@@ -1,0 +1,14 @@
+%PDF-1.4
+% A tiny stand-in for a paper, version 2: the same file with a correction, so its bytes differ from version 1.
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>
+endobj
+trailer
+<< /Root 1 0 R >>
+%%EOF

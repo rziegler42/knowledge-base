@@ -118,10 +118,10 @@ def _timed_out(exc):
         isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, (socket.timeout, TimeoutError)))
 
 
-def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redirects):
+def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redirects, types, what, accept):
     request = urllib.request.Request(address, headers={
         "User-Agent": USER_AGENT,
-        "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+        "Accept": accept,
         "Accept-Encoding": "identity",
     })
     deadline = time.monotonic() + total_timeout
@@ -146,8 +146,8 @@ def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redire
         if response.status != 200:
             raise FetchError(f"HTTP {response.status}")
         content_type = response.headers.get("Content-Type")
-        if content_type and content_type.split(";")[0].strip().lower() not in PAGE_TYPES:
-            raise FetchError(f"not a web page: its content type is {content_type.split(';')[0].strip()}")
+        if content_type and content_type.split(";")[0].strip().lower() not in types:
+            raise FetchError(f"not a {what}: its content type is {content_type.split(';')[0].strip()}")
         encoding = response.headers.get("Content-Encoding")
         if encoding and encoding.strip().lower() != "identity":
             raise FetchError(f"the server sent the page encoded ({encoding.strip()}) although none was asked for")
@@ -179,12 +179,13 @@ def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redire
 
 
 def fetch(address, allow_private=False, max_bytes=MAX_BYTES, timeout=TIMEOUT, total_timeout=TOTAL_TIMEOUT,
-          max_redirects=MAX_REDIRECTS):
-    """One GET of an already-normalised address, with a deadline over the whole of it. Returns a Page or raises
-    FetchError."""
+          max_redirects=MAX_REDIRECTS, types=PAGE_TYPES, what="web page",
+          accept="text/html,application/xhtml+xml;q=0.9,*/*;q=0.1"):
+    """One GET of an already-normalised address, with a deadline over the whole of it. Only a response whose content
+    type is in `types` is taken (`what` names it in the refusal). Returns a Page or raises FetchError."""
     # the thread's limit sits a little after the fetch's own, so the fetch normally reports its own reason first
-    return _with_deadline(lambda: _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redirects),
-                          total_timeout + 0.3)
+    return _with_deadline(lambda: _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redirects,
+                                         types, what, accept), total_timeout + 0.3)
 
 
 def _live(store, ident, kind, value):
@@ -223,11 +224,29 @@ def _resume(store, ident, book_id, version_id):
     outcome = stages.reconcile(store, book_id, version_id, "fetched", "original")
     if outcome == "adopted":
         _register_from_source(store, ident, book_id, version_id)
+        source = store.read_version(book_id, version_id)["source"]
+        if not any(e["event"] == "filed" and e.get("sha256") == source["sha256"] for e in store.read_events(book_id)):
+            store.append_event(book_id, "filed", address_asked=source["address_asked"],
+                               address_final=source["address_final"], sha256=source["sha256"],
+                               retrieved=source["retrieved"], resumed=True)
         return _result("held", book_id, version_id)
     if outcome == "invalid":
         reason = stages.read(store, book_id, version_id)["stages"]["fetched"]["reason"]
         return _result("failed", book_id, version_id, reason)
     return None
+
+
+def require_allowed(address, allow_private, total_timeout=TOTAL_TIMEOUT):
+    """Refuse (KbError) an address that resolves to a private or local address, unless that is allowed. A name that
+    cannot be resolved, or resolves too slowly, is left to the fetch, which records it as a failed fetch."""
+    parts = urlsplit(address)
+    try:
+        _with_deadline(lambda: check_host_allowed(parts.hostname, parts.port or identity.DEFAULT_PORT[parts.scheme],
+                                                  allow_private), total_timeout)
+    except PolicyError as e:
+        raise KbError(f"{e}; pass --allow-private to allow local and private-network addresses") from None
+    except FetchError:
+        pass
 
 
 def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, timeout=TIMEOUT,
@@ -241,15 +260,8 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
 
     A refused address (bad scheme, credentials, a private address without permission) raises KbError and records nothing."""
     asked = identity.normalize_address(address)
-    parts = urlsplit(asked)
     store._guard()
-    try:
-        _with_deadline(lambda: check_host_allowed(parts.hostname, parts.port or identity.DEFAULT_PORT[parts.scheme],
-                                                  allow_private), total_timeout)
-    except PolicyError as e:
-        raise KbError(f"{e}; pass --allow-private to allow local and private-network addresses") from None
-    except FetchError:
-        pass  # an unresolvable name or a slow lookup is a failed fetch, recorded below
+    require_allowed(asked, allow_private, total_timeout)
 
     book_id = _live(store, ident, "url", asked)
     version_id = None

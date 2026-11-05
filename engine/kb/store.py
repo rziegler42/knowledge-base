@@ -256,6 +256,35 @@ class Store:
                 keys[k] = current + [x for i, x in enumerate(values) if x not in current and x not in values[:i]]
         self._rewrite(self.book_file(book_id), mutate)
 
+    def set_current_version(self, book_id, version_id):
+        """Make an existing version the current one (the newest label, not necessarily the last one filed)."""
+        if version_id not in self.version_ids(book_id):
+            raise KbError(f"the book has no version {version_id!r}")
+        self._guard()
+        self._rewrite(self.book_file(book_id), lambda root: root.__setitem__("current_version", version_id))
+
+    def set_metadata(self, book_id, /, **fields):
+        """Change the descriptive fields of the root file: title, authors, year, language, and `metadata_source` (the
+        version they were taken from). Nothing else."""
+        checks = {"title": lambda v: isinstance(v, str), "language": lambda v: v is None or isinstance(v, str),
+                  "year": lambda v: v is None or (isinstance(v, int) and not isinstance(v, bool)),
+                  "authors": lambda v: isinstance(v, list) and all(isinstance(a, str) for a in v),
+                  "metadata_source": lambda v: v is None or isinstance(v, str)}
+        for name, value in fields.items():
+            if name not in checks or not checks[name](value):
+                raise KbError(f"cannot set {name!r} to that value")
+        self.read_book(book_id)
+        self._guard()
+        self._rewrite(self.book_file(book_id), lambda root: root.update(fields))
+
+    def set_version_label(self, book_id, version_id, label):
+        """Record the label the source gave a version (for example an arXiv version), once it is known."""
+        if not isinstance(label, str) or not label:
+            raise KbError("a label must be text")
+        self.read_version(book_id, version_id)
+        self._guard()
+        self._rewrite(self.version_file(book_id, version_id), lambda version: version.__setitem__("label", label))
+
     def set_version_source(self, book_id, version_id, source):
         """Replace the record of where a version came from (used when a failed fetch is retried)."""
         if not isinstance(source, dict):

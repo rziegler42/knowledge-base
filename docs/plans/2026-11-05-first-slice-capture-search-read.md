@@ -458,7 +458,7 @@ covers is an increment breaking an earlier one through the shared store.
     lock on read-modify-write, an open question in `book.md`).
 - **Committed** by the owner's word as `c8420b0c7253277c46f451369d67dec22ccb27a0`, not pushed.
 
-### Increment C — Capture a web page (implemented and reviewed, not yet committed)
+### Increment C — Capture a web page (committed as e8875e8)
 
 - **Done.** `python3 -m kb capture-url <address>` (`engine/kb/capture_url.py`, `identity.py`, a command in `__main__.py`, tests in
   `engine/tests/test_capture_url.py`, a fixture page, a README section). One plain GET with an honest user agent, no cookies, the
@@ -497,4 +497,42 @@ covers is an increment breaking an earlier one through the shared store.
     book with no title and no payload.
   - Deferred: 4 (DNS rebinding: the name is resolved once to check it and again to connect; a NAT64 address that embeds a local
     address counts as public).
-- **Left for the owner:** the word to commit, and whether to run a security review of this network surface.
+- **Committed** by the owner's word as `e8875e84f3c3ca042c292f51391fd39122e18f8c`, not pushed. The owner said to commit when asked
+  whether to run a security review first, so none was run; the recommendation stands, and the question is still open.
+
+### Increment D — Capture an arXiv paper (implemented and reviewed, not yet committed)
+
+- **Done.** `python3 -m kb capture-arxiv <id>` (`engine/kb/capture_arxiv.py`, a command in `__main__.py`, tests in
+  `engine/tests/test_capture_arxiv.py`, fixtures `paper-v1.pdf`, `paper-v2.pdf` and `arxiv-error.xml`, a README section). The id is
+  parsed strictly (new and old forms, an optional `v` number, no whitespace). The paper is a book, each arXiv version is a version of
+  it, and the file is stored unchanged as `original/paper.pdf`. Title, authors, year, categories, the abstract and the DOI come from
+  arXiv's own record. A version already stored is held without any request. With no version in the id, the metadata is asked for
+  first to learn the latest label. Results are `filed`, `held` and `failed`, as for a web page, and a stopped capture is resumed.
+- **Departures from the plan's wording.** The plan says a new label "moves current to it" and that asking again for a version
+  held is "refused before download". The code makes the current version the newest label among those fetched (so capturing
+  v1 after v2 leaves v2 current, and a newer label whose file failed does not become current), which fits `book.md`; and a
+  version already held returns status `held`, the same word as for a page, with no request made at all.
+- **Added beyond the plan's step list:** refusal of a metadata answer that is not plain UTF-8 or that declares entities, before
+  it is parsed; cleaning and bounding of every string taken from the answer; identity keys and index entries for the arXiv id and
+  the DOI; settings `--api-base` and `--pdf-base`; in `store.py`, `set_current_version`, `set_metadata` (which also records the
+  version the fields came from) and `set_version_label`; in `capture_url.py`, the fetch takes the content types it accepts and
+  the private-address check is a function other captures reuse; the index rebuild reads the new key kinds.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_capture_arxiv`: 53 tests, OK; with
+  `test_setup`, `test_store`, `test_stages` and `test_capture_url`: 187 tests, OK. The tests serve metadata in the shape of the
+  arXiv API and small PDF fixtures from a server on 127.0.0.1; none makes a request outside the machine. The first run failed
+  because the module did not exist. About fifty deliberate breaks of the code, made on scratch copies, were each caught by a
+  test after tests were added for the ones that were not, except the redundant layers that hide each other.
+- **Not run.** No request to the real arXiv, so the real response shapes, its https address and its real PDF content types are
+  untested. No security review. No concurrent-capture test.
+- **Review.** The `reviewer` agent, one exchange, seven findings, none blocking.
+  - Applied: 1 (a UTF-16 answer with NUL bytes hid an entity declaration from the check: only plain UTF-8 is accepted now, and
+    the default API address is https), 2 (digits from other scripts matched `\\d` and left a book with a bad id: ids, years and
+    DOIs accept only 0-9), 3 (a DOI from the untrusted answer could take another book's index entry: it is recorded only if no
+    other existing book holds it, and the index rebuild now agrees), 4 (a stop after a new version was added left the wrong
+    version current: the current version is chosen right after a version is added), 5 (a repeated request overwrote an edited
+    title: the version the title came from is recorded, and only a newer version replaces it), and from 7, the missing `filed`
+    event after a resumed capture (now also for web pages) and format and control characters in text from the source.
+  - Deferred: the policy part of 7 that `_live` counts a removed or weeded book as held (weeding comes later); a DOI that changes
+    between versions leaves the earlier DOI in the index; a `<!DOCTYPE` inside a CDATA abstract is refused; the size messages say
+    "page" for a PDF or metadata answer.
+- **Left for the owner:** the word to commit.

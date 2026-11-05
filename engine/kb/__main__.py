@@ -3,7 +3,7 @@ import argparse
 import json
 import sys
 
-from . import KbError, __version__, capture_url, config, identity, library
+from . import KbError, __version__, capture_arxiv, capture_url, config, identity, library
 from .store import Store
 
 
@@ -24,8 +24,28 @@ def main(argv=None):
     c.add_argument("--max-bytes", type=int, default=capture_url.MAX_BYTES, help="refuse a page larger than this")
     c.add_argument("--timeout", type=float, default=capture_url.TIMEOUT, help="seconds for each network read")
     c.add_argument("--total-timeout", type=float, default=capture_url.TOTAL_TIMEOUT, help="seconds for the whole fetch")
+    ax = sub.add_parser("capture-arxiv", help="fetch an arXiv paper (its PDF and metadata) and store it in the library")
+    ax.add_argument("arxiv_id", help="for example 2101.00001, 2101.00001v2 or cs/0112017; with no version, the latest")
+    ax.add_argument("--allow-private", action="store_true",
+                    help="allow addresses on this machine or a private network (and redirects to them)")
+    ax.add_argument("--api-base", default=capture_arxiv.API_BASE, help="the arXiv API address (for a mirror or a test)")
+    ax.add_argument("--pdf-base", default=capture_arxiv.PDF_BASE, help="the address PDFs are fetched under")
+    ax.add_argument("--max-bytes", type=int, default=capture_arxiv.PDF_MAX_BYTES, help="refuse a PDF larger than this")
+    ax.add_argument("--timeout", type=float, default=capture_url.TIMEOUT, help="seconds for each network read")
+    ax.add_argument("--total-timeout", type=float, default=capture_url.TOTAL_TIMEOUT, help="seconds for each fetch")
     args = parser.parse_args(argv)
     try:
+        if args.command == "capture-arxiv":
+            store = Store.open()
+            out = capture_arxiv.capture(store, identity.Identity(store.cfg["index_root"]), args.arxiv_id,
+                                        allow_private=args.allow_private, api_base=args.api_base,
+                                        pdf_base=args.pdf_base, max_bytes=args.max_bytes, timeout=args.timeout,
+                                        total_timeout=args.total_timeout)
+            print(json.dumps(out))
+            if out["status"] == "failed":
+                print(f"failed: {out['reason']}", file=sys.stderr)
+                return 1
+            return 0
         if args.command == "capture-url":
             store = Store.open()
             out = capture_url.capture(store, identity.Identity(store.cfg["index_root"]), args.address,

@@ -535,6 +535,20 @@ class RefusalTest(CaptureCase):
         with open(os.path.join(path, "page.html"), "rb") as f:
             self.assertEqual(f.read(), b"damaged")
 
+    def test_a_resumed_page_capture_gets_a_filed_event_once(self):
+        self.site.add("/page")
+        with mock.patch.object(self.store, "append_event", side_effect=OSError("stopped")):
+            with self.assertRaises(OSError):
+                self.capture("/page")
+        (book,) = self.store.list_books()
+        self.assertEqual(self.store.read_events(book), [])
+        self.capture("/page")
+        events = self.store.read_events(book)
+        self.assertEqual([e["event"] for e in events], ["filed"])
+        self.assertTrue(events[0]["resumed"])
+        self.capture("/page")
+        self.assertEqual(len(self.store.read_events(book)), 1)
+
     def test_a_retry_that_turns_out_to_duplicate_another_book_is_skipped_not_filed_twice(self):
         self.site.add("/page")
         held = self.capture("/page")

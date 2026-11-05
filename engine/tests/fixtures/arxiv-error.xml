@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <title>ArXiv Query: search_query=&amp;id_list=not-an-id&amp;start=0&amp;max_results=10</title>
+  <id>http://arxiv.org/api/errors</id>
+  <opensearch:totalResults>1</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/api/errors#incorrect_id_format_for_not-an-id</id>
+    <title>Error</title>
+    <summary>incorrect id format for not-an-id</summary>
+    <author><name>arXiv api core</name></author>
+  </entry>
+</feed>

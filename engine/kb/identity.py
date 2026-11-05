@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 from . import KbError
 
 DEFAULT_PORT = {"http": 80, "https": 443}
+# a book's identity keys, and the kind each is indexed under: an address, an arXiv id, a DOI, the hash of a raw file
+INDEXED_KEYS = {"url": "url", "url_alias": "url", "arxiv": "arxiv", "doi": "doi", "sha256": "sha256"}
 
 
 def normalize_address(address):
@@ -77,8 +79,7 @@ class Identity:
             if root.get("state") != "active":
                 continue
             keys = root.get("identity_keys", {})
-            urls = ([keys["url"]] if isinstance(keys.get("url"), str) else []) + list(keys.get("url_alias", []))
-            for value in urls:
-                self.register("url", value, book_id)
-            for value in keys.get("sha256", []):
-                self.register("sha256", value, book_id)
+            for name, kind in INDEXED_KEYS.items():
+                value = keys.get(name)
+                for item in ([value] if isinstance(value, str) else list(value or [])):
+                    self.register(kind, item, book_id)

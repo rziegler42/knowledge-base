@@ -99,3 +99,35 @@ exits with code 1 on failure).
 - A page that turns out to be one the library holds is a sighting on that book. A different page at a held address is also
   recorded as a sighting, not as a new version: comparing the text of versions comes later.
 - Nothing downloaded is parsed here. Conversion comes later.
+
+## Capturing an arXiv paper
+
+```sh
+cd engine
+python3 -m kb capture-arxiv 2101.00001v2     # one version
+python3 -m kb capture-arxiv 2101.00001       # the latest version
+```
+
+An id is the new form (`2101.00001`, with an optional `v2`) or the old form (`cs/0112017`, `math.GT/0309136v2`), with an
+optional `arXiv:` in front. Whitespace and anything else is refused before any request. The output has the same `status` as
+`capture-url`: `filed`, `held` or `failed`.
+
+- A paper is a book and each arXiv version is a version of it. The file is stored unchanged as `original/paper.pdf`. The
+  book's title, authors and year come from arXiv's own record and follow the current version, which is the newest label that
+  was fetched (not the last one filed). The arXiv id and the DOI, if there is one, are identity keys, alongside the hash of each
+  file.
+- A version already stored is held without any request at all. With no version in the id, the metadata is asked for first to
+  learn the latest label, and the file is downloaded only if that version is not stored.
+- The metadata answer is untrusted text: it is size-capped, refused unless it is plain UTF-8 (a UTF-16 answer could hide an
+  entity declaration from the check), refused if it declares entities (`DOCTYPE` or `ENTITY`), and then parsed with the
+  standard library. Its title, authors, abstract, categories and DOI are cleaned (whitespace collapsed; control,
+  direction-mark and zero-width characters removed), bounded and checked before they are stored in the version file. Digits
+  from other scripts are not accepted in ids, years or DOIs. The file must have a PDF content type and start with `%PDF-`.
+- A DOI comes from that untrusted answer, so it is recorded on a book only if no other book already holds it. The arXiv id,
+  not the DOI, decides which book a paper belongs to.
+- The book's title, authors and year are copied from the current version once, and the version they came from is noted in
+  the root file, so an edit of them is not undone by a later request; a newer version replaces them. The default API
+  address is https, which has not been tried against the real service.
+- The two address prefixes are settings (`--api-base`, `--pdf-base`), so a mirror or a test server can be used. They get the
+  same checks as any address: http or https only, no credentials, and no private or local host unless `--allow-private`.
+- A withdrawal flag is not read yet.
