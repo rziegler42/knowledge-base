@@ -365,4 +365,32 @@ covers is an increment breaking an earlier one through the shared store.
 
 ## Result
 
-Empty until work starts.
+### Increment A — Skeleton, config and library setup (implemented and reviewed, not yet committed)
+
+- **Done.** `engine/kb/` (`__init__`, `config`, `library`, `__main__`), `engine/tests/` (`__init__`, `test_setup`) and
+  `engine/README.md`. `python3 -m kb setup <bulk-root> <index-root> [--allow-main-disk]` creates the owner-only config
+  (file 600, directory 700, outside both roots; `KB_CONFIG_DIR` overrides the directory), a marker with the library id in the
+  bulk root, the recorded device of the bulk root, a format version and the index root. `python3 -m kb check` is the write guard.
+- **Verification as run.** `python3 -m unittest engine.tests.test_setup` from the repository root: 28 tests, OK, also with
+  `-W error::ResourceWarning`. The first 20 tests failed before the code existed (the module `kb` did not import). Fifteen
+  deliberate breaks of the code, made on scratch copies, were each caught by at least one test: seven for the first 20 tests, and
+  eight for the fixes below, which were each tested to fail when undone.
+- **Not run.** Nothing on a real unmounted volume or a real mount point: the device and main-disk checks were tested with injected
+  values only. No other test suite exists. No security review was run on this increment; the plan puts that question at step 4 of
+  increment E.
+- **Review.** A read-only reviewer agent (`reviewer`), one exchange, recommendation: no blocking findings; seven findings, none
+  blocking. It ran nothing and said so.
+  - Applied: 1 (setup is not crash-safe: it now removes the files it wrote when a later step fails, so a rerun works), 2 (a stale
+    temporary file or a system error: the temporary name is random, and a system error prints `failed: <reason>` with exit code 1
+    and no traceback), 4 (the config is opened without following a symlink, checked on the opened file for owner and mode 600,
+    and refused if its directory is writable by others), and the symlink part of 6 (the guard checks both roots for symlinks
+    again, and roots that differ only in letter case count as the same folder).
+  - Rejected: 5 (a repeated setup that ignores a changed `--allow-main-disk` flag): the flag is a first-setup choice, `check` is
+    the guard that reads the recorded value, and the README says that a repeat changes nothing.
+  - Deferred: 3 (`KB_CONFIG_DIR` lets any process redirect the config, which matters once the list of approved conversion tools
+    lives in that config): record for the security-review question at step 4 of increment E, and restrict or remove the variable
+    in production use before the list exists; 6, the rest (a hard-link or bind-mount alias, and a root nested inside the other,
+    are not refused; the plan only asks for the same folder); 7 (the spec says setup creates the empty catalog, which is
+    increment G, and shows a one-time notice that rights and legality are the owner's, which no increment lists: for the owner
+    to decide).
+- **Left for the owner:** the word to commit, and the decision on the one-time rights notice.
