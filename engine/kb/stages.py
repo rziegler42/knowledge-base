@@ -6,7 +6,7 @@ a crash a payload may be filed whose stage is not yet marked done, and `reconcil
 import json
 from datetime import datetime, timezone
 
-from . import KbError, config
+from . import KbError, config, textutil
 
 FORMAT = 1
 STAGES = ("found", "fetched", "scanned", "converted", "indexed")
@@ -73,7 +73,8 @@ def mark(store, book_id, version_id, stage, status, reason="", tool=""):
         if status == "done":
             return
         raise KbError(f"the stage {stage} is already done and is not run or changed again")
-    if status in ("failed", "skipped") and not reason:
+    reason, tool = textutil.clean(reason, 500), textutil.clean(tool or "", 100)  # text from a server or a tool is untrusted
+    if status in ("failed", "skipped") and not reason:  # checked after cleaning: a reason of only control characters is none
         raise KbError(f"a stage that is {status} needs a reason")
     if status in ("done", "failed") and not _needs_met(state, stage):
         raise KbError(f"the stage {stage} needs {_NEEDS_TEXT[stage]} first")

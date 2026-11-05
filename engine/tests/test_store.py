@@ -56,6 +56,13 @@ class StoreCase(unittest.TestCase):
                               capture_output=True, text=True, timeout=60)
 
 
+    def run_child_async(self, code):
+        """Start code in a child process and return at once, so the test can act on it while it runs."""
+        full = "import os, sys\nsys.path.insert(0, %r)\n%s" % (ENGINE_DIR, code)
+        return subprocess.Popen([sys.executable, "-c", full], env=dict(os.environ, KB_CONFIG_DIR=self.cfg),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 class IdsTest(unittest.TestCase):
     def test_an_id_is_a_26_character_ulid(self):
         i = ids.new_book_id()

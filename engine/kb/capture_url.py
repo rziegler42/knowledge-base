@@ -11,6 +11,7 @@ existing book. A capture that stopped half way is resumed by the next call for t
 import hashlib
 import http.client
 import ipaddress
+import re
 import socket
 import threading
 import time
@@ -18,7 +19,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
-from . import KbError, __version__, identity, ids, stages
+from . import KbError, __version__, identity, ids, stages, textutil
 from .store import now
 
 USER_AGENT = f"knowledge-base/{__version__} (single GET; personal research library)"
@@ -39,12 +40,13 @@ class PolicyError(FetchError):
     """An address refused by policy: on the local machine or a private network."""
 
 
-def _with_deadline(fn, seconds):
+def _with_deadline(fn, seconds, on_timeout=None, name="kb-fetch"):
     """Run fn and give up after `seconds`, whatever it is waiting on (a connection, the headers, a name lookup).
 
-    The work runs in a thread that cannot be stopped, so a server that trickles its answer can keep an abandoned thread
-    alive until the network gives up on it. That is acceptable for a command that exits, and a long-running crawler
-    should use an HTTP client with a real overall deadline instead."""
+    The work runs in a thread, which cannot be stopped from outside. When the time is up, `on_timeout` is called to cut
+    what the thread is waiting on (the fetch closes its sockets), so the thread ends within moments instead of living on
+    behind a server that trickles its answer. A name lookup that is stuck in the system resolver cannot be cut, and
+    ends when the resolver gives up."""
     box = {}
 
     def run():
@@ -53,32 +55,105 @@ def _with_deadline(fn, seconds):
         except BaseException as e:  # carried back to the caller
             box["error"] = e
 
-    worker = threading.Thread(target=run, daemon=True)
+    worker = threading.Thread(target=run, daemon=True, name=name)
     worker.start()
     worker.join(seconds)
     if worker.is_alive():
+        if on_timeout is not None:
+            on_timeout()
+            worker.join(2)
         raise FetchError("timed out")
     if "error" in box:
         raise box["error"]
     return box["value"]
 
 
-def check_host_allowed(host, port, allow_private):
-    """Resolve a host and refuse it if any address is not a public one, unless private addresses are allowed.
+# Address ranges that hide another address inside an IPv6 one, and ranges that are never a public host.
+_V4_IN_V6 = ipaddress.ip_network("::/96")            # IPv4-compatible (deprecated)
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")        # NAT64: the last 32 bits are an IPv4 address
+_NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
+_SIXTOFOUR = ipaddress.ip_network("2002::/16")       # 6to4: bits 16 to 48 are an IPv4 address
+_TEREDO = ipaddress.ip_network("2001::/32")
+_SITE_LOCAL = ipaddress.ip_network("fec0::/10")
 
-    The connection later resolves the name again, so a name that changes its answer between the two is not caught."""
+
+def is_public(ip):
+    """Whether an address is an ordinary public one. An IPv6 address that carries an IPv4 one (mapped, compatible, NAT64,
+    6to4) is judged by the IPv4 address it carries; Teredo, site-local and NAT64-local ranges are never public."""
+    if ip.version == 6:
+        if ip.ipv4_mapped is not None:
+            return is_public(ip.ipv4_mapped)
+        if ip in _TEREDO or ip in _SITE_LOCAL or ip in _NAT64_LOCAL:
+            return False
+        if ip in _NAT64 or (ip in _V4_IN_V6 and int(ip) > 1):
+            return is_public(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF))
+        if ip in _SIXTOFOUR:
+            return is_public(ipaddress.IPv4Address((int(ip) >> 80) & 0xFFFFFFFF))
+    return ip.is_global and not ip.is_multicast
+
+
+def resolve_checked(host, port, allow_private):
+    """Resolve a host once and return its addresses, refusing the name if any of them is not public (unless allowed).
+    The caller connects to one of these addresses, so what was checked is what is connected to."""
+    if "%" in host:
+        raise PolicyError(f"the host {host!r} is written with percent escapes")
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror as e:
-        raise FetchError(f"cannot resolve {host}: {e.strerror or e}") from None
-    if not infos:
-        raise FetchError(f"cannot resolve {host}")
+    except (socket.gaierror, UnicodeError) as e:
+        raise FetchError(f"cannot resolve {host}: {getattr(e, 'strerror', None) or e}") from None
+    addresses = []
     for info in infos:
         ip = ipaddress.ip_address(str(info[4][0]).split("%")[0])
-        if ip.version == 6 and ip.ipv4_mapped is not None:
-            ip = ip.ipv4_mapped
-        if not allow_private and (not ip.is_global or ip.is_multicast):
+        if not allow_private and not is_public(ip):
             raise PolicyError(f"{host} is a private or local address ({ip})")
+        if str(ip) not in addresses:
+            addresses.append(str(ip))
+    if not addresses:
+        raise FetchError(f"cannot resolve {host}")
+    return addresses
+
+
+def check_host_allowed(host, port, allow_private):
+    """Refuse a host that resolves to a private or local address, unless that is allowed (see `resolve_checked`)."""
+    resolve_checked(host, port, allow_private)
+
+
+def _connect_checked(host, port, timeout, allow_private, live):
+    """Open a connection to a host by the address that was checked, never by looking the name up a second time."""
+    last = None
+    for address in resolve_checked(host, port, allow_private):
+        try:
+            sock = socket.create_connection((address, port), timeout)
+        except OSError as e:
+            last = e
+            continue
+        live.append(sock)
+        return sock
+    raise last or OSError(f"cannot connect to {host}")
+
+
+def _guarded_handlers(allow_private, live):
+    """http and https handlers whose connections go through `_connect_checked`, and keep their sockets in `live` so that
+    the caller can cut them when the deadline passes."""
+    class Conn(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = _connect_checked(self.host, self.port, self.timeout, allow_private, live)
+
+    class SConn(http.client.HTTPSConnection):
+        def connect(self):
+            raw = _connect_checked(self.host, self.port, self.timeout, allow_private, live)
+            self.sock = self._context.wrap_socket(raw, server_hostname=self.host)  # the certificate is checked for the name
+            live.append(self.sock)  # wrapping detaches the raw socket from its descriptor: only this one can be cut now
+
+    class HTTP(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(Conn, req)
+
+    class HTTPS(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(SConn, req, context=self._context)
+
+    return HTTP(), HTTPS()
 
 
 def make_redirect_handler(allow_private, max_redirects):
@@ -92,16 +167,20 @@ def make_redirect_handler(allow_private, max_redirects):
                 raise FetchError(f"a redirect to a {scheme or 'relative'} address was refused")
             if parts.username is not None or parts.password is not None:
                 raise FetchError("a redirect carrying a user name or password was refused")
+            if "%" in parts.hostname:
+                raise FetchError("a redirect to a host written with percent escapes was refused")
             check_host_allowed(parts.hostname, parts.port or identity.DEFAULT_PORT[scheme], allow_private)
             return super().redirect_request(req, fp, code, msg, headers, newurl)
 
     return Handler()
 
 
-def _opener(allow_private, max_redirects):
-    """An opener with only the http and https handlers (no file, ftp or data) and no proxy from the environment."""
+def _opener(allow_private, max_redirects, live):
+    """An opener with only the http and https handlers (no file, ftp or data), no proxy from the environment, and
+    connections that go to the address that was checked."""
     opener = urllib.request.OpenerDirector()
-    for handler in (urllib.request.ProxyHandler({}), urllib.request.HTTPHandler(), urllib.request.HTTPSHandler(),
+    http_handler, https_handler = _guarded_handlers(allow_private, live)
+    for handler in (urllib.request.ProxyHandler({}), http_handler, https_handler,
                     urllib.request.HTTPDefaultErrorHandler(), make_redirect_handler(allow_private, max_redirects),
                     urllib.request.HTTPErrorProcessor()):
         opener.add_handler(handler)
@@ -118,7 +197,7 @@ def _timed_out(exc):
         isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, (socket.timeout, TimeoutError)))
 
 
-def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redirects, types, what, accept):
+def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redirects, types, what, accept, live):
     request = urllib.request.Request(address, headers={
         "User-Agent": USER_AGENT,
         "Accept": accept,
@@ -126,7 +205,7 @@ def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redire
     })
     deadline = time.monotonic() + total_timeout
     try:
-        response = _opener(allow_private, max_redirects).open(request, timeout=timeout)
+        response = _opener(allow_private, max_redirects, live).open(request, timeout=timeout)
     except urllib.error.HTTPError as e:
         e.close()
         if 300 <= e.code < 400:
@@ -148,11 +227,17 @@ def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redire
         content_type = response.headers.get("Content-Type")
         if content_type and content_type.split(";")[0].strip().lower() not in types:
             raise FetchError(f"not a {what}: its content type is {content_type.split(';')[0].strip()}")
-        encoding = response.headers.get("Content-Encoding")
-        if encoding and encoding.strip().lower() != "identity":
-            raise FetchError(f"the server sent the page encoded ({encoding.strip()}) although none was asked for")
-        length = response.headers.get("Content-Length")
-        declared = int(length) if length and length.isdigit() else None
+        for encoding in response.headers.get_all("Content-Encoding") or []:  # every such header, not only the first
+            if encoding.strip().lower() != "identity":
+                raise FetchError(f"the server sent the page encoded ({encoding.strip()}) although none was asked for")
+        lengths = response.headers.get_all("Content-Length") or []
+        if len(lengths) > 1 and len({v.strip() for v in lengths}) > 1:
+            raise FetchError("the server sent conflicting Content-Length headers")
+        declared = None
+        if lengths:
+            if not re.fullmatch(r"[0-9]{1,15}", lengths[0].strip()):  # ASCII digits only: str.isdigit accepts others
+                raise FetchError("the server sent a Content-Length that is not a number")
+            declared = int(lengths[0].strip())
         if declared is not None and declared > max_bytes:
             raise FetchError(f"the page is larger than {max_bytes} bytes (it says {declared})")
         chunks, total = [], 0
@@ -174,7 +259,7 @@ def _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redire
         if declared is not None and total != declared:
             # read1 does not raise when the connection closes early, so the length is checked here
             raise FetchError(f"the page ended early: {total} of {declared} bytes arrived")
-        headers = {k: response.headers[k] for k in KEPT_HEADERS if response.headers.get(k) is not None}
+        headers = {k: textutil.clean(response.headers[k], 300) for k in KEPT_HEADERS if response.headers.get(k) is not None}
         return Page(response.geturl(), response.status, headers, b"".join(chunks))
 
 
@@ -183,9 +268,19 @@ def fetch(address, allow_private=False, max_bytes=MAX_BYTES, timeout=TIMEOUT, to
           accept="text/html,application/xhtml+xml;q=0.9,*/*;q=0.1"):
     """One GET of an already-normalised address, with a deadline over the whole of it. Only a response whose content
     type is in `types` is taken (`what` names it in the refusal). Returns a Page or raises FetchError."""
+    live = []  # the sockets the fetch opens, so that they can be cut if the deadline passes
+
+    def cut():
+        for sock in list(live):
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+
     # the thread's limit sits a little after the fetch's own, so the fetch normally reports its own reason first
     return _with_deadline(lambda: _fetch(address, allow_private, max_bytes, timeout, total_timeout, max_redirects,
-                                         types, what, accept), total_timeout + 0.3)
+                                         types, what, accept, live), total_timeout + 0.3, on_timeout=cut)
 
 
 def _live(store, ident, kind, value):
@@ -275,19 +370,23 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
 
     try:
         page = fetch(asked, allow_private, max_bytes, timeout, total_timeout)
+        if page.body[:2] == b"\x1f\x8b" or b"\x00" in page.body[:8192]:
+            # a web page is text; compressed or binary data under a page's name would be stored as page.html
+            raise FetchError("the response looks like binary or compressed data, not a web page")
         try:
             final = identity.normalize_address(page.final)
         except KbError as e:
             raise FetchError(f"the final address is not usable: {e}") from None
     except FetchError as e:
+        reason = textutil.clean(str(e), 300)  # the reason can carry text a server chose, such as a content type
         if not book_id:
             book_id = ids.new_book_id()
             ident.reassign("url", asked, book_id)  # recorded first, so a stop after the book is made still finds it
             store.create_book(title="", kind="web page", identity_keys={"url": asked}, book_id=book_id)
             version_id = store.add_version(book_id, source={"address_asked": asked})
             store.append_event(book_id, "found", address_asked=asked)
-        stages.mark(store, book_id, version_id, "fetched", "failed", reason=str(e), tool=TOOL)
-        return _result("failed", book_id, version_id, str(e))
+        stages.mark(store, book_id, version_id, "fetched", "failed", reason=reason, tool=TOOL)
+        return _result("failed", book_id, version_id, reason)
 
     digest = hashlib.sha256(page.body).hexdigest()
     retrieved = now()

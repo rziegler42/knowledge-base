@@ -173,8 +173,10 @@ they have their own specs.
   owner-only config, changed only by a governed owner action at `block`; an agent cannot change them. Approved tools run within the existing
   limits: a time limit, a size limit, no network, and untrusted output.
 - **[proposed]** A conversion tool can be approved only if it runs confined: as a separate low-privilege user or in an equivalent
-  sandbox, with a filesystem allowlist limited to its input and output folders, and with no network. A tool that cannot be
-  confined this way cannot be approved.
+  sandbox, with a filesystem allowlist limited to its input folder (read-only), its output folder (the only place it can
+  write), and the system libraries, runtime folders and pinned scripts it cannot run without (read-only, named in its
+  approval), and with no network. A tool that cannot be confined this way cannot be approved. The first build does this with
+  macOS `sandbox-exec` (`engine/kb/convert_run.py`); it also lets a tool see whether a path exists, though not read it.
 - **[proposed]** An archive is unpacked within limits: a maximum total size, a maximum nesting depth, a maximum decompression
   ratio, and no entry that resolves outside the output folder (no path traversal, no absolute paths, no links). An archive that
   exceeds a limit fails the conversion stage with the reason, and nothing is written outside the output folder.

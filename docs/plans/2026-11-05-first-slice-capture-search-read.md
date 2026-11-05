@@ -500,7 +500,7 @@ covers is an increment breaking an earlier one through the shared store.
 - **Committed** by the owner's word as `e8875e84f3c3ca042c292f51391fd39122e18f8c`, not pushed. The owner said to commit when asked
   whether to run a security review first, so none was run; the recommendation stands, and the question is still open.
 
-### Increment D — Capture an arXiv paper (implemented and reviewed, not yet committed)
+### Increment D — Capture an arXiv paper (committed as f3c9ba8)
 
 - **Done.** `python3 -m kb capture-arxiv <id>` (`engine/kb/capture_arxiv.py`, a command in `__main__.py`, tests in
   `engine/tests/test_capture_arxiv.py`, fixtures `paper-v1.pdf`, `paper-v2.pdf` and `arxiv-error.xml`, a README section). The id is
@@ -535,4 +535,74 @@ covers is an increment breaking an earlier one through the shared store.
   - Deferred: the policy part of 7 that `_live` counts a removed or weeded book as held (weeding comes later); a DOI that changes
     between versions leaves the earlier DOI in the index; a `<!DOCTYPE` inside a CDATA abstract is refused; the size messages say
     "page" for a PDF or metadata answer.
-- **Left for the owner:** the word to commit.
+- **Committed** by the owner's word as `f3c9ba86f6748a16fcc3e0d0540168380e545020`, not pushed. A DOI that changes between
+  versions is no longer an open point: the DOI is not indexed (see the security review under increment E).
+
+### Increment E — The confined tool runner and the scan stage (implemented, reviewed and security-reviewed, not yet committed)
+
+- **Done.** `engine/kb/approvals.py` (the owner's approved-tools list in the owner-only config: name, exact version, the real path
+  of the program, sha256 of the program and each script, readable folders, formats, limits), `convert_run.py` (the runner:
+  `sandbox-exec` under a generated deny-by-default profile, empty environment, no standard input, time, output, file-size, file,
+  folder and depth limits, its own process group, output inventoried without following links, filed as an untrusted derived
+  payload through `Store.file_payload`), `supervisor.py` (a watchdog), `scan_tool.py` (the scan program, standard library only,
+  run with `python -I -S` inside the sandbox), `scan.py` (the scan stage and caveats on the version), `textutil.py` (cleaning of
+  text from outside), the commands `describe-tool` and `tools`, `store.py` additions (`untrusted` on a payload, caveats on a version),
+  tests (`test_convert_run.py`, `test_scan.py`, `test_textutil.py`, a hostile fake tool `fixtures/tools/probe.py`) and a README
+  section. `book.md` "Conversion and structure" now says the allowlist also covers the tool's runtime folders and pinned scripts.
+- **Step 3 of the plan (the sandbox must deny the network and the outside write).** Checked on this machine before any engine
+  code: a deny-all profile with the real interpreter (the Homebrew launcher re-executes `Python.app`, which a one-program profile
+  refuses, so the real binary is what is approved) denied the network, writes outside the output folder, reads of the config and
+  of the library, running other programs, forking, signals, hard links and symlink escapes, and an allow-all control allowed
+  nearly all of them. When the profile was replaced by an allow-all one afterwards, all eight denial tests and both profile-text
+  tests failed.
+- **Verification as run.** `python3 -m unittest engine.tests.test_convert_run engine.tests.test_scan`: 114 tests, OK; the whole
+  engine suite: 324 tests, OK, with `-W error::ResourceWarning`. Break-it checks on scratch copies: 73 deliberate breaks of the
+  runner, the approvals, the scan, the watchdog and the network fetchers on the final code; 59 were caught at first, 12 more
+  after tests were added for them, and 2 are redundant layers that change nothing observable (an explicit IPv4-mapped branch
+  that this Python's `ipaddress` makes unnecessary, and a step cap in the look-back that the byte budget already enforces).
+  Earlier runs found two real bugs this way (the standard-output overrun flag was set only at the end of the stream; a first
+  version of the PDF look-back was quadratic).
+- **Reviewer agent.** One exchange, eleven findings, two blocking, both reproduced and fixed: a tool could `chmod` its own subfolders
+  so that its data escaped the size and file limits and could not be removed (the output is now inventoried without following
+  links and a folder that cannot be listed stops the run; removal restores modes and clears flags), and the PDF stream search was
+  quadratic (now one forward pass). Also applied: PDF streams the scan cannot read are reported as `scan_incomplete`; tool error
+  text and tool-chosen names are cleaned or quoted; file names are restricted; folder and depth limits; `-S` so nothing in the
+  runtime folder runs at start-up; odd tool output fails the stage instead of crashing it; the pid-reuse risk in the group kill.
+- **Security review (step 4 of the plan).** The owner answered **yes** to running the `security-review` module, and it covered the
+  network fetchers of increments C and D as well, which had been left open. Two `security-reviewer` agents worked on copies.
+  - *Sandbox, runner and scan:* no Critical or High; the sandbox held against every attack tried (network, outside reads and
+    writes, hard links, symlinks, other programs, signals, descriptors, odd paths). Findings applied: PDF scan evasions (a
+    stream dictionary longer than the old window, `obj` inside the dictionary, layered or predicted filters, other end-of-line forms);
+    `check_reads` compared paths case-sensitively on a case-insensitive volume, and did not check pinned files; tool-chosen names in
+    messages; the `uchg` flag defeating cleanup; a tool outliving a killed engine; slow HTML (now capped at 10 MB, with
+    `scan_incomplete`); URL schemes and style comments.
+  - *Network fetchers:* one **High**: the private-address guard could be bypassed by a percent-escaped host (urllib decodes the
+    escapes at connect), by a name that answers differently the second time, and by an unresolved first lookup that was ignored,
+    and some IPv6 forms (NAT64, 6to4, compatible) were treated as public. Fixed: a host written with escapes is refused at three
+    layers, the connection itself looks the name up once, checks every answer and connects to a checked address, an unresolvable
+    name is not fetched, and IPv6 forms are judged by the address they carry. Also fixed: a thread left behind by a header-trickling
+    server (the sockets are now cut at the deadline, also over https); an uncaught error on a `Content-Length` written in other
+    digits; reason text from servers cleaned; two `Content-Encoding` headers, gzip bodies and binary bodies under a page's name;
+    a hostile arXiv answer could claim a DOI as an identity key (it is now only a recorded claim).
+  - *Second look.* A fresh reviewer re-checked the fixes. Its sandbox refused every write, so it could only read; I treated its six
+    findings as claims and tested each by experiment. Confirmed and fixed: decoy stream markers inside strings could make the scan read
+    a real stream as part of a decoy (the cross-check now compares positions, not counts); an indirect `/DecodeParms` could hide a
+    predictor; the look-back was quadratic in the worst case (a 100 KB file cost 13 s, now 0.02 s); the https deadline cut did
+    nothing because wrapping detaches the raw socket; the firmlink spelling `/System/Volumes/Data/...` of a protected folder; the
+    watchdog failing open (a run now stops unless the watchdog says it is ready); invisible characters and variation selectors in
+    cleaned text; a reason that cleans to nothing counted as a reason; kept header values stored raw.
+  - Each fix has a regression test that failed before it, except where noted in the break-it check above.
+- **Not covered, known and written in the README.** Memory is not limited (macOS does not enforce it). The profile lets a tool see
+  whether a path exists. `sandbox-exec` is deprecated by Apple. A program could be swapped between the hash check and the start of
+  the run by someone who can already write where it lives, and the Python runtime folder is pinned by neither hash nor content.
+  A tool could set an ACL that makes cleanup leave its scratch folder (an uncommon native-code case, untested). An engine killed
+  in the microseconds between starting the tool and starting its watchdog leaves the tool to its CPU limit. A name lookup stuck in the
+  system resolver cannot be cut. The scan is a pattern scan, not a PDF reader, so "no caveat" is not "safe": hidden text by
+  stylesheet, position or colour is not found, UTF-16 pages are refused as binary, and a PDF built to hide a script in a way the
+  scan does not read is reported only if it trips a rule. There is no port restriction on public hosts, a failed capture of a new
+  address still leaves an empty book, and there is no locking between two programs working on one book.
+- **Departures from the plan's wording.** The approved list holds the tool's name, exact version and formats but not an
+  "order" of fallback tools; that belongs to increment F, which runs several tools on one format. The address guard, the refusal of
+  percent-escaped hosts, the watchdog, `textutil.py` and the `describe-tool` and `tools` commands are additions.
+- **Left for the owner:** the word to commit increments E, and whether the findings listed above as not covered are acceptable
+  for the next increment, F, which runs real converters under this same runner.

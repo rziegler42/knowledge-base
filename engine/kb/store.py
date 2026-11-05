@@ -208,7 +208,7 @@ class Store:
         version_id = f"v{(int(existing[-1][1:]) + 1) if existing else 1}"
         dest = self.version_dir(book_id, version_id)
         version = {"format": FORMAT, "book_id": book_id, "version_id": version_id, "label": label,
-                   "source": source or {}, "created": now(), "primary": None, "payloads": {}}
+                   "source": source or {}, "created": now(), "primary": None, "payloads": {}, "caveats": []}
 
         def build(tmp):
             config.write_json_atomic(os.path.join(tmp, "version.json"), version, 0o644)
@@ -277,6 +277,18 @@ class Store:
         self._guard()
         self._rewrite(self.book_file(book_id), lambda root: root.update(fields))
 
+    def set_version_caveats(self, book_id, version_id, caveats):
+        """Record what the scan found: a list of {kind, count, detail, tool}. They never stop a book being filed."""
+        ok = (isinstance(caveats, list) and len(caveats) <= 100 and all(
+            isinstance(c, dict) and set(c) == {"kind", "count", "detail", "tool"} and isinstance(c["kind"], str)
+            and isinstance(c["count"], int) and not isinstance(c["count"], bool) and isinstance(c["detail"], str)
+            and isinstance(c["tool"], str) for c in caveats))
+        if not ok:
+            raise KbError("caveats must be a list of {kind, count, detail, tool}")
+        self.read_version(book_id, version_id)
+        self._guard()
+        self._rewrite(self.version_file(book_id, version_id), lambda version: version.__setitem__("caveats", caveats))
+
     def set_version_label(self, book_id, version_id, label):
         """Record the label the source gave a version (for example an arXiv version), once it is known."""
         if not isinstance(label, str) or not label:
@@ -324,7 +336,7 @@ class Store:
         except ValueError as e:
             raise KbError(f"the event log cannot be read: {e}") from None
 
-    def file_payload(self, book_id, version_id, name, files, primary=None, tool=None):
+    def file_payload(self, book_id, version_id, name, files, primary=None, tool=None, untrusted=False):
         """File a payload: `files` maps a relative name to its bytes. Returns the hash list.
 
         The payload is built in the incoming area, checked against its hash list, renamed into place and made
@@ -349,7 +361,8 @@ class Store:
         self._guard()
         if os.path.lexists(dest):
             raise KbError(f"already filed: {name} of {version_id}")
-        manifest = {"format": FORMAT, "name": name, "tool": tool, "primary": primary, "created": now(),
+        manifest = {"format": FORMAT, "name": name, "tool": tool, "primary": primary, "untrusted": bool(untrusted),
+                    "created": now(),
                     "files": {rel: {"sha256": hashlib.sha256(bytes(data)).hexdigest(), "size": len(data)}
                               for rel, data in sorted(files.items())}}
 

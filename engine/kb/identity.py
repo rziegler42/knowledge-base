@@ -11,8 +11,9 @@ from urllib.parse import urlsplit
 from . import KbError
 
 DEFAULT_PORT = {"http": 80, "https": 443}
-# a book's identity keys, and the kind each is indexed under: an address, an arXiv id, a DOI, the hash of a raw file
-INDEXED_KEYS = {"url": "url", "url_alias": "url", "arxiv": "arxiv", "doi": "doi", "sha256": "sha256"}
+# a book's identity keys, and the kind each is indexed under: an address, an arXiv id, the hash of a raw file. (A DOI is
+# kept in the version's source record but is not an identity key: it comes from an answer nobody has verified.)
+INDEXED_KEYS = {"url": "url", "url_alias": "url", "arxiv": "arxiv", "sha256": "sha256"}
 
 
 def normalize_address(address):
@@ -38,6 +39,10 @@ def normalize_address(address):
     host = parts.hostname
     if not host:
         raise KbError("the address has no host")
+    if "%" in host:
+        # urllib decodes percent escapes in a host when it connects, but a check made on the written form would not
+        # see what they spell (%31%32%37.0.0.1 is 127.0.0.1), so a host written with escapes is not accepted
+        raise KbError("the host is written with percent escapes, which are not accepted")
     if port == 0:
         raise KbError("port 0 is not a usable port")
     shown = f"[{host.lower()}]" if ":" in host else host.lower()

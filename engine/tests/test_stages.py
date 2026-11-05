@@ -51,6 +51,14 @@ class StagesTest(StoreCase):
         with self.assertRaises(KbError):
             stages.mark(self.store, self.book, self.version, "fetched", "failed")  # a failure needs a reason
 
+    def test_a_reason_is_cleaned_and_one_that_is_nothing_once_cleaned_counts_as_no_reason(self):
+        stages.mark(self.store, self.book, self.version, "fetched", "failed", reason="bad \x1b[31mthing‮ happened\n", tool="t\x07ool")
+        entry = stages.read(self.store, self.book, self.version)["stages"]["fetched"]
+        self.assertEqual((entry["reason"], entry["tool"]), ("bad [31mthing happened", "tool"))
+        for empty in ("\x1b‮​", "   \n ", "ㅤ"):
+            with self.assertRaises(KbError, msg=repr(empty)):
+                stages.mark(self.store, self.book, self.version, "fetched", "failed", reason=empty)
+
     def test_due_lists_only_runnable_pending_or_failed_stages(self):
         self.assertEqual(stages.due(self.store, self.book, self.version), ["fetched"])
         stages.mark(self.store, self.book, self.version, "fetched", "done")

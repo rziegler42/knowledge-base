@@ -8,10 +8,9 @@ like a PDF. A version already held is not requested at all; a capture that stopp
 The two address prefixes (the API and the PDF) are settings, so the tests and a mirror can point elsewhere."""
 import hashlib
 import re
-import unicodedata
 import xml.etree.ElementTree as ET
 
-from . import KbError, __version__, capture_url, identity, ids, stages
+from . import KbError, __version__, capture_url, identity, ids, stages, textutil
 from .capture_url import FetchError
 from .store import now
 
@@ -43,10 +42,7 @@ def parse_id(text):
 
 
 def _clean(text, limit):
-    """Text from the source made safe to store and show: whitespace collapsed to single spaces, then every control,
-    direction-mark, zero-width and other format character removed, and cut to a length."""
-    collapsed = " ".join((text or "").split())
-    return "".join(c for c in collapsed if unicodedata.category(c) not in ("Cc", "Cf", "Cs", "Co", "Cn"))[:limit]
+    return textutil.clean(text, limit)
 
 
 def _check_base(url):
@@ -159,13 +155,12 @@ def _claim(store, ident, kind, value, book_id):
 
 
 def _register(store, ident, book_id, version_id):
-    """Record a stored version's identity keys and index entries. The arXiv id decides the book. A DOI is taken from the
-    metadata answer, which is untrusted, so it is recorded only if no other book already holds it."""
+    """Record a stored version's identity keys and index entries. The arXiv id decides the book. The DOI in the metadata
+    answer is kept in the version's source record as a claim, and is not an identity key: it comes from an answer nobody
+    has verified, so it must not decide which book anything belongs to."""
     source = store.read_version(book_id, version_id)["source"]
     ident.reassign("arxiv", source["arxiv_id"], book_id)
-    doi_is_ours = bool(source.get("doi")) and _claim(store, ident, "doi", source["doi"], book_id)
-    store.merge_identity_keys(book_id, set_keys={"doi": source["doi"]} if doi_is_ours else {},
-                              add_keys={"sha256": [source["sha256"]]})
+    store.merge_identity_keys(book_id, add_keys={"sha256": [source["sha256"]]})
     _claim(store, ident, "sha256", source["sha256"], book_id)
 
 
@@ -219,8 +214,9 @@ def _record_failure(store, ident, book_id, base_id, label, meta, error):
     if version_id is None:
         version_id = store.add_version(book_id, label=label, source={"arxiv_id": base_id})
         _choose_current(store, book_id)
-    stages.mark(store, book_id, version_id, "fetched", "failed", reason=str(error), tool=TOOL)
-    return _result("failed", book_id, version_id, str(error))
+    reason = textutil.clean(str(error), 300)  # the reason can carry text the server chose
+    stages.mark(store, book_id, version_id, "fetched", "failed", reason=reason, tool=TOOL)
+    return _result("failed", book_id, version_id, reason)
 
 
 def capture(store, ident, arxiv_id, allow_private=False, api_base=API_BASE, pdf_base=PDF_BASE,

@@ -121,7 +121,8 @@ class FiledPaperTest(ArxivCase):
         self.assertEqual((root["title"], root["authors"], root["year"], root["kind"]),
                          ("A Fixture Paper About Nothing", ["Ada Example", "Bo Sample"], 2021, "preprint"))
         keys = root["identity_keys"]
-        self.assertEqual((keys["arxiv"], keys["doi"]), (ID, "10.1000/example.1"))
+        self.assertEqual(keys["arxiv"], ID)
+        self.assertNotIn("doi", keys)  # the DOI is a claim in the answer, not an identity key
         self.assertEqual(keys["sha256"], [hashlib.sha256(PDF1).hexdigest()])
         v = self.store.read_version(book, version)
         self.assertEqual(v["label"], "v1")
@@ -138,8 +139,9 @@ class FiledPaperTest(ArxivCase):
         state = stages.read(self.store, book, version)["stages"]
         self.assertEqual((state["fetched"]["status"], state["scanned"]["status"]), ("done", "pending"))
         self.assertEqual([e["event"] for e in self.store.read_events(book)], ["filed"])
+        self.assertEqual(src["doi"], "10.1000/example.1")  # kept in the version's source record
         self.assertEqual(self.ident.lookup("arxiv", ID), book)
-        self.assertEqual(self.ident.lookup("doi", "10.1000/example.1"), book)
+        self.assertIsNone(self.ident.lookup("doi", "10.1000/example.1"))
         self.assertEqual(self.ident.lookup("sha256", hashlib.sha256(PDF1).hexdigest()), book)
 
     def test_the_requests_are_honest_and_plain(self):
@@ -168,7 +170,8 @@ class FiledPaperTest(ArxivCase):
             self.serve(arxiv_id=arxiv_id, doi=bad)
             result = self.capture(f"{arxiv_id}v1")
             self.assertEqual(result["status"], "filed", bad)
-            self.assertNotIn("doi", self.store.read_book(result["book_id"])["identity_keys"], bad)
+            source = self.store.read_version(result["book_id"], result["version_id"])["source"]
+            self.assertIsNone(source["doi"], bad)
 
     def test_digits_from_other_scripts_in_the_year_or_doi_are_dropped(self):
         self.serve(published="\u0662\u0660\u0662\u0661-01-01T00:00:00Z", doi="10.\u0661\u0662\u0663\u0664/x")
@@ -186,17 +189,16 @@ class FiledPaperTest(ArxivCase):
         src = self.store.read_version(result["book_id"], result["version_id"])["source"]
         self.assertEqual(src["abstract"], "an abstract")
 
-    def test_a_doi_already_held_by_another_book_is_not_taken_over(self):
+    def test_a_doi_claimed_by_an_answer_never_decides_which_book_anything_belongs_to(self):
         self.serve(arxiv_id="2101.00001", doi="10.1000/shared.1")
-        self.serve(arxiv_id="2101.00002", doi="10.1000/shared.1", pdf=PDF2)
+        self.serve(arxiv_id="2101.00002", doi="10.1000/shared.1", pdf=PDF2)  # a hostile answer claiming the same DOI
         a, b = self.capture("2101.00001v1"), self.capture("2101.00002v1")
-        self.assertEqual(self.ident.lookup("doi", "10.1000/shared.1"), a["book_id"])
-        self.assertEqual(self.store.read_book(a["book_id"])["identity_keys"]["doi"], "10.1000/shared.1")
-        self.assertNotIn("doi", self.store.read_book(b["book_id"])["identity_keys"])
-        os.remove(os.path.join(self.index, "identity.sqlite"))
-        self.ident = identity.Identity(self.index)
-        self.ident.rebuild(self.store)  # the rebuilt index agrees with the live one
-        self.assertEqual(self.ident.lookup("doi", "10.1000/shared.1"), a["book_id"])
+        self.assertNotEqual(a["book_id"], b["book_id"])
+        for book in (a["book_id"], b["book_id"]):
+            self.assertNotIn("doi", self.store.read_book(book)["identity_keys"])
+        self.assertIsNone(self.ident.lookup("doi", "10.1000/shared.1"))
+        for r in (a, b):  # each record keeps the claim it was given, as a claim
+            self.assertEqual(self.store.read_version(r["book_id"], r["version_id"])["source"]["doi"], "10.1000/shared.1")
 
     def test_a_missing_year_or_doi_is_left_out_not_invented(self):
         self.serve(published="not a date")
@@ -543,13 +545,13 @@ class RefusalTest(ArxivCase):
 
 
 class IndexAndCommandLineTest(ArxivCase):
-    def test_the_index_rebuilds_with_the_arxiv_id_the_doi_and_the_hashes(self):
+    def test_the_index_rebuilds_with_the_arxiv_id_and_the_hashes(self):
         self.serve(doi="10.1000/example.1")
         result = self.capture(f"{ID}v1")
         os.remove(os.path.join(self.index, "identity.sqlite"))
         self.ident = identity.Identity(self.index)
         self.ident.rebuild(self.store)
-        for key in (("arxiv", ID), ("doi", "10.1000/example.1"), ("sha256", hashlib.sha256(PDF1).hexdigest())):
+        for key in (("arxiv", ID), ("sha256", hashlib.sha256(PDF1).hexdigest())):
             self.assertEqual(self.ident.lookup(*key), result["book_id"], key)
 
     def run_kb(self, *args):

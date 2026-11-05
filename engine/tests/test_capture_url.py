@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -45,7 +46,7 @@ class Site:
                     time.sleep(delay)
                 try:
                     self.send_response(status)
-                    for k, v in headers.items():
+                    for k, v in (headers.items() if isinstance(headers, dict) else headers):
                         self.send_header(k, v)
                     self.end_headers()
                     self.wfile.write(body)
@@ -115,6 +116,37 @@ class HostGuardTest(unittest.TestCase):
                 capture_url.check_host_allowed(ip, 80, allow_private=False)
             capture_url.check_host_allowed(ip, 80, allow_private=True)
         capture_url.check_host_allowed("8.8.8.8", 80, allow_private=False)
+
+    def test_is_public_judges_every_form_by_the_address_it_carries(self):
+        import ipaddress
+        cases = {"::ffff:7f00:1": False, "::ffff:a00:1": False, "::ffff:808:808": True, "64:ff9b::808:808": True,
+                 "64:ff9b::7f00:1": False, "2002:808:808::1": True, "2002:7f00:1::1": False, "::7f00:1": False,
+                 "2001::1": False, "fec0::1": False, "2606:4700:4700::1111": True, "8.8.8.8": True, "127.0.0.1": False,
+                 "224.0.0.1": False, "100.64.0.1": False, "169.254.169.254": False}
+        for text, expected in cases.items():
+            self.assertEqual(capture_url.is_public(ipaddress.ip_address(text)), expected, text)
+
+    def test_each_layer_refuses_a_host_written_with_percent_escapes_on_its_own(self):
+        with self.assertRaises(KbError):
+            identity.normalize_address("http://%31%32%37.0.0.1/")
+        with self.assertRaises(capture_url.PolicyError):
+            capture_url.resolve_checked("%31%32%37.0.0.1", 80, allow_private=False)
+        with self.assertRaises(capture_url.PolicyError):
+            capture_url.resolve_checked("%31%32%37.0.0.1", 80, allow_private=True)  # even where private hosts are allowed
+        handler = capture_url.make_redirect_handler(allow_private=True, max_redirects=5)
+        req = urllib.request.Request("http://8.8.8.8/start")
+        with mock.patch.object(capture_url, "check_host_allowed"):  # even if the later check were silent
+            with self.assertRaises(capture_url.FetchError):
+                handler.redirect_request(req, None, 302, "Found", {}, "http://%31%32%37.0.0.1/x")
+
+    def test_addresses_hidden_inside_other_ipv6_forms_are_judged_by_the_address_they_hide(self):
+        hidden_private = ("::7f00:1", "::a00:1", "64:ff9b::7f00:1", "64:ff9b::a00:1", "64:ff9b::c0a8:101",
+                          "2002:7f00:1::1", "2002:c0a8:101::1", "2002:a9fe:a9fe::1", "64:ff9b:1::1", "2001::1", "fec0::1")
+        for ip in hidden_private:
+            with self.assertRaises(capture_url.FetchError, msg=ip):
+                capture_url.check_host_allowed(ip, 80, allow_private=False)
+        for ip in ("64:ff9b::808:808", "2002:808:808::1", "2606:4700:4700::1111"):
+            capture_url.check_host_allowed(ip, 80, allow_private=False)  # public ones inside the same forms are fine
 
     def test_a_name_that_resolves_to_a_private_address_is_refused(self):
         fake = [(2, 1, 6, "", ("10.1.2.3", 80))]
@@ -306,6 +338,220 @@ class DuplicateTest(CaptureCase):
         for key in (("url", self.site.url("/page")), ("url", self.site.url("/copy")),
                     ("sha256", hashlib.sha256(PAGE).hexdigest())):
             self.assertEqual(self.ident.lookup(*key), a["book_id"], key)
+
+
+class NetworkGuardTest(CaptureCase):
+    """The address that was checked is the address that is connected to, and a name that cannot be checked is not fetched."""
+
+    @staticmethod
+    def fetch_thread_ends(seconds=4.0):
+        """Whether every thread the fetch started (named kb-fetch) has ended within a few seconds of the deadline."""
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if not [t for t in threading.enumerate() if t.name == "kb-fetch" and t.is_alive()]:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def test_a_host_written_with_percent_escapes_is_refused_before_any_request(self):
+        self.site.add("/page")
+        for host in ("%31%32%37.0.0.1", "localhost%2e", "127%2e0%2e0%2e1", "%6c%6f%63%61%6c%68%6f%73%74", "exa%6dple.com"):
+            with self.assertRaises(KbError, msg=host):
+                capture_url.capture(self.store, self.ident, f"http://{host}:{self.site.port}/page")
+        self.assertEqual(self.site.count(), 0)
+        self.assertEqual(self.store.list_books(), [])
+
+    def test_a_redirect_to_a_host_with_percent_escapes_is_refused(self):
+        handler = capture_url.make_redirect_handler(allow_private=False, max_redirects=5)
+        req = urllib.request.Request("http://8.8.8.8/start")
+        for target in ("http://%31%32%37.0.0.1/x", "http://localhost%2e/x", "http://127%2e0%2e0%2e1/"):
+            with self.assertRaises(capture_url.FetchError, msg=target):
+                handler.redirect_request(req, None, 302, "Found", {}, target)
+
+    def test_a_name_that_answers_differently_the_second_time_is_never_connected_to_at_the_private_address(self):
+        answers = iter([[(2, 1, 6, "", ("93.184.216.34", 80))]])
+
+        def getaddrinfo(host, port, *a, **k):
+            return next(answers, [(2, 1, 6, "", ("127.0.0.1", port))])  # every later lookup says loopback
+
+        targets = []
+
+        def create_connection(address, *a, **k):
+            targets.append(address[0])
+            raise ConnectionRefusedError("no real connection in a test")
+
+        with mock.patch("socket.getaddrinfo", getaddrinfo), mock.patch("socket.create_connection", create_connection):
+            result = capture_url.capture(self.store, self.ident, "http://rebind.example/page")
+        self.assertNotIn("127.0.0.1", targets, "the connection went to the private address")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("private", result["reason"])
+
+    def test_the_connection_uses_the_address_it_checked_and_looks_the_name_up_only_once(self):
+        lookups, targets = [], []
+
+        def getaddrinfo(host, port, *a, **k):
+            lookups.append(host)
+            return [(2, 1, 6, "", ("93.184.216.34", port))]
+
+        def create_connection(address, *a, **k):
+            targets.append(address)
+            raise ConnectionRefusedError("no real connection in a test")
+
+        with mock.patch("socket.getaddrinfo", getaddrinfo), mock.patch("socket.create_connection", create_connection):
+            with self.assertRaises(capture_url.FetchError):  # the stand-in connection always refuses
+                capture_url.fetch("http://pinned.example/page", allow_private=False, total_timeout=5)
+        self.assertEqual(targets, [("93.184.216.34", 80)])
+        self.assertEqual(lookups, ["pinned.example"], "the name must be looked up once, by the connection itself")
+
+    def test_a_name_that_cannot_be_resolved_is_not_fetched_even_when_the_second_lookup_would_succeed(self):
+        calls = []
+
+        def getaddrinfo(host, port, *a, **k):
+            calls.append(host)
+            if len(calls) == 1:
+                raise socket.gaierror(8, "no such name")
+            return [(2, 1, 6, "", ("127.0.0.1", self.site.port))]
+
+        self.site.add("/page")
+        with mock.patch("socket.getaddrinfo", getaddrinfo):
+            result = capture_url.capture(self.store, self.ident, f"http://flaky.example:{self.site.port}/page")
+        self.assertEqual(self.site.count(), 0)
+        self.assertEqual(result["status"], "failed")
+
+    def test_a_name_with_one_private_answer_among_public_ones_is_not_connected_to_at_all(self):
+        targets = []
+
+        def refuse(address, *a, **k):
+            targets.append(address)
+            raise OSError("no real connection in a test")
+
+        fake = [(2, 1, 6, "", ("93.184.216.34", 80)), (2, 1, 6, "", ("10.0.0.5", 80))]
+        with mock.patch("socket.getaddrinfo", return_value=fake), mock.patch("socket.create_connection", refuse):
+            with self.assertRaises(KbError) as cm:
+                capture_url.capture(self.store, self.ident, "http://mixed.example/page")
+        self.assertIn("private", str(cm.exception))
+        self.assertEqual(targets, [])
+        self.assertEqual(self.store.list_books(), [])
+
+    def test_a_server_that_trickles_its_headers_does_not_keep_a_thread_alive_after_the_deadline(self):
+        class Trickle(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def do_GET(self):
+                try:
+                    self.wfile.write(b"HTTP/1.0 200 OK\r\n")
+                    for i in range(200):
+                        self.wfile.write(b"X-Slow-%d: y\r\n" % i)
+                        self.wfile.flush()
+                        time.sleep(0.4)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+
+            def log_message(self, *a):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Trickle)
+        server.daemon_threads = True
+        threading.Thread(target=lambda: server.serve_forever(poll_interval=0.02), daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        result = self.capture(f"http://127.0.0.1:{server.server_address[1]}/", timeout=5, total_timeout=1)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("timed out", result["reason"])
+        self.assertTrue(self.fetch_thread_ends(), "the fetch's thread is still alive")
+
+    def test_a_server_that_trickles_over_https_does_not_keep_a_thread_alive_after_the_deadline(self):
+        import ssl
+        cert, key = os.path.join(self.base, "cert.pem"), os.path.join(self.base, "key.pem")
+        self.assertFalse([t for t in threading.enumerate() if t.name == "kb-fetch"])  # nothing left over from another test
+        made = subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
+                               "-out", cert, "-days", "1", "-subj", "/CN=127.0.0.1", "-addext",
+                               "subjectAltName=IP:127.0.0.1"], capture_output=True, timeout=60)
+        self.assertEqual(made.returncode, 0, made.stderr)
+
+        class Trickle(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.0"
+
+            def do_GET(self):
+                try:
+                    self.wfile.write(b"HTTP/1.0 200 OK\r\n")
+                    for i in range(200):
+                        self.wfile.write(b"X-Slow-%d: y\r\n" % i)
+                        self.wfile.flush()
+                        time.sleep(0.4)
+                except (BrokenPipeError, ConnectionResetError, OSError):
+                    pass
+
+            def log_message(self, *a):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Trickle)
+        server.daemon_threads = True
+        server_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_ctx.load_cert_chain(cert, key)
+        server.socket = server_ctx.wrap_socket(server.socket, server_side=True)
+        threading.Thread(target=lambda: server.serve_forever(poll_interval=0.02), daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        client_ctx = ssl.create_default_context(cafile=cert)  # trust the test certificate and nothing else
+        before = threading.active_count()
+        with mock.patch("http.client._create_https_context", lambda version: client_ctx):
+            result = self.capture(f"https://127.0.0.1:{server.server_address[1]}/", timeout=5, total_timeout=1)
+        self.assertEqual(result["status"], "failed", result)
+        self.assertIn("timed out", result["reason"])
+        self.assertTrue(self.fetch_thread_ends(), "the fetch's thread is still alive behind https")
+
+    def test_header_values_that_are_kept_are_cleaned(self):
+        self.site.add("/page", headers={"ETag": '"\x1b[31mred\x07"', "Last-Modified": "Mon\x01, 01 Jan 2024", "Cache-Control": "a­" + "b" * 600})
+        result = self.capture("/page")
+        kept = self.store.read_version(result["book_id"], result["version_id"])["source"]["headers"]
+        for value in kept.values():
+            for bad in ("\x1b", "\x07", "\x01", "­"):
+                self.assertNotIn(bad, value)
+            self.assertLessEqual(len(value), 300)
+        self.assertEqual(kept["etag"], '"[31mred"')
+
+    def test_a_content_length_written_in_other_digits_is_a_failed_fetch_not_a_crash(self):
+        for value in ("²", "1e3", "-5", " ", "12 34"):
+            self.site.add("/odd", headers={"Content-Length": value}, body=b"x")
+            result = self.capture("/odd")
+            self.assertEqual(result["status"], "failed", value)
+
+    def test_conflicting_content_length_headers_are_refused_and_repeated_equal_ones_are_not(self):
+        self.site.add("/conflict", body=b"12345", headers={})
+        h = self.site.routes["/conflict"]
+        self.site.routes["/conflict"] = (h[0], list(h[1].items()) + [("Content-Length", "3"), ("Content-Length", "5")], h[2], h[3])
+        result = self.capture("/conflict")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("conflicting", result["reason"])
+        self.site.add("/same", body=b"12345", headers={})
+        h = self.site.routes["/same"]
+        self.site.routes["/same"] = (h[0], list(h[1].items()) + [("Content-Length", "5"), ("Content-Length", "5")], h[2], h[3])
+        self.assertEqual(self.capture("/same")["status"], "filed")
+
+    def test_two_content_encoding_headers_are_refused_if_any_is_not_identity(self):
+        self.site.add("/twice", headers={"Content-Encoding": "identity"})
+        h = self.site.routes["/twice"]
+        self.site.routes["/twice"] = (h[0], list(h[1].items()) + [("Content-Encoding", "gzip")], h[2], h[3])
+        result = self.capture("/twice")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("encoded", result["reason"])
+
+    def test_a_body_that_is_compressed_or_binary_is_not_taken_for_a_page(self):
+        for label, body in {"gzip": b"\x1f\x8b\x08\x00" + b"x" * 50, "binary": b"<html>\x00\x01\x02" + b"\xff" * 100}.items():
+            self.site.add(f"/{label}", body=body, content_type=None)
+            result = self.capture(f"/{label}")
+            self.assertEqual(result["status"], "failed", label)
+            self.assertIn("binary", result["reason"], label)
+
+    def test_text_from_the_server_is_cleaned_before_it_is_stored_as_a_reason(self):
+        self.site.add("/evil", body=b"x", content_type="application/\x1b[31mred ")
+        result = self.capture("/evil")
+        self.assertEqual(result["status"], "failed")
+        stored = stages.read(self.store, result["book_id"], result["version_id"])["stages"]["fetched"]["reason"]
+        for text in (result["reason"], stored):
+            self.assertNotIn("\x1b", text)
+        self.assertIn("not a web page", stored)
 
 
 class IdentityIndexTest(CaptureCase):
