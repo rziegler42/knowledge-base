@@ -5,8 +5,10 @@ workbench except for model calls, which this first slice does not make. The desi
 [`docs/specs/`](../docs/specs/README.md) and the build plan is
 [`docs/plans/2026-11-05-first-slice-capture-search-read.md`](../docs/plans/2026-11-05-first-slice-capture-search-read.md).
 
-Only library setup exists so far. Requirements: Python 3.15 (the version the first increment was written and tested with) and no
-other package.
+The engine sets up a library, captures web pages and arXiv papers, scans them, and converts them to text. Search and reading come
+next. Requirements: Python 3.15 (the version it was written and tested with); the engine itself uses only the standard library. Two
+of the converters need more, and the conversion section below says what: the pinned packages in `engine/.venv` for the article
+extractor, and poppler for PDFs.
 
 ## Run the tests
 
@@ -14,6 +16,7 @@ From the repository root:
 
 ```sh
 python3 -m unittest engine.tests.test_setup engine.tests.test_store engine.tests.test_stages
+engine/.venv/bin/python -m unittest engine.tests.test_convert     # the conversion tests, which use the pinned environment
 ```
 
 ## Set up a library
@@ -196,3 +199,97 @@ when it is hidden by the `hidden` attribute or an inline style, not by a stylesh
 
 There is no command that runs the scan yet. `scan.scan_version(store, book, version)` does it, and the command that advances every
 book through its stages comes with the search index.
+
+## Converting what is captured
+
+A version that has been fetched and scanned (or whose scan failed or was skipped) is converted to text by `kb/convert.py`
+(`convert.convert_version(store, book, version)`; there is no command yet, and the one that advances every book comes with the
+search index). The converters are approved tools like the scan, run by the same sandboxed runner, on the stored original:
+
+| Tool name | What it is | Kind of file | Output |
+| --- | --- | --- | --- |
+| `trafilatura` | an article extractor, run with the packages pinned in `requirements.lock` (`kb/extract_traf.py`) | web page | `blocks.json` |
+| `kb-html-std` | the plain extractor, the Python standard library with a tag skip list (`kb/extract_std.py`) | web page | `blocks.json` |
+| `pdftotext` | poppler's text extractor | PDF | `text.txt` |
+
+**Set up the tools.** The article extractor needs its environment, built from the hashes in the lock file (a package whose file
+differs from its hash is refused, and nothing outside the list is installed). The PDF tool needs poppler (`brew install poppler`).
+Then, as for the scan, print the entries, read them, and paste them into `approved_tools` in your config:
+
+```sh
+python3 -m venv engine/.venv
+engine/.venv/bin/python -m pip install --require-hashes --no-deps -r engine/requirements.lock
+cd engine
+python3 -m kb describe-tool all        # or one of: kb-scan, kb-html-std, trafilatura, pdftotext
+python3 -m kb tools                    # whether each approved entry still matches
+```
+
+Read each entry before you approve it. For `trafilatura` look at the two folders it may read (the Python install and the
+environment's packages). For `pdftotext` look at the list of folders: it is the program's own package and every package it loads
+a library from (found by reading its load commands, about two dozen under Homebrew). A Homebrew upgrade of poppler or of any library it uses changes those paths, and the entry then
+fails closed until you describe and approve it again, which is the intent. The version of each entry ends in `-kb1`: the number
+is the revision of our command line or wrapper, raised when its options change.
+
+**What a conversion is.** Each tool writes one file, which is read back as untrusted data and checked in full (`convert.py`).
+The text is a list of blocks (heading, paragraph, list item, quote, code, table row; for a PDF, the paragraphs of each page),
+cleaned of control, direction, zero-width and other hidden characters, with line breaks kept. The converted text is the blocks
+joined by blank lines. Each conversion is filed as a derived payload (`derived/<tool>/<n>/`) and recorded on the version
+(`conversions`, `conversion_in_use`, `conversion_check` in `version.json`) with its tool, version, generation, structure quality,
+block and character counts, and page count. The structure quality is **full** (headings, and the text starts under one),
+**partial** (headings, but some text lies before the first) or **flat** (no headings; a PDF is text with page marks only, and a
+page with no heading or paragraph tags is one block that keeps its line breaks).
+
+**The extractor-size rule.** For a web page both extractors run and their sizes are compared; the book is marked partial when
+one returns more than twice the characters of the other, when what they found is under 200 characters for a file of 3,000 bytes
+or more (a page built by scripts, or a scan of images), or when an extractor stopped at the limit of what it reads (10 MB). The
+reasons are recorded in `conversion_check`, and a partial book uses the conversion with the most text; otherwise the article
+extractor's is used. With only one extractor approved, or one failing, the book is converted by the other and `compared` is false,
+so an unchecked extraction does not look checked. The ratio can be set in the config as `partial_ratio` (a number above 1, at most
+1000); the first values rest on a test of ten pages, so they will give false alarms and misses: on that test a thread of 71
+comments gave 3.7k against 28k characters (flagged), a repository page 1.5k against 2.6k (a ratio of 1.7, not flagged), and a
+page built by scripts 22 and 29 characters (flagged by the second rule).
+
+**Locators** (`kb/locator.py`). A locator names the conversion it was made against (tool, version, generation) and a place by
+the structure of that conversion: a heading path and a paragraph number (`section`), a page and the block on it (`page`), or a
+character offset (`offset`, for a page with no headings). It also carries a hash of the first twelve words at the place (lower
+case, no punctuation, compatibility forms folded). The place holds only against the same conversion; against another, the words
+find the passage again inside any block, and a different split into blocks does not matter. A passage in more than one block is
+reported with how many, and the first is named. A passage that is gone is "not found"; nothing is guessed.
+
+**Not covered.**
+- The article extractor is set to leave comments out (the setting of the ten-page test); a discussion thread's comments therefore
+  come from the plain extractor, which is what the size rule is for.
+- The packages of the environment are fixed by the hashes when it is built, not checked file by file each time a page is
+  converted (the scripts and the Python program are pinned, as for every tool). The same is true of poppler's libraries.
+- `trafilatura` loads `dateutil`, which imports `ctypes`, which asks the system for its name and release; the sandbox refuses
+  that, so `extract_traf.py` gives a fixed answer when it is refused rather than allowing it for every tool. Nothing else it
+  needed was refused.
+- A PDF is read for its text and nothing else: a scan of images gives almost no text and is marked partial, there is no OCR, and
+  paragraphs are where poppler puts blank lines. Hyphenated words at a line end stay as they are.
+- The plain extractor leaves out content that is hidden by the `hidden` attribute, `aria-hidden` or an inline style, as well as
+  navigation, forms and scripts; the raw capture still has it, and the scan reports hidden text.
+- The article extractor's time and memory grow with the number of tags, not the bytes (about 5 s and 275 MB for 125,000 tags, 31 s
+  and 1.6 GB for a million), and the sandbox does not limit memory. Its wrapper therefore reads a page only up to 200,000 tags and
+  10 MB, and says when it cut (which marks the book partial); the plain extractor still reads up to 10 MB. A page with more tags
+  than that, or one nested more than 10,000 deep (the plain extractor then stops reading, since it could no longer tell which
+  element a closing tag ends), is converted only as far as that.
+- The plain extractor reads a page in the character set it declares only if that is a common text encoding (UTF-8, Latin-1 and the
+  ISO-8859, Windows, KOI8, GB, Big5, EUC and Shift-JIS families); any other name is ignored and the page is read as UTF-8.
+- `describe-tool pdftotext` runs the `pdftotext` that is first on your path (`-v`) and `otool` on it, outside the sandbox, to
+  find its version and libraries. It first refuses any program that is not in a Homebrew package folder
+  (`<prefix>/Cellar/<package>/<version>`), so nothing else is run, and it lists only whole package folders. Read the printed
+  folders all the same.
+- Locator search is bounded: text that grows more than four times when normalised, or more than 100 million normalised characters
+  in one search, is refused with a reason and not searched, so text built to make the search slow cannot.
+- If a tool's output keeps failing its checks, each try is kept as its own generation; after five from one version of a tool it is
+  not run again on that version (a different version of the tool is, and so is the same version once you delete its failed
+  outputs under `v/<version>/derived/<tool>/`; they are read-only, so `chmod -R u+w` first). Failures that file nothing (a tool that
+  exits with an error or runs out of time) are not counted, and can be retried each time.
+- Python's HTML parser holds every attribute of a tag in memory at once, so a page that is one enormous tag with millions of
+  attributes can take about 300 times its size (10 MB gave 2 to 3 GB) in the plain extractor and in the scan, and the sandbox
+  does not limit memory; the tool is killed or fails and the stage notes it. A page that hides text by a style sheet, a class,
+  `font-size:0`, `opacity:0` or a position is not recognised by the plain extractor (the scan reports some of those); text hidden
+  by an inline `display:none` or `visibility:hidden` is left out, and so is a style longer than 64 KB. An unclosed `<nav>`, `<form>`
+  or `<aside>` hides the rest of the page from the plain extractor, as the HTML rules put the rest of the page inside it.
+- The text match of a locator looks inside one block at a time, so a passage that a different conversion splits across two blocks
+  is not found by text.

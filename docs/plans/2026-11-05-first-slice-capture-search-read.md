@@ -538,7 +538,7 @@ covers is an increment breaking an earlier one through the shared store.
 - **Committed** by the owner's word as `f3c9ba86f6748a16fcc3e0d0540168380e545020`, not pushed. A DOI that changes between
   versions is no longer an open point: the DOI is not indexed (see the security review under increment E).
 
-### Increment E — The confined tool runner and the scan stage (implemented, reviewed and security-reviewed, not yet committed)
+### Increment E — The confined tool runner and the scan stage (committed as 4eeadf8223690b86af4347ff82b3193c529bc7a7, not pushed)
 
 - **Done.** `engine/kb/approvals.py` (the owner's approved-tools list in the owner-only config: name, exact version, the real path
   of the program, sha256 of the program and each script, readable folders, formats, limits), `convert_run.py` (the runner:
@@ -606,3 +606,101 @@ covers is an increment breaking an earlier one through the shared store.
   percent-escaped hosts, the watchdog, `textutil.py` and the `describe-tool` and `tools` commands are additions.
 - **Left for the owner:** the word to commit increments E, and whether the findings listed above as not covered are acceptable
   for the next increment, F, which runs real converters under this same runner.
+
+### Increment F — Converters and locators (implemented, reviewed and security-reviewed, not yet committed)
+
+- **Done.** `engine/kb/convert.py` (what a tool may hand back, checked in full; blocks, section paths, structure quality; the
+  extractor-size rule; the stage `convert_version` and `load_in_use`), `convert_html.py` and `convert_pdf.py` (the approved-list
+  entries), `extract_std.py` (the plain extractor, standard library only) and `extract_traf.py` (trafilatura, with a version
+  check), `locator.py`, `engine/requirements.lock`, and the supporting pieces: `textutil.block_text`, `approvals.find_for`,
+  `Store.set_version_conversions` with three new version fields, `describe-tool <name|all>`, two probe modes, and a README section.
+  One sentence was added to the extractor-size bullet of `docs/specs/book.md` (the first build compares in both directions, also
+  marks thin and cut pages, and says when only one extractor ran).
+- **Step 1.** `engine/.venv` was built from the lock with `--require-hashes --no-deps`: 20 wheels, resolved on 2026-11-05 with Python
+  3.15.0 and pip 26.2.2 on macOS arm64, each hashed from the file `pip download --only-binary=:all:` fetched. `pip freeze` of the
+  venv equals the resolved set. `.venv` is ignored by git. **The owner has not yet put any converter on the list of tools allowed
+  to run**; the tests put entries in temporary configs. `python3 -m kb describe-tool all` prints the four entries to review.
+- **Verification as run.** `engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_convert`: 130 tests, OK,
+  none skipped. The security-review fixes changed `textutil.clean` and `scan_tool.py`, which every other part of the engine uses,
+  so the other eight test files were run as well (`test_textutil`, `test_store`, `test_stages`, `test_convert_run`, `test_scan`,
+  `test_capture_url`, `test_capture_arxiv`, `test_setup`): 332 tests, OK. That is every test file of the engine, 462 tests.
+- **Settings and first values** (all resting on the ten-page test, not on more): ratio 2.0 (config `partial_ratio`, above 1 and at
+  most 1000), thin text under 200 characters for a file of 3,000 bytes or more, comments left out of trafilatura, pages read to
+  10 MB. On a synthetic 71-comment thread the real extractors gave 328 and 22,085 characters (marked partial, the plain
+  conversion used); a page built by scripts is marked partial by the thin rule; the repository page of the test (a ratio of 1.7)
+  would not be marked.
+- **Break-it check.** 142 deliberate faults in scratch copies of the final code, each run against the tests that should notice it:
+  138 caught. The four that are not are equivalent or unreachable: a boolean `partial_ratio` (the range check already refuses it),
+  the extra pin of the executable (`describe` always pins it), the bound on how much of a page is read (the output is cut at
+  the same size anyway), and the skip of elements inside a table row in the wrapper (trafilatura's output does not nest them in
+  the cases I could build). The first full run, before the security review, caught 86 of 99; later runs found, each time, tests
+  that were too weak or that passed for another reason (an unfetched version refused only because its scan was also pending; an
+  output over the read limit refused only because the truncated read was not JSON; a version built by another Python refused
+  only because the folder name was also wrong; two cross-checks that each hid the other; a store check hidden by a mismatched
+  reference; a style with a comment inside the property name or padded past the part that was read; no test of the cut flag of the
+  article extractor) and one check that was dead code, which I removed. Some misses were the harness's own: stale compiled files
+  in the scratch copies, a fault line with the wrong escaping that changed nothing, and a fault aimed at the wrong test class.
+- **A claim of mine that was wrong.** While building the `pdftotext` entry I concluded that the sandbox needs read permission on
+  the symlinks leading to each library, and wrote code and a README sentence for it. The break-it check showed that the entry
+  works without them. The earlier failure was my shell not splitting an unquoted variable, so the whole list of folders had gone
+  into the profile as one path. The symlink logic and the sentence are removed, and the entry is narrower (about two dozen package
+  folders, not three times that), and a test now requires every readable folder to be a whole package.
+- **Reviewer agent.** One exchange of six, recommendation "no blocking findings". Applied or noted: the plan's wording of a
+  locator (below); a note to carry the within-one-block text match into increment H; the minor mismatch in the plain extractor when
+  nesting passes 10,000 levels (a closing tag may then end an earlier element of the same name; it changes only how a pathological
+  page is grouped, and stays inside the sandbox) is **deferred**; a non-Homebrew `pdftotext` would be given its whole folder to
+  read, which the owner sees in the printed entry (**noted**, with the README advice to read the folders); the packages in the
+  environment are fixed by hashes at build time and not checked per file, and the version check lives in the wrapper (**noted**,
+  disclosed in the README). The reviewer could not run anything, and read most but not all of the stage tests.
+- **Departures from the plan's wording.**
+  - A locator stores its place by the structure of its conversion (heading path and paragraph number, page and block on the page,
+    or a character offset) and not a block index, because an index moves when blocks are added and the spec's tested locator was a
+    heading path, a paragraph number and an excerpt hash. `locator.resolve` returns the block index.
+  - The plan lists `convert_html.py`, `convert_pdf.py`, `locator.py`; the extractor programs have to be files of their own to run
+    in the sandbox, and the stage and the checks of tool output sit in `convert.py`, so `convert.py`, `extract_std.py` and
+    `extract_traf.py` are added.
+  - The fallback order of tools is the order in `convert.TOOLS` (article extractor first), and the list of allowed tools is
+    consulted by tool name and kind of file, taking the first entry; both web extractors always run, as the plan's outcome says,
+    so the spec's "a second tool runs when the first gives a flat result" is not what the first build does for web pages.
+  - The versions of the entries end in `-kb1`, the revision of our command line or wrapper.
+  - The fixtures of step 2 (a clean document, a flat page, a thread, a script-built page, a PDF with page breaks) are built in the
+    test file and in a small PDF writer, as approximations of the ten pages, and not saved files.
+  - `extract_traf.py` answers `os.uname()` itself when the sandbox refuses it, because `dateutil`, which trafilatura loads, imports
+    `ctypes`, which asks for it; the shared profile was not widened for one library.
+- **Not done.** There is no command that runs the conversion yet (G adds `process`). Search, reading and the index are G and H. No
+  live conversion of a real captured page or paper has been run outside the tests.
+- **Security review.** The owner was asked, with a recommendation to run it before the commit (this increment runs third-party
+  packages and a third-party program on untrusted pages and PDFs, parses their output, and reads library folders), and answered
+  **yes: "run the security review"**. Two `security-reviewer` agents worked on copies, one on the tools, their entries and the
+  sandbox, one on the path from a tool's output to what is stored and read back. Neither found a Critical or High issue, and
+  the sandbox held when the reviewer replaced the parser with a program of its own: no reads outside the allowed folders, no
+  writes outside the output folder, no network, no new programs, no signals. A third agent then took a second look at the fixes.
+  - *Applied, each with a test that failed before the fix:* invisible characters U+17B4, U+17B5 and U+180B to U+180F survived
+    cleaning (and `clean` now returns its own cleaned form, which other code compares with); `locator.resolve` could be made to cost
+    seconds and a gigabyte by text that grows when normalised (now refused when it grows over four times, a budget per search, a
+    block that grows is skipped and reported, and `make` reads only a prefix); the locator check is strict about types, sizes
+    and the form of strings; a failing tool is not run again after five failed outputs of one version; generation folders are
+    ASCII digits only; a recorded conversion must be filed under its own tool and generation and made by that tool and version;
+    the store checks the shape and the cleaned form of what it records; a boolean or float `format` was accepted; a memory error
+    crashed the stage; the plain extractor crashed on seven declared character sets that are not text encodings (and read EBCDIC
+    pages under cp500 and the like) and is now limited to a list of common ASCII-compatible ones; a lone surrogate could stop the
+    output being written; the style-comment pattern cost the square of the length (40 s for a 10 MB page, in the plain extractor
+    and in the scan from increment E, which is fixed in both); a style padded past 4 KB hid its hiding, and now anything over 64 KB
+    counts as hiding; nesting past 10,000 levels dropped the skip rules and now stops the reading and says so; trafilatura took
+    31 s and 1.6 GB for a million tags and now reads at most 200,000 tags; `describe-tool pdftotext` ran any program first on the
+    path and put a whole folder on the list of folders to read for a library outside Homebrew, and now refuses anything not in a
+    Homebrew package folder before running it; a folder name with glob characters was expanded.
+  - *Second look:* no Critical or High. It found one bug of my own making, a locator refused when its heading was cut at a space
+    (about one in six long headings), and two latent ones (`clean` not returning its own cleaned form; a charset list that
+    admitted EBCDIC); all fixed.
+  - *Not fixed, recorded in the README:* the sandbox does not limit memory, and Python's HTML parser takes about 300 times the
+    size of a page that is one enormous tag (2 to 3 GB for 10 MB) in the plain extractor and in the scan; the runtime and the
+    packages are not pinned file by file (a changed package would produce falsified text, still inside the sandbox); the plain
+    extractor does not recognise hiding by style sheet, class, position, `font-size:0` or `opacity:0`; an unclosed `<nav>`,
+    `<form>` or `<aside>` hides the rest of the page from it; a failing version of a tool stays stopped on that book until its failed
+    outputs are deleted by hand; the text match of a locator is within one block; 41 MB of PDF text takes about 8 s to read.
+  - *Limits of the evidence:* the reviewers could not run `git status` or the test classes (their shells were limited to scripts),
+    did not exploit a memory-safety bug in lxml, libxml2, poppler or FreeType (they assumed one and showed the sandbox contains
+    it), ran a small fuzz of PDFs only, and tested on this machine's macOS, Python and poppler.
+- **Left for the owner:** the word to commit F, and the converters' entries, which only the owner puts on the list by pasting
+  them into the config.

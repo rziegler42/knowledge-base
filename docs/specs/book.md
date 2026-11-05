@@ -190,7 +190,11 @@ they have their own specs.
 - **[proposed]** For a web page no single extractor is right, so two run and their sizes are compared. When the article extractor
   returns far less text than the plain extractor (in the test, 1.5k against 2.6k characters for a repository page and 3.7k against
   28k for a thread), the book is marked partial and the owner can see both. The threshold is not settled and rests on ten pages.
-  A page with no paragraph or heading tags is one flat block, and its only locator is an offset in the converted text.
+  A page with no paragraph or heading tags is one flat block, and its only locator is an offset in the converted text. The first
+  build (`engine/kb/convert.py`) compares in both directions at a ratio of two (a setting), also marks a file partial when the
+  extractors find under 200 characters for 3,000 bytes or more (a page built by scripts, or a scan of images) or stopped at the
+  limit of what they read, and says when only one extractor ran, so that a book that was not compared does not look compared.
+  By that ratio the repository page of the test (a ratio of 1.7) is not marked.
 - **[proposed]** The tool is chosen by format: a tool built for scientific papers for PDFs of papers (recovering sections, authors
   and references), the native headings for office files and Markdown, an article extractor for web pages. The local model may
   repair or fill in an outline, with its output marked as model-made.

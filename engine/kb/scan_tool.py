@@ -262,6 +262,23 @@ _HIDING = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden|font-size\s*:\
 _MAX_DEPTH = 5000
 
 
+def _strip_comments(value):
+    """A style with its CSS comments removed (a comment can split a property name), in one pass: a pattern that looks for the
+    end of each comment costs the square of the length when none ends. A comment that never ends runs to the end, as in CSS."""
+    out, i = [], 0
+    while True:
+        start = value.find("/*", i)
+        if start < 0:
+            out.append(value[i:])
+            break
+        out.append(value[i:start])
+        end = value.find("*/", start + 2)
+        if end < 0:
+            break
+        i = end + 2
+    return "".join(out)
+
+
 class _Scanner(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -289,8 +306,11 @@ class _Scanner(HTMLParser):
         if len(self.stack) < _MAX_DEPTH:
             self.stack.append(tag)
             self.open[tag] = self.open.get(tag, 0) + 1
-        style = re.sub(r"/\*.*?\*/", "", a.get("style", "")[:4096], flags=re.S)  # a comment can split the property name
-        if self.hidden_from is None and ("hidden" in a or _HIDING.search(style)):
+        raw_style = a.get("style", "")
+        style = _strip_comments(raw_style[:65_536])  # a comment can split the property name
+        # a style no page needs (over 64 KB) is not read for hiding, it is counted as hiding; so padding cannot push the
+        # rule that hides the text out of the part that is read
+        if self.hidden_from is None and ("hidden" in a or len(raw_style) > 65_536 or _HIDING.search(style)):
             self.hidden_from = len(self.stack)
         if tag in ("script", "style"):
             self.in_script += 1

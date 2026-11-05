@@ -15,18 +15,21 @@ incoming area, re-read from disk and checked against that list, and only then re
 read-only, so it is never half filed. Manifests are rewritten with a temporary file and a rename."""
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
 from datetime import datetime, timezone
 
-from . import KbError, config, ids, incoming, library, stages
+from . import KbError, config, ids, incoming, library, stages, textutil
 
 BOOKS = "books"
 FORMAT = 1
 _VERSION = re.compile(r"v[1-9][0-9]{0,5}")
 _PAYLOAD = re.compile(r"original|derived/[a-z0-9][a-z0-9._-]{0,63}/[0-9]{1,6}")
 _SHELF = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+_TOOL = re.compile(r"[a-z][a-z0-9-]{0,40}")
+_TOOL_VERSION = re.compile(r"[0-9A-Za-z._-]{1,40}")
 
 
 def now():
@@ -208,7 +211,8 @@ class Store:
         version_id = f"v{(int(existing[-1][1:]) + 1) if existing else 1}"
         dest = self.version_dir(book_id, version_id)
         version = {"format": FORMAT, "book_id": book_id, "version_id": version_id, "label": label,
-                   "source": source or {}, "created": now(), "primary": None, "payloads": {}, "caveats": []}
+                   "source": source or {}, "created": now(), "primary": None, "payloads": {}, "caveats": [],
+                   "conversions": [], "conversion_in_use": None, "conversion_check": None}
 
         def build(tmp):
             config.write_json_atomic(os.path.join(tmp, "version.json"), version, 0o644)
@@ -288,6 +292,38 @@ class Store:
         self.read_version(book_id, version_id)
         self._guard()
         self._rewrite(self.version_file(book_id, version_id), lambda version: version.__setitem__("caveats", caveats))
+
+    def set_version_conversions(self, book_id, version_id, conversions, in_use, check):
+        """Record the conversions of a version: one record for each tool that converted it, the one to use, and the result
+        of the extractor-size check. Replaces what was recorded before. The shapes are checked, not trusted."""
+        keys = {"tool", "version", "generation", "payload", "parse", "quality", "blocks", "chars", "pages", "truncated"}
+        count = lambda v: type(v) is int and 0 <= v <= 10 ** 9
+        plain = lambda v, limit: isinstance(v, str) and len(v) <= limit and textutil.clean(v, limit) == v
+        ok = (isinstance(conversions, list) and 0 < len(conversions) <= 10 and all(
+            isinstance(c, dict) and set(c) == keys and isinstance(c["tool"], str) and bool(_TOOL.fullmatch(c["tool"]))
+            and isinstance(c["version"], str) and bool(_TOOL_VERSION.fullmatch(c["version"]))
+            and type(c["generation"]) is int and 1 <= c["generation"] <= 999_999
+            and c["payload"] == f"derived/{c['tool']}/{c['generation']}"
+            and c["parse"] in ("blocks-json", "paged-text") and c["quality"] in ("full", "partial", "flat")
+            and count(c["blocks"]) and count(c["chars"]) and (c["pages"] is None or count(c["pages"]))
+            and isinstance(c["truncated"], bool) for c in conversions))
+        ref = lambda r: isinstance(r, dict) and set(r) == {"tool", "version", "generation"} and r in [
+            {k: c[k] for k in ("tool", "version", "generation")} for c in conversions]
+        ok = ok and ref(in_use)
+        ok = ok and isinstance(check, dict) and set(check) == {"rule", "compared", "partial", "reasons", "ratio", "chars", "notes"} \
+            and isinstance(check["compared"], bool) and isinstance(check["partial"], bool) \
+            and isinstance(check["reasons"], list) and all(plain(r, 500) for r in check["reasons"]) \
+            and isinstance(check["chars"], dict) and all(plain(k, 300) and count(v) for k, v in check["chars"].items()) \
+            and isinstance(check["notes"], dict) and all(plain(k, 300) and plain(v, 500) for k, v in check["notes"].items()) \
+            and type(check["ratio"]) in (int, float) and math.isfinite(check["ratio"])
+        if not ok:
+            raise KbError("the conversions, the one in use and the check are not in the expected form")
+        self.read_version(book_id, version_id)
+        self._guard()
+
+        def mutate(version):
+            version["conversions"], version["conversion_in_use"], version["conversion_check"] = conversions, in_use, check
+        self._rewrite(self.version_file(book_id, version_id), mutate)
 
     def set_version_label(self, book_id, version_id, label):
         """Record the label the source gave a version (for example an arXiv version), once it is known."""

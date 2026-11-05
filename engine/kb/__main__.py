@@ -3,8 +3,13 @@ import argparse
 import json
 import sys
 
-from . import KbError, __version__, approvals, capture_arxiv, capture_url, config, identity, library
+from . import KbError, __version__, approvals, capture_arxiv, capture_url, config, convert_html, convert_pdf, identity, library
 from .store import Store
+
+
+# the tools the engine can describe for the owner to approve, in the order `all` prints them
+DESCRIBABLE = {"kb-scan": approvals.builtin_scan_entry, "kb-html-std": convert_html.std_entry,
+               "trafilatura": convert_html.trafilatura_entry, "pdftotext": convert_pdf.pdftotext_entry}
 
 
 def main(argv=None):
@@ -33,13 +38,16 @@ def main(argv=None):
     ax.add_argument("--max-bytes", type=int, default=capture_arxiv.PDF_MAX_BYTES, help="refuse a PDF larger than this")
     ax.add_argument("--timeout", type=float, default=capture_url.TIMEOUT, help="seconds for each network read")
     ax.add_argument("--total-timeout", type=float, default=capture_url.TOTAL_TIMEOUT, help="seconds for each fetch")
-    sub.add_parser("describe-tool", help="print the approved-list entry for the built-in scan tool, to review and paste "
-                                         "into approved_tools in the config (it changes nothing)")
+    d = sub.add_parser("describe-tool", help="print the approved-list entry for a tool, to review and paste into "
+                                             "approved_tools in the config (it changes nothing)")
+    d.add_argument("tool", nargs="?", default="kb-scan", choices=[*DESCRIBABLE, "all"],
+                   help="which tool (default kb-scan); all prints the four as one list")
     sub.add_parser("tools", help="list the approved tools and say whether each still matches what was approved")
     args = parser.parse_args(argv)
     try:
         if args.command == "describe-tool":
-            print(json.dumps(approvals.builtin_scan_entry(), indent=1))
+            entries = [make() for make in DESCRIBABLE.values()] if args.tool == "all" else DESCRIBABLE[args.tool]()
+            print(json.dumps(entries, indent=1))
             return 0
         if args.command == "tools":
             cfg = config.load()

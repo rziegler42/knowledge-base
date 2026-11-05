@@ -124,6 +124,15 @@ def find(name, version, cfg=None):
     raise KbError(f"{name} {version} is not on the approved list")
 
 
+def find_for(name, fmt, cfg=None):
+    """The first entry of the approved list for the tool of this name that handles this kind of file. The list is the
+    owner's, and its order is the owner's choice when a tool is approved in more than one version."""
+    for entry in approved_tools(cfg):
+        if entry["name"] == name and fmt in entry["formats"]:
+            return entry
+    raise KbError(f"{name} is not on the approved list for {fmt} files")
+
+
 def check_pins(entry):
     """Refuse a tool if the program or any script it runs is not exactly the file that was approved."""
     for path, digest in entry["pinned"].items():
