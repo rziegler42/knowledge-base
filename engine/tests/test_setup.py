@@ -268,6 +268,31 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(ok.returncode, 0, ok.stderr)
         self.assertEqual(json.loads(ok.stdout)["library_id"], out["library_id"])
 
+    def test_the_rights_notice_is_shown_once_on_the_error_stream_only(self):
+        tmp, base = real_tmp()
+        self.addCleanup(tmp.cleanup)
+        cfg = os.path.join(base, "cfg")
+        bulk, index = os.path.join(base, "bulk"), os.path.join(base, "index")
+        first = self.run_kb(cfg, "setup", bulk, index, "--allow-main-disk")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(first.stderr, library.NOTICE + "\n")
+        self.assertIn("responsib", library.NOTICE)
+        self.assertEqual(list(json.loads(first.stdout)), ["library_id"])
+        self.assertEqual(len(first.stdout.strip().splitlines()), 1)
+        again = self.run_kb(cfg, "setup", bulk, index, "--allow-main-disk")
+        self.assertEqual(again.returncode, 0)
+        self.assertEqual(again.stderr, "")
+        checked = self.run_kb(cfg, "check")
+        self.assertEqual((checked.returncode, checked.stderr), (0, ""))
+
+    def test_a_refused_setup_shows_no_notice(self):
+        tmp, base = real_tmp()
+        self.addCleanup(tmp.cleanup)
+        same = os.path.join(base, "same")
+        done = self.run_kb(os.path.join(base, "cfg"), "setup", same, same, "--allow-main-disk")
+        self.assertEqual(done.returncode, 2)
+        self.assertNotIn(library.NOTICE, done.stderr)
+
     def test_a_system_error_is_reported_without_a_traceback(self):
         tmp, base = real_tmp()
         self.addCleanup(tmp.cleanup)

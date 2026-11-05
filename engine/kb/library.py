@@ -12,6 +12,8 @@ from . import config
 
 FORMAT = 1
 MARKER = ".kb-library"
+NOTICE = ("Notice: rights and legality are your responsibility as the owner of this library. "
+          "This tool does not judge what you add to it or how you use it.")
 
 
 def _check_path(path, what):

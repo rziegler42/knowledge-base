@@ -110,6 +110,21 @@ root that is a symlink or has a symlink in its path, and two roots that are the 
 **Verification:** `python3 -m unittest engine.tests.test_setup` passes, and the tests failed before the code existed.
 **Evidence:** one local commit with the trailer `Plan: 2026-11-05-first-slice-capture-search-read#A`.
 
+### Increment A-A — One-time rights notice at setup
+
+**Outcome:** the first successful `setup` of a library prints a one-line notice on the error stream that rights and legality are
+the owner's responsibility (`library.md`, "Setup"). A repeated setup, a refused setup and `check` print no notice, and the output
+on the standard stream stays the single JSON line. The tool makes no judgement about rights or legality.
+**Dependencies:** A.
+**Affected areas:** `engine/kb/__main__.py`, `engine/kb/library.py`, `engine/tests/test_setup.py`, `engine/README.md`.
+**Steps:**
+1. Write the tests first, through the command line: a first setup prints the notice on the error stream and only the JSON line on
+   the output stream; a repeated setup prints no notice; a refused setup prints only the refusal; `check` prints no notice.
+2. Add the notice text as a constant in `library.py` and print it from the command line after a first setup that created the
+   library. State it in the README.
+**Verification:** `python3 -m unittest engine.tests.test_setup` passes.
+**Evidence:** one local commit with the trailer `Plan: 2026-11-05-first-slice-capture-search-read#A-A`.
+
 ### Increment B — The book store
 
 **Outcome:** the library can create a book with an id, a root file and a version folder. A book's payload (originals, later the
@@ -365,7 +380,7 @@ covers is an increment breaking an earlier one through the shared store.
 
 ## Result
 
-### Increment A — Skeleton, config and library setup (implemented and reviewed, not yet committed)
+### Increment A — Skeleton, config and library setup (committed as 430db92)
 
 - **Done.** `engine/kb/` (`__init__`, `config`, `library`, `__main__`), `engine/tests/` (`__init__`, `test_setup`) and
   `engine/README.md`. `python3 -m kb setup <bulk-root> <index-root> [--allow-main-disk]` creates the owner-only config
@@ -393,4 +408,20 @@ covers is an increment breaking an earlier one through the shared store.
     are not refused; the plan only asks for the same folder); 7 (the spec says setup creates the empty catalog, which is
     increment G, and shows a one-time notice that rights and legality are the owner's, which no increment lists: for the owner
     to decide).
-- **Left for the owner:** the word to commit, and the decision on the one-time rights notice.
+- **Committed** by the owner's word as `430db9268c4ccbb8d9023320a527e037b267e824` with the plan file, and not pushed. The owner
+  then asked for the one-time rights notice, which is increment A-A.
+
+### Increment A-A — One-time rights notice at setup (implemented and reviewed, not yet committed)
+
+- **Done.** `engine/kb/library.py` holds the `NOTICE` text, and `engine/kb/__main__.py` prints it on the error stream after a
+  first successful `setup`, decided by whether the config existed before the call. A repeated setup, a refused or failed setup and
+  `check` print nothing extra, and the standard output stays one JSON line. The README states it. The plan was approved again
+  for this increment (region `0bcc6004…12294859`).
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_setup`: 30 tests, OK. The two new tests
+  failed before the code (no `NOTICE`).
+- **Not run.** No mutation check of the new test; no other suite exists.
+- **Review.** The `reviewer` agent, one exchange: no findings, no security risk named, recommendation no blocking findings. It
+  ran nothing. Its two notes were not defects: the spec line `library.md:217` still carries `[proposed]` (an owner decision, out of
+  this increment), and the notice could repeat if the config were deleted while the marker stays, which I checked: `setup` then
+  refuses, so no notice is printed.
+- **Left for the owner:** the word to commit, and whether `library.md:217` becomes `[agreed]`.

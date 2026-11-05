@@ -33,6 +33,8 @@ python3 -m kb check
 - It refuses, with `refused: <reason>` and exit code 2: a relative path, a symlink in a root's path, the same folder for both
   roots, a bulk root that holds another library's marker, a second library with other roots, and a bulk root on the main disk
   unless you pass `--allow-main-disk`.
+- The first setup that creates a library also prints a one-line notice on the error stream that rights and legality are the
+  owner's responsibility. The tool does not judge them. A repeated setup, a refusal and `check` print no notice.
 - Roots that differ only in letter case count as the same folder. If setup fails part way, it removes the files it wrote, so
   running it again works. A system error such as a permission failure prints `failed: <reason>` and exits with code 1.
 - `check` is the guard that runs before any later write. It refuses when the bulk root or index root is not reachable or has

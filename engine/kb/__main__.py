@@ -3,7 +3,7 @@ import argparse
 import json
 import sys
 
-from . import KbError, __version__, library
+from . import KbError, __version__, config, library
 
 
 def main(argv=None):
@@ -19,7 +19,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "setup":
+            first_time = not config.exists()
             out = {"library_id": library.setup(args.bulk_root, args.index_root, allow_main_disk=args.allow_main_disk)}
+            if first_time:
+                print(library.NOTICE, file=sys.stderr)
         else:
             out = {"library_id": library.check_writable()["library_id"]}
     except KbError as e:
