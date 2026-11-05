@@ -427,7 +427,7 @@ covers is an increment breaking an earlier one through the shared store.
 - **Committed** by the owner's word as `61499f9003968d97bc2e279c5ae292847253c14a`, not pushed. `library.md:217` is still
   `[proposed]`; the owner did not answer whether it becomes `[agreed]`.
 
-### Increment B — The book store (implemented and reviewed, not yet committed)
+### Increment B — The book store (committed as c8420b0)
 
 - **Done.** `engine/kb/ids.py` (ULID book ids, sharding by the end of the id), `incoming.py` (the incoming area, name checks,
   hash check, promotion by rename, read-only marking), `store.py` (books, versions, payloads, `adopt_payload`) and `stages.py`
@@ -456,4 +456,45 @@ covers is an increment breaking an earlier one through the shared store.
     until the owner moves the folder; a quarantine action belongs with weeding and the integrity check in a later plan), 6
     (macOS `fsync` does not force data to disk, so power loss is weaker than a process crash; `F_FULLFSYNC` is not used), 7 (no
     lock on read-modify-write, an open question in `book.md`).
-- **Left for the owner:** the word to commit.
+- **Committed** by the owner's word as `c8420b0c7253277c46f451369d67dec22ccb27a0`, not pushed.
+
+### Increment C — Capture a web page (implemented and reviewed, not yet committed)
+
+- **Done.** `python3 -m kb capture-url <address>` (`engine/kb/capture_url.py`, `identity.py`, a command in `__main__.py`, tests in
+  `engine/tests/test_capture_url.py`, a fixture page, a README section). One plain GET with an honest user agent, no cookies, the
+  page asked for unencoded, at most 5 redirects to http and https only, a size cap, a per-read timeout and a deadline over the
+  whole fetch. The page is stored unchanged in `original/page.html`; the version file records the address asked for, the final
+  address, the retrieval date, the status, a short list of headers and the sha256. Results are `filed`, `held` (no download),
+  `duplicate` (a sighting on the existing book) and `failed` (recorded in the stage state; the next call retries into the same
+  book). A capture that stopped half way is resumed by the next call.
+- **Added beyond the plan's step list**, each small and for the owner to keep or remove: a guard that refuses addresses
+  resolving to private, local, link-local or multicast addresses, and redirects to them, unless `--allow-private` is passed;
+  refusal of addresses with a user name or password; refusal of non-HTML content types and of an encoded response; an
+  append-only event log per book (`events.jsonl`); identity keys on the book and a sqlite index of them in the index root
+  (`identity.sqlite`, rebuildable); and, in `store.py`, `set_state`, `merge_identity_keys`, `set_version_source`,
+  `append_event`, `read_events` and an optional `book_id` for `create_book`. `book.md` "Root details" now lists a `duplicate`
+  state.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_capture_url`: 50 tests, OK; with
+  `test_setup`, `test_store` and `test_stages` (store.py changed): 133 tests, OK. The tests start an HTTP server on 127.0.0.1;
+  none makes a request outside the machine. The first run failed because the modules did not exist. About forty deliberate
+  breaks of the code, made on scratch copies, were each caught by a test after tests were added for the ones that were not,
+  except two that change nothing observable (an explicit `Accept-Encoding` header that `http.client` sends anyway, and the
+  `Content-Length` pre-check that the read loop duplicates for the size cap).
+- **Not run.** No request to a real site and no test against a real DNS answer (name resolution was tested with patched
+  answers). No concurrent-capture test. No security review of this increment.
+- **Review.** The `reviewer` agent, one exchange, seven findings, two blocking, both correct.
+  - Applied: 1 (blocking: a stop after a redirected page was filed left the address asked for out of the index, so the next call
+    downloaded again and recorded a sighting on its own half-filed book: addresses are now recorded in the index before the book
+    is made, a stale index entry is ignored, and an unfinished book at the final address is resumed, not treated as a duplicate),
+    2 (blocking: a body shorter than its declared length was stored as a whole page, because `read1` does not raise when the
+    connection closes early: the length is now compared), 3 (the deadline now covers connecting, the headers, redirects and the
+    name lookup, by running the fetch in a thread that is given up on; an abandoned thread can outlive the fetch), 5 (an encoded
+    response is refused and `content-encoding` is kept), and the part of 6 about hashes (a page at a held address that has the
+    bytes of another book no longer claims that book's hash).
+  - Recorded for the owner, not changed: 6, the policy part: a changed page at a held address is a sighting and its bytes are
+    not kept as a new version (version comparison is a later piece), and many addresses that redirect to one page, such as a
+    consent page or a soft 404, all become aliases of the first book to hold it; 7, a failed fetch of a new address leaves a
+    book with no title and no payload.
+  - Deferred: 4 (DNS rebinding: the name is resolved once to check it and again to connect; a NAT64 address that embeds a local
+    address counts as public).
+- **Left for the owner:** the word to commit, and whether to run a security review of this network surface.

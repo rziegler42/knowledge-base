@@ -67,3 +67,35 @@ under the bulk root as `books/<last two characters of its id>/<id>/`:
   fails its check marks the stage failed with the reason, and a payload whose stage inputs are not ready is left alone
   (`blocked`). Nothing here overwrites a payload.
 - Nothing here takes a lock. Two programs changing the same book at the same time are not supported yet.
+
+## Capturing a web page
+
+```sh
+cd engine
+python3 -m kb capture-url https://example.org/some/page
+```
+
+It prints one JSON line with a `status`: `filed` (fetched and stored), `held` (the library already holds that address, so
+nothing was downloaded), `duplicate` (fetched, but the same final address or the same bytes are already held, so a sighting
+is added to the existing book) or `failed` (the reason is recorded; running the command again retries into the same book and
+exits with code 1 on failure).
+
+- One plain GET: an honest user agent, no cookies or credentials, the page asked for unencoded, at most 5 redirects, only to
+  http and https, a size cap (`--max-bytes`, default 20 MB), a timeout for each read (`--timeout`) and a deadline for the
+  whole fetch (`--total-timeout`, which also covers connecting and the headers). Only HTML pages are taken: another content
+  type is refused, and so is a response that arrives encoded (gzip and the like), because none was asked for. A page that
+  ends before its declared length is refused too, and is not stored as a complete page.
+- The page is stored unchanged in `original/page.html`. The version file records the address asked for, the final address
+  after redirects, the retrieval date, the HTTP status, a short list of response headers (never cookies) and the sha256.
+- An address with a user name or password is refused, so no secret is stored. Addresses on this machine or a private network
+  are refused too, and so are redirects to them, unless you pass `--allow-private`. The name is resolved once to check it and
+  again to connect, so a name that changes its answer between the two is not caught.
+- A book's identity keys are its address (`url`), other addresses it has been seen at (`url_alias`) and the hashes of its raw
+  bytes (`sha256`). An index of them in the index root (`identity.sqlite`) is looked up before a download and can be rebuilt
+  from the books. A book's `events.jsonl` is its append-only log (`found`, `filed`, `sighting`).
+- A capture that stopped half way is resumed by the next call for the same address, from the filed copy if there is one,
+  without downloading it again. The overall deadline runs the fetch in a thread that cannot be stopped, so a server that
+  trickles its answer can keep an abandoned thread alive until the network gives up on it.
+- A page that turns out to be one the library holds is a sighting on that book. A different page at a held address is also
+  recorded as a sighting, not as a new version: comparing the text of versions comes later.
+- Nothing downloaded is parsed here. Conversion comes later.

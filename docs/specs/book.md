@@ -108,7 +108,7 @@ they have their own specs.
 ### Root details
 
 - **[proposed]** The root file holds the book id and library id, the title, authors, year, kind (for example preprint, thesis, web
-  page), language, identity keys, the home shelf, the date added, whether it was auto-filed, a state (active, weeded or removed),
+  page), language, identity keys, the home shelf, the date added, whether it was auto-filed, a state (active, weeded, removed, or duplicate for a candidate that turned out to be another book),
   the current version, and any "same work" links.
 
 ### Versions

@@ -158,8 +158,11 @@ class Store:
             raise
 
     def create_book(self, title, kind, authors=None, year=None, language=None, identity_keys=None,
-                    shelf="default", auto_filed=False):
-        """File an empty book (its root file only) and return its id."""
+                    shelf="default", auto_filed=False, book_id=None):
+        """File an empty book (its root file only) and return its id.
+
+        A caller that must record the id elsewhere first (an index entry) can choose it with `ids.new_book_id()` and
+        pass it as `book_id`; an id that already has a folder is refused."""
         if not isinstance(kind, str) or not kind:
             raise KbError("a book needs a kind")
         if title is not None and not isinstance(title, str):
@@ -169,13 +172,19 @@ class Store:
         if year is not None and not isinstance(year, int):
             raise KbError("the year must be a whole number")
         if identity_keys is not None and not (isinstance(identity_keys, dict) and all(
-                isinstance(k, str) and isinstance(v, str) for k, v in identity_keys.items())):
-            raise KbError("the identity keys must be text pairs")
+                isinstance(k, str) and (isinstance(v, str) or (isinstance(v, list) and all(isinstance(x, str) for x in v)))
+                for k, v in identity_keys.items())):
+            raise KbError("the identity keys must be text, or lists of text")
         if not isinstance(shelf, str) or not _SHELF.fullmatch(shelf):
             raise KbError(f"not a shelf name: {shelf!r}")
         self._guard()
+        if book_id is not None:
+            ids.check_id(book_id)
+            if os.path.lexists(self.book_dir(book_id)):
+                raise KbError(f"the book id {book_id} is already used")
+        chosen = book_id
         for _ in range(5):
-            book_id = ids.new_book_id()
+            book_id = chosen or ids.new_book_id()
             dest = self.book_dir(book_id)
             if os.path.lexists(dest):
                 continue  # an id is never reused
@@ -216,6 +225,75 @@ class Store:
         self.read_book(book_id)
         self._guard()
         self._rewrite(self.book_file(book_id), lambda root: root.__setitem__("shelf", shelf))
+
+    def set_state(self, book_id, state):
+        """Set a book's state. A book that turned out to duplicate another is marked `duplicate`."""
+        if state not in ("active", "weeded", "removed", "duplicate"):
+            raise KbError(f"not a book state: {state!r}")
+        self.read_book(book_id)
+        self._guard()
+        self._rewrite(self.book_file(book_id), lambda root: root.__setitem__("state", state))
+
+    def merge_identity_keys(self, book_id, set_keys=None, add_keys=None):
+        """Change a book's identity keys. `set_keys` replaces single values (the address); `add_keys` appends to lists
+        (other addresses, raw hashes) without repeating one."""
+        set_keys, add_keys = set_keys or {}, add_keys or {}
+        if not all(isinstance(k, str) and isinstance(v, str) for k, v in set_keys.items()):
+            raise KbError("set_keys must be text pairs")
+        if not all(isinstance(k, str) and isinstance(v, list) and all(isinstance(x, str) for x in v)
+                   for k, v in add_keys.items()):
+            raise KbError("add_keys must map names to lists of text")
+        self.read_book(book_id)
+        self._guard()
+
+        def mutate(root):
+            keys = root.setdefault("identity_keys", {})
+            keys.update(set_keys)
+            for k, values in add_keys.items():
+                current = keys.get(k, [])
+                if not isinstance(current, list):
+                    raise KbError(f"the identity key {k!r} is a single value and cannot take a list")
+                keys[k] = current + [x for i, x in enumerate(values) if x not in current and x not in values[:i]]
+        self._rewrite(self.book_file(book_id), mutate)
+
+    def set_version_source(self, book_id, version_id, source):
+        """Replace the record of where a version came from (used when a failed fetch is retried)."""
+        if not isinstance(source, dict):
+            raise KbError("the source must be a mapping")
+        self.read_version(book_id, version_id)
+        self._guard()
+        self._rewrite(self.version_file(book_id, version_id), lambda version: version.__setitem__("source", source))
+
+    def events_file(self, book_id):
+        return os.path.join(self.book_dir(book_id), "events.jsonl")
+
+    def append_event(self, book_id, event, **data):
+        """Add one line to the book's append-only event log (filed, sighting, ...)."""
+        if not isinstance(event, str) or not re.fullmatch(r"[a-z][a-z_]{0,31}", event):
+            raise KbError(f"not an event name: {event!r}")
+        if {"event", "at"} & set(data):
+            raise KbError("an event's data cannot use the names event or at")
+        self.read_book(book_id)
+        self._guard()
+        line = (json.dumps({"event": event, "at": now(), **data}, sort_keys=True) + "\n").encode()
+        fd = os.open(self.events_file(book_id), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+        try:
+            os.write(fd, line)  # one write, so lines from two writers do not mix
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def read_events(self, book_id):
+        self.read_book(book_id)
+        try:
+            with open(self.events_file(book_id)) as f:
+                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+        except FileNotFoundError:
+            return []
+        try:
+            return [json.loads(ln) for ln in lines]
+        except ValueError as e:
+            raise KbError(f"the event log cannot be read: {e}") from None
 
     def file_payload(self, book_id, version_id, name, files, primary=None, tool=None):
         """File a payload: `files` maps a relative name to its bytes. Returns the hash list.
