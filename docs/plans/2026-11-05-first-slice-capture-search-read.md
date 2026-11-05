@@ -411,7 +411,7 @@ covers is an increment breaking an earlier one through the shared store.
 - **Committed** by the owner's word as `430db9268c4ccbb8d9023320a527e037b267e824` with the plan file, and not pushed. The owner
   then asked for the one-time rights notice, which is increment A-A.
 
-### Increment A-A — One-time rights notice at setup (implemented and reviewed, not yet committed)
+### Increment A-A — One-time rights notice at setup (committed as 61499f9)
 
 - **Done.** `engine/kb/library.py` holds the `NOTICE` text, and `engine/kb/__main__.py` prints it on the error stream after a
   first successful `setup`, decided by whether the config existed before the call. A repeated setup, a refused or failed setup and
@@ -424,4 +424,36 @@ covers is an increment breaking an earlier one through the shared store.
   ran nothing. Its two notes were not defects: the spec line `library.md:217` still carries `[proposed]` (an owner decision, out of
   this increment), and the notice could repeat if the config were deleted while the marker stays, which I checked: `setup` then
   refuses, so no notice is printed.
-- **Left for the owner:** the word to commit, and whether `library.md:217` becomes `[agreed]`.
+- **Committed** by the owner's word as `61499f9003968d97bc2e279c5ae292847253c14a`, not pushed. `library.md:217` is still
+  `[proposed]`; the owner did not answer whether it becomes `[agreed]`.
+
+### Increment B — The book store (implemented and reviewed, not yet committed)
+
+- **Done.** `engine/kb/ids.py` (ULID book ids, sharding by the end of the id), `incoming.py` (the incoming area, name checks,
+  hash check, promotion by rename, read-only marking), `store.py` (books, versions, payloads, `adopt_payload`) and `stages.py`
+  (the stage state and `reconcile`), with `engine/tests/test_store.py` and `test_stages.py` and a README section. A payload is
+  built in `incoming/`, re-read and checked against its `payload.json`, renamed into place and marked read-only. The stage state
+  is `stages.json` beside the version file.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_store engine.tests.test_stages`:
+  53 tests, OK. The first run failed because the modules did not exist. Crash points were tested with a child process that ends
+  with `os._exit` at an injected step, so no cleanup runs: before verification, between verification and the rename, during a
+  manifest rewrite, during book and version creation, and between the version folder and the current-version update. Thirty-two
+  deliberate breaks of the code, made on scratch copies, were each caught by a test, except two overwrite checks that each hide
+  the other (removing both together was caught) and one weak test that was strengthened and then caught its break.
+- **Not run.** `test_setup` was not rerun (nothing in `config.py` or `library.py` changed). No power-loss test and no test on
+  a real unmounted volume. No concurrent-writer test. No security review was run on this increment; the plan puts that question
+  at step 4 of increment E.
+- **Review.** The `reviewer` agent, one exchange, eight findings, one blocking.
+  - Applied: 1 (blocking: a stop after the rename left the version file without the payload and the primary file, and filing
+    again was refused: `primary` is now kept in the payload's hash list and `Store.adopt_payload` rebuilds the version file from
+    it, and `reconcile` uses it), 4 (adoption also marks the payload read-only if the stop came before that), 3 (the checks of
+    ids, versions, payload names and shelves use a full match, so a trailing newline is refused), 8 (a symlinked shard, book
+    folder or payload folder is not read as one), and the second part of 2 (`reconcile` returns `blocked` and changes nothing when
+    the stage's inputs are not ready, instead of raising).
+  - Recorded as tested behaviour, not changed: 5 (a stop between the version folder and the current-version update leaves a
+    readable orphan version, no id is reused, and the next version becomes current).
+  - Deferred: the first part of 2 (a filed payload that fails its check cannot be replaced, so the stage fails on every resume
+    until the owner moves the folder; a quarantine action belongs with weeding and the integrity check in a later plan), 6
+    (macOS `fsync` does not force data to disk, so power loss is weaker than a process crash; `F_FULLFSYNC` is not used), 7 (no
+    lock on read-modify-write, an open question in `book.md`).
+- **Left for the owner:** the word to commit.

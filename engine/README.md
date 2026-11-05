@@ -13,7 +13,7 @@ other package.
 From the repository root:
 
 ```sh
-python3 -m unittest engine.tests.test_setup
+python3 -m unittest engine.tests.test_setup engine.tests.test_store engine.tests.test_stages
 ```
 
 ## Set up a library
@@ -42,3 +42,28 @@ python3 -m kb check
   the main disk and setup did not allow that.
 - The config is read only if it is a plain file (never a symlink) owned by you with mode 600, in a directory that others cannot
   write.
+
+## The book store
+
+`kb.store.Store.open()` opens the library named by the config; opening to write runs the write guard first. A book is stored
+under the bulk root as `books/<last two characters of its id>/<id>/`:
+
+| Path | Contents |
+|---|---|
+| `book.json` | The root file: id, library id, title, authors, year, kind, language, identity keys, shelf, date added, state, current version |
+| `v/<version>/version.json`, `stages.json` | Small mutable files, rewritten with a temporary file and a rename |
+| `v/<version>/original/` | The source as captured: its files and a `payload.json` with the sha256 and size of each |
+| `v/<version>/derived/<tool>/<n>/` | A tool's output, one folder per generation |
+
+- A book id is a ULID: 26 characters that sort by time. The shelf is a field of the root file, so a reshelve moves no bytes.
+- A payload is built in `incoming/` inside the bulk root, re-read from disk and checked against its hash list, renamed into
+  place in one step and marked read-only. A folder left in `incoming/` by a crash is never read as a book or a payload.
+  Filing a payload that already exists is refused.
+- `stages.json` holds the stages found, fetched, scanned, converted and indexed, each pending, done, failed or skipped. A stage
+  cannot be done before its inputs are, a failure needs a reason, and a done stage is not run or changed again.
+  `stages.reconcile` handles a stop between filing a payload and marking its stage. It calls `Store.adopt_payload`, which checks
+  the filed payload against its hash list, marks it read-only if the stop came before that, and brings the version file (the
+  payload list and the primary file, both kept in the hash list) up to date. Then the stage is marked done. A payload that
+  fails its check marks the stage failed with the reason, and a payload whose stage inputs are not ready is left alone
+  (`blocked`). Nothing here overwrites a payload.
+- Nothing here takes a lock. Two programs changing the same book at the same time are not supported yet.
