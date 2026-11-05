@@ -1,0 +1,67 @@
+{
+  "name": "groundwork",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Specs, roadmaps, decisions and references: the work done before the work.",
+  "provides": [
+    "specs",
+    "roadmaps",
+    "decisions",
+    "references"
+  ],
+  "writes": [
+    "docs/decisions/README.md",
+    "docs/references/README.md",
+    "docs/roadmaps/README.md",
+    "docs/specs/README.md"
+  ],
+  "ships": [
+    "helper/doccheck",
+    "helper/groundwork",
+    "helper/refcheck"
+  ],
+  "checks": [
+    {
+      "helper": "helper/doccheck",
+      "kit": 1
+    },
+    {
+      "helper": "helper/refcheck",
+      "kit": 1
+    }
+  ],
+  "commands": {
+    "groundwork": {
+      "helper": "helper/groundwork",
+      "runtime": "python",
+      "kit": 1,
+      "arguments": [
+        "preview",
+        "accept"
+      ],
+      "owner": [
+        "accept"
+      ],
+      "levels": {
+        "accept": [
+          "ask",
+          "none"
+        ]
+      },
+      "preview": "preview",
+      "checkpoint_of": {
+        "accept": "accept-decision"
+      }
+    }
+  },
+  "fills": [
+    {
+      "slot": "slot:docs-index",
+      "source": "files/blocks/docs-index.md"
+    },
+    {
+      "slot": "slot:policy",
+      "source": "files/blocks/policy.md"
+    }
+  ]
+}

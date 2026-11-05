@@ -1,0 +1,997 @@
+#!/usr/bin/env python3
+"""The code-work helper: reads a project's plans and says what is wrong with them.
+
+It is one file that imports only the standard library; the launcher runs a private copy of it through the
+kit runner with nothing beside it. Its seven subcommands change nothing, take no lock, run no program and
+follow no link. Commits and removals are the ``safe-git`` module's.
+
+    code-work check      report problems with the plans in docs/plans/ (exit 1 if there is one)
+    code-work plans      list the plans that are Proposed, Approved or In Progress
+    code-work report     list the roadmap candidates a Completed plan names, and the plans whose
+                         Candidate: names a roadmap or candidate that is not there
+    code-work region <plan>
+                         print the hash of a plan's hashed region and the names of the parts left out of
+                         it, as one JSON object (the installer's approval command reads it)
+    code-work delegable <plan>
+                         print whether a plan may be approved by a delegate, as one JSON object (the
+                         installer's delegated approval reads it)
+    code-work active     print the plans that are Approved or In Progress, as one JSON object (the
+                         installer's edit gate reads it)
+    code-work shared     print the branches `.workbench/shared-branches.json` declares as shared, as one
+                         JSON object
+
+The rules are in ``docs/specs/code-work.md`` and in the README the module writes into
+``docs/plans/``. Everything read is untrusted repository content: the number of files, the bytes in
+all, the bytes of one plan and the findings reported are bounded, and passing a bound is itself a
+problem that says what was not looked at. Nothing read is evaluated, and anything shown has its
+escapes and non-ASCII characters written out.
+"""
+
+import datetime
+import hashlib
+import html
+import io
+import itertools
+import json
+import os
+import re
+import stat
+import sys
+
+MAX_FILES = 2000
+MAX_BYTES = 4 * 1024 * 1024
+MAX_DOCUMENT = 1024 * 1024
+MAX_LISTED = 20000
+MAX_HEADER = 40
+MAX_INCREMENTS = 1000
+MAX_REPORTED = 200
+MAX_ACTIVE = 32
+MAX_ACTIVE_PATH = 240
+MAX_CANDIDATES = 2000
+MAX_DEPTH = 64
+SHARED = ".workbench/shared-branches.json"
+MAX_SHARED_FILE = 8192
+MAX_SHARED = 64
+MAX_BRANCH = 200
+WARN_INCREMENTS = 15
+LIMIT_INCREMENTS = 26
+
+STATUSES = ("Proposed", "Approved", "In Progress", "Completed", "Superseded")
+ACTIVE = STATUSES[:3]
+UNDER_WAY = STATUSES[1:3]
+PLANS = "docs/plans"
+ROADMAPS = "docs/roadmaps"
+MANIFEST = ".workbench/manifest.json"
+
+_SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+_NAME = re.compile(r"\A([0-9]{4})-([0-9]{2})-([0-9]{2})-(%s)\.md\Z" % _SLUG)
+_DATE = re.compile(r"\A([0-9]{4})-([0-9]{2})-([0-9]{2})\Z")
+_ITEM = r"(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)?"
+_FENCE = re.compile(r"\A[ ]{0,3}" + _ITEM + r"(`{3,}|~{3,})")
+_QUOTE = re.compile(r"\A[ ]{0,3}>")
+_TWO = re.compile(r"\A[ ]{0,3}##[ \t]+(.*)")
+_TITLE = re.compile(r"\A[ ]{0,3}#[ \t]+\S")
+_FIELD = re.compile(r"\A[ ]{0,3}(Status|Created|Candidate|Specs):[ \t]*(.*)\Z")
+_CANDIDATE = re.compile(r"\A(%s)#(%s)\Z" % (_SLUG, _SLUG))
+_NONE = re.compile(r"\Anone(?:\Z|[ \t,.;:(—-]+(.*))", re.S)
+_LABEL = r"[A-Z]{1,3}(?:-[A-Z]{1,3})*"
+_INCREMENT = re.compile(r"\A###[ ]Increment[ ](%s)[ ]—[ ]\S.*\Z" % _LABEL)
+_NEAR = re.compile(r"\A[ ]{0,3}#{1,6}[ \t]+Increment\b", re.I)
+_CANDIDATE_HEAD = re.compile(r"\A[ ]{0,3}" + _ITEM + r"###[ \t]+([^\s:]+)")
+_UNDERLINE = re.compile(r"\A[ ]{0,3}(=+|-+)[ \t]*\Z")
+_LINE = 2000
+_REASON = 200
+_STATUS_BOUND = 200
+# What a reader may show as a section start inside a quote or a list item, or as an HTML heading or rule.
+_WRAPPED = re.compile(r"\A(?:[ \t]+|>|[-*+](?=[ \t])|\d{1,9}[.)](?=[ \t]))*")
+_WRAPPED_START = re.compile(r"\A(?:#{1,2}(?:[ \t]|\Z)|([-*_])(?:[ \t]*\1){2,}[ \t]*\Z|<(?:h[1-6]|hr)(?:[ \t/>]|\Z))", re.I)
+_HEADING = 200
+# The hashed region: an excluded section starts at exactly one of these headings and ends at any heading,
+# of whatever form, so nothing a reader could take for another section is ever left out.
+_EXCLUDED = re.compile(r"\A##[ ](Review record|Second opinion|Result)[ \t]*\Z")
+_BOUNDARY = re.compile(r"\A[ ]{0,3}#{1,2}(?:[ \t]|\Z)")
+# Delegability: the one section that lists a plan's risks, and the line that marks a hard stop in it. Any heading
+# that a reader could take for the section counts, and only the exact form is accepted.
+_RISKS = "risks and sensitive actions"
+_RISKS_HEADING = re.compile(r"\A## Risks and sensitive actions[ \t]*\Z")
+_ATX = re.compile(r"\A[ ]{0,3}#{1,6}(?:[ \t]+(.*))?\Z")
+_LEAD = (r"\A[ \t]*\|?[ \t]*(?:(?:#{3,6}|[-*+]|[0-9]{1,9}[.)])[ \t]+)*(?:\[[ xX]\][ \t]+)?[*_`~]*")
+_HARD = re.compile(_LEAD + r"Hard[ \t-]+stop[*_`~]*[ \t]*:", re.IGNORECASE)
+# The same words split over two lines, which a reader sees as one.
+_HARD_HEAD = re.compile(_LEAD + r"Hard[*_`~]*[ \t]*\Z", re.IGNORECASE)
+_HARD_TAIL = re.compile(r"\A[ \t]*[*_`~]*stop[*_`~]*[ \t]*:", re.IGNORECASE)
+# What a reader could see otherwise than the bytes say: markup, an entity, or a character other than printable ASCII.
+_UNSURE = re.compile(r"[^ -~\t]|<[A-Za-z/!?]|&[#A-Za-z]")
+
+
+class Refused(Exception):
+    """Nothing was looked at; the message says why."""
+
+
+def shown(text, limit=120):
+    """`text` with every character outside printable ASCII written as an escape, cut to `limit`."""
+    out = []
+    for char in str(text)[:limit]:
+        if " " <= char <= "~":
+            out.append(char)
+        elif ord(char) < 0x100:
+            out.append("\\x%02x" % ord(char))
+        elif ord(char) < 0x10000:
+            out.append("\\u%04x" % ord(char))
+        else:
+            out.append("\\U%08x" % ord(char))
+    return "".join(out)
+
+
+# --- reading a project without following a link ------------------------------------------------
+
+_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+_FILE = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+
+
+def find_root(start):
+    """The nearest directory at or above `start` that holds `.git` and a regular manifest."""
+    here = start
+    for _ in range(MAX_DEPTH):
+        try:
+            git = os.lstat(os.path.join(here, ".git"))
+            if not stat.S_ISDIR(os.lstat(os.path.join(here, ".workbench")).st_mode):
+                raise OSError("not a directory")
+            manifest = os.lstat(os.path.join(here, *MANIFEST.split("/")))
+        except OSError:
+            git = manifest = None
+        if git is not None and manifest is not None and stat.S_ISDIR(git.st_mode) \
+                and stat.S_ISREG(manifest.st_mode):
+            return here
+        parent = os.path.dirname(here)
+        if parent == here:
+            break
+        here = parent
+    raise Refused("this is not inside a workbench project (no .git with %s above %s)"
+                  % (MANIFEST, shown(start)))
+
+
+def open_dir(root_fd, relative):
+    """A descriptor for the directory `relative` below `root_fd`, or None when a part is absent.
+    A link or a file on the way is an error."""
+    fd = os.dup(root_fd)
+    try:
+        for part in relative.split("/"):
+            try:
+                step = os.open(part, _DIR, dir_fd=fd)
+            except FileNotFoundError:
+                return None
+            os.close(fd)
+            fd = step
+        taken, fd = fd, -1
+        return taken
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def list_dir(fd):
+    """``([(name, kind)], cut)``; `kind` is ``file``, ``dir`` or ``other``. At most MAX_LISTED."""
+    found, cut = [], False
+    with os.scandir(fd) as entries:
+        for entry in entries:
+            if len(found) >= MAX_LISTED:
+                cut = True
+                break
+            try:
+                mode = entry.stat(follow_symlinks=False).st_mode
+            except OSError:
+                found.append((entry.name, "other"))
+                continue
+            kind = "file" if stat.S_ISREG(mode) else "dir" if stat.S_ISDIR(mode) else "other"
+            found.append((entry.name, kind))
+    return sorted(found), cut
+
+
+def read_file(dir_fd, name, limit):
+    """``(bytes, size)``: at most `limit` bytes of the regular file `name`, and its size."""
+    fd = os.open(name, _FILE, dir_fd=dir_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError("not a regular file")
+        chunks, taken = [], 0
+        while taken < limit:
+            piece = os.read(fd, min(65536, limit - taken))
+            if not piece:
+                break
+            chunks.append(piece)
+            taken += len(piece)
+        return b"".join(chunks), info.st_size
+    finally:
+        os.close(fd)
+
+
+# --- the lines of a plan -----------------------------------------------------------------------
+
+def lines_of(text, state=None):
+    """``(number, line, plain)`` for each line of `text`; `plain` is False inside a code fence, for
+    a quoted line and inside an HTML comment, none of which is the document's own statement. A line
+    ends at ``\\n``, ``\\r\\n`` or a lone ``\\r``. A comment is one that starts a line, and the whole of
+    its last line is hidden; text before ``<!--`` on a line is read. When `state` is a dict, ``open`` is set if a fence is still open at
+    the end and ``comment`` if a comment is."""
+    fence, comment = None, False
+    for number, line in enumerate(io.StringIO(text, newline=None), 1):
+        line = line.rstrip("\n")
+        match = _FENCE.match(line)
+        opener = match and not (match.group(1)[0] == "`" and "`" in line[match.end():])
+        closer = match and match.group(1)[0] == (fence or " ")[0] \
+            and len(match.group(1)) >= len(fence or "") and not line[match.end():].strip()
+        line = line[:_LINE]
+        if fence is None:
+            if opener and not comment:
+                fence = match.group(1)
+                yield number, line, False
+                continue
+        elif closer:
+            fence = None
+            yield number, line, False
+            continue
+        if fence is not None:
+            yield number, line, False
+            continue
+        if comment:
+            end = line.find("-->")
+            if end < 0:
+                yield number, line, False
+                continue
+            comment = False
+            yield number, line, False
+            continue
+        start = line.find("<!--")
+        if start >= 0 and not line[:start].strip():
+            # An HTML block runs to the line that holds `-->`, all of it, so what follows the
+            # closing marker on that line is not a heading or a field either.
+            comment = "-->" not in line[start + 4:]
+            yield number, line, False
+            continue
+        if start >= 0 and "-->" not in line[start + 4:]:
+            comment = True
+        yield number, line, not _QUOTE.match(line)
+    if state is not None:
+        state["open"] = fence is not None
+        state["comment"] = comment
+
+
+# --- the rules ---------------------------------------------------------------------------------
+
+def name_problem(name):
+    """What is wrong with the file name of a plan, or None."""
+    match = _NAME.match(name)
+    if not match:
+        return "a plan is named YYYY-MM-DD-<topic>.md in lowercase kebab-case"
+    try:
+        datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return "the date in a plan's name is not a date"
+    return None
+
+
+def _number(label):
+    """The order of a label: ``B-A`` follows ``B`` and comes before ``C``."""
+    return tuple(sum((ord(c) - 64) * 26 ** i for i, c in enumerate(reversed(part)))
+                 for part in label.split("-"))
+
+
+def header_fields(lines):
+    """``(fields, title)``: the values of each ``Status``, ``Created``, ``Candidate`` and ``Specs``
+    line in the header, and whether the first line is a title."""
+    found, title, first = {}, None, True
+    for number, line, plain in itertools.islice(lines, MAX_HEADER + 1):
+        if number > MAX_HEADER:
+            break
+        if plain and _TWO.match(line):
+            break
+        if not plain:
+            continue
+        if first and line.strip():
+            first, title = False, bool(_TITLE.match(line))
+        match = _FIELD.match(line)
+        if match:
+            found.setdefault(match.group(1), []).append(match.group(2).strip())
+    return found, title
+
+
+def header_problems(name, real, lines):
+    """Problems with the title and the header fields of one plan."""
+    problems = []
+    found, title = header_fields(lines)
+    if not title:
+        problems.append("%s has no title (a first line `# <title>`)" % name)
+    for field in ("Status", "Created", "Specs"):
+        count = len(found.get(field, ()))
+        if count == 0:
+            problems.append("%s has no %s line near the top" % (name, field))
+        elif count > 1:
+            problems.append("%s has %d %s lines near the top; there is one" % (name, count, field))
+    problems.extend(_status_problem(name, found.get("Status", [""])[0], "Status" in found))
+    problems.extend(_created_problem(name, real, found.get("Created", [""])[0], "Created" in found))
+    problems.extend(_candidate_problem(name, found.get("Candidate", [])))
+    return problems
+
+
+def status_of(value):
+    """The status a `Status:` value begins with, or None."""
+    for status in STATUSES:
+        if value == status or (value.startswith(status) and value[len(status)] in " \t.,;:(—-"):
+            return status
+    return None
+
+
+def _status_problem(name, value, present):
+    if not present:
+        return []
+    if status_of(value):
+        return []
+    return ["%s has the status %s; a plan is %s or %s"
+            % (name, shown(value) or "(none)", ", ".join(STATUSES[:-1]), STATUSES[-1])]
+
+
+def _created_problem(name, real, value, present):
+    if not present:
+        return []
+    match = _DATE.match(value)
+    try:
+        if not match:
+            raise ValueError
+        datetime.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return ["%s has Created %s, which is not a date (YYYY-MM-DD)" % (name, shown(value))]
+    if not real.startswith(value + "-"):
+        return ["%s has Created %s, which differs from the date in its name" % (name, value)]
+    return []
+
+
+def _candidate_problem(name, values):
+    if len(values) == 0:
+        return ["%s has no Candidate line near the top (`Candidate: <roadmap>#<id>` or "
+                "`Candidate: none` and a reason)" % name]
+    if len(values) > 1:
+        return ["%s has %d Candidate lines near the top; there is exactly one" % (name, len(values))]
+    value = values[0]
+    if _CANDIDATE.match(value):
+        return []
+    none = _NONE.match(value)
+    if none:
+        if any(c.isalnum() for c in none.group(1) or ""):
+            return []
+        return ["%s has `Candidate: none` with no reason" % name]
+    return ["%s has the Candidate %s; it is <roadmap>#<id> or `none` and a reason"
+            % (name, shown(value))]
+
+
+def _section(text):
+    """The words of a ``##`` heading, as the check compares them."""
+    return " ".join(text.split()).rstrip("#").strip().rstrip(":.").strip().casefold()
+
+
+def increment_problems(name, lines):
+    """``(problems, warnings)`` for the increment headings of one plan. Only the headings under
+    ``## Increments`` are increments; the same form elsewhere (a result note, say) is text."""
+    problems, warnings, labels, last, count = [], [], set(), None, 0
+    inside = has_section = False
+    outside = 0
+    for number, line, plain in lines:
+        if not plain:
+            continue
+        line = line.rstrip()
+        two = _TWO.match(line)
+        if two and _NEAR.match(line):
+            problems.append("%s line %d: the increment heading is not of the form "
+                            "`### Increment <label> — <title>`" % (name, number))
+            continue
+        if two:
+            inside = _section(two.group(1)) == "increments"
+            has_section = has_section or inside
+            continue
+        match = _INCREMENT.match(line)
+        if not inside:
+            outside += bool(match)
+            continue
+        if not match:
+            if _NEAR.match(line):
+                problems.append("%s line %d: the increment heading is not of the form "
+                                "`### Increment <label> — <title>`" % (name, number))
+            continue
+        count += 1
+        if count > MAX_INCREMENTS:
+            problems.append("%s has more than %d increments; the rest were not looked at"
+                            % (name, MAX_INCREMENTS))
+            break
+        label = match.group(1)
+        if label in labels:
+            problems.append("%s line %d: the label %s repeats an earlier one" % (name, number, label))
+        elif last is not None and _number(label) < _number(last):
+            problems.append("%s line %d: the label %s comes after %s, which is later in order"
+                            % (name, number, label, last))
+        labels.add(label)
+        if last is None or _number(label) > _number(last):
+            last = label
+    if not has_section:
+        problems.append("%s has no `## Increments` section%s" % (
+            name, ", so its %d increment heading%s were not checked" % (outside, "" if outside == 1
+                                                                       else "s") if outside else ""))
+    if count > LIMIT_INCREMENTS:
+        problems.append("%s has %d increments; more than %d is two plans"
+                        % (name, count, LIMIT_INCREMENTS))
+    elif count > WARN_INCREMENTS:
+        warnings.append("%s has %d increments; more than %d suggests two plans"
+                        % (name, count, WARN_INCREMENTS))
+    return problems, warnings
+
+
+def plan_findings(name, real, data):
+    """``(problems, warnings)`` for one plan, given as the bytes read of it. `name` is how it is
+    shown and `real` is the file's own name."""
+    problems, warnings = [], []
+    trouble = name_problem(real)
+    if trouble:
+        problems.append("%s: %s" % (name, trouble))
+    text = data.decode("utf-8", "replace")
+    closing = {}
+    for _ in lines_of(text, closing):
+        pass
+    if closing["open"]:
+        problems.append("%s: a code fence is never closed, so what follows it was not looked at"
+                        % name)
+    if closing["comment"]:
+        problems.append("%s: an HTML comment is never closed, so what follows it was not looked at"
+                        % name)
+    problems.extend(header_problems(name, real, lines_of(text)))
+    more, warn = increment_problems(name, lines_of(text))
+    return problems + more, warnings + warn
+
+
+# --- the documents of a project ----------------------------------------------------------------
+
+def collect(root_fd, folder, budget, problems):
+    """``[(label, name, data, size, limit)]`` for the regular ``.md`` files of `folder`, in name
+    order, or None when the folder is not there or cannot be listed. What could not be read, and why, is added to
+    `problems`. `budget` is ``[files, bytes]`` left and is spent as files are read."""
+    try:
+        handle = open_dir(root_fd, folder)
+    except OSError as exc:
+        problems.append("%s: cannot be listed: %s" % (folder, shown(exc.strerror or exc)))
+        return None
+    if handle is None:
+        return None
+    found, seen = [], {}
+    try:
+        entries, cut = list_dir(handle)
+        for name, kind in entries:
+            label = "%s/%s" % (folder, shown(name))
+            folded = name.casefold()
+            if kind == "dir" or not folded.endswith(".md") or folded == "readme.md":
+                continue
+            try:
+                name.encode("utf-8")
+            except UnicodeEncodeError:
+                problems.append("%s: the name is not usable" % label)
+                continue
+            if folded in seen:
+                problems.append("%s: collides with %s, which differs only in letter case"
+                                % (label, shown(seen[folded])))
+            seen[folded] = name
+            if kind != "file":
+                problems.append("%s: is not a regular file, so it was not read" % label)
+                continue
+            if budget[0] <= 0 or budget[1] <= 0:
+                problems.append("%s: not looked at; more than %d files or %d bytes"
+                                % (label, MAX_FILES, MAX_BYTES))
+                continue
+            budget[0] -= 1
+            limit = min(MAX_DOCUMENT, budget[1])
+            try:
+                data, size = read_file(handle, name, limit)
+            except OSError as exc:
+                problems.append("%s: cannot be read: %s" % (label, shown(exc.strerror or exc)))
+                continue
+            budget[1] -= size
+            if size > limit:
+                problems.append("%s: larger than the %d bytes looked at; only the start was "
+                                "examined" % (label, limit))
+            found.append((label, name, data, size, limit))
+        if cut:
+            problems.append("%s: more than %d entries; the rest were not listed"
+                            % (folder, MAX_LISTED))
+    finally:
+        os.close(handle)
+    return found
+
+
+def examine(root):
+    """``(checked, problems, warnings)`` for the plans of the project at `root`."""
+    problems, warnings, checked = [], [], 0
+    root_fd = os.open(root, _DIR)
+    try:
+        items = collect(root_fd, PLANS, [MAX_FILES, MAX_BYTES], problems) or []
+    finally:
+        os.close(root_fd)
+    for label, name, data, size, limit in items:
+        checked += 1
+        more, warn = plan_findings(label, name, data)
+        problems.extend(more)
+        warnings.extend(warn)
+        if len(problems) > MAX_REPORTED:
+            problems.append("%s: stopped after %d problems; the plans after %s were not looked at"
+                            % (PLANS, MAX_REPORTED, shown(name)))
+            break
+    return checked, problems, warnings
+
+
+def plan_facts(data, state=None):
+    """``(status, candidate)`` a plan's header states: the first `Status:` line's status, and the
+    `Candidate:` line's ``<roadmap>#<id>`` when there is exactly one and it has that form. `state` is
+    passed to `lines_of`."""
+    found, _ = header_fields(lines_of(data.decode("utf-8", "replace"), state))
+    status = status_of(found["Status"][0]) if found.get("Status") else None
+    values = found.get("Candidate", [])
+    candidate = values[0] if len(values) == 1 and _CANDIDATE.match(values[0]) else None
+    return status, candidate
+
+
+def _heading(text):
+    """A ``##`` heading's words as a reader sees them, as ``doccheck`` reads them: entities
+    decoded, no emphasis marks, comment, closing hashes or trailing colon or full stop."""
+    text = " ".join(html.unescape(" ".join(text.split())[:_HEADING * 4]).split())[:_HEADING]
+    for mark in "*_`\\":
+        text = text.replace(mark, "")
+    while True:
+        start = text.find("<!--")
+        if start < 0:
+            break
+        end = text.find("-->", start + 4)
+        text = text[:start] + (text[end + 3:] if end >= 0 else "")
+    text = text.strip()
+    bare = text.rstrip("#")
+    if bare != text and (not bare or bare[-1] in " \t"):
+        text = bare
+    return text.strip().rstrip(":.").strip().casefold()
+
+
+def roadmap_candidates(text, state=None):
+    """``([(id, line)], cut)``: the ``###`` headings under ``## Candidates`` of a roadmap, as
+    ``doccheck`` reads them (a setext heading too), and whether the list was cut at MAX_CANDIDATES.
+    `state` is passed to `lines_of`."""
+    inside, cut, found, before = False, False, [], None
+    for number, line, plain in lines_of(text, state):
+        if not plain:
+            before = None
+            continue
+        under = _UNDERLINE.match(line)
+        if under and before is not None:
+            inside = under.group(1)[0] == "-" and _heading(before) == "candidates"
+            before = None
+            continue
+        two = _TWO.match(line)
+        if two:
+            inside = _heading(two.group(1)) == "candidates"
+            before = None
+            continue
+        stripped = line.strip()
+        before = stripped if stripped and not stripped.startswith(("#", ">")) else None
+        match = _CANDIDATE_HEAD.match(line) if inside else None
+        if match:
+            if len(found) >= MAX_CANDIDATES:
+                cut = True
+            else:
+                found.append((match.group(1), number))
+    return found, cut
+
+
+def _roadmap_ids(items, problems):
+    """``{roadmap: set of candidate ids}`` for the roadmaps read."""
+    known = {}
+    for label, name, data, size, limit in items:
+        stem = name[:-3]
+        if not re.fullmatch(_SLUG, stem):
+            continue
+        closing = {}
+        found, cut = roadmap_candidates(data.decode("utf-8", "replace"), closing)
+        if closing["open"] or closing["comment"]:
+            problems.append("%s: a code fence or an HTML comment is never closed, so what follows "
+                            "it was not looked at" % label)
+        if cut:
+            problems.append("%s: more than %d candidates; the rest were not looked at"
+                            % (label, MAX_CANDIDATES))
+        known[stem] = {each for each, _ in found}
+    return known
+
+
+def command_check(root, out, err):
+    checked, problems, warnings = examine(root)
+    found = len(problems)
+    if found > MAX_REPORTED + 1:
+        # What was not looked at is never among the lines dropped.
+        notices = [p for p in problems[MAX_REPORTED:] if "not looked at" in p or "not listed" in p]
+        problems = problems[:MAX_REPORTED] + notices + ["more plan problems are not listed"]
+    for line in problems:
+        err.write("problem: %s\n" % line)
+    for line in warnings[:MAX_REPORTED]:
+        err.write("warning: %s\n" % line)
+    if len(warnings) > MAX_REPORTED:
+        err.write("warning: more plan warnings are not listed\n")
+    out.write("checked %d plan%s\n" % (checked, "" if checked == 1 else "s"))
+    if problems:
+        out.write("check found %d problem%s\n" % (found, "" if found == 1 else "s"))
+        return 1
+    out.write("check found no problems\n")
+    return 0
+
+
+def _read_plans(root):
+    """``(items, problems)``: the plans of the project at `root` and what could not be read."""
+    problems = []
+    root_fd = os.open(root, _DIR)
+    try:
+        return collect(root_fd, PLANS, [MAX_FILES, MAX_BYTES], problems) or [], problems
+    finally:
+        os.close(root_fd)
+
+
+def _finish(problems, out, err):
+    for line in problems[:MAX_REPORTED]:
+        err.write("problem: %s\n" % line)
+    if len(problems) > MAX_REPORTED:
+        err.write("problem: more problems are not listed\n")
+    return 1 if problems else 0
+
+
+def _unread(label, status, closing, problems):
+    """Say so when a plan has no status because a fence or comment was never closed."""
+    if status is None and (closing.get("open") or closing.get("comment")):
+        problems.append("%s: a code fence or an HTML comment is never closed, so its status was "
+                        "not looked for" % label)
+
+
+def command_plans(root, out, err):
+    items, problems = _read_plans(root)
+    for label, name, data, size, limit in items:
+        closing = {}
+        status, _ = plan_facts(data, closing)
+        _unread(label, status, closing, problems)
+        if status in ACTIVE:
+            out.write("%s: %s\n" % (shown(name), status))
+    return _finish(problems, out, err)
+
+
+def command_report(root, out, err):
+    problems, budget = [], [MAX_FILES, MAX_BYTES]
+    root_fd = os.open(root, _DIR)
+    try:
+        roadmaps = collect(root_fd, ROADMAPS, budget, problems)
+        # A roadmap that was not read in full cannot be said to lack a candidate.
+        unsure = bool(problems)
+        plans = collect(root_fd, PLANS, budget, problems) if roadmaps is not None else None
+    finally:
+        os.close(root_fd)
+    if roadmaps is not None:
+        before = len(problems)
+        known = _roadmap_ids(roadmaps, problems)
+        unsure = unsure or len(problems) > before
+        complete, lost = set(), []
+        for label, name, data, size, limit in plans or ():
+            closing = {}
+            status, candidate = plan_facts(data, closing)
+            _unread(label, status, closing, problems)
+            if candidate is None:
+                continue
+            roadmap, _, each = candidate.partition("#")
+            if unsure:
+                if roadmap in known and each in known[roadmap] and status == "Completed":
+                    complete.add(candidate)
+            elif roadmap not in known:
+                lost.append("unresolved %s names %s: no such roadmap" % (shown(name), shown(candidate)))
+            elif each not in known[roadmap]:
+                lost.append("unresolved %s names %s: no such candidate" % (shown(name), shown(candidate)))
+            elif status == "Completed":
+                complete.add(candidate)
+        for each in sorted(complete):
+            out.write("complete %s\n" % shown(each))
+        for line in lost:
+            out.write(line + "\n")
+    return _finish(problems, out, err)
+
+
+def read_plan(root, plan):
+    """The bytes of the plan `plan`, a path relative to `root` that names a plan directly in docs/plans/,
+    or Refused. No link is followed, and a plan larger than the check reads is refused, not cut."""
+    parts = plan.split("/")
+    if len(parts) != 3 or "/".join(parts[:2]) != PLANS or name_problem(parts[2]):
+        raise Refused("%s is not a plan: a plan is %s/YYYY-MM-DD-<topic>.md" % (shown(plan, 80), PLANS))
+    try:
+        root_fd = os.open(root, _DIR)
+        try:
+            folder = open_dir(root_fd, PLANS)
+            if folder is None:
+                raise Refused("there is no %s folder" % PLANS)
+            try:
+                data, size = read_file(folder, parts[2], MAX_DOCUMENT)
+            finally:
+                os.close(folder)
+        finally:
+            os.close(root_fd)
+    except OSError as exc:
+        raise Refused("%s cannot be read: %s" % (shown(plan, 80), shown(exc.strerror or exc)))
+    if size > MAX_DOCUMENT:
+        raise Refused("%s is larger than the %d bytes that are read" % (shown(plan, 80), MAX_DOCUMENT))
+    return data
+
+
+def _status_line(marked):
+    """The line number of the one `Status:` line in the header, or Refused."""
+    found = []
+    for number, line, plain in itertools.islice(marked, MAX_HEADER + 1):
+        if number > MAX_HEADER or (plain and _TWO.match(line)):
+            break
+        match = _FIELD.match(line) if plain else None
+        if match and match.group(1) == "Status":
+            found.append(number)
+    if len(found) != 1:
+        raise Refused("the plan has %s `Status:` line before its first heading; it needs exactly one"
+                      % ("no" if not found else "%d" % len(found)))
+    return found[0]
+
+
+def _starts_section(whole, index):
+    """Whether the line at `index` could be taken for the start of a section: a heading of level one or
+    two, a line of `=` or `-` (a rule, or the underline of a heading), or the text such an underline follows.
+    The test is made on the plan's own lines and ignores any fence, comment or quote, because a reader may not
+    see them as the helper does; a false match only hashes more."""
+    line = whole[index]
+    if _BOUNDARY.match(line) or _UNDERLINE.match(line):
+        return True
+    if _WRAPPED_START.match(line.lstrip()) or _WRAPPED_START.match(line[_WRAPPED.match(line).end():]):
+        return True
+    following = whole[index + 1] if index + 1 < len(whole) else None
+    return bool(line.strip() and following is not None and _UNDERLINE.match(following))
+
+
+def region_of(text):
+    """``(hash, unhashed)`` for the text of a plan: the SHA-256 of the plan without its status line, its review
+    record and its result, line by line with the line ends and the trailing white space normalized, and the
+    names of what was left out. Refused when the plan cannot be told apart with certainty."""
+    state = {}
+    marked = list(lines_of(text, state))
+    if state["open"] or state["comment"]:
+        raise Refused("a code fence or an HTML comment is never closed, so the plan's sections cannot be told")
+    # The text hashed is the plan's own lines; the lines `lines_of` yields are cut at a bound.
+    whole = [line.rstrip("\n") for line in io.StringIO(text, newline=None)]
+    if len(whole) != len(marked):
+        raise Refused("the plan's lines cannot be read")
+    status = _status_line(marked)
+    if len(whole[status - 1]) > _STATUS_BOUND:
+        raise Refused("the `Status:` line is longer than %d characters, and it is not part of the region" % _STATUS_BOUND)
+    kept, names, seen, excluded = [], [], set(), False
+    for index, (number, line, plain) in enumerate(marked):
+        if number == status:
+            names.append("Status")
+            continue
+        head = _EXCLUDED.match(whole[index]) if plain else None
+        if head:
+            group = "Result" if head.group(1) == "Result" else "Review record"
+            if group in seen:
+                raise Refused("the plan has more than one %s section" % group.lower())
+            seen.add(group)
+            names.append(head.group(1))
+            excluded = True
+            continue
+        if _starts_section(whole, index):
+            excluded = False
+        if not excluded:
+            kept.append(whole[index].rstrip(" \t"))
+    while kept and not kept[-1]:
+        kept.pop()
+    return hashlib.sha256(("\n".join(kept) + "\n").encode("utf-8")).hexdigest(), names
+
+
+def command_region(root, plan, out, err):
+    data = read_plan(root, plan)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("%s is not valid UTF-8, so its region cannot be hashed" % shown(plan, 80))
+    digest, names = region_of(text)
+    out.write(json.dumps({"format": 1, "region_hash": digest, "unhashed": names}) + "\n")
+    return 0
+
+
+def _risks_heading(marked, whole):
+    """``(index, count)``: the line index of the first heading a reader could take for the Risks section, and how
+    many there are. An ATX heading of any level or a heading underlined with `=` or `-` counts, in whatever case."""
+    found = []
+    for index, (_, _, plain) in enumerate(marked):
+        if not plain:
+            continue
+        atx = _ATX.match(whole[index])
+        if atx:
+            words = atx.group(1) or ""
+        elif index + 1 < len(whole) and _UNDERLINE.match(whole[index + 1]):
+            words = whole[index]
+        else:
+            continue
+        if _heading(words).replace("&", "and") == _RISKS:
+            found.append(index)
+    return (found[0] if found else None), len(found)
+
+
+def delegable_of(text):
+    """``(delegable, reason)`` for the text of a plan. Delegable means exactly one Risks section, in its exact form,
+    with no line in it that begins, after any list marker and emphasis, with `Hard stop:`. Whatever leaves the
+    answer uncertain is not delegable. Only the plan's own lines count: not a fence, a quotation or a comment."""
+    state = {}
+    marked = list(lines_of(text, state))
+    if state["open"] or state["comment"]:
+        return False, "a code fence or an HTML comment is never closed, so the plan's sections cannot be told"
+    whole = [line.rstrip("\n") for line in io.StringIO(text, newline=None)]
+    if len(whole) != len(marked):
+        return False, "the plan's lines cannot be read"
+    try:
+        _status_line(marked)
+    except Refused as exc:
+        return False, shown(exc, _REASON)
+    heading, count = _risks_heading(marked, whole)
+    if count == 0:
+        return False, "the plan has no Risks section (`## Risks and sensitive actions`)"
+    if count > 1:
+        return False, "the plan has more than one Risks section"
+    if not _RISKS_HEADING.match(whole[heading]):
+        return False, "the Risks heading is not exactly `## Risks and sensitive actions`"
+    for index in range(heading + 1, len(marked)):
+        if not marked[index][2]:
+            continue
+        if _BOUNDARY.match(whole[index]):
+            break
+        if _HARD.match(whole[index]) or (_HARD_HEAD.match(whole[index]) and index + 1 < len(marked)
+                                         and marked[index + 1][2] and _HARD_TAIL.match(whole[index + 1])):
+            return False, 'the Risks section has a line that begins "Hard stop:" (line %d)' % marked[index][0]
+        if _UNSURE.search(whole[index]):
+            return False, ("the Risks section has markup, an entity or a character other than printable ASCII, "
+                           "so a reader may see it otherwise (line %d)" % marked[index][0])
+    return True, "the plan has one Risks section and it has no `Hard stop:` line"
+
+
+def command_delegable(root, plan, out, err):
+    data = read_plan(root, plan)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        delegable, reason = False, "the plan is not valid UTF-8, so its sections cannot be told"
+    else:
+        delegable, reason = delegable_of(text)
+    out.write(json.dumps({"format": 1, "delegable": delegable, "reason": reason,
+                          "document_sha256": hashlib.sha256(data).hexdigest()}) + "\n")
+    return 0
+
+
+def command_active(root, out, err):
+    """The plans under way, as ``{"format": 1, "plans": ["docs/plans/<name>", ...]}`` in name order. A plan is
+    under way when any `Status:` line of its header begins with Approved or In Progress, so a second, contrary
+    line lists it rather than hides it. Whatever could make the answer uncertain is refused, never guessed: a
+    plan that could not be read in full or whose header ends inside a fence or comment, a file under way
+    whose name is not a plan's, a path over the bound and more than the bound of plans."""
+    items, problems = _read_plans(root)
+    listed = []
+    for label, name, data, size, limit in items:
+        closing = {}
+        found, _ = header_fields(lines_of(data.decode("utf-8", "replace"), closing))
+        if closing.get("open") or closing.get("comment"):
+            problems.append("%s: a code fence or an HTML comment is never closed, so its status was not "
+                            "looked for" % label)
+            continue
+        if not any(status_of(value) in UNDER_WAY for value in found.get("Status", ())):
+            continue
+        path = "%s/%s" % (PLANS, name)
+        if name_problem(name):
+            problems.append("%s: is under way and is not named like a plan" % label)
+        elif len(path) > MAX_ACTIVE_PATH:
+            problems.append("%s: the path is longer than %d characters" % (label, MAX_ACTIVE_PATH))
+        else:
+            listed.append(path)
+    if len(listed) > MAX_ACTIVE:
+        problems.append("%s: more than %d plans are under way" % (PLANS, MAX_ACTIVE))
+    if problems:
+        raise Refused("; ".join(problems[:3]) + ("; more problems are not listed" if len(problems) > 3 else ""))
+    out.write(json.dumps({"format": 1, "plans": listed}) + "\n")
+    return 0
+
+
+_BRANCH_NAME = re.compile(r"\A[A-Za-z0-9._][A-Za-z0-9._/-]*\Z")
+
+
+def _branch_name(name):
+    """Whether `name` is a plain branch name of ASCII letters, digits and . _ - / that git would accept."""
+    return (type(name) is str and len(name) <= MAX_BRANCH and _BRANCH_NAME.match(name) is not None
+            and ".." not in name and "//" not in name and not name.endswith(("/", "."))
+            and all(not part.startswith(".") and not part.endswith(".lock") for part in name.split("/")))
+
+
+def _no_repeat(pairs):
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("a key appears more than once")
+    return dict(pairs)
+
+
+def _no_constant(name):
+    raise ValueError("%s is not allowed" % name)
+
+
+def command_shared(root, out, err):
+    """The shared branches the project declares, as ``{"format": 1, "shared": [name, ...]}`` in file order. No
+    file is an empty list. The answer is read as the branches a push stops for, so whatever is not exactly
+    ``{"format": 1, "shared": [<branch name>, ...]}`` is refused, never partly read: a link or another kind of file,
+    one over the bound, text that is not UTF-8 JSON, a repeated key, an extra key, more than the bound of names,
+    a name that is not a plain branch name and a repeated name."""
+    label = shown(SHARED)
+    try:
+        root_fd = os.open(root, _DIR)
+        try:
+            folder = open_dir(root_fd, os.path.dirname(SHARED))
+            if folder is None:
+                return _write_shared([], out)
+            try:
+                data, size = read_file(folder, os.path.basename(SHARED), MAX_SHARED_FILE)
+            except FileNotFoundError:
+                return _write_shared([], out)
+            finally:
+                os.close(folder)
+        finally:
+            os.close(root_fd)
+    except OSError as exc:
+        raise Refused("%s cannot be read: %s" % (label, shown(exc.strerror or exc)))
+    if size > MAX_SHARED_FILE:
+        raise Refused("%s is larger than the %d bytes that are read" % (label, MAX_SHARED_FILE))
+    try:
+        value = json.loads(data.decode("utf-8"), object_pairs_hook=_no_repeat, parse_constant=_no_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        raise Refused("%s is not valid JSON text: %s" % (label, shown(exc, 80)))
+    if type(value) is not dict or set(value) != {"format", "shared"} or type(value["format"]) is not int \
+            or value["format"] != 1 or type(value["shared"]) is not list:
+        raise Refused('%s must be {"format": 1, "shared": [<branch name>, ...]}' % label)
+    names = value["shared"]
+    if len(names) > MAX_SHARED:
+        raise Refused("%s names more than %d branches" % (label, MAX_SHARED))
+    for name in names:
+        if not _branch_name(name):
+            raise Refused("%s holds a name that is not a plain branch name: %s" % (label, shown(name, 60)))
+    if len(set(names)) != len(names):
+        raise Refused("%s names a branch more than once" % label)
+    return _write_shared(names, out)
+
+
+def _write_shared(names, out):
+    out.write(json.dumps({"format": 1, "shared": names}) + "\n")
+    return 0
+
+
+COMMANDS = {"check": command_check, "plans": command_plans, "report": command_report, "active": command_active,
+            "shared": command_shared}
+
+
+def main(argv, out, err, cwd):
+    """Run one subcommand from `cwd`. Returns the exit code."""
+    try:
+        if len(argv) == 2 and argv[0] == "region":
+            return command_region(find_root(cwd), argv[1], out, err)
+        if len(argv) == 2 and argv[0] == "delegable":
+            return command_delegable(find_root(cwd), argv[1], out, err)
+        if len(argv) != 1 or argv[0] not in COMMANDS:
+            raise Refused("usage: code-work %s (no arguments), or code-work region|delegable <plan>"
+                          % "|".join(COMMANDS))
+        return COMMANDS[argv[0]](find_root(cwd), out, err)
+    except Refused as exc:
+        err.write("refused: %s\n" % exc)
+        return 1
+    except OSError as exc:
+        err.write("failed: %s\n" % shown(exc.strerror or exc))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:], sys.stdout, sys.stderr, os.getcwd()))

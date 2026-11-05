@@ -1,0 +1,10 @@
+# Local brainstorming notes with personal details of the owner's environment
+/docs/brainstorm/
+
+# Python
+__pycache__/
+*.pyc
+/engine/.venv/
+
+# macOS
+.DS_Store

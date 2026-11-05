@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "spelling": [
+    "wb",
+    "run",
+    "safe-git"
+  ],
+  "subcommand": "remove",
+  "module": "safe-git",
+  "action": "remove",
+  "flags": {
+    "--confirm": {
+      "type": "boolean"
+    },
+    "--recursive": {
+      "type": "boolean"
+    }
+  },
+  "positionals": {
+    "name": "paths",
+    "separator": true,
+    "min": 1,
+    "max": 61
+  },
+  "checks": [
+    "facts_complete",
+    "confirm_present",
+    "removal_valid",
+    "ignore_status_known",
+    "preview_matches_arguments",
+    "no_git_metadata"
+  ],
+  "rubric": "remove",
+  "questions": [
+    "targets_look_disposable",
+    "scope_is_narrow",
+    "no_reviewer_directed_text"
+  ]
+}

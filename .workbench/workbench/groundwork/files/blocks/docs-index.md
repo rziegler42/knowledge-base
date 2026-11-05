@@ -1,0 +1,4 @@
+- [Specs](specs/README.md): what is true now
+- [Roadmaps](roadmaps/README.md): where the work is heading
+- [Decisions](decisions/README.md): why choices were made
+- [References](references/README.md): the outside material the work rests on

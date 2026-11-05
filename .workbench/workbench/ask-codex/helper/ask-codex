@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+"""The ask-codex helper: a model bridge for the Codex command line program.
+
+It is one file that imports the standard library and the workbench kit (``wbkit``); the launcher runs a
+private copy of it through the kit runner with nothing beside it.
+
+    ask-codex ask [--model <name>] [--effort <level>] [--timeout <seconds>] [--root <path>]
+                  [--schema <path>] [--server <name>] [--confine]      the prompt is on standard input
+
+The contract is ``docs/specs/model-bridge.md`` (version 2). The helper translates it to one program, ``codex``,
+found on a PATH entry outside the repository, started read-only with a fresh unsaved session and without the
+user's configuration file, in an environment built here. It prints one JSON object and keeps no state: it
+writes nothing in the project, opens no connection and logs nothing. What the program returns is data: it is
+classified and copied, never run and never believed.
+"""
+
+import json
+import os
+import re
+import selectors
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import unicodedata
+
+from wbkit import display, project
+
+VENDOR = "codex"
+CONTRACT = 2
+PROGRAM = "codex"
+MAX_PROMPT = 262144
+MAX_REPLY = 262144
+MAX_SCHEMA = 65536
+MAX_OUTPUT = 1048576
+MAX_OBJECT = 2000000
+DEFAULT_TIMEOUT = 600
+EFFORTS = ("low", "medium", "high")
+OPTIONS = ("--model", "--effort", "--timeout", "--root", "--schema", "--server")
+FLAGS = ("--confine",)  # an option with no value
+# What `--confine` adds (docs/specs/model-bridge.md, "Confinement"): the program's own feature names as `codex-cli`
+# 0.163.0 lists them, then the setting that turns its web tool off. The list is fixed here and is not asked of the program.
+CONFINE_FEATURES = ("apps", "browser_use", "browser_use_external", "browser_use_full_cdp_access", "computer_use",
+                    "in_app_browser", "image_generation", "multi_agent", "plugins", "remote_plugin", "goals", "hooks",
+                    "shell_tool")
+CONFINE_SETTING = 'web_search="disabled"'
+_MODEL = r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}"
+_SECONDS = r"[0-9]{1,4}"
+_SERVER = r"[a-z0-9][a-z0-9_-]{0,31}"
+_KEPT = ("HOME", "XDG_CONFIG_HOME", "USER", "LOGNAME", "LANG", "TZ", "TERM", "TMPDIR")
+
+# What the program's own words are taken to mean. The first pattern that matches wins; text that matches
+# none of them is `bad_exit`. Only the class reaches the caller, never the text.
+_SIGN_IN = (r"not (logged|signed) in|(log|sign) ?in required|please (log|sign) ?in|codex login|unauthori[sz]ed"
+            r"|(status|error|code)\W{0,3}401\b|authentication (failed|required)|invalid (api key|token)"
+            r"|no (api key|credentials)")
+_QUOTA = r"usage limit|rate.?limit|quota|\b429\b|too many requests|credits"
+_EFFORT = (r"(reasoning|effort).{0,80}(unsupported|not supported|invalid|unknown)"
+           r"|(unsupported|not supported|invalid|unknown).{0,80}(reasoning|effort)")
+_SCHEMA = (r"schema.{0,80}(invalid|unsupported|not supported|rejected|failed)"
+           r"|(invalid|unsupported|rejected).{0,40}schema")
+_NO_MODEL = (r"model.{0,80}(not found|does not exist|not supported|unavailable|unknown|not available"
+             r"|no access|do not have access)|(unknown|unsupported|invalid) model")
+
+
+class Refused(Exception):
+    """Nothing was run; the message says why."""
+
+
+def plain(text, keep=""):
+    """`text` without control, format, unassigned and line-separator characters, except those in `keep`."""
+    return "".join(c for c in text if c in keep or (unicodedata.category(c)[0] != "C"
+                                                    and unicodedata.category(c) not in ("Zl", "Zp")))
+
+
+def is_inside(path, boundary):
+    """True when `path` is `boundary` or below it, whatever links and case spellings lead there. A part of the
+    path that does not exist yet is skipped (it cannot be the boundary, but something may be put there later),
+    and a part that cannot be examined counts as inside."""
+    current = os.path.realpath(path)
+    while True:
+        try:
+            if os.path.samefile(current, boundary):
+                return True
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
+def outermost_boundary(start):
+    """The outermost ancestor of `start` that holds a `.git` entry. A PATH entry is trusted only when it is
+    outside this one, so a repository embedded in another cannot make the outer one look outside."""
+    current = os.path.realpath(start)
+    found = None
+    while True:
+        if os.path.lexists(os.path.join(current, ".git")):
+            found = current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return found or os.path.realpath(start)
+        current = parent
+
+
+def trusted_entries(boundary):
+    """The PATH entries that are absolute, are directories that exist now and are outside the repository: never "",
+    "." or a relative one, and never one that is missing or cannot be examined (a missing one that goes up through
+    ".." could later name a place inside the repository)."""
+    return [entry for entry in os.environ.get("PATH", "").split(os.pathsep)
+            if entry and os.path.isabs(entry) and os.path.isdir(entry) and not is_inside(entry, boundary)]
+
+
+def trusted_which(name, entries, boundary):
+    """The first executable file `name` in a trusted entry that does not resolve into the repository."""
+    for entry in entries:
+        candidate = os.path.join(entry, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK) \
+                and not is_inside(candidate, boundary):
+            return candidate
+    return None
+
+
+def environment(entries):
+    """What the program sees: a short list of the caller's variables, its ``LC_*`` variables and the
+    trusted PATH. Nothing else is passed."""
+    env = {name: os.environ[name] for name in _KEPT if name in os.environ}
+    env.update({name: value for name, value in os.environ.items() if name.startswith("LC_")})
+    env["PATH"] = os.pathsep.join(entries)
+    return env
+
+
+def confinement():
+    """The arguments that `--confine` adds, written once: strict configuration (a wrong setting name is an error and
+    not a warning that leaves a tool on), then each feature switched off, then the web tool's setting."""
+    argv = ["--strict-config"]
+    for name in CONFINE_FEATURES:
+        argv += ["--disable", name]
+    return argv + ["--config", CONFINE_SETTING]
+
+
+def parse_options(args):
+    """``{option: value}`` for the options in `args`, and ``True`` for a flag: each at most once, each option with a
+    value, nothing else."""
+    found = {}
+    position = 0
+    while position < len(args):
+        name = args[position]
+        if name not in OPTIONS and name not in FLAGS:
+            raise Refused("%s is not an option of ask" % display.ascii_text(name)[:60])
+        if name in found:
+            raise Refused("%s is given twice" % name)
+        if name in FLAGS:
+            found[name] = True
+            position += 1
+            continue
+        if position + 1 >= len(args):
+            raise Refused("%s needs a value" % name)
+        found[name] = args[position + 1]
+        position += 2
+    if "--model" in found and not re.fullmatch(_MODEL, found["--model"]):
+        raise Refused("--model is at most 64 characters of letters, digits and ._:- and starts with a "
+                      "letter or digit")
+    if "--effort" in found and found["--effort"] not in EFFORTS:
+        raise Refused("--effort is one of %s" % ", ".join(EFFORTS))
+    if "--timeout" in found:
+        if not re.fullmatch(_SECONDS, found["--timeout"]) or not 1 <= int(found["--timeout"]) <= 3600:
+            raise Refused("--timeout is a whole number of seconds from 1 to 3600")
+    if "--server" in found:
+        if not re.fullmatch(_SERVER, found["--server"]):
+            raise Refused("--server is 1 to 32 characters of a-z, 0-9, _ and - and starts with a letter or digit")
+        raise Refused("--server names an endpoint and this bridge starts a program, which has none")
+    return found
+
+
+def read_prompt(stream):
+    """The prompt: non-empty UTF-8 text of at most `MAX_PROMPT` bytes."""
+    data = stream.read(MAX_PROMPT + 1)
+    if not data or not data.strip():
+        raise Refused("the prompt on standard input is empty")
+    if len(data) > MAX_PROMPT:
+        raise Refused("the prompt is larger than %d bytes" % MAX_PROMPT)
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("the prompt is not UTF-8 text")
+    return data
+
+
+def inside_path(base, value, what):
+    """The path `value` (absolute, or relative to `base`) as a path below `base` in which no component is
+    a link and none is `..`. Raises ``Refused`` for any other path."""
+    if not value or "\0" in value:
+        raise Refused("%s is not a usable path" % what)
+    if value.startswith("-"):  # so that a flag is never read as a path (a --model cannot start with one either)
+        raise Refused("%s may not start with a dash; write ./ before a relative path that does" % what)
+    if os.path.isabs(value):
+        prefix = base.rstrip(os.sep) + os.sep
+        if value != base and not value.startswith(prefix):
+            raise Refused("%s is outside the project" % what)
+        value = value[len(prefix):] if value != base else ""
+    parts = [part for part in value.split("/") if part not in ("", ".")]
+    if ".." in parts:
+        raise Refused("%s names a parent directory" % what)
+    current = base
+    for part in parts:
+        current = os.path.join(current, part)
+        try:
+            linked = stat.S_ISLNK(os.lstat(current).st_mode)
+        except OSError:
+            raise Refused("%s does not exist" % what)
+        if linked:
+            raise Refused("%s has a link in it" % what)
+    return current
+
+
+def working_root(base, value):
+    path = base if value is None else inside_path(base, value, "--root")
+    if not os.path.isdir(path) or not os.access(path, os.R_OK | os.X_OK):
+        raise Refused("--root is not a directory the program can enter")
+    if any(part in (".git", ".workbench") for part in os.path.relpath(path, base).split(os.sep)):
+        raise Refused("--root may not be inside .git or .workbench")
+    return path
+
+
+def read_schema(base, value):
+    """The bytes of the schema file at `value`: a regular file of at most `MAX_SCHEMA` bytes, with no link in
+    its path, holding one JSON object. ``None`` when no schema was given."""
+    if value is None:
+        return None
+    path = inside_path(base, value, "--schema")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise Refused("--schema cannot be opened")
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise Refused("--schema is not a regular file")
+        data = os.read(descriptor, MAX_SCHEMA + 1)
+    finally:
+        os.close(descriptor)
+    if len(data) > MAX_SCHEMA:
+        raise Refused("--schema is larger than %d bytes" % MAX_SCHEMA)
+    if json_object(data) is None:
+        raise Refused("--schema is not a JSON object")
+    return data
+
+
+def json_object(data):
+    """The JSON object in `data` (bytes or text), or ``None`` when it is anything else."""
+    try:
+        value = json.loads(data if isinstance(data, str) else data.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def kill(process):
+    """Stop the program and anything it started in its own process group."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        process.kill()
+    except ProcessLookupError:
+        pass
+
+
+def run_program(argv, cwd, env, stdin, timeout):
+    """Run `argv`; return ``(code, stdout, stderr, over, timed_out)``. Each stream is read to `MAX_OUTPUT`
+    bytes and the program is stopped when one passes it, and at `timeout` seconds; the whole process group
+    is killed in either case."""
+    process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               cwd=cwd, env=env, start_new_session=True)
+    out, err = bytearray(), bytearray()
+    over = timed_out = False
+    pending = memoryview(stdin)
+    try:
+        os.set_blocking(process.stdin.fileno(), False)
+        with selectors.DefaultSelector() as pipes:
+            pipes.register(process.stdout, selectors.EVENT_READ, out)
+            pipes.register(process.stderr, selectors.EVENT_READ, err)
+            if pending:
+                pipes.register(process.stdin, selectors.EVENT_WRITE, None)
+            else:
+                process.stdin.close()
+            deadline = time.monotonic() + timeout
+            while (process.stdout in pipes.get_map() or process.stderr in pipes.get_map()) and not over:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    timed_out = True
+                    break
+                for key, _ in pipes.select(min(left, 0.2)):
+                    if key.data is None:
+                        try:
+                            pending = pending[os.write(key.fileobj.fileno(), pending[:65536]):]
+                        except BlockingIOError:
+                            continue
+                        except BrokenPipeError:
+                            pending = pending[len(pending):]
+                        if not pending:
+                            pipes.unregister(key.fileobj)
+                            process.stdin.close()
+                        continue
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        pipes.unregister(key.fileobj)
+                    else:
+                        key.data.extend(chunk)
+                        over = over or len(key.data) > MAX_OUTPUT
+        if not timed_out and not over:
+            try:
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+        kill(process)  # also what a program that has exited left running in its group
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            kill(process)
+            process.wait()
+        return process.returncode, bytes(out[:MAX_OUTPUT]), bytes(err[:MAX_OUTPUT]), over, timed_out
+    finally:
+        if process.poll() is None:  # an interrupt: the program is in its own session, so it would run on
+            kill(process)
+            process.wait()
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            try:
+                pipe.close()
+            except (OSError, ValueError):
+                pass
+
+
+def count(value):
+    """`value` when it is a non-negative whole number the program reported, else ``None``."""
+    return value if type(value) is int and 0 <= value <= 10 ** 12 else None
+
+
+def read_events(stdout):
+    """What the program's JSON event lines report: ``(usage, model, messages)``. A line that is not an
+    object, and a field of another shape, are skipped."""
+    usage, model, messages = {}, None, []
+    for line in stdout.decode("utf-8", "replace").splitlines():
+        event = json_object(line)
+        if event is None:
+            continue
+        if isinstance(event.get("usage"), dict):
+            usage = event["usage"]
+        if isinstance(event.get("model"), str) and re.fullmatch(_MODEL, event["model"]):
+            model = event["model"]
+        for holder in (event, event.get("error")):
+            if isinstance(holder, dict) and isinstance(holder.get("message"), str):
+                messages.append(holder["message"][:500])
+    return usage, model, messages
+
+
+def classify(text):
+    """``(error, detail)`` for the program's words `text`."""
+    text = text.lower()
+    if re.search(_SIGN_IN, text):
+        return "not_signed_in", None
+    if re.search(_QUOTA, text):
+        return "vendor_error", "usage_limit"
+    if re.search(_EFFORT, text):
+        return "effort_unsupported", None
+    if re.search(_SCHEMA, text):
+        return "vendor_error", "bad_schema"
+    if re.search(_NO_MODEL, text):
+        return "model_unavailable", None
+    return "vendor_error", "bad_exit"
+
+
+MESSAGES = {
+    "not_signed_in": "codex is not signed in",
+    "model_unavailable": "the model is not available to this account",
+    "effort_unsupported": "the model does not support this effort",
+    "vendor_unreachable": "codex was not found in a trusted PATH entry",
+    "not_started": "codex was found but could not be started",
+    "timeout": "codex did not finish in time",
+    "usage_limit": "codex refused the call because a usage limit was reached",
+    "unusable_reply": "codex returned no usable reply",
+    "reply_too_large": "codex returned more than the bridge accepts",
+    "bad_schema": "codex rejected the schema",
+    "bad_exit": "codex stopped with an error",
+}
+
+
+def failure(error, detail=None, message=None):
+    return {"contract": CONTRACT, "ok": False, "vendor": VENDOR, "error": error, "detail": detail,
+            "retryable": error == "timeout" or detail == "usage_limit",
+            "message": message or MESSAGES[detail or error]}
+
+
+def read_reply(path):
+    """The reply file's bytes (at most `MAX_OUTPUT`), ``None`` when there is none, or ``False`` when it is
+    larger than that."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        data = os.read(descriptor, MAX_OUTPUT + 1)
+    finally:
+        os.close(descriptor)
+    return False if len(data) > MAX_OUTPUT else data
+
+
+def outcome(code, stdout, stderr, over, timed_out, reply_path, requested, schema):
+    """The object to print for a finished program."""
+    if timed_out:
+        return failure("timeout")
+    if over:
+        return failure("vendor_error", "reply_too_large")
+    usage, model, messages = read_events(stdout)
+    if code != 0:
+        words = stderr.decode("utf-8", "replace")
+        return failure(*classify(" ".join(messages) + " " + words[:2000] + " " + words[-2000:]))
+    data = read_reply(reply_path)
+    if data is False:
+        return failure("vendor_error", "reply_too_large")
+    reply = plain(data.decode("utf-8", "replace"), "\n\t") if data is not None else ""
+    if not reply.strip() or (schema is not None and json_object(reply) is None):
+        return failure("vendor_error", "unusable_reply")
+    if len(reply.encode("utf-8")) > MAX_REPLY:
+        return failure("vendor_error", "reply_too_large")
+    return {"contract": CONTRACT, "ok": True, "vendor": VENDOR, "model": model or requested, "reply": reply,
+            "usage": {"input_tokens": count(usage.get("input_tokens")),
+                      "output_tokens": count(usage.get("output_tokens")),
+                      "total_tokens": count(usage.get("total_tokens")),
+                      "cached_input_tokens": count(usage.get("cached_input_tokens")),
+                      "reasoning_output_tokens": count(usage.get("reasoning_output_tokens"))}}
+
+
+def emit(out, document):
+    text = json.dumps(document) + "\n"
+    if len(text) > MAX_OBJECT:
+        text = json.dumps(failure("vendor_error", "reply_too_large")) + "\n"
+    out.write(text)
+    return 0 if document["ok"] else 1
+
+
+def ask(args, stdin, cwd, out):
+    options = parse_options(args)
+    try:
+        base = os.path.realpath(project.find_root(cwd))
+    except project.ProjectError as exc:
+        raise Refused(display.ascii_text(str(exc))[:200])
+    prompt = read_prompt(stdin)
+    workdir = working_root(base, options.get("--root"))
+    schema = read_schema(base, options.get("--schema"))
+    timeout = int(options.get("--timeout", DEFAULT_TIMEOUT))
+    boundary = outermost_boundary(base)
+    entries = trusted_entries(boundary)
+    program = trusted_which(PROGRAM, entries, boundary)
+    if program is None:
+        return emit(out, failure("vendor_unreachable"))
+    temp = os.environ.get("TMPDIR") or tempfile.gettempdir()
+    if is_inside(temp, base):
+        raise Refused("the temporary directory is inside the project; set TMPDIR outside it")
+    scratch = tempfile.mkdtemp(prefix="ask-codex-", dir=temp)
+    try:
+        if is_inside(scratch, base):
+            raise Refused("the temporary directory is inside the project; set TMPDIR outside it")
+        reply_path = os.path.join(scratch, "reply.txt")
+        argv = [program, "exec", "--sandbox", "read-only", "--ephemeral", "--ignore-user-config",
+                "--ignore-rules", "--color", "never", "--json", "--cd", workdir,
+                "--output-last-message", reply_path]
+        if "--model" in options:
+            argv += ["--model", options["--model"]]
+        if "--effort" in options:
+            argv += ["--config", 'model_reasoning_effort="%s"' % options["--effort"]]
+        if schema is not None:
+            schema_path = os.path.join(scratch, "schema.json")
+            with open(schema_path, "wb") as handle:
+                handle.write(schema)
+            argv += ["--output-schema", schema_path]
+        if "--confine" in options:
+            argv += confinement()
+        argv.append("-")
+        try:
+            finished = run_program(argv, workdir, environment(entries), prompt, timeout)
+        except OSError:
+            return emit(out, failure("vendor_unreachable", message=MESSAGES["not_started"]))
+        return emit(out, outcome(*finished, reply_path, options.get("--model"), schema))
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def main(argv, stdin, out, err, cwd):
+    """Run one question from `cwd`. Returns the exit code."""
+    try:
+        if not argv or argv[0] != "ask":
+            raise Refused("usage: ask-codex ask [--model <name>] [--effort <level>] [--timeout <seconds>] "
+                          "[--root <path>] [--schema <path>] [--server <name>] [--confine], with the prompt on standard input")
+        return ask(argv[1:], stdin, cwd, out)
+    except Refused as exc:
+        err.write("refused: %s\n" % exc)
+        return 1
+    except OSError as exc:
+        err.write("refused: the call could not be started (%s)\n"
+                  % display.ascii_text(exc.strerror or "error")[:100])
+        return 1
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # so the program is stopped and the scratch removed
+    sys.exit(main(sys.argv[1:], sys.stdin.buffer, sys.stdout, sys.stderr, os.getcwd()))

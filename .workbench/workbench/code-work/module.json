@@ -1,0 +1,80 @@
+{
+  "name": "code-work",
+  "version": "0.1.0",
+  "type": "process",
+  "description": "Plans made of increments, and a read-only helper that checks and lists them.",
+  "provides": [
+    "plans"
+  ],
+  "requires": [
+    "specs",
+    "roadmaps",
+    "decisions",
+    "commit"
+  ],
+  "writes": [
+    "docs/plans/README.md"
+  ],
+  "ships": [
+    "helper/code-work"
+  ],
+  "commands": {
+    "code-work": {
+      "helper": "helper/code-work",
+      "runtime": "python",
+      "kit": 1,
+      "arguments": [
+        "check",
+        "plans",
+        "report",
+        "region",
+        "active",
+        "shared",
+        "delegable"
+      ]
+    }
+  },
+  "approval": {
+    "command": "code-work",
+    "argument": "region",
+    "active": "active",
+    "delegable": "delegable"
+  },
+  "checkpoints": [
+    "approve-plan",
+    "push-shared-branch",
+    "submit-remote-job",
+    "fetch-remote-output",
+    "change-direction",
+    "accept-decision",
+    "acknowledge-first-tier",
+    "acknowledge-second-tier"
+  ],
+  "caps": [
+    {
+      "name": "review-rounds",
+      "default": 3,
+      "ceiling": 5
+    },
+    {
+      "name": "same-failure-retries",
+      "default": 1,
+      "ceiling": 2
+    },
+    {
+      "name": "reviewer-exchanges",
+      "default": 6,
+      "ceiling": 12
+    }
+  ],
+  "fills": [
+    {
+      "slot": "slot:docs-index",
+      "source": "files/blocks/docs-index.md"
+    },
+    {
+      "slot": "slot:policy",
+      "source": "files/blocks/policy.md"
+    }
+  ]
+}

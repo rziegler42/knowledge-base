@@ -1,0 +1,33 @@
+{
+  "name": "safe-git",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Safe local commits of exactly the named files, and approved deletions.",
+  "provides": [
+    "commit"
+  ],
+  "ships": [
+    "helper/safe-git"
+  ],
+  "commands": {
+    "safe-git": {
+      "helper": "helper/safe-git",
+      "runtime": "python",
+      "kit": 1,
+      "arguments": [
+        "commit",
+        "remove",
+        "push-check",
+        "describe"
+      ],
+      "describes": [
+        "remove",
+        "commit",
+        "push"
+      ],
+      "asks": [
+        "remove"
+      ]
+    }
+  }
+}

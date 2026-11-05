@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "Increment G — Outcome and steps; Increment E — scan caveats",
+      "problem": "Scan findings and partial flags are stored, but the search result contract never returns them. This drifts from reading.md's result contract and makes a partial extraction appear complete to the agent consuming search results.",
+      "severity": "major",
+      "suggestion": "Include version caveats and conversion completeness/partial status in search results, and test that a flagged fixture retains those fields through indexing and rebuilding."
+    },
+    {
+      "id": "R3-F2",
+      "location": "Increment B — stage resumption; Increment G — process step 3",
+      "problem": "Resume skips done stages, but payload promotion and the subsequent stage-state update are separate atomic operations. A crash after promotion and before marking the stage done leaves a pending stage with an existing immutable payload; retry then conflicts with B's refusal to overwrite filed payloads. The plan does not specify reconciliation or test this interruption point, despite promising resumability.",
+      "severity": "major",
+      "suggestion": "On resume, validate and adopt an already promoted result for the stage's identity before retrying work. Add an interruption test between payload promotion and the stage-state update that proves resume completes without overwriting or duplicating output."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "Two remaining gaps affect result completeness and crash-safe resumption.",
+  "verdict": "changes_needed"
+}

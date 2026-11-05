@@ -1,0 +1,25 @@
+{
+  "name": "ask-codex",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A model bridge for the Codex command line program: one read-only question, one JSON answer.",
+  "provides": [
+    "model-bridge"
+  ],
+  "ships": [
+    "helper/ask-codex"
+  ],
+  "ask_reads": [
+    "~/.codex/auth.json"
+  ],
+  "commands": {
+    "ask-codex": {
+      "helper": "helper/ask-codex",
+      "runtime": "python",
+      "kit": 1,
+      "arguments": [
+        "ask"
+      ]
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Scope/Non-goals (lines 35 and 45); Increment I, especially step 1 (lines 231-246)",
+      "problem": "The plan deliberately excludes the network host, tokens, and owner-only host configuration, but implements the workbench helper by accepting an engine path from project configuration and running the engine locally. This drifts from `library.md` and `reading.md`, which define the reading interface as a host service whose address and credentials are owner-only configuration, and prohibit a read command from accepting a path. The resulting package is not the specified reading interface.",
+      "severity": "major",
+      "suggestion": "Either defer Increment I until the host/interface plan exists, or change it to implement the minimal specified host boundary and owner-only configuration without a project-configured engine path."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Scope and Increments B-G (lines 25-35, 122-230)",
+      "problem": "The plan has no scan stage or persisted per-version pipeline state. `book.md` and `pipeline.md` require fetched, scanned, converted, and indexed stages to be recorded atomically with pending/done/failed/skipped outcomes, and require objective scan findings to become caveats before conversion. Direct capture/conversion/index commands alone do not provide the required restartable lifecycle or scan behavior.",
+      "severity": "major",
+      "suggestion": "Add a small, separately verified increment (or explicit steps and tests in B-G) defining atomic stage state, advancing capture through scan/conversion/index, recording failure reasons, resuming safely, and persisting scan caveats without blocking filing."
+    },
+    {
+      "id": "R2-F3",
+      "location": "Risks and sensitive actions (lines 275-277)",
+      "problem": "The plan only recommends a security review and says the owner decides. Project policy requires the owner to be explicitly asked whether to run a security review for this exposed surface (untrusted input, parsing, subprocesses, filesystem writes, network, and dependencies). No increment or approval checkpoint performs that ask.",
+      "severity": "major",
+      "suggestion": "Add an explicit owner checkpoint—before implementing E/F or before plan approval—to ask whether to run the installed security-review module, and record the owner's answer in the Result or review record."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The prior findings are addressed, but the proposed local helper conflicts with the specified host boundary, and the plan omits required pipeline scan/state behavior and the required security-review ask.",
+  "verdict": "changes_needed"
+}

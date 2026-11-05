@@ -1,0 +1,2557 @@
+#!/usr/bin/env python3
+"""The safe-git helper: makes one local commit of exactly the named files, and removes exact paths.
+
+It is one file that imports the standard library and the workbench kit (``wbkit``); the launcher runs a
+private copy of it through the kit runner with nothing beside it.
+
+    safe-git commit     make one local commit of exactly the named files (see `parse_commit`)
+    safe-git remove     preview, and with --confirm delete, exact paths of the repository
+    safe-git push-check report, read-only, what a push of the current branch would send (see `command_push_check`)
+
+The rules are in ``docs/specs/safe-git.md``. It starts one program, ``git``, found on a PATH entry
+outside the repository, with an environment built here, and only in one of the shapes listed in
+`git_shape_ok`. The repository is untrusted: its configuration and hooks are read for the names of
+anything that would make git run a program, and a commit is refused when there is one. The owner's own
+global and system Git configuration is trusted. It never reads or writes the guarded store.
+"""
+
+import difflib
+import errno
+import json
+import os
+import re
+import stat
+import sys
+import time
+import unicodedata
+
+from wbkit import display, jsonstrict, safefs
+
+_DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+class Refused(Exception):
+    """Nothing was done; the message says why. `code` names the class of refusal for `describe`, which reports
+    it as data; the real commands print the message only."""
+
+    def __init__(self, message="", code=None):
+        super().__init__(message)
+        self.code = code
+
+
+def shown(text, limit=120):
+    """`text` with every character outside printable ASCII written as an escape, cut to `limit`."""
+    out = []
+    for char in str(text)[:limit]:
+        if " " <= char <= "~":
+            out.append(char)
+        elif ord(char) < 0x100:
+            out.append("\\x%02x" % ord(char))
+        elif ord(char) < 0x10000:
+            out.append("\\u%04x" % ord(char))
+        else:
+            out.append("\\U%08x" % ord(char))
+    return "".join(out)
+
+
+FALLBACK_PATH = ["/usr/bin", "/bin"]
+GIT_TIMEOUT = 120
+MAX_REF = 200
+MAX_GITLINK_FINDINGS = 5
+MAX_SCAN = 8 * 1024 * 1024
+MAX_FINDINGS = 100
+MAX_CHANGED = 500
+_KEPT = ("HOME", "XDG_CONFIG_HOME", "USER", "LOGNAME", "LANG", "TZ", "TERM", "TMPDIR")
+_BRANCH = re.compile(r"\Arefs/heads/[A-Za-z0-9._][A-Za-z0-9._/-]*\Z")
+_TRACKING = re.compile(r"\Arefs/remotes/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}/[A-Za-z0-9._][A-Za-z0-9._/-]*\Z")
+_TAG = re.compile(r"\Arefs/tags/[A-Za-z0-9._][A-Za-z0-9._/-]*\Z")
+_REMOTE_HEAD = re.compile(r"\Arefs/remotes/[A-Za-z0-9_][A-Za-z0-9._-]{0,63}/HEAD\Z")
+_REMOTE_NAME = re.compile(r"\A(?!.*\.\.)(?!.*\.(?:lock)?\Z)[A-Za-z0-9_][A-Za-z0-9._-]{0,63}\Z")
+_RANGE = re.compile(r"\A[0-9a-f]{40}\.\.HEAD\Z")
+_DIFF_FLAGS = ("--cached", "--name-only", "-z", "--check", "--no-ext-diff", "--no-textconv", "--no-renames",
+               "--no-color", "-U0", "-U3", "--diff-filter=d", "--src-prefix=a/", "--dst-prefix=b/", "--text",
+               "--ignore-submodules=all", "--ignore-submodules=none", "--raw", "--inter-hunk-context=0")
+# A log of patches for `push-check`: these flags, and every one of the first group.
+_LOG_REQUIRED = {"--no-merges", "-p", "--format=", "--no-show-signature", "--no-ext-diff", "--no-textconv",
+                 "--ignore-submodules=all"}
+_LOG_FLAGS = _LOG_REQUIRED | {"--no-renames", "--no-color", "-U0", "--src-prefix=a/", "--dst-prefix=b/", "--text",
+                              "--inter-hunk-context=0"}
+# A log of the messages of a range for `describe push`: these flags in this order, and the range. `-z` ends each commit
+# with a NUL, `--topo-order` with `--reverse` puts a parent before its children, and the encoding is fixed so that
+# `i18n.logOutputEncoding` cannot change the bytes.
+_LOG_MESSAGES = ["-z", "--reverse", "--topo-order", "--no-show-signature", "--encoding=UTF-8", "--format=%H%n%B"]
+# Repository settings shaped like "a program or command to run": the shape decides and not a list of
+# names, because a list kept missing keys. A key is lower-cased before it is matched.
+EXEC_KEY = re.compile(
+    r".*\.(program|command|driver|cmd|clean|smudge|process|textconv|external|defaultkeycommand"
+    r"|uploadpack|receivepack|vcs|helper|promisor|partialclone|partialclonefilter)"
+    r"|core\.(hookspath|fsmonitor|sshcommand|gitproxy|askpass)|.*hook")
+
+
+def is_inside(path, boundary):
+    """True when `path` is `boundary` or below it, whatever links and case spellings lead there. A part of the
+    path that does not exist yet is skipped (it cannot be the boundary, but something may be put there later),
+    and a part that cannot be examined counts as inside."""
+    current = os.path.realpath(path)
+    while True:
+        try:
+            if os.path.samefile(current, boundary):
+                return True
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
+def repository_boundary(start):
+    """The nearest ancestor of `start` that holds a `.git` entry, found without running git."""
+    current = os.path.realpath(start)
+    while True:
+        if os.path.lexists(os.path.join(current, ".git")):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return os.path.realpath(start)
+        current = parent
+
+
+def outermost_boundary(start):
+    """The outermost ancestor of `start` that holds a `.git` entry. A PATH entry is trusted only when it is
+    outside this one, so a repository embedded in another cannot make the outer one look outside."""
+    current = os.path.realpath(start)
+    found = None
+    while True:
+        if os.path.lexists(os.path.join(current, ".git")):
+            found = current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return found or os.path.realpath(start)
+        current = parent
+
+
+def trusted_path_entries(boundary):
+    """The PATH entries that are absolute, are directories that exist now and are outside the repository: never "",
+    "." or a relative one, and never one that is missing or cannot be examined (a missing one that goes up through
+    ".." could later name a place inside the repository)."""
+    return [entry for entry in os.environ.get("PATH", "").split(os.pathsep)
+            if entry and os.path.isabs(entry) and os.path.isdir(entry) and not is_inside(entry, boundary)]
+
+
+def trusted_which(name, boundary, entries=None):
+    """The first executable `name` in a trusted entry that does not resolve into the repository."""
+    for entry in trusted_path_entries(boundary) if entries is None else entries:
+        candidate = os.path.join(entry, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK) \
+                and not is_inside(candidate, boundary):
+            return candidate
+    return None
+
+
+def git_environment(entries, extra=None):
+    """The environment git runs in: a short list of the caller's variables, the trusted PATH and the
+    few Git variables set here. No variable of the caller that starts with GIT_ is passed. A repository's
+    file system monitor is switched off, a missing object is never fetched and no maintenance runs after a
+    commit, because each could run a program the repository names. Nothing is written for the sake of a read (an index
+    refreshed by a diff), whatever is run."""
+    env = {name: os.environ[name] for name in _KEPT if name in os.environ}
+    env.update({name: value for name, value in os.environ.items() if name.startswith("LC_")})
+    env["PATH"] = os.pathsep.join(entries)
+    env.update({"GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_EDITOR": "true",
+                "GIT_PAGER": "cat", "GIT_LITERAL_PATHSPECS": "1", "GIT_NO_LAZY_FETCH": "1", "GIT_OPTIONAL_LOCKS": "0",
+                "GIT_CONFIG_COUNT": "3", "GIT_CONFIG_KEY_0": "core.fsmonitor", "GIT_CONFIG_VALUE_0": "false",
+                "GIT_CONFIG_KEY_1": "maintenance.auto", "GIT_CONFIG_VALUE_1": "false",
+                "GIT_CONFIG_KEY_2": "gc.auto", "GIT_CONFIG_VALUE_2": "0"})
+    env.update(extra or {})
+    return env
+
+
+def _plain_ref(ref, pattern):
+    return (isinstance(ref, str) and len(ref) <= MAX_REF + 11 and pattern.match(ref) is not None
+            and ".." not in ref and "//" not in ref and not ref.endswith(("/", ".")) and "@{" not in ref
+            and all(not part.startswith(".") and not part.endswith(".lock") for part in ref.split("/")))
+
+
+def _branch_ref(ref):
+    return _plain_ref(ref, _BRANCH)
+
+
+def _scan_ref(ref):
+    """A local branch or a remote-tracking branch, written out in full."""
+    return _plain_ref(ref, _BRANCH) or _plain_ref(ref, _TRACKING)
+
+
+def _readable_ref(ref):
+    """What `show-ref` may be asked for: `_scan_ref`, or a tag."""
+    return _scan_ref(ref) or _plain_ref(ref, _TAG)
+
+
+def _paths_ok(paths):
+    """True for one or more repository-relative paths: none empty, absolute or naming a `..` component, so
+    a path cannot leave the repository (git treats two paths outside the work tree as ``--no-index``)."""
+    return bool(paths) and all(item and not item.startswith("/") and ".." not in item.split("/")
+                               for item in paths)
+
+
+def _after_dashes(rest, start):
+    """True when `rest` has `--` at `start` and, after it, one or more paths that stay in the repository."""
+    return rest[start:start + 1] == ["--"] and _paths_ok(rest[start + 1:])
+
+
+def _flags_ok(flags):
+    return len(set(flags)) == len(flags) and ("--name-only" in flags
+                                              or ("--no-ext-diff" in flags and "--no-textconv" in flags))
+
+
+# Whether a submodule is looked into follows this flag when it is `none`, so it is allowed only where two trees are
+# compared (a range): a diff of the work tree with it would enter a nested repository and read its configuration.
+_NO_ENTRY = "--ignore-submodules=none"
+
+
+def _diff_shape(rest):
+    """A diff in the allowed flags. One that reads file contents must also switch off external diff and
+    text conversion, so a program a configuration names is never started by it."""
+    flags = []
+    for index, item in enumerate(rest):
+        if item == "--":
+            return _flags_ok(flags) and _after_dashes(rest, index) and _NO_ENTRY not in flags
+        if index == len(rest) - 1 and _RANGE.match(item):   # `<40 hex>..HEAD`, last, and no paths after it
+            return _flags_ok(flags) and (_NO_ENTRY not in flags or "--raw" in flags)
+        if item not in _DIFF_FLAGS:
+            return False
+        flags.append(item)
+    return _flags_ok(flags) and bool(flags) and _NO_ENTRY not in flags
+
+
+def _head_blob(argument):
+    """``HEAD:<path>`` for a path that stays in the repository and has no empty or ``.`` segment."""
+    path = argument[5:] if isinstance(argument, str) and argument.startswith("HEAD:") else None
+    return path is not None and _paths_ok([path]) and all(part not in ("", ".") for part in path.split("/"))
+
+
+_CONVERTING = ("filter", "ident", "working-tree-encoding")
+
+
+def _literal(path):
+    """A path git reads as the file it names: no leading colon (pathspec magic), glob or escape, and no leading dash."""
+    return not path.startswith(("-", ":")) and not any(char in path for char in "*?[]\\")
+
+
+def _commit_shape(rest):
+    start = 1 if rest[:1] == ["--cleanup=whitespace"] else 0
+    index = start
+    while rest[index:index + 1] == ["-m"] and index + 1 < len(rest):
+        index += 2
+    if index == start:
+        return False
+    tail = rest[index:]
+    return tail == [] or (tail[:2] == ["--only", "--"] and _paths_ok(tail[2:]))
+
+
+_SHAPES = {
+    "rev-parse": lambda rest: rest in (["--show-toplevel"], ["--absolute-git-dir"], ["--git-common-dir"],
+                                       ["HEAD"], ["--verify", "HEAD"], ["HEAD^@"])
+    or (len(rest) == 3 and rest[:2] == ["--verify", "-q"] and _branch_ref(rest[2])),
+    "diff": _diff_shape,
+    "show-ref": lambda rest: len(rest) == 3 and rest[:2] == ["--verify", "--hash"] and _readable_ref(rest[2]),
+    "symbolic-ref": lambda rest: rest == ["-q", "HEAD"] or (
+        len(rest) == 3 and rest[:2] == ["-q", "--short"] and _plain_ref(rest[2], _REMOTE_HEAD)),
+    "log": lambda rest: bool(rest) and _RANGE.match(rest[-1]) is not None and (
+        rest[:-1] == _LOG_MESSAGES
+        or (len(set(rest[:-1])) == len(rest) - 1 and set(rest[:-1]) <= _LOG_FLAGS and _LOG_REQUIRED <= set(rest[:-1]))),
+    # The reflog of a tracking ref, newest entry first, with the subject of each entry and nothing else.
+    "reflog": lambda rest: len(rest) == 6 and rest[:4] == ["show", "-z", "--no-show-signature", "--format=%gs"]
+    and _plain_ref(rest[4], _TRACKING) and rest[5] == "--",
+    "rev-list": lambda rest: len(rest) == 2 and rest[0] == "--count" and _RANGE.match(rest[1]) is not None,
+    "ls-files": lambda rest: (rest[:2] == ["--error-unmatch", "--"] and _paths_ok(rest[2:]))
+    or rest == ["-s", "-z"] or (rest[:3] == ["-s", "-z", "--"] and _paths_ok(rest[3:]))
+    or (rest[:2] == ["-z", "--"] and _paths_ok(rest[2:])),
+    "cat-file": lambda rest: len(rest) == 2 and ((rest[0] in ("-s", "blob") and _head_blob(rest[1]))
+                                                 or (rest[0] == "commit" and _HEX40.match(rest[1]) is not None)),
+    "check-attr": lambda rest: rest[:1 + len(_CONVERTING)] == ["-z"] + list(_CONVERTING)
+    and _after_dashes(rest, 1 + len(_CONVERTING)),
+    "check-ignore": lambda rest: len(rest) == 3 and rest[:2] == ["-q", "--"] and _paths_ok(rest[2:])
+    and _literal(rest[2]),
+    "add": lambda rest: _after_dashes(rest, 0),
+    "commit": _commit_shape,
+    "reset": lambda rest: rest[:1] == ["-q"] and _after_dashes(rest, 1),
+    "show": lambda rest: rest in (["-s", "--format=%s", "HEAD"], ["-s", "--format=%B", "HEAD"]),
+    "diff-tree": lambda rest: rest in (
+        ["--no-commit-id", "--name-only", "-r", "-z", "HEAD"],
+        ["--root", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"]),
+    "config": lambda rest: rest in (["--list", "-z"], ["--list", "--show-scope", "-z"]),
+    "remote": lambda rest: len(rest) == 4 and rest[:3] == ["get-url", "--push", "--all"]
+    and _REMOTE_NAME.match(rest[3]) is not None,
+    "status": lambda rest: rest == ["--porcelain=v1", "-z", "--untracked-files=all"],
+}
+
+
+def git_shape_ok(argv):
+    """Whether `argv` is `git` and one of the few commands in the shapes this helper runs. Anything
+    else, a global option before the subcommand included, is not run."""
+    if not isinstance(argv, list) or len(argv) < 2 or argv[0] != "git" \
+            or not all(type(item) is str and "\0" not in item for item in argv):
+        return False
+    shape = _SHAPES.get(argv[1])
+    return shape is not None and bool(shape(argv[2:]))
+
+
+def _resolve_git(argv, cwd):
+    """The path of the trusted ``git`` and the PATH entries it runs with, after checking the shape of `argv`."""
+    if not git_shape_ok(argv):
+        raise Refused("this helper does not run that git command: %s"
+                      % display.ascii_text(" ".join(str(item)[:60] for item in argv[:3]))[:200])
+    boundary = outermost_boundary(cwd)
+    entries = trusted_path_entries(boundary) or FALLBACK_PATH
+    found = trusted_which("git", boundary, entries)
+    if found is None:
+        raise Refused("git was not found in an absolute PATH entry outside the repository",
+                      code="repository_unreadable")
+    return found, entries
+
+
+def run(argv, cwd, check=True, timeout=GIT_TIMEOUT, env_extra=None):
+    """Run `argv` (``git`` and a command in an allowed shape) in `cwd`; return the finished process.
+    Raises ``Refused`` for a shape that is not allowed, a missing git, a timeout, or (with `check`) a
+    nonzero exit."""
+    import subprocess   # the one program this helper starts; imported here, below the read-only part
+    found, entries = _resolve_git(argv, cwd)
+    try:
+        result = subprocess.run([found] + argv[1:], cwd=cwd, capture_output=True, text=True,
+                                encoding="utf-8", errors="surrogateescape", check=False,
+                                env=git_environment(entries, env_extra), timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise Refused("git %s did not finish within %d seconds" % (argv[1], timeout), code="repository_unreadable")
+    except OSError as exc:
+        raise Refused("git %s could not be started (%s)" % (argv[1], display.ascii_text(exc.strerror or "error")),
+                      code="repository_unreadable")
+    if check and result.returncode:
+        raise Refused("git %s failed (%d)" % (argv[1], result.returncode), code="repository_unreadable")
+    return result
+
+
+def run_capped(argv, cwd, limit, timeout=None, separator="\n"):
+    """Run `argv` like `run`, reading at most `limit` bytes of its output. Returns ``(text, truncated)``:
+    when the output is longer, git and anything it started are stopped and the text ends at the last
+    `separator`. Standard error is discarded. Raises ``Refused`` for a shape that is not allowed, a missing git, a
+    timeout or a nonzero exit of a run that was not cut."""
+    import select       # read below the cap, with a deadline, and no thread
+    import signal
+    import subprocess   # the same one program as `run`
+    import time
+    found, entries = _resolve_git(argv, cwd)
+    deadline = time.monotonic() + (GIT_TIMEOUT if timeout is None else timeout)
+    try:
+        child = subprocess.Popen([found] + argv[1:], cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, env=git_environment(entries), start_new_session=True)
+    except OSError as exc:
+        raise Refused("git %s could not be started (%s)" % (argv[1], display.ascii_text(exc.strerror or "error")))
+    chunks, size, truncated = [], 0, False
+    try:
+        fd = child.stdout.fileno()
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise Refused("git %s did not finish within %d seconds" % (argv[1], GIT_TIMEOUT if timeout is None else timeout))
+            if not select.select([fd], [], [], min(left, 1.0))[0]:
+                continue
+            data = os.read(fd, 65536)
+            if not data:
+                break
+            if size + len(data) > limit:
+                chunks.append(data[:limit - size])
+                truncated = True
+                break
+            chunks.append(data)
+            size += len(data)
+    finally:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)   # git has its own process group, so what it started goes too
+        except OSError:
+            pass
+        child.stdout.close()
+        child.wait()
+    if not truncated and child.returncode:
+        raise Refused("git %s failed (%d)" % (argv[1], child.returncode))
+    text = b"".join(chunks).decode("utf-8", "surrogateescape")
+    if truncated:
+        text = text[:text.rfind(separator) + 1]
+    return text, truncated
+
+
+def git_root(path):
+    """The root of the repository that holds `path`, after refusing a work tree or git directory that is
+    not the repository's own `.git`: a `core.worktree` redirect, an embedded or separate repository, and a
+    `.git` that is a link."""
+    path = os.path.realpath(path)
+    top = os.path.realpath(run(["git", "rev-parse", "--show-toplevel"], path).stdout.strip())
+    holder = repository_boundary(path)
+    try:
+        same = os.path.samefile(top, holder)
+    except OSError:
+        same = False
+    if not same:
+        raise Refused("git reports a work tree that is not the repository holding its metadata "
+                      "(a core.worktree redirect?); refusing to act", code="repository_unreadable")
+    marker = os.path.join(top, ".git")
+    if os.path.islink(marker):
+        raise Refused("the repository's .git is a link; refusing to act", code="repository_unreadable")
+    if os.path.isdir(marker):
+        gitdir = run(["git", "rev-parse", "--absolute-git-dir"], path).stdout.strip()
+        if os.path.realpath(gitdir) != os.path.realpath(marker):
+            raise Refused("git is using a git directory that is not the repository's own .git "
+                          "(an embedded or bare repository?); refusing to act", code="repository_unreadable")
+    else:
+        raise Refused("the repository's .git is not a directory (a separate git directory or a work tree "
+                      "of another repository?); refusing to act", code="repository_unreadable")
+    if os.path.commonpath([path, top]) != top:
+        raise Refused("the working directory is outside the repository root git reports; refusing to act",
+                      code="repository_unreadable")
+    return top
+
+
+def head(root):
+    return run(["git", "rev-parse", "HEAD"], root).stdout.strip()
+
+
+def names(root, cached=False):
+    """The paths git reports as changed in the work tree, or (with `cached`) staged."""
+    command = ["git", "diff"] + (["--cached"] if cached else []) + ["--no-renames", "--name-only", "-z"]
+    return {item for item in run(command, root).stdout.split("\0") if item}
+
+
+def git_bool_is_true(has_value, value):
+    """A Git boolean as Git reads it: a key with no value is true, an integer is true unless zero, and
+    only the empty string, false, no, off and 0 are false. Anything unrecognised is true, the cautious
+    reading."""
+    if not has_value:
+        return True
+    text = value.strip().lower()
+    if text in ("", "false", "no", "off"):
+        return False
+    try:
+        return int(text, 0) != 0
+    except ValueError:
+        return True
+
+
+def _without_subsection(key):
+    """`key` with its subsection left out (``credential.*.helper``): a subsection can be a URL that carries a
+    credential. A key with no subsection is returned as it is."""
+    section, _, rest = key.partition(".")
+    subsection, dot, variable = rest.rpartition(".")
+    return "%s.*.%s" % (section, variable) if dot else key
+
+
+def repo_program_findings(root, redact=False):
+    """The names, never the values, of repository settings and hooks that make a commit run a program. With `redact`
+    a key is named without its subsection, before it is cut to length, so no part of a URL in a subsection is kept."""
+    findings = []
+    quiet = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    listing = run(["git", "config", "--list", "-z"], root, check=False, env_extra=quiet)
+    if listing.returncode:
+        return ["config:unreadable"]
+    for entry in listing.stdout.split("\0"):
+        key, separator, value = entry.partition("\n")
+        lowered = key.lower()
+        if lowered == "core.fsmonitor" and not git_bool_is_true(bool(separator), value):
+            continue   # off, as the runner itself sets it
+        if EXEC_KEY.fullmatch(lowered) or (lowered == "commit.gpgsign"
+                                           and git_bool_is_true(bool(separator), value)):
+            findings.append(display.ascii_text(_without_subsection(key) if redact else key)[:80])
+    for flag in ("--absolute-git-dir", "--git-common-dir"):
+        directory = run(["git", "rev-parse", flag], root).stdout.strip()
+        hooks = os.path.join(directory if os.path.isabs(directory) else os.path.join(root, directory), "hooks")
+        try:
+            listed = sorted(os.listdir(hooks))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:      # git needs only search permission to run a hook it names
+            findings.append("hooks:unreadable")
+            continue
+        for name in listed:
+            path = os.path.join(hooks, name)
+            if not name.endswith(".sample") and os.path.isfile(path) and os.access(path, os.X_OK):
+                findings.append("hook:" + display.ascii_text(name)[:60])
+    listing = run(["git", "ls-files", "-s", "-z"], root, check=False)
+    if listing.returncode:
+        findings.append("index:unreadable")
+    else:
+        # A committed gitlink is a nested repository: git starts a child in it for `diff`, `status` and
+        # `commit`, and that child reads the nested repository's own configuration, which is not read above.
+        links = [entry.partition("\t")[2] for entry in listing.stdout.split("\0")
+                 if entry.startswith("160000 ")]
+        findings.extend("submodule:" + display.ascii_text(path)[:60] for path in links[:MAX_GITLINK_FINDINGS])
+    return sorted(set(findings))
+
+
+# --- commit --------------------------------------------------------------------------------------
+
+MAX_SUBJECT = 300
+MAX_BODY = 100000
+MAX_TRAILERS = 50
+MAX_TRAILER = 1000
+MAX_PATHS = 2000
+SETTING = ".workbench/safe-git.json"
+MAX_SETTING = 4096
+_HEX40 = re.compile(r"\A[0-9a-f]{40}\Z")
+_TRAILER = re.compile(r"\A[A-Za-z][A-Za-z0-9-]{0,63}:[ ]+\S[^\0\r\n]*\Z")
+_TOOL = r"(?:the\s+|an?\s+)?(?:ai\s+)?[\W_]{0,4}(claude|anthropic)\b"
+_ATTRIBUTION = [re.compile(pattern, re.I) for pattern in (
+    r"co[-\s]?(authored|developed)[-\s]?by\s*:[^\n]{0,200}(claude|anthropic)",
+    r"signed[-\s]?off[-\s]?by\s*:[^\n]{0,200}(claude|anthropic)",
+    r"\b(claude|anthropic)\b[^\n]{0,20}\b(wrote|authored|generated|created|made|drafted)\b",
+    r"\b(assisted|generated|created|written|authored|reviewed|helped|made|drafted|powered|built|developed)[-\s]+"
+    r"(with|by|using|via)\s+" + _TOOL,
+    r"(assisted|generated|created|written|authored|reviewed|helped)[-\s]?(with|by)\s*:[^\n]{0,200}(claude|anthropic)",
+    r"\bai[-\s]assisted\b[^\n]{0,20}\b(claude|anthropic)\b",
+    r"noreply[^@\s]{0,20}@anthropic\.com",
+    r"claude[-\s]session\s*:",
+    r"(?<![A-Za-z0-9-])(?:www\.)?claude\.(ai|com)[:/?]\S")]
+_CONFUSABLE = {0x430: "a", 0x435: "e", 0x43E: "o", 0x440: "p", 0x441: "c", 0x445: "x", 0x443: "y",
+               0x455: "s", 0x456: "i", 0x458: "j", 0x3BF: "o", 0x3B1: "a", 0x501: "d", 0x57D: "u", 0x3C5: "u", 0x3BC: "u",
+               0x251: "a", 0x1D04: "c", 0x142: "l", 0x19A: "l", 0x131: "i", 0x1DD: "e", 0x1BF: "p", 0x1F7: "p", 0x2184: "c", 0x2C75: "h", 0x2C76: "h", 0x2223: "l", 0x5C0: "l", 0x2373: "i", 0x212E: "e", 0x1C0: "l", 0x1C1: "l", 0x1455: "c", 0x3002: "."}
+# Blocks of Latin letters drawn like ASCII ones (IPA, small capitals, modifier letters, Latin extensions).
+_PHONETIC = ((0x250, 0x2FF), (0x1D00, 0x1DBF), (0xA720, 0xA7FF), (0xAB30, 0xAB6F))
+_STROKED = re.compile(r"LATIN (?:CAPITAL|SMALL) LETTER ([A-Z]) WITH ")
+_SQUARES = (0x1F130, 0x1F150, 0x1F170)   # squared, negative circled and negative squared capital letters
+_FILLERS = "\u115f\u1160\u3164\uffa0"
+_BLANKS = "\u2800\u1680"
+_LOOKALIKE_SCRIPTS = {"CYRILLIC", "GREEK", "ARMENIAN", "COPTIC", "CHEROKEE"}
+
+
+def _base_letter(char):
+    """A non-ASCII letter drawn as an ASCII one (a stroke, a hook, a dot or a box around it) as that letter."""
+    code = ord(char)
+    if code < 128:
+        return char
+    for start in _SQUARES:
+        if start <= code < start + 26:
+            return chr(97 + code - start)
+    found = _STROKED.match(unicodedata.name(char, ""))
+    return found.group(1).lower() if found else char
+
+
+def _script(char):
+    """The script of a letter, from the first word of its Unicode name; the Japanese and Korean scripts
+    and Han count as one, so a sentence that mixes them is not a mix."""
+    first = unicodedata.name(char, "?").split(" ")[0]
+    return "CJK" if first in ("CJK", "HIRAGANA", "KATAKANA", "HANGUL", "BOPOMOFO") else first
+_COMMIT_OPTIONS = ("--expected-head", "--subject", "--body", "--trailer", "--leave-other-staged")
+
+
+class Request:
+    """What `commit` was asked to do, after the arguments were read."""
+
+    def __init__(self):
+        self.expected = None
+        self.subject = None
+        self.body = None
+        self.trailers = []
+        self.leave_other_staged = False
+        self.paths = []
+
+
+def parse_commit(argv):
+    """Read the arguments of `commit` by hand: options, then ``--``, then the paths. An unknown option, a
+    repeated one that takes one value, a missing value and a missing ``--`` are refused."""
+    request = Request()
+    seen = set()
+    index = 0
+    while index < len(argv) and argv[index] != "--":
+        option = argv[index]
+        if option not in _COMMIT_OPTIONS:
+            raise Refused("unknown option: %s" % shown(option, 40), code="usage")
+        if option != "--trailer" and option in seen:
+            raise Refused("%s was given more than once" % option, code="usage")
+        seen.add(option)
+        if option == "--leave-other-staged":
+            request.leave_other_staged = True
+            index += 1
+            continue
+        if index + 1 >= len(argv):
+            raise Refused("%s needs a value" % option, code="usage")
+        value = argv[index + 1]
+        index += 2
+        if option == "--expected-head":
+            request.expected = value
+        elif option == "--subject":
+            request.subject = value
+        elif option == "--body":
+            request.body = value
+        else:
+            request.trailers.append(value)
+    if index >= len(argv):
+        raise Refused("usage: safe-git commit --expected-head <hash> --subject <text> [--body <text>] "
+                      "[--trailer 'Key: value']... [--leave-other-staged] -- <path>...", code="usage")
+    request.paths = argv[index + 1:]
+    for required, label in ((request.expected, "--expected-head"), (request.subject, "--subject")):
+        if required is None:
+            raise Refused("%s is required" % label, code="usage")
+    if not request.paths:
+        raise Refused("name at least one path after --", code="usage")
+    if len(request.paths) > MAX_PATHS:
+        raise Refused("more than %d paths" % MAX_PATHS, code="usage")
+    return request
+
+
+def validate_expected(value):
+    """The commit the caller expects HEAD to be: its full lower-case hash, or None for ``none`` (a branch
+    that has no commit yet)."""
+    if value == "none":
+        return None
+    if _HEX40.match(value) is None:
+        raise Refused("--expected-head must be the full 40-digit lower-case hash of HEAD, or none",
+                      code="expected_head_invalid")
+    return value
+
+
+def validate_message(request):
+    """Refuse a subject, body or trailer that git or a reader would read differently from what was given."""
+    subject = request.subject
+    if not subject.strip() or len(subject) > MAX_SUBJECT or any(c in subject for c in "\0\r\n"):
+        raise Refused("the subject must be one non-empty line of at most %d characters" % MAX_SUBJECT,
+                      code="subject_invalid")
+    if request.body is not None:
+        if "\0" in request.body or len(request.body) > MAX_BODY or not request.body.strip():
+            raise Refused("the body must be non-empty text without NUL, at most %d characters" % MAX_BODY,
+                          code="body_invalid")
+    if len(request.trailers) > MAX_TRAILERS:
+        raise Refused("more than %d trailers" % MAX_TRAILERS, code="trailer_invalid")
+    for trailer in request.trailers:
+        if len(trailer) > MAX_TRAILER or _TRAILER.match(trailer) is None:
+            raise Refused("a trailer must be one 'Key: value' line: %s" % shown(trailer, 60), code="trailer_invalid")
+
+
+def _folded(text):
+    """`text` as the attribution patterns read it: compatibility-normalised, without format characters and
+    fillers, every dash a hyphen, every run of blanks one space, accents dropped, lower-cased, look-alike
+    letters mapped to ASCII, a folded line joined to the one before. A combining mark that no precomposed
+    letter holds, or a word that mixes scripts, cannot be read safely and is refused."""
+    text = unicodedata.normalize("NFKC", text)
+    if any(unicodedata.category(c) in ("Mn", "Me", "Co", "Cn") or c in _BLANKS
+           or (unicodedata.category(c) == "Cc" and c not in "\n\t") for c in text):
+        raise Refused("the message has a control, combining, private-use or invisible character; "
+                      "write it with plain letters", code="message_character_refused")
+    text = "".join(c for c in text if unicodedata.category(c) != "Cf" and c not in _FILLERS)
+    text = text.casefold().replace("\u00b7", "")   # NFKC reads a letter with a middle dot as the letter and a dot
+    for c in text:
+        if c.isalpha() and ord(c) not in _CONFUSABLE and any(low <= ord(c) <= high for low, high in _PHONETIC):
+            raise Refused("a letter in the message looks like another letter: %s" % shown(c, 10),
+                          code="message_character_refused")
+    for word in re.findall(r"\w+", text.replace("\u03bc", "u")):      # a micro sign is not a look-alike
+        scripts = {_script(c) for c in word if c.isalpha()}
+        if "LATIN" in scripts and scripts & _LOOKALIKE_SCRIPTS:
+            raise Refused("a word in the message mixes scripts: %s" % shown(word, 40), code="message_character_refused")
+    text = "".join(_base_letter(c) for c in text.translate(_CONFUSABLE))
+    text = "".join("-" if unicodedata.category(c) == "Pd" or c == "\u2212" else c for c in text)
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if unicodedata.category(c) != "Mn")
+    for token in re.findall(r"\S+", text.replace("\u03bc", "u")):
+        scripts = {"LATIN" if c.isascii() else _script(c) for c in token
+                   if (c.isascii() and c.isalpha()) or (not c.isascii() and (c.isalpha() or unicodedata.category(c)[0] == "N"))}
+        if len(scripts - {"CJK"}) > 1:
+            raise Refused("a word in the message mixes scripts: %s" % shown(token, 40),
+                          code="message_character_refused")
+    text = re.sub(r"[^\S\n]+", " ", text)
+    return re.sub(r":[ \t]*\n[ \t]*", ": ", re.sub(r"\n[ \t]+", " ", text))
+
+
+def refuse_attribution(request):
+    """Refuse a message that names a tool as its author (the commit helper writes the owner's, not a tool's)."""
+    fields = [request.subject] + ([request.body] if request.body is not None else []) + request.trailers
+    for text in fields + ["\n".join(fields)]:
+        folded = _folded(text)
+        if any(pattern.search(folded) for pattern in _ATTRIBUTION):
+            raise Refused("the message carries tool attribution; this project does not allow it",
+                          code="attribution_refused")
+
+
+def message_paragraphs(request):
+    paragraphs = [request.subject]
+    if request.body is not None:
+        paragraphs.append(request.body)
+    if request.trailers:
+        paragraphs.append("\n".join(request.trailers))
+    return paragraphs
+
+
+def _cleaned(text):
+    """`text` as git stores a message given with ``-m``: trailing space off each line, runs of blank lines
+    collapsed, blank lines at either end dropped."""
+    lines = [line.rstrip() for line in text.split("\n")]
+    kept = []
+    for line in lines:
+        if line or (kept and kept[-1]):
+            kept.append(line)
+    return "\n".join(kept).strip("\n")
+
+
+def validate_paths(root, paths, entries):
+    """Refuse a path that is not one tracked or existing regular file of the repository, reached without
+    a link or through a directory that holds its own repository. `entries` maps each indexed path to
+    ``(mode, stage)``. Repositories with a gitlink are refused earlier, by `repo_program_findings`."""
+    cache = {}
+    seen = set()
+    try:
+        tree = safefs.Root(root, "repository")
+    except safefs.SafeFsError as exc:
+        raise Refused("the repository cannot be read safely: %s" % display.ascii_text(str(exc))[:200],
+                      code="repository_unreadable")
+    with tree:
+        def listing(directory):
+            if directory not in cache:
+                cache[directory] = tree.list_dir(directory, lenient=True)
+            return cache[directory]
+
+        for path in paths:
+            label = shown(path, 80)
+            try:
+                parts = safefs.validate_relpath(path)
+                if path.startswith("-") or any(c in path for c in "*?[]"):
+                    raise Refused("path refused (a glob or an option): %s" % label, code="path_refused")
+                if path.casefold() in seen:
+                    raise Refused("path named twice (or two spellings of one file): %s" % label, code="path_duplicate")
+                seen.add(path.casefold())
+                if entries.get(path, ("", "0"))[1] != "0":
+                    raise Refused("path has an unresolved merge state: %s" % label, code="path_unmerged")
+                present = False
+                for depth in range(len(parts)):
+                    found = listing("/".join(parts[:depth]))
+                    if found is None:
+                        break
+                    if depth and any(name.casefold().rstrip(" .") == ".git" for name, _ in found):
+                        raise Refused("path lies inside a nested repository: %s" % label,
+                                      code="path_in_nested_repository")
+                    kind = dict(found).get(parts[depth])
+                    if kind is None:
+                        break
+                    if kind != ("dir" if depth < len(parts) - 1 else "file"):
+                        raise Refused("path goes through, or is, a %s and not a file: %s" % (kind, label),
+                                      code="path_not_a_file")
+                    present = depth == len(parts) - 1
+                if not present and path not in entries:
+                    raise Refused("path does not exist and is not tracked: %s" % label, code="path_unknown")
+                if not present:
+                    # A tracked name the listing did not show may still be there under another spelling
+                    # of the same name (Unicode normalisation): it must be a plain file or nothing.
+                    try:
+                        mode = os.lstat(os.path.join(root, *parts)).st_mode
+                    except FileNotFoundError:
+                        continue
+                    except OSError as exc:
+                        raise Refused("path refused: %s" % display.ascii_text(exc.strerror or "error"),
+                                      code="path_refused")
+                    if not stat.S_ISREG(mode):
+                        raise Refused("path is a link or not a file under another spelling: %s" % label,
+                                      code="path_not_a_file")
+            except safefs.SafeFsError as exc:
+                raise Refused("path refused: %s" % display.ascii_text(str(exc))[:200], code="path_refused")
+    return paths
+
+
+def indexed(root):
+    """The index as ``{path: (mode, stage)}`` plus the raw text, for a comparison before and after."""
+    listing = run(["git", "ls-files", "-s", "-z"], root).stdout
+    found = {}
+    for entry in listing.split("\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition("\t")
+        fields = meta.split(" ")
+        if len(fields) != 3:
+            raise Refused("git listed the index in a form this helper does not read", code="index_unreadable")
+        found[path] = (fields[0], fields[2])
+    return found, listing
+
+
+def refuse_operation_in_progress(root):
+    """A merge, revert, cherry-pick or rebase in progress would give the commit another parent or belong to
+    that operation; this helper does not commit into one."""
+    directory = run(["git", "rev-parse", "--absolute-git-dir"], root).stdout.strip()
+    for name in ("MERGE_HEAD", "REVERT_HEAD", "CHERRY_PICK_HEAD", "rebase-merge", "rebase-apply", "sequencer"):
+        if os.path.lexists(os.path.join(directory, name)):
+            raise Refused("a %s is in progress in this repository; finish or abort it by hand"
+                          % name.replace("_HEAD", "").replace("-", " ").lower(), code="operation_in_progress")
+
+
+def _short(commit):
+    return "no commit" if commit is None else commit[:12]
+
+
+def _unborn_branch(root):
+    """The branch ref HEAD names when that branch has no commit, else None. HEAD must be the plain text
+    ``ref: refs/heads/<name>`` (not a link), no file may hold that ref, and git must say, quietly, that it
+    names nothing: a branch that exists but cannot be read is not an unborn one."""
+    directory = run(["git", "rev-parse", "--absolute-git-dir"], root).stdout.strip()
+    try:
+        fd = os.open(os.path.join(directory, "HEAD"), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            text = os.read(fd, 1024).decode("utf-8")
+        finally:
+            os.close(fd)
+    except (OSError, UnicodeDecodeError):
+        return None
+    found = re.fullmatch(r"ref: (refs/heads/[^\n]+)\n?", text)
+    if found is None or not _branch_ref(found.group(1)):
+        return None
+    ref = found.group(1)
+    if os.path.lexists(os.path.join(directory, *ref.split("/"))):
+        return None
+    probe = run(["git", "rev-parse", "--verify", "-q", ref], root, check=False)
+    return ref if probe.returncode == 1 and not probe.stdout.strip() else None
+
+
+def tip(root):
+    """The commit HEAD names, or None on a branch that has no commit yet. A HEAD git cannot resolve that is
+    not such a branch is refused, never taken for one."""
+    found = run(["git", "rev-parse", "--verify", "HEAD"], root, check=False)
+    if found.returncode == 0:
+        return found.stdout.strip()
+    if _unborn_branch(root) is None:
+        raise Refused("HEAD names neither a commit nor a branch without commits whose name this helper reads "
+                      "(ASCII letters, digits and . _ - /); refusing to act", code="head_unreadable")
+    return None
+
+
+def _expect_head(root, expected, when, note=None):
+    now = tip(root)
+    if note is not None:
+        note("head", now)
+    if now != expected:
+        raise Refused("HEAD moved %s: expected %s, found %s" % (when, _short(expected), _short(now)),
+                      code="head_mismatch")
+
+
+def _unstage(root, paths, expected):
+    """Take the named paths out of the index again, but only while HEAD is still where it was expected."""
+    try:
+        if tip(root) != expected:
+            return "HEAD moved, so the index was left as it is"
+        run(["git", "reset", "-q", "--"] + paths, root)
+    except Refused as exc:
+        return "the named paths could not be unstaged (%s)" % exc
+    return "the named paths were unstaged"
+
+
+def attribution_allowed(root):
+    """Whether `.workbench/safe-git.json` says ``allow``. No file means refuse; a file that is not exactly
+    ``{"format": 1, "attribution": "refuse" | "allow"}``, and a link or other non-file at that path, stop
+    the commit rather than read as either."""
+    try:
+        tree = safefs.Root(root, "repository")
+    except safefs.SafeFsError as exc:
+        raise Refused("%s cannot be read: %s" % (SETTING, display.ascii_text(str(exc))[:200]),
+                      code="repository_unreadable")
+    try:
+        with tree:
+            data = tree.read_if_present(SETTING, MAX_SETTING)
+    except safefs.SafeFsError as exc:
+        raise Refused("%s cannot be read: %s" % (SETTING, display.ascii_text(str(exc))[:200]), code="setting_invalid")
+    if data is None:
+        return False
+    try:
+        value = jsonstrict.parse_object(data, MAX_SETTING)
+    except ValueError as exc:
+        raise Refused("%s is not valid: %s" % (SETTING, display.ascii_text(str(exc))[:100]), code="setting_invalid")
+    if set(value) != {"format", "attribution"} or type(value["format"]) is not int or value["format"] != 1 \
+            or value["attribution"] not in ("refuse", "allow"):
+        raise Refused('%s must be {"format": 1, "attribution": "refuse" or "allow"}' % SETTING, code="setting_invalid")
+    return value["attribution"] == "allow"
+
+
+def refuse_converting_attributes(root, paths):
+    """Refuse a named path that an attribute converts when git adds it: a filter, `ident` or a working-tree encoding.
+    What `git add` stores is then not what the work tree holds, and the owner's own filter would be started by the
+    comparison that follows. `text` and `eol` change line endings only and are not refused."""
+    found = run(["git", "check-attr", "-z"] + list(_CONVERTING) + ["--"] + paths, root, check=False)
+    fields = found.stdout.split("\0")
+    if found.returncode or fields[-1:] != [""] or len(fields) - 1 != 3 * len(_CONVERTING) * len(paths) \
+            or [fields[index] for index in range(1, len(fields) - 1, 3)] != list(_CONVERTING) * len(paths):
+        raise Refused("git check-attr did not give the attributes of the named paths", code="repository_unreadable")
+    for index in range(0, len(fields) - 1, 3):
+        path, attribute, value = fields[index:index + 3]
+        if value not in ("unspecified", "unset"):
+            raise Refused("git would convert %s when adding it (attribute %s is %s); commit by hand"
+                          % (shown(path, 80), shown(attribute, 30), shown(value, 40)), code="path_converts_on_add")
+
+
+class Checked:
+    """What the checks of `commit` established: the request, the repository root, the staged paths, the index listing
+    the commit will be compared with and the index as ``{path: (mode, stage)}``."""
+
+    def __init__(self, request, root, staged, before, entries):
+        self.request, self.root, self.staged, self.before, self.entries = request, root, staged, before, entries
+
+
+def check_commit(argv, cwd, note=None):
+    """Every check `commit` makes before it changes anything, through `git diff --check` of the named paths, in order.
+    Returns a ``Checked`` or raises ``Refused``. `describe commit` calls it too, with `note(name, value)`, which is told
+    each fact the moment it is known, so a refusal still reports what was found before it."""
+    def told(name, value):
+        if note is not None:
+            note(name, value)
+
+    request = parse_commit(argv)
+    told("leave_other_staged", request.leave_other_staged)
+    told("path_count", len(request.paths))
+    told("requested_paths", list(request.paths))
+    told("subject", request.subject)
+    told("trailers", list(request.trailers))
+    told("body", request.body)
+    given = request.expected
+    request.expected = validate_expected(given)
+    told("expected_head", given)
+    validate_message(request)
+    root = git_root(cwd)
+    allowed = attribution_allowed(root)
+    told("attribution_allowed", allowed)
+    if not allowed:
+        refuse_attribution(request)
+    found = repo_program_findings(root)
+    told("program_findings", list(found))
+    if found:
+        raise Refused("this repository would make git run a program (%s); commit by hand"
+                      % ", ".join(found[:10]), code="repo_selects_program")
+    refuse_operation_in_progress(root)
+    paths = request.paths
+    named = set(paths)
+    _expect_head(root, request.expected, "before the commit was started", note)
+    entries, before = indexed(root)
+    validate_paths(root, paths, entries)
+    told("paths", list(paths))
+    staged = names(root, cached=True)
+    told("staged_paths", sorted(staged))
+    if staged and not request.leave_other_staged:
+        raise Refused("the index already holds staged changes (%d path(s)); use --leave-other-staged to keep "
+                      "them out of this commit" % len(staged), code="index_has_staged_changes")
+    if staged & named:
+        raise Refused("a named path is already staged: %s" % shown(sorted(staged & named)[0], 80),
+                      code="path_already_staged")
+    refuse_converting_attributes(root, paths)
+    # Optional locks are off so that comparing the work tree with the index does not refresh the index file.
+    problems = run(["git", "diff", "--check", "--no-ext-diff", "--no-textconv", "--"] + paths, root,
+                   check=False, env_extra={"GIT_OPTIONAL_LOCKS": "0"})
+    if problems.returncode:
+        # Git exits 2 (older versions 1) when it finds whitespace errors, and 128 when it fails.
+        raise Refused("git diff --check finds whitespace errors in the named paths: %s"
+                      % display.ascii_text(problems.stdout.strip())[:300],
+                      code="whitespace_errors" if problems.returncode in (1, 2) else "repository_unreadable")
+    return Checked(request, root, staged, before, entries)
+
+
+def command_commit(argv, cwd, out, err):
+    checked = check_commit(argv, cwd)
+    request, root, staged, before = checked.request, checked.root, checked.staged, checked.before
+    paths = request.paths
+    named = set(paths)
+    try:
+        _expect_head(root, request.expected, "before staging")
+        run(["git", "add", "--"] + paths, root)
+        _expect_head(root, request.expected, "while staging")
+        after_add = names(root, cached=True)
+        if after_add != staged | named:
+            missing = sorted((staged | named) - after_add)
+            extra = sorted(after_add - staged - named)
+            raise Refused("staging did not give exactly the named paths (no change: %s; extra: %s)"
+                          % (shown(", ".join(missing), 120) or "none", shown(", ".join(extra), 120) or "none"))
+        checked = run(["git", "diff", "--cached", "--check", "--no-ext-diff", "--no-textconv", "--"] + paths,
+                      root, check=False)
+        if checked.returncode:
+            raise Refused("git diff --cached --check finds whitespace errors: %s"
+                          % display.ascii_text(checked.stdout.strip())[:300])
+        _expect_head(root, request.expected, "just before the commit")
+        command = ["git", "commit", "--cleanup=whitespace"]
+        for paragraph in message_paragraphs(request):
+            command += ["-m", paragraph]
+        if request.leave_other_staged:
+            command += ["--only", "--"] + paths
+        run(command, root)
+    except Refused as exc:
+        raise Refused("%s; %s" % (exc, _unstage(root, paths, request.expected)))
+    return verify_commit(root, request, named, before, out)
+
+
+def verify_commit(root, request, named, before, out):
+    """Check what the commit holds; a failure here is reported with the commit and undoes nothing."""
+    made = head(root)
+    try:
+        parents = run(["git", "rev-parse", "HEAD^@"], root).stdout.split()
+        if parents != ([] if request.expected is None else [request.expected]):
+            raise Refused("HEAD moved during the commit; the commit %s was made on %s"
+                          % (made[:12], ", ".join(p[:12] for p in parents) or "no parent"))
+        # Git on macOS precomposes its arguments, so the stored text may be the canonical form of the given.
+        expected_message = unicodedata.normalize("NFC", _cleaned("\n\n".join(message_paragraphs(request))))
+        stored = _cleaned(run(["git", "show", "-s", "--format=%B", "HEAD"], root).stdout)
+        if unicodedata.normalize("NFC", stored) != expected_message:
+            raise Refused("the commit %s has a message other than the one asked for" % made[:12])
+        listing = ["git", "diff-tree"] + (["--root"] if request.expected is None else []) \
+            + ["--no-commit-id", "--name-only", "-r", "-z", "HEAD"]
+        changed = {item for item in run(listing, root).stdout.split("\0") if item}
+        if changed != named:
+            raise Refused("the commit %s holds %s, not the named paths" % (made[:12], shown(", ".join(sorted(changed)), 120)))
+        _, after = indexed(root)
+        if _others(after, named) != _others(before, named):
+            raise Refused("the commit %s was made but the rest of the index is not as it was" % made[:12])
+        if head(root) != made:
+            raise Refused("HEAD moved after the commit %s was made" % made[:12])
+    except Refused as exc:
+        raise Refused("%s; nothing was undone" % exc)
+    out.write(json.dumps({"committed": made, "subject": request.subject, "paths": sorted(named)},
+                         ensure_ascii=True) + "\n")
+    return 0
+
+
+def _others(listing, named):
+    """The index listing without the entries of the named paths."""
+    return sorted(entry for entry in listing.split("\0") if entry and entry.partition("\t")[2] not in named)
+
+
+# --- remove --------------------------------------------------------------------------------------
+# `remove` deletes exact paths of the repository. Its guarantee is confinement, not identity: every
+# directory is opened relative to the descriptor of its already-opened parent without following a link,
+# and every entry is deleted relative to the descriptor of its own parent, so an entry swapped for a link
+# while the walk runs loses the link and nothing it pointed to. Nothing promises that what is deleted is
+# what was previewed; the preview and `--confirm` are two runs that each validate everything from scratch.
+
+MAX_REMOVE_ENTRIES = 100000
+MAX_REMOVE_DEPTH = 100
+HOOK = None   # tests only: HOOK(stage, path) runs between the steps of a removal, so a test can swap an entry
+_REMOVE_OPTIONS = ("--recursive", "--confirm")
+
+
+class Stopped(Exception):
+    """A removal that stopped part way; the message says why."""
+
+
+class Target:
+    """One validated path to remove: its parts, its kind and what was seen of it. `size` is the bytes of the
+    regular files at or below it (read by `describe` only)."""
+
+    def __init__(self, path, parts, kind, info, entries, size=0):
+        self.path, self.parts, self.kind, self.info, self.entries = path, parts, kind, info, entries
+        self.size = size
+
+
+def _event(stage, path):
+    if HOOK is not None:
+        HOOK(stage, path)
+
+
+def _device(info):
+    return info.st_dev
+
+
+def _same(first, second):
+    return (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino)
+
+
+def _kind(mode):
+    return "directory" if stat.S_ISDIR(mode) else "symlink" if stat.S_ISLNK(mode) \
+        else "file" if stat.S_ISREG(mode) else "other"
+
+
+def _git_name(name):
+    """True when `name` is spelled like Git metadata: ``.git`` in any case, with trailing dots or spaces,
+    with invisible characters, or as the Windows short name ``git~1``."""
+    plain = "".join(c for c in unicodedata.normalize("NFKC", name) if unicodedata.category(c) != "Cf")
+    plain = plain.rstrip(" .").casefold()
+    return plain == ".git" or (plain.startswith("git~") and plain[4:].isascii() and plain[4:].isdigit())
+
+
+def _entries(fd):
+    """``[(name, lstat)]`` of the directory `fd`, sorted, nothing followed."""
+    found = []
+    with os.scandir(fd) as scanning:
+        for entry in scanning:
+            if len(found) >= MAX_REMOVE_ENTRIES:
+                raise Refused("a directory holds more than %d entries" % MAX_REMOVE_ENTRIES, code="tree_too_large")
+            found.append((entry.name, entry.stat(follow_symlinks=False)))
+    return sorted(found, key=lambda item: item[0])
+
+
+def _holds_repository(listing):
+    """What in `listing` is Git metadata (a ``.git`` entry of any kind or spelling, or the HEAD, objects and
+    refs of a bare or separate git directory), or None."""
+    for name, _ in listing:
+        if _git_name(name):
+            return "a .git entry"
+    present = {name.casefold() for name, _ in listing}
+    # Whatever their type: git reads a HEAD, objects and refs that are links as a git directory too.
+    if {"head", "objects", "refs"} <= present or {"head", "commondir"} <= present:
+        return "a git directory"
+    return None
+
+
+def parse_remove(argv):
+    """``[--recursive] [--confirm] -- <path>...``, read by hand like `commit`'s."""
+    recursive = confirm = False
+    index = 0
+    while index < len(argv) and argv[index] != "--":
+        option = argv[index]
+        if option not in _REMOVE_OPTIONS:
+            raise Refused("unknown option: %s" % shown(option, 40), code="usage")
+        if (recursive if option == "--recursive" else confirm):
+            raise Refused("%s was given more than once" % option, code="usage")
+        recursive, confirm = recursive or option == "--recursive", confirm or option == "--confirm"
+        index += 1
+    if index >= len(argv):
+        raise Refused("usage: safe-git remove [--recursive] [--confirm] -- <path>...", code="usage")
+    paths = argv[index + 1:]
+    if not paths:
+        raise Refused("name at least one path after --", code="usage")
+    if len(paths) > MAX_PATHS:
+        raise Refused("more than %d paths" % MAX_PATHS, code="usage")
+    return recursive, confirm, paths
+
+
+def _parent_of(root_fd, parts, device, seen):
+    """A descriptor for the directory that holds the last of `parts`. Each step is opened relative to the one
+    before without following a link, stays on the repository's filesystem, and may not be inside a nested
+    repository. `seen` holds the directories of this phase already listed, so a directory is listed once
+    however many targets lie below it. The caller closes it."""
+    fd = os.dup(root_fd)
+    try:
+        for part in parts[:-1]:
+            try:
+                step = os.open(part, _DIR, dir_fd=fd)
+            except FileNotFoundError:
+                raise Refused("a directory on the way does not exist: %s" % shown(part, 60), code="target_missing")
+            except OSError:
+                raise Refused("the path goes through a link or something that is not a directory: %s"
+                              % shown(part, 60), code="path_refused")
+            os.close(fd)
+            fd = step
+            if _device(os.fstat(fd)) != device:
+                raise Refused("the path crosses into another filesystem at %s" % shown(part, 60),
+                              code="other_filesystem")
+            info = os.fstat(fd)
+            if (info.st_dev, info.st_ino) not in seen:
+                if _holds_repository(_entries(fd)):
+                    raise Refused("the path lies inside a nested Git repository (%s)" % shown(part, 60),
+                                  code="nested_repository")
+                seen.add((info.st_dev, info.st_ino))
+        taken, fd = fd, -1
+        return taken
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _scan(fd, device, depth, counter):
+    """Check a directory tree before it is deleted: no nested repository, no other filesystem, bounded.
+    `counter` is ``[entries, bytes of regular files]`` of everything listed so far."""
+    if depth > MAX_REMOVE_DEPTH:
+        raise Refused("the directory is nested deeper than %d levels" % MAX_REMOVE_DEPTH, code="tree_too_large")
+    listing = _entries(fd)
+    found = _holds_repository(listing)
+    if found:
+        raise Refused("the directory holds a nested repository (%s)" % found, code="nested_repository")
+    counter[0] += len(listing)
+    if counter[0] > MAX_REMOVE_ENTRIES:
+        raise Refused("the directory tree holds more than %d entries" % MAX_REMOVE_ENTRIES, code="tree_too_large")
+    counter[1] += sum(info.st_size for _, info in listing if stat.S_ISREG(info.st_mode))
+    for name, info in listing:
+        if stat.S_ISDIR(info.st_mode):
+            if _device(info) != device:
+                raise Refused("the directory holds another filesystem (%s)" % shown(name, 60), code="other_filesystem")
+            _event("scanning", name)
+            try:
+                child = os.open(name, _DIR, dir_fd=fd)
+            except OSError:
+                raise Refused("a directory changed while it was being checked: %s" % shown(name, 60),
+                              code="target_changed")
+            try:
+                opened = os.fstat(child)
+                if not _same(opened, info):
+                    raise Refused("a directory changed while it was being checked: %s" % shown(name, 60),
+                              code="target_changed")
+                _scan(child, device, depth + 1, counter)
+            finally:
+                os.close(child)
+
+
+def plan_removal(root_fd, paths, recursive):
+    """Validate every path from scratch; return the `Target`s or refuse, with nothing touched."""
+    root_info = os.fstat(root_fd)
+    device = _device(root_info)
+    targets, keys, seen = [], [], set()
+    for path in paths:
+        label = shown(path, 80)
+        try:
+            parts = safefs.validate_relpath(path)
+        except safefs.SafeFsError as exc:
+            raise Refused("path refused: %s" % display.ascii_text(str(exc))[:200], code="path_refused")
+        if path.startswith("-") or any(c in path for c in "*?[]"):
+            raise Refused("path refused (a glob or an option): %s" % label, code="path_refused")
+        if any(_git_name(part) for part in parts):
+            raise Refused("refusing to remove Git metadata: %s" % label, code="git_metadata_refused")
+        key = tuple(unicodedata.normalize("NFC", part.casefold()) for part in parts)
+        if any(key[:len(other)] == other or other[:len(key)] == key for other in keys):
+            raise Refused("overlapping removal targets are not allowed: %s" % label, code="path_duplicate")
+        try:
+            parent = _parent_of(root_fd, parts, device, seen)
+        except Refused as exc:
+            raise Refused("%s: %s" % (exc, label), code=exc.code)
+        try:
+            try:
+                info = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                raise Refused("removal target does not exist: %s" % label, code="target_missing")
+            kind = _kind(info.st_mode)
+            entries = 0
+            size = info.st_size if kind == "file" else 0
+            if kind == "directory":
+                if not recursive:
+                    raise Refused("directory removal requires --recursive: %s" % label, code="recursive_required")
+                if _same(info, root_info):
+                    raise Refused("refusing to remove the repository root", code="repository_root_refused")
+                if _device(info) != device:
+                    raise Refused("the directory is another filesystem: %s" % label, code="other_filesystem")
+                _event("planning", path)
+                try:
+                    child = os.open(parts[-1], _DIR, dir_fd=parent)
+                except OSError:
+                    raise Refused("the directory changed while it was being checked: %s" % label, code="target_changed")
+                try:
+                    if not _same(os.fstat(child), info):
+                        raise Refused("the directory changed while it was being checked: %s" % label,
+                                      code="target_changed")
+                    counter = [0, 0]
+                    try:
+                        _scan(child, device, 1, counter)
+                    except Refused as exc:
+                        raise Refused("%s: %s" % (exc, label), code=exc.code)
+                    entries, size = counter
+                finally:
+                    os.close(child)
+        finally:
+            os.close(parent)
+        keys.append(key)
+        targets.append(Target(path, parts, kind, info, entries, size))
+    return targets
+
+
+def _remove_entry(parent_fd, name, rel, listed, device, depth, counter):
+    """Delete `name` below `parent_fd`, which was listed as `listed`. A directory is emptied bottom-up,
+    each entry relative to its own parent's descriptor. Anything that is not as it was listed stops it, and so
+    does a tree that has grown past the bound since it was checked (`counter` counts the entries listed)."""
+    _event("entry", rel)
+    try:
+        now = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise Stopped("%s could not be examined (%s)" % (shown(rel, 80), exc.strerror or "error"))
+    if stat.S_IFMT(now.st_mode) != stat.S_IFMT(listed.st_mode):
+        raise Stopped("%s changed type while it was being removed" % shown(rel, 80))
+    _event("checked", rel)
+    if not stat.S_ISDIR(now.st_mode):
+        try:
+            os.unlink(name, dir_fd=parent_fd)
+        except OSError as exc:
+            raise Stopped("%s could not be removed (%s)" % (shown(rel, 80), exc.strerror or "error"))
+        return
+    if depth > MAX_REMOVE_DEPTH:
+        raise Stopped("%s is nested deeper than %d levels" % (shown(rel, 80), MAX_REMOVE_DEPTH))
+    try:
+        fd = os.open(name, _DIR, dir_fd=parent_fd)
+    except OSError:
+        raise Stopped("%s is no longer a directory" % shown(rel, 80))
+    try:
+        opened = os.fstat(fd)
+        if not _same(opened, listed):
+            raise Stopped("%s was replaced while it was being removed" % shown(rel, 80))
+        if _device(opened) != device:
+            raise Stopped("%s is another filesystem" % shown(rel, 80))
+        listing = _entries(fd)
+        found = _holds_repository(listing)
+        if found:
+            raise Stopped("%s holds %s" % (shown(rel, 80), found))
+        counter[0] += len(listing)
+        if counter[0] > MAX_REMOVE_ENTRIES:
+            raise Stopped("%s: the tree holds more than %d entries" % (shown(rel, 80), MAX_REMOVE_ENTRIES))
+        _event("listed", rel)
+        for child, info in listing:
+            _remove_entry(fd, child, rel + "/" + child, info, device, depth + 1, counter)
+        try:
+            os.rmdir(name, dir_fd=parent_fd)
+        except OSError as exc:
+            found = _holds_repository(_entries(fd))
+            raise Stopped("%s was not removed: %s" % (
+                shown(rel, 80), "%s appeared in it" % found if found else exc.strerror or "error"))
+    finally:
+        os.close(fd)
+
+
+def _remove_target(root_fd, target, device, seen):
+    try:
+        parent = _parent_of(root_fd, target.parts, device, seen)
+    except Refused as exc:
+        raise Stopped(str(exc))
+    try:
+        _remove_entry(parent, target.parts[-1], target.path, target.info, device, 1, [0])
+    finally:
+        os.close(parent)
+
+
+def command_remove(argv, cwd, out, err):
+    recursive, confirm, paths = parse_remove(argv)
+    root = git_root(cwd)
+    try:
+        root_fd = safefs.open_root(root, "repository")
+    except safefs.SafeFsError as exc:
+        raise Refused("the repository cannot be read safely: %s" % display.ascii_text(str(exc))[:200],
+                      code="repository_unreadable")
+    try:
+        targets = plan_removal(root_fd, paths, recursive)
+        listed = [{"path": t.path, "kind": t.kind} for t in targets]
+        for item, target in zip(listed, targets):
+            if target.kind == "directory":
+                item["entries"] = target.entries
+        if not confirm:
+            out.write(json.dumps({"status": "preview", "targets": listed,
+                                  "next_action": "rerun the identical command with --confirm after user approval"},
+                                 ensure_ascii=True) + "\n")
+            return 0
+        device = _device(os.fstat(root_fd))
+        done, seen = [], set()
+        for index, target in enumerate(targets):
+            try:
+                _remove_target(root_fd, target, device, seen)
+            except (Stopped, Refused, OSError) as exc:
+                reason = str(exc) if isinstance(exc, (Stopped, Refused)) else exc.strerror or "error"
+                out.write(json.dumps({"status": "stopped", "reason": reason, "removed": done,
+                                      "stopped_in": target.path,
+                                      "not_removed": [t.path for t in targets[index + 1:]]},
+                                     ensure_ascii=True) + "\n")
+                err.write("stopped: %s\n" % shown(reason, 300))
+                return 1
+            done.append(target.path)
+        out.write(json.dumps({"status": "removed", "targets": listed}, ensure_ascii=True) + "\n")
+        return 0
+    finally:
+        os.close(root_fd)
+
+
+# --- describe ------------------------------------------------------------------------------------
+
+# `describe <action> ...` takes the arguments of the real command and prints what that command would act on, as one
+# JSON object (docs/specs/safe-git.md, "Describe"). It runs the real command's own validation and stops before
+# anything changes, so a refusal the real command would give is data here, with a code, and the exit status is 0.
+
+CONTRACT = 1
+MAX_OBJECT = 196608       # bytes, as printed: compact JSON with every non-ASCII character escaped, and its newline
+MAX_STRING = 32768        # bytes of a string value other than the diff
+MAX_DIFF = 98304          # bytes of the `diff` string, before escaping
+MAX_ARRAY = 200           # elements of an array
+MAX_ELEMENT = 1024        # bytes of an element
+MAX_WHOLE = 2 ** 53 - 1   # a whole number must survive a JSON reader that uses a double
+MAX_MESSAGE = 500         # characters of an error message
+STATS_ENTRY_CAP = 10000   # entries above which the totals of a removal are left out
+IGNORE_TIMEOUT = 10       # seconds for one `git check-ignore`; a longer one leaves that target's status unknown
+OMIT = object()           # a fact the caller could not find out: left out of the object and named in `omitted`
+_CODE = re.compile(r"\A[a-z0-9_]{1,64}\Z")
+
+
+def _bytes(text):
+    return len(text.encode("utf-8", "backslashreplace"))
+
+
+def _printable(value):
+    """`value` with every lone surrogate written out as its escape text, so that the printed object is one a strict
+    reader accepts."""
+    if isinstance(value, str):
+        return value.encode("utf-8", "backslashreplace").decode("utf-8")
+    if isinstance(value, list):
+        return [_printable(item) for item in value]
+    return value
+
+
+def _within_cap(name, value):
+    """Whether `value` fits the cap of its own kind. A type or a number the contract does not allow is a mistake of
+    the caller and raises ``ValueError``."""
+    if value is None or isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        if not 0 <= value <= MAX_WHOLE:
+            raise ValueError("fact %s is a whole number outside 0 to 2^53 - 1" % name)
+        return True
+    if isinstance(value, str):
+        return _bytes(value) <= (MAX_DIFF if name == "diff" else MAX_STRING)
+    if isinstance(value, list):
+        if not all(isinstance(item, str) for item in value):
+            raise ValueError("fact %s is a list with an element that is not a string" % name)
+        return len(value) <= MAX_ARRAY and all(_bytes(item) <= MAX_ELEMENT for item in value)
+    raise ValueError("fact %s is not a string, a whole number, a boolean, null or a list of strings" % name)
+
+
+def render_description(built):
+    """The line `describe` prints."""
+    return json.dumps(built, separators=(",", ":"), ensure_ascii=True) + "\n"
+
+
+def build_description(action, errors, facts):
+    """The object for `action`. `errors` is ``[(code, message)]`` and `facts` is ``[(name, value)]`` in the order of
+    the tables of the spec. A value is never cut: one that is over its cap, or that would take the printed object past
+    `MAX_OBJECT`, is left out whole and named in `omitted` (in table order), and `truncated` is true. Facts are tried in
+    order, so a later, smaller one may still fit. Naming a value can itself push the object past the cap, and then the
+    last fact that was kept is left out too, until the object fits."""
+    listed = []
+    for code, message in errors:
+        if not isinstance(code, str) or not _CODE.match(code):
+            raise ValueError("an error code is 1 to 64 characters of a-z, 0-9 and _")
+        listed.append({"code": code, "message": _printable(display.ascii_text(str(message))[:MAX_MESSAGE])})
+    facts = [(name, _printable(value)) for name, value in facts]
+    names = [name for name, _ in facts]
+    if len(set(names)) != len(names) or "omitted" in names:
+        raise ValueError("a fact is named once, and `omitted` is not the caller's")
+    kept, left = [], []
+
+    def draft():
+        body = {names[index]: facts[index][1] for index in sorted(kept)}
+        body["omitted"] = [names[index] for index in sorted(left)]
+        return {"contract": CONTRACT, "action": action, "ok": not listed, "truncated": bool(left),
+                "errors": listed, "facts": body}
+
+    for index, (name, value) in enumerate(facts):
+        if value is OMIT or not _within_cap(name, value):
+            left.append(index)
+            continue
+        kept.append(index)
+        if len(render_description(draft())) > MAX_OBJECT:
+            left.append(kept.pop())
+    while kept and len(render_description(draft())) > MAX_OBJECT:
+        left.append(kept.pop())
+    return draft()
+
+
+_REMOVE_FACTS = ("confirm", "recursive", "requested_paths", "target_paths", "file_targets", "directory_targets",
+                 "link_targets", "other_targets", "tracked_targets", "ignored_targets", "ignore_unknown_targets",
+                 "tracked_file_total", "entry_total", "size_total")
+_KINDS = (("file_targets", "file"), ("directory_targets", "directory"), ("link_targets", "symlink"),
+          ("other_targets", "other"))
+
+
+def _fold(path):
+    return unicodedata.normalize("NFC", path.casefold())
+
+
+def _remove_facts(root, targets, facts):
+    """Fill `facts` from the planned `targets`. Git is asked only to list tracked files and whether a path is ignored."""
+    facts["target_paths"] = [target.path for target in targets]
+    for name, kind in _KINDS:
+        facts[name] = [target.path for target in targets if target.kind == kind]
+    entries = sum(1 + target.entries for target in targets)
+    if entries <= STATS_ENTRY_CAP:
+        facts["entry_total"], facts["size_total"] = entries, sum(target.size for target in targets)
+    listing = run(["git", "ls-files", "-z", "--"] + facts["target_paths"], root).stdout
+    tracked = [item for item in listing.split("\0") if item]
+    facts["tracked_file_total"] = len(tracked)
+    by_name = {_fold(target.path): target.path for target in targets}
+    holding = set()
+    for item in tracked:
+        parts = _fold(item).split("/")
+        for length in range(1, len(parts) + 1):
+            found = by_name.get("/".join(parts[:length]))
+            if found is not None:
+                holding.add(found)
+                break
+    facts["tracked_targets"] = [target.path for target in targets if target.path in holding]
+    for target in targets:
+        # `check-ignore` dies when literal pathspecs are on. The shape of the call refuses a glob character, a
+        # backslash, a leading colon and a leading dash, so a target it runs carries no pathspec magic.
+        try:
+            answer = run(["git", "check-ignore", "-q", "--", target.path], root, check=False,
+                         timeout=IGNORE_TIMEOUT, env_extra={"GIT_LITERAL_PATHSPECS": "0"}).returncode
+        except Refused:
+            answer = None
+        if answer == 0:
+            facts["ignored_targets"].append(target.path)
+        elif answer != 1:
+            facts["ignore_unknown_targets"].append(target.path)
+
+
+def describe_remove(argv, cwd):
+    """``(errors, facts)`` of `remove <argv>`: what `command_remove` would act on, with nothing deleted."""
+    split = argv.index("--") if "--" in argv else None
+    options = argv if split is None else argv[:split]
+    facts = {"confirm": "--confirm" in options, "recursive": "--recursive" in options,
+             "requested_paths": [] if split is None else argv[split + 1:], "target_paths": [],
+             "file_targets": [], "directory_targets": [], "link_targets": [], "other_targets": [],
+             "tracked_targets": [], "ignored_targets": [], "ignore_unknown_targets": [],
+             "tracked_file_total": None, "entry_total": OMIT, "size_total": OMIT}
+    errors = []
+    try:
+        recursive, _, paths = parse_remove(argv)
+        root = git_root(cwd)
+        try:
+            root_fd = safefs.open_root(root, "repository")
+        except safefs.SafeFsError as exc:
+            raise Refused("the repository cannot be read safely: %s" % display.ascii_text(str(exc))[:200],
+                          code="repository_unreadable")
+        try:
+            targets = plan_removal(root_fd, paths, recursive)
+        finally:
+            os.close(root_fd)
+        _remove_facts(root, targets, facts)
+    except Refused as exc:
+        if exc.code is None:
+            raise      # a refusal with no code has no place in the tables: stop with no object, as a decline
+        errors.append((exc.code, str(exc)))
+    return errors, [(name, facts[name]) for name in _REMOVE_FACTS]
+
+
+MAX_MIDDLE = 500          # lines of one side that differ once the shared first and last lines are set aside; more is
+#                           not compared, because the cost grows with the product of the two sides (about 0.6 s for
+#                           the worst 500 lines); the budget below is checked between files, not inside one comparison
+DIFF_BUDGET = 20.0        # seconds in all for the diffs of one `describe`; the diff is left out once they are spent
+MAX_SIDE = 262144         # bytes of one side of a diff that are read (the approver's whole-diff bound); more is not read
+_CHANGE_LISTS = ("new_paths", "modified_paths", "deleted_paths", "unchanged_paths", "binary_paths", "not_regular_paths")
+_COMMIT_FACTS = ("head", "expected_head", "leave_other_staged", "path_count", "subject", "trailers", "body",
+                 "attribution_allowed", "program_findings", "staged_paths", "requested_paths", "paths") \
+    + _CHANGE_LISTS + ("diff",)
+
+
+def _read_work(root_fd, parts):
+    """What the work-tree path `parts` holds, reached from the open root without following a link: ``("absent",)``;
+    ``("irregular",)`` for a link, a directory, a pipe or anything else that is not a regular file, and for a path
+    that goes through a link or a file; ``("large", size, mode)`` for a regular file over `MAX_SIDE`, which is not read;
+    else ``("file", data, mode)``. The mode is the one git would record: 100755 when the owner may execute the file,
+    else 100644."""
+    opened = []
+    try:
+        current = root_fd
+        for part in parts[:-1]:
+            try:
+                current = os.open(part, _DIR, dir_fd=current)
+            except FileNotFoundError:
+                return ("absent",)
+            except OSError as exc:
+                if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                    return ("irregular",)
+                raise
+            opened.append(current)
+        try:
+            info = os.stat(parts[-1], dir_fd=current, follow_symlinks=False)
+        except FileNotFoundError:
+            return ("absent",)
+        except NotADirectoryError:
+            return ("irregular",)
+        if not stat.S_ISREG(info.st_mode):
+            return ("irregular",)
+        try:
+            fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0),
+                         dir_fd=current)
+        except FileNotFoundError:
+            return ("absent",)
+        except OSError as exc:
+            if exc.errno in (errno.ELOOP, errno.ENXIO):
+                return ("irregular",)
+            raise
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                return ("irregular",)
+            mode = "100755" if info.st_mode & stat.S_IXUSR else "100644"
+            if info.st_size > MAX_SIDE:
+                return ("large", info.st_size, mode)
+            chunks, total = [], 0
+            while total <= MAX_SIDE:
+                chunk = os.read(fd, min(65536, MAX_SIDE + 1 - total))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+            if total > MAX_SIDE:
+                return ("large", total, mode)
+            return ("file", b"".join(chunks), mode)
+        finally:
+            os.close(fd)
+    finally:
+        for fd in opened:
+            os.close(fd)
+
+
+_EMPTY_BLOBS = ("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+                "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813")
+
+
+def _intent_to_add(listing):
+    """The paths the index lists with the empty blob: what ``git add -N`` leaves, a path HEAD does not hold."""
+    found = set()
+    for entry in listing.split("\0"):
+        meta, _, path = entry.partition("\t")
+        fields = meta.split(" ")
+        if len(fields) == 3 and fields[1] in _EMPTY_BLOBS:
+            found.add(path)
+    return found
+
+
+def _head_side(root, path, may_be_absent):
+    """What HEAD holds at `path`: ``("absent",)`` where `may_be_absent` (an intent-to-add path), ``("large", size)``
+    for a blob over `MAX_SIDE`, whose size is asked first so that it is never read, or ``("blob", data)``. Git is asked
+    only for the size and then the content. A blob git cannot give for any other path is an unreadable repository."""
+    probe = run(["git", "cat-file", "-s", "HEAD:" + path], root, check=False)
+    if probe.returncode:
+        if may_be_absent:
+            return ("absent",)
+        raise Refused("git cat-file cannot read HEAD:%s" % shown(path, 80), code="repository_unreadable")
+    if not re.fullmatch(r"[0-9]{1,15}", probe.stdout.strip()):
+        raise Refused("git cat-file gave a size this helper does not read", code="repository_unreadable")
+    size = int(probe.stdout)
+    if size > MAX_SIDE:
+        return ("large", size)
+    try:
+        text, cut = run_capped(["git", "cat-file", "blob", "HEAD:" + path], root, size + 1)
+    except Refused as exc:
+        raise Refused(str(exc), code="repository_unreadable")
+    data = text.encode("utf-8", "surrogateescape")
+    if cut or len(data) != size:
+        raise Refused("git cat-file gave a blob that is not the size it reported", code="repository_unreadable")
+    return ("blob", data)
+
+
+def _lines(data):
+    """The lines of `data` as git splits them, on the line feed only; a last line with none is marked. Only UTF-8 text
+    is shown (`_change_facts` sets any other aside as binary)."""
+    pieces = data.decode("utf-8", "backslashreplace").split("\n")
+    lines = [piece + "\n" for piece in pieces[:-1]]
+    if pieces[-1]:
+        lines.append(pieces[-1] + "\n\\ No newline at end of file\n")
+    return lines
+
+
+def _range(start, stop):
+    """A range of a hunk header, as ``difflib`` writes it: the first line (counted from 1) and the count."""
+    first, length = start + 1, stop - start
+    if length == 1:
+        return str(first)
+    return "%d,%d" % (first - 1 if not length else first, length)
+
+
+def _text_diff(path, old, new):
+    """The unified diff of `old` against `new`, named ``HEAD/<path>`` and ``work/<path>``; empty when they are equal;
+    ``None`` when more than `MAX_MIDDLE` lines differ. The lines both sides share at the start and the end are set
+    aside before they are compared, so a long file with a small change costs little."""
+    first, second = _lines(old), _lines(new)
+    if first == second:
+        return ""
+    head = 0
+    while head < min(len(first), len(second)) and first[head] == second[head]:
+        head += 1
+    tail = 0
+    while tail < min(len(first), len(second)) - head and first[-1 - tail] == second[-1 - tail]:
+        tail += 1
+    middle = (first[head:len(first) - tail], second[head:len(second) - tail])
+    if max(len(middle[0]), len(middle[1])) > MAX_MIDDLE:
+        return None
+    codes = [("equal", 0, head, 0, head)] if head else []
+    codes += [(tag, a + head, b + head, c + head, d + head)
+              for tag, a, b, c, d in difflib.SequenceMatcher(None, *middle, autojunk=False).get_opcodes()]
+    if tail:
+        codes.append(("equal", len(first) - tail, len(first), len(second) - tail, len(second)))
+    matcher = difflib.SequenceMatcher(None, [], [])
+    matcher.opcodes = codes
+    lines = ["--- HEAD/%s\n" % path, "+++ work/%s\n" % path]
+    for group in matcher.get_grouped_opcodes(3):
+        lines.append("@@ -%s +%s @@\n" % (_range(group[0][1], group[-1][2]), _range(group[0][3], group[-1][4])))
+        for tag, a, b, c, d in group:
+            if tag == "equal":
+                lines += [" " + line for line in first[a:b]]
+                continue
+            if tag in ("replace", "delete"):
+                lines += ["-" + line for line in first[a:b]]
+            if tag in ("replace", "insert"):
+                lines += ["+" + line for line in second[c:d]]
+    return "".join(lines)
+
+
+def _utf8(data):
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _mode_line(path, old, new):
+    """A line for a change of mode, with ``none`` for a side that is not there; none for a plain new or deleted file."""
+    if old == new or (old is None and new == "100644") or (new is None and old == "100644"):
+        return ""
+    return "mode HEAD/%s %s -> work/%s %s\n" % (path, old or "none", path, new or "none")
+
+
+def _change_facts(checked, facts):
+    """Fill the change lists and the diff of the checked paths, HEAD against the work tree, byte for byte: no git
+    filter, text conversion or external diff, and no link followed. Nothing is set unless all of it is found."""
+    root, paths, entries = checked.root, checked.request.paths, checked.entries
+    in_head = checked.request.expected is not None
+    lists = {name: [] for name in _CHANGE_LISTS}
+    pieces, length, left_out = [], 0, False
+    deadline = time.monotonic() + DIFF_BUDGET
+    intent = _intent_to_add(checked.before)
+    try:
+        root_fd = safefs.open_root(root, "repository")
+    except safefs.SafeFsError as exc:
+        raise Refused("the repository cannot be read safely: %s" % display.ascii_text(str(exc))[:200],
+                      code="repository_unreadable")
+    try:
+        for path in paths:
+            try:
+                old = _head_side(root, path, path in intent) if in_head and path in entries else ("absent",)
+                new = _read_work(root_fd, path.split("/"))
+            except Refused as exc:
+                raise Refused(str(exc), code=exc.code or "repository_unreadable")
+            except OSError as exc:
+                raise Refused("path refused: %s" % display.ascii_text(exc.strerror or "error"), code="path_refused")
+            if new[0] == "irregular":
+                lists["not_regular_paths"].append(path)
+                continue
+            if old[0] == "absent" and new[0] == "absent":
+                continue      # gone from both sides since the checks: there is nothing to say of it
+            old_mode = entries[path][0] if old[0] != "absent" else None
+            new_mode = new[2] if new[0] != "absent" else None
+            if new[0] == "absent":
+                kind = "deleted_paths"
+            elif old[0] == "absent":
+                kind = "new_paths"
+            elif "large" in (old[0], new[0]):
+                kind = "modified_paths"      # not read, so not compared: the cautious reading
+            elif old[1] == new[1] and old_mode == new_mode:
+                kind = "unchanged_paths"
+            else:
+                kind = "modified_paths"
+            lists[kind].append(path)
+            if "large" in (old[0], new[0]):
+                left_out = True
+                continue
+            before = old[1] if old[0] == "blob" else b""
+            after = new[1] if new[0] == "file" else b""
+            if b"\0" in before or b"\0" in after or not (_utf8(before) and _utf8(after)):
+                lists["binary_paths"].append(path)
+            elif length <= MAX_DIFF:     # counted in characters, never more than bytes; past the cap the diff is left out whole, so the rest is not worked out
+                text = _text_diff(path, before, after) if time.monotonic() <= deadline else None
+                if text is None:
+                    left_out = True      # too much differs to compare, or the budget is spent
+                    continue
+                piece = _mode_line(path, old_mode, new_mode) + text
+                pieces.append(piece)
+                length += len(piece)
+    finally:
+        os.close(root_fd)
+    facts.update(lists)
+    facts["diff"] = OMIT if left_out else "".join(pieces)
+
+
+def _given_commit(argv):
+    """``(leave_other_staged, paths)`` of a command line that `parse_commit` refused, read as it reads them: an option
+    that takes a value takes the next word whatever it is, so that word may be ``--`` or another option. A command
+    line it accepts is reported from its request instead."""
+    leave, index = False, 0
+    while index < len(argv) and argv[index] != "--":
+        if argv[index] == "--leave-other-staged":
+            leave, index = True, index + 1
+        elif argv[index] in _COMMIT_OPTIONS and index + 1 < len(argv):
+            index += 2
+        else:
+            index += 1
+    return leave, ([] if index >= len(argv) else argv[index + 1:])
+
+
+def describe_commit(argv, cwd):
+    """``(errors, facts)`` of `commit <argv>`: the checks the real command makes through `git diff --check`, the facts
+    they establish, and the change lists and the diff of the named paths. Nothing is staged and nothing is committed."""
+    leave, given = _given_commit(argv)
+    facts = {"head": None, "expected_head": None, "leave_other_staged": leave,
+             "path_count": len(given), "subject": None, "trailers": [], "body": None,
+             "attribution_allowed": None, "program_findings": [], "staged_paths": [],
+             "requested_paths": given, "paths": [], "diff": None}
+    facts.update((name, []) for name in _CHANGE_LISTS)
+    errors = []
+    try:
+        _change_facts(check_commit(argv, cwd, note=facts.__setitem__), facts)
+    except Refused as exc:
+        if exc.code is None:
+            raise      # a refusal with no code has no place in the tables: stop with no object, as a decline
+        errors.append((exc.code, str(exc)))
+    return errors, [(name, facts[name]) for name in _COMMIT_FACTS]
+
+
+# --- describe push -------------------------------------------------------------------------------
+
+# `describe push` takes the arguments that follow `git push` and has no real command of this module to share their
+# validation with, so this parser is the validation: a fixed grammar, and anything else is `usage` (spec: "The
+# grammar"). No message quotes an argument: a remote argument can be a URL that carries a credential.
+_PUSH_FLAGS = {"-f": "force", "--force": "force", "--force-with-lease": "force_with_lease", "-d": "delete",
+               "--delete": "delete", "-u": "set_upstream", "--set-upstream": "set_upstream",
+               "--no-verify": "no_verify", "-n": "dry_run", "--dry-run": "dry_run", "--atomic": "atomic",
+               "-q": "quiet", "--quiet": "quiet", "-v": "verbose", "--verbose": "verbose"}
+_REMOTE_STATE_FLAGS = ("--mirror", "--follow-tags")
+_PUSH_NAME = re.compile(r"\A[A-Za-z0-9._][A-Za-z0-9._/-]*\Z")
+_PUSH_FLAG_FACTS = ("force", "delete", "set_upstream", "no_verify", "dry_run", "atomic")
+_PUSH_FACTS = ("head", "branch", "remote", "default_branch", "force", "delete", "set_upstream", "no_verify",
+               "dry_run", "atomic", "remote_scheme", "remote_url_has_credentials", "push_config_findings",
+               "push_updates", "push_deletes", "push_forced", "base", "ahead",
+               "tracking_ref_reflog_looks_git_written", "commit_hashes", "commit_messages", "changed_paths",
+               "binary_paths", "submodule_paths", "findings", "diff")
+
+
+class PushRequest:
+    """What the arguments of a push say: the flags given (by their fact names), the remote named (or None), the
+    updates as ``(source, destination, forced)`` and the destinations to delete."""
+
+    def __init__(self):
+        self.flags, self.remote, self.updates, self.deletes = set(), None, [], []
+
+
+def _usage(what):
+    return Refused("usage: safe-git describe push [flags] [remote [refspec...]]: %s" % what, code="usage")
+
+
+def _push_ref(text):
+    return _plain_ref(text, _PUSH_NAME)
+
+
+def parse_push(argv):
+    """The `PushRequest` of the arguments after ``git push``. Refuses with ``usage`` anything outside the grammar,
+    and with ``remote_state_required`` a form whose targets depend on what the remote holds."""
+    request, spelled, index = PushRequest(), set(), 0
+    while index < len(argv) and argv[index].startswith("-"):
+        item = argv[index]
+        if item in _REMOTE_STATE_FLAGS:
+            raise Refused("a push with --mirror or --follow-tags sends what the remote's refs decide, so it cannot "
+                          "be described from local data", code="remote_state_required")
+        name = _PUSH_FLAGS.get(item)
+        if name is None:
+            raise _usage("a flag that is not accepted")
+        if name in spelled:
+            raise _usage("a flag given twice")
+        spelled.add(name)
+        request.flags.add("force" if name == "force_with_lease" else name)
+        index += 1
+    rest = argv[index:]
+    if not rest:
+        if "delete" in spelled:
+            raise _usage("--delete needs a remote and a destination")
+        return request
+    if _REMOTE_NAME.match(rest[0]) is None:
+        raise _usage("the remote must be a configured name, not a URL or a path")
+    request.remote = rest[0]
+    deleting = "delete" in spelled
+    for text in rest[1:]:
+        kind, item = _refspec(text, deleting)
+        (request.deletes if kind == "delete" else request.updates).append(item)
+    if len(request.updates) > 1 or (request.updates and request.deletes) or (deleting and not request.deletes):
+        raise _usage("a push is one update, or deletions only")
+    return request
+
+
+def _refspec(text, deleting):
+    """``("update", (source, destination, forced))`` or ``("delete", destination)`` for one refspec of a push, as
+    written; the destination of an update with no ``:`` is its source. Refuses with ``usage`` a form outside the
+    grammar and with ``remote_state_required`` a wildcard."""
+    if text.startswith(("-", "^")) or text in ("", "+"):
+        raise _usage("a refspec that is not accepted")
+    forced = text.startswith("+")
+    body = text[1:] if forced else text
+    if "*" in body:
+        raise Refused("a wildcard refspec sends what the remote's refs decide, so it cannot be described "
+                      "from local data", code="remote_state_required")
+    source, colon, destination = body.partition(":")
+    if ":" in destination or (deleting and (colon or forced)):
+        raise _usage("a refspec that is not accepted")
+    if deleting or (colon and not source):
+        if (colon and forced) or not _push_destination(destination if colon else source):
+            raise _usage("a refspec that is not accepted")
+        return "delete", destination if colon else source
+    if not _push_ref(source) or (colon and not _push_destination(destination)):
+        raise _usage("a refspec that is not accepted")
+    return "update", (source, destination if colon else source, forced)
+
+
+def _push_destination(text):
+    """A destination: a name, or a full ref under ``refs/heads/`` or ``refs/tags/``."""
+    return (_push_ref(text) and text != "HEAD"
+            and (not text.startswith("refs/") or text.startswith(("refs/heads/", "refs/tags/"))))
+
+
+def config_entries(root):
+    """The configuration git reads, in its order, as ``[(scope, section, subsection or None, variable, value or
+    None)]``: the section and variable lower-case, the subsection as written, and a key with no value None."""
+    listing = run(["git", "config", "--list", "--show-scope", "-z"], root, check=False)
+    fields = listing.stdout.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
+    if listing.returncode or len(fields) % 2:
+        raise Refused("git could not list its configuration", code="repository_unreadable")
+    entries = []
+    for scope, entry in zip(fields[0::2], fields[1::2]):
+        key, separator, value = entry.partition("\n")
+        section, _, rest = key.partition(".")
+        subsection, dot, variable = rest.rpartition(".")
+        entries.append((scope, section.lower(), subsection if dot else None, variable.lower(),
+                        value if separator else None))
+    return entries
+
+
+def push_remote(entries, branch, given):
+    """The remote a push goes to: `given`, else the first set of ``branch.<name>.pushRemote``, ``remote.pushDefault``
+    and ``branch.<name>.remote``, else ``origin``. A value that is not a remote name is ``target_unresolved``."""
+    if given is not None:
+        return given
+    last = {}
+    for _, section, subsection, variable, value in entries:
+        last[(section, subsection, variable)] = value
+    for key in (("branch", branch, "pushremote"), ("remote", None, "pushdefault"), ("branch", branch, "remote")):
+        if key in last:
+            value = last[key]
+            if value is None or _REMOTE_NAME.match(value) is None:
+                raise Refused("the remote a push would use, from the configuration, is not a remote name",
+                              code="target_unresolved")
+            return value
+    return "origin"
+
+
+# The settings that redirect or intercept a push, or make it run a program (spec: "Resolution and the remote"). They
+# are named by `<section>.<variable>`, and a subsectioned key without its subsection (`credential.*.helper`), because a
+# subsection can be a URL that carries a credential. A key of the repository is refused; one of the owner's is named.
+_PUSH_SETTINGS = {("http", "proxy"), ("https", "proxy"), ("credential", "helper"), ("ssh", "variant"),
+                  ("core", "sshcommand"), ("core", "gitproxy"), ("core", "askpass"), ("push", "gpgsign"),
+                  ("push", "pushoption"), ("push", "recursesubmodules"), ("push", "negotiate")}
+_SUBSECTIONED = {"http", "https", "credential"}   # `http.<url>.proxy` and `credential.<url>.helper` also count
+_REMOTE_SETTINGS = {"proxy", "receivepack", "vcs", "pushoption", "pushurl"}
+# Every key of these sections can send the push, or the credentials of the owner's helper, somewhere else: a header,
+# a cookie file, a certificate, a resolver, a redirect, a user name, a transport allowed. And the rewrites of a URL.
+_PUSH_SECTIONS = {"http", "protocol", "credential", "transfer"}
+_REWRITES = {"insteadof", "pushinsteadof"}
+_REPOSITORY_SCOPES = ("local", "worktree")
+
+
+def push_setting(section, subsection, variable, value):
+    """The name of a setting that redirects or intercepts a push, or None."""
+    if section == "remote" and subsection is not None and variable in _REMOTE_SETTINGS:
+        return "remote.*." + variable
+    if section in _PUSH_SECTIONS or (section == "url" and variable in _REWRITES):
+        name = display.ascii_text(variable)[:40]
+        return "%s.%s" % (section, name) if subsection is None else "%s.*.%s" % (section, name)
+    if (section, variable) not in _PUSH_SETTINGS or (subsection is not None and section not in _SUBSECTIONED):
+        return None
+    if (section, variable) == ("push", "gpgsign") and not git_bool_is_true(value is not None, value or ""):
+        return None   # off, as `commit.gpgsign` is read
+    return "%s.%s" % (section, variable) if subsection is None else "%s.*.%s" % (section, variable)
+
+
+def push_config_findings(entries):
+    """``(findings, refused)``: ``<scope>:<name>`` of every named setting, sorted and without repeats, and those of
+    them in a scope of the repository."""
+    found = {"%s:%s" % (display.ascii_text(scope)[:20], name)
+             for scope, section, subsection, variable, value in entries
+             for name in [push_setting(section, subsection, variable, value)] if name is not None}
+    return sorted(found), sorted(item for item in found if item.partition(":")[0] in _REPOSITORY_SCOPES)
+
+
+_HELPER_URL = re.compile(r"\A[A-Za-z0-9+.-]+::")
+_URL = re.compile(r"\A([A-Za-z][A-Za-z0-9+.-]*)://([^/]*)")
+
+
+def classify_url(url):
+    """``(scheme, has_credentials)`` of a push URL, never the URL: the scheme is ``https``, ``http``, ``ssh`` (also the
+    scp-like form), ``git``, ``file`` (also a path) or ``other``. A credential is a password, any user information on
+    ``http``, ``https`` or ``ftp``, or user information that matches a pattern of `push-check`; a bare user name on
+    ``ssh`` or ``git`` is none. A lower bound: a credential in another form (a query, a path) is not seen. A transport
+    helper (``ext::...``) starts a program and is refused."""
+    if _HELPER_URL.match(url):
+        raise Refused("the push URL uses a transport helper that would start a program (remote:helper-transport)",
+                      code="repo_selects_program")
+    found = _URL.match(url)
+    if found:
+        kind = found.group(1).lower()
+        scheme = kind if kind in ("https", "http", "ssh", "git", "file") else "other"
+        authority = found.group(2)
+        userinfo = authority.rpartition("@")[0] if "@" in authority else ""
+        plain = kind in ("http", "https", "ftp")
+    else:
+        head = url.partition("/")[0]
+        scheme = "ssh" if ":" in head else "file"      # `host:path` is scp-like, anything else is a path
+        host = head.partition(":")[0]
+        userinfo = host.rpartition("@")[0] if scheme == "ssh" and "@" in host else ""
+        plain = False
+    secret = any(pattern.search(userinfo) for _, pattern in _RULES)
+    return scheme, bool(":" in userinfo or (plain and userinfo) or secret)
+
+
+def push_url(root, entries, remote):
+    """The one effective push URL of `remote` (``git remote get-url --push --all``, which applies ``pushurl`` and the
+    rewrite rules), never printed. A remote with no ``url`` or ``pushurl`` is unconfigured, whatever git would do with
+    its name; more than one URL is refused."""
+    if not any(section == "remote" and subsection == remote and variable in ("url", "pushurl")
+               for _, section, subsection, variable, _ in entries):
+        raise Refused("the remote has no URL in the configuration", code="remote_unconfigured")
+    listing = run(["git", "remote", "get-url", "--push", "--all", remote], root, check=False)
+    if listing.returncode:
+        raise Refused("git could not give the push URL of the remote", code="repository_unreadable")
+    urls = listing.stdout.split("\n")
+    if urls and urls[-1] == "":
+        urls.pop()
+    if not urls:
+        raise Refused("the remote has no URL in the configuration", code="remote_unconfigured")
+    if len(urls) > 1:
+        raise Refused("the remote has more than one push URL", code="multiple_push_urls")
+    return urls[0]
+
+
+def config_values(entries, section, subsection, variable):
+    """Every value, in the order git read them, of one key (None for a key with no value)."""
+    return [value for _, name, sub, var, value in entries if (name, sub, var) == (section, subsection, variable)]
+
+
+def remote_state_setting(entries, remote):
+    """The name of a setting that makes a push send what the remote's refs decide (``push.followTags``,
+    ``remote.<name>.mirror``), whatever its scope, or None. The last value of a key is the one that counts."""
+    for name, key in (("push.followTags", ("push", None, "followtags")),
+                      ("remote.*.mirror", ("remote", remote, "mirror"))):
+        values = config_values(entries, *key)
+        if values and git_bool_is_true(values[-1] is not None, values[-1] or ""):
+            return name
+    return None
+
+
+def _unresolved(what):
+    return Refused("the target of the push cannot be told from local data: %s" % what, code="target_unresolved")
+
+
+def configured_targets(entries, branch, remote):
+    """``(updates, deletes)`` of a push with no refspec, in the form `_refspec` gives, from ``remote.<name>.push`` and
+    else ``push.default``. Where git would refuse or the answer needs the remote's refs it refuses with
+    ``target_unresolved`` (or ``remote_state_required``). The behaviour of each case was checked against git itself."""
+    current = "refs/heads/" + branch
+    pushes = config_values(entries, "remote", remote, "push")
+    if pushes:
+        if len(pushes) > 1 or not pushes[0]:
+            raise _unresolved("remote.*.push is empty or holds more than one refspec")
+        try:
+            kind, item = _refspec(pushes[0], False)
+        except Refused as exc:
+            if exc.code != "usage":
+                raise
+            raise _unresolved("remote.*.push holds a refspec this version does not read") from None
+        if kind == "delete":
+            return [], [item]
+        if item[0] not in ("HEAD", branch, current):
+            raise _unresolved("remote.*.push names a source other than the current branch")
+        return [item], []
+    given = config_values(entries, "push", None, "default")
+    mode = given[-1] if given else "simple"
+    if mode == "matching":
+        raise Refused("push.default is matching, which sends what the remote's refs decide",
+                      code="remote_state_required")
+    if mode == "current":
+        return [(current, current, False)], []
+    if mode not in ("simple", "upstream", "tracking"):
+        # `nothing` is the one value that reaches this: for a value git does not know it fails on every command, even
+        # `rev-parse`, so the repository was refused as unreadable before this ran. The guard stays so that a value
+        # a later git accepts is never guessed.
+        raise _unresolved("push.default is nothing or a value git refuses")
+    fetched = config_values(entries, "branch", branch, "remote")
+    fetch = fetched[-1] if fetched else "origin"      # where the branch's upstream is, or git's default remote
+    if fetch is None or _REMOTE_NAME.match(fetch) is None:
+        raise _unresolved("the remote of the branch is not a remote name")
+    if fetch != remote:                                # a triangular workflow: simple is current, upstream is refused
+        if mode == "simple":
+            return [(current, current, False)], []
+        raise _unresolved("push.default is upstream and the push does not go to the upstream's remote")
+    merges = config_values(entries, "branch", branch, "merge")
+    if not fetched or len(merges) != 1 or merges[0] is None or not merges[0].startswith(("refs/heads/", "refs/tags/")) \
+            or not _push_destination(merges[0]) or (mode == "simple" and merges[0] != current):
+        raise _unresolved("the branch has no usable upstream for push.default")
+    return [(current, merges[0], False)], []
+
+
+def _qualified_update(root, branch, update):
+    """``(source, destination, forced)`` of an update with the source shown as ``git push --porcelain`` shows it and
+    the destination a full ref. A bare destination is qualified from the source, a branch; the remote could read it as
+    another ref (a recorded limit), and one it could read as ``heads/...`` is refused."""
+    source, destination, forced = update
+    if source == branch:
+        if _resolved(root, "refs/tags/" + branch):
+            raise _unresolved("the source names both the branch and a tag")
+        source = "refs/heads/" + branch
+    if destination == "HEAD":                          # `git push <remote> HEAD`: the current branch
+        destination = "refs/heads/" + branch
+    elif not destination.startswith(("refs/heads/", "refs/tags/")):
+        if destination.partition("/")[0] in ("heads", "tags", "remotes"):
+            raise _unresolved("a destination the remote could read as another ref")
+        destination = "refs/heads/" + destination
+    return source, destination, forced
+
+
+def _qualified_delete(destination):
+    if not destination.startswith(("refs/heads/", "refs/tags/")):
+        raise _unresolved("a deletion by a bare name could mean a branch or a tag there")
+    return destination
+
+
+def push_targets(root, entries, request, branch, remote):
+    """``(updates, deletes)`` the push asks for: updates as ``(source, destination, forced)`` and deletions as full
+    refs, from the refspecs of the command, else the configuration. Reads local configuration and refs only."""
+    updates, deletes = request.updates, request.deletes
+    if not updates and not deletes:
+        updates, deletes = configured_targets(entries, branch, remote)
+    return [_qualified_update(root, branch, item) for item in updates], [_qualified_delete(item) for item in deletes]
+
+
+def _blank_push_facts():
+    facts = {name: None for name in _PUSH_FACTS}
+    facts.update((name, False) for name in _PUSH_FLAG_FACTS)
+    facts.update((name, []) for name in ("push_config_findings", "push_updates", "push_deletes", "push_forced",
+                                         "commit_hashes", "commit_messages", "changed_paths", "binary_paths",
+                                         "submodule_paths", "findings"))
+    return facts
+
+
+def describe_push(argv, cwd):
+    """``(errors, facts)`` of ``push <argv>``: the flags, the branch, the remote, the refs the push updates or
+    deletes, the base, and the commits ahead of it with their messages, changed paths, credential-looking lines and
+    diff. Nothing is contacted and nothing is written. A fact that could not be found out whole is ``OMIT``."""
+    facts, errors = _blank_push_facts(), []
+    try:
+        request = parse_push(argv)
+        facts.update((name, name in request.flags) for name in _PUSH_FLAG_FACTS)
+        root = git_root(cwd)
+        found = repo_program_findings(root, redact=True)
+        if found:
+            raise Refused("this repository would make git run a program (%s)" % ", ".join(found[:10]),
+                          code="repo_selects_program")
+        try:
+            facts["head"] = tip(root)
+        except Refused as exc:
+            raise Refused(str(exc), code="branch_unreadable") if exc.code == "head_unreadable" else exc
+        facts["branch"] = branch = current_branch(root, facts["head"])
+        if any(source not in ("HEAD", branch, "refs/heads/" + branch) for source, _, _ in request.updates):
+            raise _usage("the source of an update is HEAD or the current branch")
+        entries = config_entries(root)
+        facts["remote"] = remote = push_remote(entries, branch, request.remote)
+        facts["default_branch"] = default = remote_default_branch(root, remote)
+        facts["push_config_findings"], refused = push_config_findings(entries)
+        if refused:
+            raise Refused("a setting of the repository would redirect or intercept the push (%s)" % ", ".join(refused),
+                          code="push_config_refused")
+        facts["remote_scheme"], facts["remote_url_has_credentials"] = classify_url(push_url(root, entries, remote))
+        state = remote_state_setting(entries, remote)
+        if state:
+            raise Refused("%s makes the push send what the remote's refs decide, so it cannot be described from "
+                          "local data" % state, code="remote_state_required")
+        updates, deletes = push_targets(root, entries, request, branch, remote)
+        forcing = "force" in request.flags
+        facts["push_updates"] = ["%s:%s" % (source, destination) for source, destination, _ in updates]
+        facts["push_deletes"] = list(deletes)
+        facts["push_forced"] = [destination for _, destination, forced in updates if forced or forcing]
+        facts["push_forced"] += list(deletes) if forcing else []
+        if deletes:
+            facts["ahead"], facts["diff"] = 0, ""
+        else:
+            destination = updates[0][1]
+            named = destination[len("refs/heads/"):] if destination.startswith("refs/heads/") else None
+            tracking, facts["base"] = push_base_ref(root, remote, named, default)
+            base = facts["base"]
+            facts["ahead"] = ahead = int(run(["git", "rev-list", "--count", base + "..HEAD"], root).stdout.strip())
+            facts["tracking_ref_reflog_looks_git_written"] = _coded(reflog_looks_git_written, root, tracking)
+            facts["diff"] = ""
+            if ahead:     # a range with no commit sends nothing, whatever the trees say
+                span = base + "..HEAD"
+                facts["commit_hashes"], facts["commit_messages"] = _coded(range_commits, root, span, ahead)
+                (facts["changed_paths"], facts["binary_paths"], facts["submodule_paths"],
+                 facts["diff"]) = _coded(range_changes, root, span)
+                found, cut = _coded(range_findings, root, span)
+                facts["findings"] = OMIT if cut else [
+                    "%s %s %s" % (item["rule"], "-" if item["line"] is None else item["line"], item["path"])
+                    for item in found]
+    except Refused as exc:
+        if exc.code is None:
+            raise      # a refusal with no code has no place in the tables: stop with no object, as a decline
+        if exc.code == "usage":
+            facts = _blank_push_facts()   # arguments the grammar refuses give no fact
+        errors.append((exc.code, str(exc)))
+    return errors, [(name, facts[name]) for name in _PUSH_FACTS]
+
+
+DESCRIBERS = {"commit": describe_commit, "push": describe_push, "remove": describe_remove}
+
+
+def command_describe(argv, cwd, out, err):
+    if not argv or argv[0] not in DESCRIBERS:
+        raise Refused("usage: safe-git describe %s, with the arguments of that command" % "|".join(sorted(DESCRIBERS)))
+    errors, facts = DESCRIBERS[argv[0]](argv[1:], cwd)
+    out.write(render_description(build_description(argv[0], errors, facts)))
+    return 0
+
+
+# --- push-check ----------------------------------------------------------------------------------
+
+# The narrow list of patterns the owner has used by hand, as a guard against a mistake and not as a scanner.
+# Written in pieces where a whole pattern would match itself.
+_RULES = (
+    ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY")),
+    ("aws-access-key-id", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("github-token", re.compile(r"ghp_[A-Za-z0-9]{20}|github" "_pat_[A-Za-z0-9_]{20}")),
+    ("sk-key", re.compile(r"sk-[A-Za-z0-9]{20}")),
+    ("slack-token", re.compile(r"xox[bp]-[0-9A-Za-z-]{10}")),
+    ("jwt-shaped", re.compile(r"eyJ[A-Za-z0-9_-]{20,4096}\.")),
+)
+_HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+_ESCAPES = {"a": 7, "b": 8, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, '"': 34, "\\": 92}
+
+
+def _unquote(text):
+    """A path as git quotes it (C-style, in double quotes, octal for other bytes); the text if it is not quoted."""
+    if len(text) < 2 or text[0] != '"' or text[-1] != '"':
+        return text
+    body, out, index = text[1:-1], bytearray(), 0
+    while index < len(body):
+        char = body[index]
+        if char != "\\":
+            out += char.encode("utf-8", "surrogateescape")
+            index += 1
+        elif body[index + 1:index + 2] in _ESCAPES:
+            out.append(_ESCAPES[body[index + 1]])
+            index += 2
+        elif re.fullmatch(r"[0-7]{3}", body[index + 1:index + 4]):
+            out.append(int(body[index + 1:index + 4], 8) & 0xFF)
+            index += 4
+        else:
+            out += b"\\"
+            index += 1
+    return out.decode("utf-8", "surrogateescape")
+
+
+def _patch_path(text):
+    """The path a `+++ ` line names, or None for a deletion."""
+    if text.endswith("\t"):
+        text = text[:-1]
+    if text == "/dev/null":
+        return None
+    path = _unquote(text)
+    return path[2:] if path.startswith("b/") else path
+
+
+def scan_patch(text, limit):
+    """The credential-looking added lines of a patch made with ``-U0``: ``(findings, cut)`` where each finding
+    is ``{"path", "line", "rule"}`` and never holds the line. Hunk counts decide where a hunk ends, so an added
+    line that starts like a header is read as a line."""
+    findings, path, old_left, new_left, number = [], None, 0, 0, 0
+    for raw in text.split("\n"):
+        if old_left > 0 or new_left > 0:
+            if raw.startswith("+"):
+                new_left -= 1
+                for rule, pattern in _RULES:
+                    if path is not None and pattern.search(raw, 1):
+                        if len(findings) >= limit:
+                            return findings, True
+                        findings.append({"path": display.ascii_text(path)[:200], "line": number, "rule": rule})
+                number += 1
+                continue
+            if raw.startswith("-"):
+                old_left -= 1
+                continue
+            if raw.startswith("\\"):
+                continue
+            old_left = new_left = 0
+        if raw.startswith("diff --git "):
+            path = None
+        elif raw.startswith("+++ "):
+            path = _patch_path(raw[4:])
+        elif raw.startswith("@@"):
+            found = _HUNK.match(raw)
+            if found is not None:
+                old_left = 1 if found.group(1) is None else int(found.group(1))
+                new_left = 1 if found.group(3) is None else int(found.group(3))
+                number = int(found.group(2))
+    return findings, False
+
+
+def secret_name(path):
+    base = path.rsplit("/", 1)[-1]
+    return base in (".env", "id_rsa") or base.endswith(".pem")
+
+
+def parse_push_check(argv):
+    """``(remote, base ref or None)`` from ``[--remote NAME] [--base REF]``, each at most once."""
+    remote, base, index = "origin", None, 0
+    seen = set()
+    while index < len(argv):
+        option = argv[index]
+        if option not in ("--remote", "--base") or option in seen or index + 1 >= len(argv):
+            raise Refused("usage: safe-git push-check [--remote NAME] [--base refs/heads/NAME|refs/remotes/R/NAME]")
+        seen.add(option)
+        value = argv[index + 1]
+        if option == "--remote":
+            if _REMOTE_NAME.match(value) is None:
+                raise Refused("--remote must be a remote name of letters, digits and . _ - (at most 64)")
+            remote = value
+        else:
+            if not _scan_ref(value):
+                raise Refused("--base must be a full branch ref, refs/heads/NAME or refs/remotes/REMOTE/NAME")
+            base = value
+        index += 2
+    return remote, base
+
+
+def _resolved(root, ref):
+    """The commit a full ref names, or None. Reads local refs only."""
+    shown = run(["git", "show-ref", "--verify", "--hash", ref], root, check=False)
+    value = shown.stdout.strip()
+    return value if shown.returncode == 0 and _HEX40.match(value) else None
+
+
+def current_branch(root, commit):
+    """The short name of the branch HEAD names, given `commit`, the commit `tip` found (None when the branch has
+    none). Refuses a branch with no commit, a detached HEAD and a name this helper does not read."""
+    if commit is None:
+        raise Refused("the current branch has no commit yet, so there is nothing to send", code="branch_unborn")
+    named_head = run(["git", "symbolic-ref", "-q", "HEAD"], root, check=False)
+    if named_head.returncode:
+        raise Refused("HEAD is detached; switch to the branch to push", code="head_detached")
+    full = named_head.stdout.strip()
+    if not full.startswith("refs/heads/") or not _branch_ref(full):
+        raise Refused("the branch name is not one this helper reads (ASCII letters, digits and . _ - /)",
+                      code="branch_unreadable")
+    return full[len("refs/heads/"):]
+
+
+def remote_default_branch(root, remote):
+    """The remote's default branch as `refs/remotes/<remote>/HEAD` says, or None."""
+    named = run(["git", "symbolic-ref", "-q", "--short", "refs/remotes/%s/HEAD" % remote], root, check=False)
+    text = named.stdout.strip()
+    if named.returncode == 0 and text.startswith(remote + "/") and _branch_ref("refs/heads/" + text[len(remote) + 1:]):
+        return text[len(remote) + 1:]
+    return None
+
+
+def push_base_ref(root, remote, branch, default, explicit=None):
+    """``(ref, commit)``: the ref a push of `branch` (None for a tag) to `remote` is compared with, and the commit it
+    names. It is `explicit` when given, else the remote-tracking ref of the branch, else that of the remote's default
+    branch. Refuses when none of them exists."""
+    if explicit:
+        candidates = [explicit]
+    else:
+        candidates = ["refs/remotes/%s/%s" % (remote, name) for name in (branch, default) if name is not None]
+        candidates = [ref for ref in candidates if _scan_ref(ref)]   # a name too long to be read has no tracking ref here
+    for ref in candidates:
+        value = _resolved(root, ref)
+        if value:
+            return ref, value
+    raise Refused("no base to compare with; tried %s" % (", ".join(candidates) or "no tracking ref"),
+                  code="base_unresolved")
+
+
+def push_base(root, remote, branch, default, explicit=None):
+    """The commit of `push_base_ref`."""
+    return push_base_ref(root, remote, branch, default, explicit)[1]
+
+
+# The flags of a patch made with no context, which is what the scan for credentials reads.
+_PATCH_SHAPE = ["--no-ext-diff", "--no-textconv", "--no-renames", "--no-color", "-U0", "--text",
+                "--ignore-submodules=all", "--inter-hunk-context=0", "--src-prefix=a/", "--dst-prefix=b/"]
+
+
+def range_findings(root, span):
+    """``(findings, cut)`` of the credential-looking added lines of the range `span`, each ``{"path", "line",
+    "rule"}``. Each commit is read on its own, so a secret added and taken out again inside the range is still seen,
+    and so is the net change, which also holds what a merge brought in. A changed submodule is not entered: that would
+    start the program its own configuration names. `cut` is true when a read or the list was cut short."""
+    history, cut_history = run_capped(["git", "log", "--no-merges", "-p", "--format=", "--no-show-signature"]
+                                      + _PATCH_SHAPE + [span], root, MAX_SCAN, timeout=GIT_TIMEOUT)
+    patch, cut_patch = run_capped(["git", "diff"] + _PATCH_SHAPE + [span], root, MAX_SCAN, timeout=GIT_TIMEOUT)
+    findings, cut = scan_patch(history, MAX_FINDINGS)
+    more, cut_more = scan_patch(patch, MAX_FINDINGS)
+    for item in more:
+        if item not in findings:
+            if len(findings) >= MAX_FINDINGS:
+                cut = True
+                break
+            findings.append(item)
+    return findings, bool(cut or cut_more or cut_history or cut_patch)
+
+
+# --- what `describe push` reads of the range -------------------------------------------------------
+
+# A read here that fails, or runs out of time, is an unreadable repository and not a mistake of the caller, and a read
+# that is cut at its limit leaves the facts it would have given out of the object.
+_RAW_LINE = re.compile(r"\A:([0-7]{6}) ([0-7]{6}) [0-9a-f]+ [0-9a-f]+ [A-Z]\Z")
+_ESCAPED_BYTE = re.compile("[\udc80-\udcff]")
+_DIFF_HEADER = "diff --git "
+_TEXT_PATCH = ["--text", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all", "--no-renames", "--no-color",
+               "-U3", "--src-prefix=a/", "--dst-prefix=b/"]
+_GIT_WRITTEN = ("fetch", "push", "update by push")
+
+
+def _coded(function, *arguments):
+    """``function(*arguments)``, with a refusal that has no code made an unreadable repository."""
+    try:
+        return function(*arguments)
+    except Refused as exc:
+        raise Refused(str(exc), code=exc.code or "repository_unreadable")
+
+
+def reflog_looks_git_written(root, ref):
+    """True when every entry of the reflog of the tracking ref `ref` begins ``fetch``, ``push`` or ``update by push``,
+    False when one does not, None when there is no reflog (git shows one empty entry for a ref that has none), and OMIT
+    when the read was cut. A reflog is local and cannot show who wrote a ref: a forged one passes."""
+    text, cut = run_capped(["git", "reflog", "show", "-z", "--no-show-signature", "--format=%gs", ref, "--"], root, MAX_SCAN,
+                           timeout=GIT_TIMEOUT, separator="\0")
+    if cut or (text and not text.endswith("\0")):
+        return OMIT
+    entries = text.split("\0")[:-1]
+    if entries in ([], [""]):
+        return None
+    return all(entry.startswith(_GIT_WRITTEN) for entry in entries)
+
+
+def range_commits(root, span, count):
+    """``(hashes, messages)`` of the `count` commits of `span`, oldest first, merges included, each message as git keeps
+    it. Both are OMIT for more than `MAX_ARRAY` commits, a read that was cut, a commit object with a NUL in it, and output
+    that is not `count` records of a hash and a message."""
+    if count > MAX_ARRAY:
+        return OMIT, OMIT
+    text, cut = run_capped(["git", "log"] + _LOG_MESSAGES + [span], root, MAX_SCAN, timeout=GIT_TIMEOUT,
+                           separator="\0")
+    if cut or (text and not text.endswith("\0")):
+        return OMIT, OMIT
+    # git's own output stops at a NUL in a message and still ends the record, so the count above cannot tell; the bytes
+    # after it would be pushed, and neither shown nor scanned.
+    for record in text.split("\0")[:-1]:
+        if _HEX40.match(record[:40]) is None or record[40:41] != "\n":
+            return OMIT, OMIT
+        raw, cut_raw = run_capped(["git", "cat-file", "commit", record[:40]], root, MAX_SCAN, timeout=GIT_TIMEOUT)
+        if cut_raw or "\0" in raw:
+            return OMIT, OMIT
+    records = text.split("\0")[:-1]
+    hashes, messages = [], []
+    for record in records:
+        if _HEX40.match(record[:40]) is None or record[40:41] != "\n":
+            return OMIT, OMIT
+        hashes.append(record[:40])
+        messages.append(record[41:])
+    return (hashes, messages) if len(hashes) == count else (OMIT, OMIT)
+
+
+def _header_path(line):
+    """The path of a ``diff --git a/<path> b/<path>`` header (`line` is the text after ``diff --git ``), or None for a
+    header of another shape. A path git quotes is unquoted; the two sides of a patch made with no renames are one path."""
+    if line.startswith('"'):
+        end = 1
+        while end < len(line) and line[end] != '"':
+            end += 2 if line[end] == "\\" else 1
+        if line[end + 1:end + 3] != ' "':
+            return None
+        left, right = _unquote(line[:end + 1]), _unquote(line[end + 2:])
+    else:
+        size = (len(line) - 5) // 2
+        if len(line) != 2 * size + 5 or line[size + 2] != " ":
+            return None
+        left, right = line[:size + 2], line[size + 3:]
+    return left[2:] if left.startswith("a/") and right == "b/" + left[2:] else None
+
+
+def _patch_sections(patch):
+    """``[(path, text)]``, one for each ``diff --git`` header of `patch`; None when a header is not one this helper
+    reads. A line of a hunk starts with a space, ``+``, ``-`` or a backslash, so no line of content is a header."""
+    starts = [found.start() for found in re.finditer(r"^diff --git ", patch, re.M)]
+    if (starts and starts[0] != 0) or (not starts and patch):
+        return None
+    sections = []
+    for begin, end in zip(starts, starts[1:] + [len(patch)]):
+        text = patch[begin:end]
+        newline = text.find("\n")
+        path = _header_path(text[len(_DIFF_HEADER):newline]) if newline > 0 else None
+        if path is None:
+            return None
+        sections.append((path, text))
+    return sections
+
+
+def range_changes(root, span):
+    """``(changed_paths, binary_paths, submodule_paths, diff)`` of the range `span`, from the difference of its two
+    trees. The paths come from a raw listing that does not skip a submodule whatever the configuration says; the diff
+    is made with no filter, text conversion or external diff and with every file read as text, and a path whose patch
+    holds a NUL or a byte that is not UTF-8 is binary and has no hunk in it. Any of the four is OMIT where it could not
+    be found out whole."""
+    raw, cut = run_capped(["git", "diff", "--raw", "-z", "--no-renames", "--no-ext-diff", "--no-textconv",
+                           "--ignore-submodules=none", span], root, MAX_SCAN, timeout=GIT_TIMEOUT, separator="\0")
+    if cut:
+        return OMIT, OMIT, OMIT, OMIT
+    fields = raw.split("\0")
+    if fields.pop() != "" or len(fields) % 2:
+        raise Refused("git diff gave a listing this helper does not read", code="repository_unreadable")
+    paths, links = [], []
+    for meta, path in zip(fields[0::2], fields[1::2]):
+        found = _RAW_LINE.match(meta)
+        if found is None or not path:
+            raise Refused("git diff gave a line this helper does not read", code="repository_unreadable")
+        paths.append(path)
+        if "160000" in found.groups():
+            links.append(path)
+    patch, cut = run_capped(["git", "diff"] + _TEXT_PATCH + [span], root, MAX_SCAN, timeout=DIFF_BUDGET)
+    sections = None if cut else _patch_sections(patch)
+    if sections is None or not set(paths) - set(links) <= {path for path, _ in sections} \
+            or not {path for path, _ in sections} <= set(paths):
+        return paths, OMIT, links, OMIT
+    binary = []
+    for path, text in sections:
+        if path not in binary and ("\0" in text or _ESCAPED_BYTE.search(text)):
+            binary.append(path)
+    return paths, binary, links, "".join(text for path, text in sections if path not in binary)
+
+
+def command_push_check(argv, cwd, out, err):
+    """Report what a push of the current branch would send, from local refs only; it never contacts a remote and
+    changes nothing. One JSON line: ``remote``, ``branch``, ``target`` (the branch a push of HEAD would update),
+    ``default_branch`` (or null), ``base``, ``ahead``, ``changed_paths``, ``findings`` and ``truncated``."""
+    remote, explicit = parse_push_check(argv)
+    root = git_root(cwd)
+    found = repo_program_findings(root)
+    if found:
+        raise Refused("this repository would make git run a program (%s); check by hand" % ", ".join(found[:10]))
+    branch = current_branch(root, tip(root))
+    default = remote_default_branch(root, remote)
+    base = push_base(root, remote, branch, default, explicit)
+    span = base + "..HEAD"
+    ahead = run(["git", "rev-list", "--count", span], root).stdout.strip()
+    names_text, cut_names = run_capped(["git", "diff", "--name-only", "-z", "--no-renames", "--diff-filter=d", span],
+                                       root, MAX_SCAN, separator="\0")
+    paths = [item for item in names_text.split("\0") if item]
+    findings, cut_findings = range_findings(root, span)
+    for item in paths:
+        if secret_name(item):
+            if len(findings) >= MAX_FINDINGS:
+                cut_findings = True
+                break
+            findings.append({"path": display.ascii_text(item)[:200], "line": None, "rule": "secret-file-name"})
+    report = {"remote": remote, "branch": branch, "target": branch, "default_branch": default, "base": base,
+              "ahead": int(ahead), "changed_paths": [display.ascii_text(item)[:200] for item in paths[:MAX_CHANGED]],
+              "findings": findings, "truncated": bool(cut_names or cut_findings or len(paths) > MAX_CHANGED)}
+    out.write(json.dumps(report) + "\n")
+    return 0
+
+
+COMMANDS = {"commit": command_commit, "describe": command_describe, "remove": command_remove,
+            "push-check": command_push_check}
+
+
+def main(argv, out, err, cwd):
+    """Run one subcommand from `cwd`. Returns the exit code."""
+    try:
+        if not argv or argv[0] not in COMMANDS:
+            raise Refused("usage: safe-git %s, with their options" % "|".join(sorted(COMMANDS)))
+        return COMMANDS[argv[0]](argv[1:], cwd, out, err)
+    except Refused as exc:
+        err.write("refused: %s\n" % exc)
+        return 1
+    except OSError as exc:
+        err.write("failed: %s\n" % shown(exc.strerror or exc))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:], sys.stdout, sys.stderr, os.getcwd()))

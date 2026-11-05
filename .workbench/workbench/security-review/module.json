@@ -1,0 +1,9 @@
+{
+  "name": "security-review",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Review a change for security flaws: one skill that says how, and a confined agent that runs the experiments.",
+  "provides": [
+    "security-review"
+  ]
+}

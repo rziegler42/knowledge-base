@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""The groundwork decision helper: preview and accept a decision record.
+
+    groundwork preview <record>                     what accepting the record would change, and its digest (read-only)
+    groundwork accept <record> [--digest <digest>]  replace the record's status line with its acceptance (owner-run)
+
+``<record>`` is a path relative to the project root that names a regular file directly under ``docs/decisions/``. It is a
+kit helper (kit API 1) started from the project, and the one thing it writes is the record's status line. The rules are in
+``docs/specs/command-permissions.md``, "Accepting a decision through a command".
+
+Everything read is untrusted repository content. The record is read through the kit, which follows no link and reads only a
+regular file with one hard link, within ``MAX_RECORD`` bytes, and is replaced through the kit's hash-checked replace
+(``safefs.Root.replace_file``). Nothing is evaluated. The status line is found by the rule the document check uses
+(``helper/doccheck``): a line of the first ``MAX_HEADER`` lines, before the first ``##`` heading and outside a code fence or a
+quotation, that begins ``Status:``. A record with none, or with two, is refused.
+
+How a run is confirmed, in order: a ``--digest`` is the digest of the preview as it is now (``ask``, the route ``ask``); with
+none, at a terminal, the owner types the first 12 characters of the record's SHA-256; with none and no terminal, the run is at
+the level ``none``. The helper is not told the level: the launcher checks the route it prints against the level the run had.
+A run without a terminal prints, last, one JSON line of at most ``MAX_RESULT`` bytes that the launcher reads; a run at a
+terminal reads no level and prints none (a ``--digest`` given there is checked, and needs no typing). For a record that is
+already accepted the line names the approver of this run, since nothing was accepted by anyone in it.
+
+Known limits: the kit has no lock, so a write to the record between the replace's last comparison and its rename is
+overwritten without notice (``safefs.Root.replace_file``); the read-back that follows confirms only what this helper wrote. The
+digest binds the project, the record's path, its status line and its bytes; it does not show that the owner read the record,
+and the index row of ``docs/decisions/README.md`` is not written. An approver name that does not fit the result line within
+``MAX_RESULT`` bytes is refused before anything is written.
+"""
+
+import datetime
+import hashlib
+import hmac
+import itertools
+import json
+import os
+import re
+import sys
+
+from wbkit import digest, display, identity, project, safefs
+
+CONFIRM_CHARS = 12
+MAX_RECORD = 1024 * 1024
+MAX_REPLACE = MAX_RECORD + 1024
+MAX_HEADER = 40
+MAX_RESULT = 512
+RESULT_FORMAT = 1
+FOLDER = ("docs", "decisions")
+
+USAGE = "usage: groundwork preview <record> | groundwork accept <record> [--digest <%d lowercase hex>]" % digest.CHARS
+
+_ITEM = r"(?:(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)?"
+_FENCE = re.compile(r"\A[ ]{0,3}" + _ITEM + r"(`{3,}|~{3,})")
+_QUOTE = re.compile(r"\A[ ]{0,3}>")
+_TWO = re.compile(r"\A[ ]{0,3}##[ \t]+(.*)")
+_STATUS = re.compile(r"\A[ ]{0,3}Status:[ \t]*([A-Za-z][A-Za-z0-9_-]*)?")
+_ENDS = re.compile(r"\r\n|\n|\r")
+_LINE = 2000
+
+
+class Usage(Exception):
+    """The arguments do not have the shape of a command."""
+
+
+class Refused(Exception):
+    """Nothing was written; the message is the reason."""
+
+
+def today():
+    return datetime.date.today()
+
+
+# --- the status line ------------------------------------------------------------
+
+
+def _split(text):
+    """``(content, start, stop)`` for each line of `text`: a line ends at ``\\n``, ``\\r\\n`` or a lone ``\\r``, and
+    ``text[start:stop]`` is the line without its ending."""
+    found, position = [], 0
+    for match in _ENDS.finditer(text):
+        found.append((text[position:match.start()], position, match.start()))
+        position = match.end()
+    if position < len(text):
+        found.append((text[position:], position, len(text)))
+    return found
+
+
+def _lines(text):
+    """``(number, line, plain, start, stop)``; `plain` is False inside a code fence and for a quoted line, which are not the
+    document's own statements (the rule of ``doccheck``)."""
+    fence = None
+    for number, (line, start, stop) in enumerate(_split(text), 1):
+        match = _FENCE.match(line)
+        opener = match and not (match.group(1)[0] == "`" and "`" in line[match.end():])
+        closer = match and match.group(1)[0] == (fence or " ")[0] \
+            and len(match.group(1)) >= len(fence or "") and not line[match.end():].strip()
+        line = line[:_LINE]
+        if fence is None:
+            if opener:
+                fence = match.group(1)
+                yield number, line, False, start, stop
+                continue
+        elif closer:
+            fence = None
+            yield number, line, False, start, stop
+            continue
+        yield number, line, fence is None and not _QUOTE.match(line), start, stop
+
+
+def status_lines(text):
+    """``[(word, start, stop)]`` for each status line near the top of `text`: `word` is what follows ``Status:``."""
+    found = []
+    for number, line, plain, start, stop in itertools.islice(_lines(text), MAX_HEADER + 1):
+        if number > MAX_HEADER:
+            break
+        if plain and _TWO.match(line):
+            break
+        if not plain:
+            continue
+        match = _STATUS.match(line)
+        if match:
+            found.append((match.group(1) or "", start, stop))
+    return found
+
+
+# --- the record -----------------------------------------------------------------
+
+
+def record_path(argument):
+    """`argument` if it names a file directly under ``docs/decisions/``, else ``Refused``."""
+    try:
+        parts = safefs.validate_relpath(argument)
+    except safefs.SafeFsError as exc:
+        raise Refused("the record is not a usable relative path: %s" % display.ascii_text(str(exc))[:160])
+    if len(parts) != 3 or tuple(parts[:2]) != FOLDER or not parts[2].endswith(".md") or parts[2] == ".md":
+        raise Refused("the record must be a .md file directly under docs/decisions/")
+    return argument
+
+
+def read_record(held, rel):
+    """``(data, text)`` of the record: bounded, no link followed, a regular file with one link, UTF-8 text."""
+    try:
+        data = held.read_if_present(rel, MAX_RECORD)
+    except safefs.SafeFsError as exc:
+        raise Refused("the record cannot be read: %s" % display.ascii_text(str(exc))[:160])
+    if data is None:
+        raise Refused("there is no such record: %s" % display.ascii_text(rel)[:160])
+    try:
+        return data, data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("the record is not UTF-8 text")
+
+
+def the_status(text, rel):
+    """``(word, start, stop)`` of the one status line, else ``Refused``."""
+    found = status_lines(text)
+    if not found:
+        raise Refused("%s has no status line near the top" % display.ascii_text(rel)[:160])
+    if len(found) > 1:
+        raise Refused("%s has %d status lines near the top; there is one" % (display.ascii_text(rel)[:160], len(found)))
+    return found[0]
+
+
+def preview_lines(project_id, rel, status_line, sha):
+    """The text a preview prints before its digest: what the digest binds."""
+    return ["accept a decision: groundwork accept",
+            "project: %s" % project_id,
+            "record: %s" % display.ascii_text(rel),  # whole: a path is at most 512 printable characters, and the digest binds it
+            "status line: %s" % display.ascii_text(status_line)[:200],
+            "sha256: %s" % sha,
+            "not covered: that you read the record; the index row of docs/decisions/README.md"]
+
+
+def same(left, right):
+    return hmac.compare_digest(left.encode("utf-8", "replace"), right.encode("utf-8", "replace"))
+
+
+# --- the commands ---------------------------------------------------------------
+
+
+def loaded(argument, cwd):
+    """``(root path, project id, relative path)``."""
+    rel = record_path(argument)
+    try:
+        root = os.path.realpath(project.find_root(cwd))
+        return root, project.read_id(root), rel
+    except project.ProjectError as exc:
+        raise Refused(display.ascii_text(str(exc))[:200])
+
+
+def preview(argument, out, cwd):
+    root, project_id, rel = loaded(argument, cwd)
+    try:
+        with safefs.Root(root, "project root") as held:
+            data, text = read_record(held, rel)
+    except safefs.SafeFsError as exc:
+        raise Refused(display.ascii_text(str(exc))[:200])
+    _, start, stop = the_status(text, rel)
+    lines = preview_lines(project_id, rel, text[start:stop], hashlib.sha256(data).hexdigest())
+    out.write("\n".join(lines + ["digest: %s" % digest.of(lines)]) + "\n")
+    return 0
+
+
+def confirmed(given, lines, sha, terminal, stdin, out):
+    """The route of a run: ``ask`` (a digest that is the preview's now), ``terminal`` (the owner typed the start of the
+    hash) or ``none``; ``Refused`` if a digest or what was typed is wrong."""
+    if given is not None:
+        wrong = digest.mismatch(given, lines)
+        if wrong:
+            raise Refused(wrong)
+        return "ask"
+    if terminal:
+        out.write("\n".join(lines) + "\n")
+        out.write("Type the first %d characters of the record's SHA-256 to accept it: " % CONFIRM_CHARS)
+        out.flush()
+        typed = stdin.readline().strip()
+        if not typed or not same(typed, sha[:CONFIRM_CHARS]):
+            raise Refused("what was typed is not the start of the record's SHA-256; nothing was changed")
+        return "terminal"
+    return "none"
+
+
+def result_line(rel, sha, who, route):
+    line = json.dumps({"format": RESULT_FORMAT, "record": rel, "sha256": sha, "approver": who.text, "via": route})
+    if len(line.encode("ascii")) > MAX_RESULT:
+        raise Refused("the result line would be longer than %d bytes (the approver or the record's name is too long); "
+                      "nothing was changed" % MAX_RESULT)
+    return line
+
+
+def accept(argument, given, stdin, out, cwd, terminal):
+    who = identity.read()  # first: a missing or refused identity writes nothing
+    root, project_id, rel = loaded(argument, cwd)
+    try:
+        with safefs.Root(root, "project root") as held:
+            data, text = read_record(held, rel)
+            word, start, stop = the_status(text, rel)
+            sha = hashlib.sha256(data).hexdigest()
+            route = confirmed(given, preview_lines(project_id, rel, text[start:stop], sha), sha, terminal, stdin, out)
+            line = result_line(rel, sha, who, route) if not terminal else None  # a terminal run reads no level: no line
+            if word == "Accepted":
+                out.write("already accepted: %s; nothing was changed\n" % display.ascii_text(rel)[:200])
+                if line:
+                    out.write(line + "\n")
+                return 0
+            if word != "Proposed":
+                raise Refused("the status of %s is %s, not Proposed; nothing was changed"
+                              % (display.ascii_text(rel)[:160], display.ascii_text(word)[:40] or "(none)"))
+            status = "Status: Accepted by %s on %s" % (who.text, today().isoformat())
+            new = (text[:start] + status + text[stop:]).encode("utf-8")
+            held.replace_file(rel, sha, new, MAX_REPLACE)
+            try:
+                back = held.read_if_present(rel, MAX_REPLACE)
+            except (safefs.SafeFsError, OSError):
+                back = None
+            if back != new:
+                raise Refused("the record was replaced, but what is there now is not what was written, or cannot be read; "
+                              "look at %s" % display.ascii_text(rel)[:160])
+    except safefs.SafeFsError as exc:
+        raise Refused(display.ascii_text(str(exc))[:200])
+    out.write("accepted: %s\n" % display.ascii_text(rel)[:200])
+    if line:
+        out.write(line + "\n")
+    return 0
+
+
+def arguments(argv):
+    """``(command, record, digest or None)`` or ``Usage``."""
+    if len(argv) == 2 and argv[0] in ("preview", "accept") and not argv[1].startswith("-"):
+        return argv[0], argv[1], None
+    if len(argv) == 4 and argv[0] == "accept" and not argv[1].startswith("-") and argv[2] == "--digest":
+        if not digest.well_formed(argv[3]):
+            raise Usage(digest.SHAPE)
+        return "accept", argv[1], argv[3]
+    raise Usage(USAGE)
+
+
+def main(argv, stdin, out, err, cwd, terminal=False):
+    """Run one command from `cwd`. Returns the exit code: 0 done or already accepted, 1 refused with nothing written, 2 usage."""
+    try:
+        command, record, given = arguments(argv)
+        if command == "preview":
+            return preview(record, out, cwd)
+        return accept(record, given, stdin, out, cwd, terminal)
+    except Usage as exc:
+        err.write("%s\n" % exc)
+        return 2
+    except Refused as exc:
+        err.write("refused: %s\n" % exc)
+        return 1
+    except identity.IdentityError as exc:
+        err.write("refused: %s\n" % display.ascii_text(str(exc))[:300])
+        return 1
+    except OSError as exc:
+        err.write("refused: the command could not be completed (%s)\n" % display.ascii_text(exc.strerror or "error")[:80])
+        return 1
+
+
+def _terminal():
+    try:
+        return os.isatty(0) and os.isatty(1)
+    except OSError:
+        return False
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:], sys.stdin, sys.stdout, sys.stderr, os.getcwd(), _terminal()))

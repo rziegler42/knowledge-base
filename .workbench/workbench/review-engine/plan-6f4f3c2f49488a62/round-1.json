@@ -1,0 +1,50 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Candidate line",
+      "problem": "The plan declares `Candidate: none`, but project policy requires work to move from a roadmap candidate into a plan. This leaves the plan without the required source and makes its scope and ordering untraceable.",
+      "severity": "blocker",
+      "suggestion": "Create and name an owner-acknowledged roadmap candidate, then revise the plan to trace its goal, scope, and increments to that candidate."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increments A–J, Evidence",
+      "problem": "Each increment calls only for verification and a local commit. Project policy requires every increment to be verified, reviewed, and then committed; the plan has no review step, reviewer checkpoint, or review record before its commits.",
+      "severity": "major",
+      "suggestion": "Add a review step and recorded review result before each `safe-git` commit, including how findings are resolved or accepted."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Scope; Increment A",
+      "problem": "The plan specifies one library root with an index folder inside it. This drifts from `library.md`'s agreed two-root design: a bulk root for books and a separate fast index root, with config located separately from either root.",
+      "severity": "major",
+      "suggestion": "Use separately configured bulk and index roots from setup onward, or explicitly narrow and amend the applicable spec before relying on the one-root design."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Increments B–F",
+      "problem": "The plan only makes manifests atomic. It does not build book payloads in a same-volume incoming area, verify them, rename them into place, and mark them immutable/read-only. That drifts from the safe-writing behavior in `book.md` and `pipeline.md`, so an interrupted capture or conversion can leave a partially filed payload.",
+      "severity": "major",
+      "suggestion": "Add an incoming-area/atomic-promotion design and interruption tests for original and derived payloads; make later stages consume only promoted payloads."
+    },
+    {
+      "id": "R1-F5",
+      "location": "Non-goals; Increments C and F",
+      "problem": "The plan intentionally treats listing pages as ordinary raw captures marked partial and gives them no special handling. `book.md` specifies listings as pointer-only and not converted as documents, so the proposed conversion behavior drifts from the named spec.",
+      "severity": "major",
+      "suggestion": "Either exclude listings from conversion and file them as pointers, or record an explicit approved spec change that permits the first-slice behavior."
+    },
+    {
+      "id": "R1-F6",
+      "location": "Completion criteria 6; Increment J",
+      "problem": "The plan makes the live walk-through a completion criterion but permits the owner to decline all live fetches. It defines no skipped outcome, so the plan cannot become complete in the valid case where the owner declines J.",
+      "severity": "major",
+      "suggestion": "Make J an explicitly optional, separately approved follow-up, or define an owner-declined result that satisfies the plan’s completion conditions."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan hash matches the supplied SHA-256, but it has a missing roadmap candidate and several process/design drifts that need resolution before approval.",
+  "verdict": "changes_needed"
+}

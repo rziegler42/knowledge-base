@@ -1,0 +1,83 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-04T14:11:12Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The record said the engine did not depend on the workbench, yet its model calls go through a bridge. I corrected that wording, added an unattended bridge call as a second part of the stub gate, and added a second fallback in which the model stages run only when the owner starts them. A direct route to the model server needs a new decision."
+    },
+    {
+      "at": "2026-11-04T14:13:45Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "The evidence cited three files of another repository without provenance. I added the repository address, commit, retrieval date and sha256 of each file, and stated that the hashes were taken after the reading. The conclusion stays limited to what the installer design says."
+    }
+  ],
+  "format": 1,
+  "generation": 5,
+  "kind": "adr",
+  "path": "docs/decisions/2026-11-04-knowledge-base-is-a-standalone-package.md",
+  "rounds": [
+    {
+      "at": "2026-11-04T14:10:32Z",
+      "bridge": "ask-codex",
+      "document_sha256": "b497acebaf7d87ba649c193149091c8461d376bdeab9464f99a47e849768c5c2",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra"
+      },
+      "sha256": "21f32b681709a24284a7e269a1a6e824a3427f2a760610da9a6832f755a04c96",
+      "usage": {
+        "input_tokens": 104833,
+        "output_tokens": 1999,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-04T14:24:15Z",
+      "bridge": "ask-codex",
+      "document_sha256": "a4aad9c930e95a69bfc13526160025db75c19f682bc7501515aed4f337c28263",
+      "file": "round-2.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra"
+      },
+      "sha256": "a38f26fd46d2473bfea60c4cf11f34d4ce1d4ae9a7617dd78681439cc5453db4",
+      "usage": {
+        "input_tokens": 150779,
+        "output_tokens": 2186,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "8fa66fe089bf3d20cdaceafe4502f2980555e1826bf9b164e48b37e8cacf000c",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
