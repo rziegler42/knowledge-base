@@ -47,6 +47,7 @@ class Conversion:
 
     def __init__(self, blocks, quality, pages, title=None):
         self.blocks, self.quality, self.pages, self.title = blocks, quality, pages, title
+        self.has_headings = any(b.kind == "heading" for b in blocks)  # once here, not for every locator made
         self.text = "\n\n".join(b.text for b in blocks)
         self.chars = len(self.text)
 

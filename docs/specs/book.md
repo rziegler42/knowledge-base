@@ -293,7 +293,9 @@ All of these are provisional until the spec is approved.
 - A pointer is recorded with its pin, and promoting it adds a captured version without changing the id.
 - A weeded book keeps its card, pointer and hashes, and a removed book is not fetched again.
 - A reconversion that shifts anchors leaves the book's themes re-anchorable by their excerpt hash.
-- A reader that meets an older format number reads it, and nothing is migrated without the owner's command.
+- A reader that meets an older format number reads it, and nothing is migrated without the owner's command. The search index is not a
+  book format but a derived file: one of another format number is refused with the instruction to build it again, and building it
+  again is the owner's command.
 
 ## Open questions
 

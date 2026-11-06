@@ -123,25 +123,6 @@ def _completeness(version, ref):
             "compared": bool(check.get("compared")), "reasons": [textutil.clean(str(x), 500) for x in reasons[:10]]}
 
 
-def _window(text, start, chars):
-    """The piece of `text` from `start`: at most `chars` characters, cut at a word, and where the next piece starts (None at the
-    end). Returns (end, next_offset)."""
-    total = len(text)
-    if start + chars >= total:
-        return total, None
-    end = start + chars
-    floor = start + chars // 2
-    cut = max(text.rfind(" ", floor, end + 1), text.rfind("\n", floor, end + 1))  # the last place to break, in the later half
-    if cut > floor:
-        end = cut
-    following = end
-    while following < total and text[following].isspace():
-        following += 1
-    if following >= total:
-        return total, None
-    return end, following
-
-
 def _read(store, book_id, loc, version_id, chars):
     root = store.read_book(book_id)
     if root.get("state") != "active":
@@ -188,7 +169,7 @@ def _read(store, book_id, loc, version_id, chars):
         return {**base, "status": "not_found", "reason": "the passage is not in the text of the book as it is now"}
     block = conversion.blocks[found["block"]]
     start = loc["at"]["offset"] if found["status"] == "found" and loc["kind"] == "offset" else block.start
-    end, following = _window(conversion.text, start, chars)
+    end, following = textutil.window(conversion.text, start, chars)
     body = conversion.text[start:end].rstrip()
     return {
         **base, "status": found["status"], "matches": found["matches"],

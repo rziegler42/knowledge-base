@@ -43,3 +43,36 @@ def literal(text, limit=80):
     in a message without a newline, an escape sequence or a direction mark getting through."""
     shown = ascii(str(text))
     return shown if len(shown) <= limit else shown[: limit - 3] + "..."
+
+
+def window(text, start, chars):
+    """The piece of `text` from `start`: at most `chars` characters, cut at a word, and where the next piece starts (None at the
+    end). Returns (end, next_offset)."""
+    total = len(text)
+    if start + chars >= total:
+        return total, None
+    end = start + chars
+    floor = start + chars // 2
+    cut = max(text.rfind(" ", floor, end + 1), text.rfind("\n", floor, end + 1))  # the last place to break, in the later half
+    if cut > floor:
+        end = cut
+    following = end
+    while following < total and text[following].isspace():
+        following += 1
+    if following >= total:
+        return total, None
+    return end, following
+
+
+def pieces(text, chars):
+    """The consecutive pieces of `text`, each at most `chars` characters and cut at a word where one is near the end, as a list
+    of (start, end). Each next one starts at the first character that is not space, so the pieces hold every word once. Reading
+    time grows with the length of the text alone."""
+    found, start, total = [], 0, len(text)
+    while start < total:
+        end, following = window(text, start, chars)
+        found.append((start, end))
+        if following is None:
+            break
+        start = following
+    return found

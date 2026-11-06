@@ -176,6 +176,190 @@ class SearchResultsTest(SearchCase):
         self.assertEqual(by_book, {a: "Ocelots of the Americas", b: "", c: "Chosen by the owner"})
 
 
+WORDS_69K = [f"w{n:05d}" for n in range(9857)]  # 7 characters each with its space: a block of about 69,000 characters
+ESSAY = " ".join(WORDS_69K)
+
+
+class LongBlockTest(SearchCase):
+    """A block longer than a piece is indexed as several rows, each with a place of its own."""
+
+    def essay_book(self, headings=False, text=ESSAY):
+        self.approve_all()
+        blocks = ([h("Talk")] if headings else []) + [p(text)]
+        book, version = self.add_book("An essay", "web page", "page.html", page(*blocks))
+        process.process(self.store)
+        return book, version
+
+    def rows(self, book):
+        with sqlite3.connect(self.db_path()) as db:
+            return db.execute("SELECT b.id, b.block, b.locator, f.text FROM blocks b JOIN blocks_fts f ON f.rowid = b.id "
+                              "WHERE b.book_id = ? ORDER BY b.id", (book,)).fetchall()
+
+    def test_a_block_of_69000_characters_is_about_as_many_rows_as_pieces_and_none_is_longer_than_a_piece(self):
+        book, version = self.essay_book()
+        rows = self.rows(book)
+        self.assertTrue(68_000 < len(ESSAY) < 70_000)
+        self.assertGreaterEqual(len(rows), len(ESSAY) // index.CHUNK_CHARS)
+        self.assertLessEqual(len(rows), 2 * len(ESSAY) // index.CHUNK_CHARS)
+        self.assertTrue(all(len(text) <= index.CHUNK_CHARS for _, _, _, text in rows))
+        self.assertEqual({block for _, block, _, _ in rows}, {0})
+        self.assertEqual(" ".join(text for _, _, _, text in rows).split(), WORDS_69K)  # no gap and no repeat
+        converted = convert.load_in_use(self.store, book, version)[1].text
+        for _, _, loc, text in rows:  # each row is the converted text at the place its locator names
+            offset = json.loads(loc)["at"]["offset"]
+            self.assertEqual(converted[offset:offset + len(text)], text)
+            self.assertFalse(text[0].isspace() or text[-1].isspace())
+
+    def test_a_word_in_the_middle_of_a_long_block_finds_the_piece_and_a_read_from_its_locator_starts_near_it(self):
+        book, version = self.essay_book()
+        hits = self.search("w05000")
+        self.assertEqual(len(hits), 1)
+        loc = hits[0]["locator"]
+        self.assertEqual(loc["kind"], "offset")
+        conversion = convert.load_in_use(self.store, book, version)[1]
+        here = conversion.text.index("w05000")
+        self.assertLessEqual(loc["at"]["offset"], here)
+        self.assertLess(here - loc["at"]["offset"], index.CHUNK_CHARS)
+        from kb import read
+        got = read.read(self.store, book, loc, version_id=version)
+        self.assertEqual((got["status"], got["offset"]), ("found", loc["at"]["offset"]))
+        self.assertIn("w05000", got["text"])
+        self.assertNotIn("w00000", got["text"])  # not the top of the page
+
+    def test_a_long_block_under_a_heading_is_in_pieces_too_and_a_short_block_keeps_its_own_kind_of_locator(self):
+        book, version = self.essay_book(headings=True)
+        self.assertEqual(self.search("w05000")[0]["locator"]["kind"], "offset")
+        other = self.add_book("Short", "web page", "page.html", OCELOT)
+        process.process(self.store)
+        self.assertEqual({r["locator"]["kind"] for r in self.search("ocelot") if r["book_id"] == other[0]}, {"section"})
+        paper_book = self.add_book("A paper", "preprint", "paper.pdf", TIDES)
+        process.process(self.store)
+        self.assertEqual({r["locator"]["kind"] for r in self.search("syzygy") if r["book_id"] == paper_book[0]}, {"page"})
+
+    def test_a_long_paragraph_of_a_pdf_is_in_pieces_and_a_hit_reads_from_its_page_text(self):
+        self.approve_all()
+        long_paragraph = " ".join(f"v{n:05d}" for n in range(1500))
+        book, version = self.add_book("Long PDF", "preprint", "paper.pdf", paper("Short first page.", long_paragraph))
+        process.process(self.store)
+        hit = self.search("v00700")[0]
+        self.assertEqual(hit["locator"]["kind"], "offset")
+        from kb import read
+        got = read.read(self.store, book, hit["locator"], version_id=version)
+        self.assertEqual(got["status"], "found")
+        self.assertIn("v00700", got["text"])
+
+    def test_a_block_of_one_very_long_word_is_cut_at_the_size_of_a_piece(self):
+        book, version = self.essay_book(text="x" * 5000)
+        rows = self.rows(book)
+        self.assertEqual([len(text) for _, _, _, text in rows], [2000, 2000, 1000])
+
+    def test_two_words_in_one_piece_match_together_and_two_in_different_pieces_of_one_block_do_not(self):
+        text = "alpha " + "filler " * 500 + "omega"  # alpha is in the first piece and omega in the second
+        book, version = self.essay_book(text=text)
+        rows = self.rows(book)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(self.search("alpha")), 1)
+        self.assertEqual(len(self.search("omega")), 1)
+        self.assertEqual(len(self.search("alpha filler")), 1)
+        self.assertEqual(self.search("alpha omega"), [])
+
+    def test_the_last_word_of_a_piece_and_the_first_of_the_next_do_not_match_together_and_neighbours_inside_a_piece_do(self):
+        book, version = self.essay_book(text=" ".join(f"d{n:04d}" for n in range(400)))  # 2,800 characters: two pieces
+        rows = self.rows(book)
+        self.assertEqual(len(rows), 2)
+        last, first = rows[0][3].split()[-1], rows[1][3].split()[0]
+        self.assertEqual(self.search(f"{last} {first}"), [])
+        self.assertEqual(len(self.search(last)), 1)
+        self.assertEqual(len(self.search(first)), 1)
+        inside = rows[0][3].split()[-2:]
+        self.assertEqual(len(self.search(" ".join(inside))), 1)
+
+    def test_a_search_gives_the_same_results_after_the_index_is_deleted_and_built_again(self):
+        self.library()
+        book, version = self.essay_book()
+        queries = ["w05000", "w00001", "w09856", "ocelot", "syzygy", "harbour tide", "the"]
+        before = {q: self.search(q, limit=20) for q in queries}
+        os.remove(self.db_path())
+        counts = index.rebuild(self.store)
+        self.assertEqual({q: self.search(q, limit=20) for q in queries}, before)
+        self.assertEqual(self.search("w05000")[0]["locator"], before["w05000"][0]["locator"])
+        self.assertGreater(counts["rows"], counts["blocks"])
+
+    def test_the_counts_name_the_blocks_and_the_rows_and_the_pieces_a_great_block_that_cannot_have_a_locator_are_skipped(self):
+        book, version = self.essay_book()
+        written = index.write_version(self.store, book, version)
+        blocks = len(convert.load_in_use(self.store, book, version)[1].blocks)
+        self.assertEqual(written["blocks"], blocks)
+        self.assertEqual(written["rows"], len(self.rows(book)))
+        self.assertGreater(written["rows"], blocks)
+        self.assertEqual(written["skipped"], 0)
+        grows = self.add_book("Grows", "web page", "page.html", page(p("\ufdfa" * 3000)))
+        process.process(self.store)
+        self.assertEqual(self.rows(grows[0]), [])
+        again = index.write_version(self.store, *grows)
+        self.assertEqual((again["blocks"], again["rows"], again["skipped"]), (0, 0, 2))  # 3000 characters: two pieces, neither has a locator
+
+    def test_the_rows_of_a_long_block_are_adopted_after_a_stop_and_written_again_when_one_is_missing(self):
+        book, version = self.essay_book()
+        before = self.rows(book)
+        facts = index._indexable(self.store, book, version)[2]
+        self.assertTrue(index._current(self.store.cfg["index_root"], book, version, facts))  # every row is there
+        stages.reset(self.store, book, version, "indexed", "test")
+        index.index_version(self.store, book, version)
+        self.assertEqual(self.rows(book), before)  # adopted: the same rows, not written again
+        with sqlite3.connect(self.db_path()) as db:
+            gone = before[3][0]
+            db.execute("DELETE FROM blocks_fts WHERE rowid = ?", (gone,))
+            db.execute("DELETE FROM blocks WHERE id = ?", (gone,))
+        self.assertFalse(index._current(self.store.cfg["index_root"], book, version, facts))  # one row short: not current
+        stages.reset(self.store, book, version, "indexed", "test")
+        index.index_version(self.store, book, version)
+        self.assertEqual([r[1:] for r in self.rows(book)], [r[1:] for r in before])
+
+    def test_the_size_of_a_piece_is_part_of_what_the_rows_are_made_from_even_when_the_number_of_rows_is_the_same(self):
+        book, version = self.essay_book(text=" ".join(f"w{n:04d}" for n in range(350)))  # 2,099 characters: two pieces
+        facts = index._indexable(self.store, book, version)[2]
+        self.assertTrue(index._current(self.store.cfg["index_root"], book, version, facts))
+        with mock.patch.object(index, "CHUNK_CHARS", 1500):
+            changed = index._indexable(self.store, book, version)[2]
+        self.assertEqual((changed["rows"], changed["blocks"]), (facts["rows"], facts["blocks"]))  # two pieces either way, cut elsewhere
+        self.assertNotEqual(changed["signature"], facts["signature"])
+        with mock.patch.object(index, "CHUNK_CHARS", 1500):
+            self.assertFalse(index._current(self.store.cfg["index_root"], book, version, changed))  # rows cut at 2,000 are not current
+
+    def test_ties_between_the_pieces_of_a_block_come_in_their_order(self):
+        text = " ".join(["same words in each piece"] * 300)  # 7,500 characters
+        book, version = self.essay_book(text=text)
+        hits = self.search("same words", limit=50)
+        offsets = [h_["locator"]["at"]["offset"] for h_ in hits]
+        self.assertGreater(len(offsets), 3)
+        by_rank = {}
+        for hit in hits:
+            by_rank.setdefault(hit["rank"], []).append(hit["locator"]["at"]["offset"])
+        for tied in by_rank.values():
+            self.assertEqual(tied, sorted(tied))
+
+    def test_an_index_of_an_older_format_is_refused_with_the_instruction_to_build_it_again(self):
+        self.library()
+        with sqlite3.connect(self.db_path()) as db:
+            db.execute("PRAGMA user_version = 1")
+        with self.assertRaises(KbError) as cm:
+            self.search("ocelot")
+        self.assertIn("python3 -m kb index", str(cm.exception))
+        counts = index.rebuild(self.store)  # the owner's command builds it again
+        self.assertGreater(counts["rows"], 0)
+        self.assertEqual(len(self.search("syzygy")), 1)
+
+    def test_indexing_many_great_blocks_costs_little(self):
+        self.approve_all()
+        text = "lorem ipsum dolor sit amet " * 8500  # 229,500 characters (the fake tool hands back at most a million)
+        self.add_book("Great", "web page", "page.html", page(*[p(text) for _ in range(4)]))
+        started = time.monotonic()
+        process.process(self.store)
+        self.assertLess(time.monotonic() - started, 60)
+        self.assertGreater(len(self.search("lorem ipsum", limit=5)), 0)
+
+
 class QueryIsTextTest(SearchCase):
     def test_nothing_in_a_query_is_syntax_and_the_index_is_unharmed(self):
         books = self.library()
@@ -372,7 +556,7 @@ class RebuildTest(SearchCase):
         process.process(self.store)
         self.assertEqual(len(self.search("numbat")), 1)
         with sqlite3.connect(self.db_path()) as db:
-            self.assertEqual(db.execute("SELECT blocks, skipped FROM versions").fetchone(), (1, 1))
+            self.assertEqual(db.execute("SELECT blocks, skipped FROM versions").fetchone(), (1, 2))  # 4,000 characters: two pieces, each left out
 
 
 class FlaggedBookTest(SearchCase):
@@ -453,7 +637,7 @@ class IndexStageTest(SearchCase):
         book, version = books["tides"]
         self.assertGreater(self.rows_of(book)[0], 0)
         self.store.set_state(book, "removed")
-        self.assertEqual(index.write_version(self.store, book, version), {"blocks": 0, "skipped": 0})
+        self.assertEqual(index.write_version(self.store, book, version), {"blocks": 0, "rows": 0, "skipped": 0})
         self.assertEqual(self.rows_of(book), (0, 0))  # the rows it had are taken out
         other, other_version = self.add_book("Other", "web page", "page.html", OCELOT, scanned="skipped")
         convert.convert_version(self.store, other, other_version)
@@ -692,8 +876,8 @@ class CostTest(SearchCase):
             started = time.monotonic()
             found = self.search(query)
             self.assertLess(time.monotonic() - started, 3, query)  # it took hours for the biggest block
-            self.assertEqual(len(found), 1)
-            self.assertLessEqual(len(found[0]["excerpt"]), len(search.MARKER) + 1 + search.EXCERPT_CHARS + 4)
+            self.assertEqual(len(found), search.DEFAULT_LIMIT)  # the block is in some 400 pieces, and every one has the word
+            self.assertTrue(all(len(f["excerpt"]) <= len(search.MARKER) + 1 + search.EXCERPT_CHARS + 4 for f in found))
 
     def test_an_excerpt_is_short_one_line_and_around_the_first_match(self):
         self.approve_all()

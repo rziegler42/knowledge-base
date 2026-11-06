@@ -267,7 +267,7 @@ a test that names the old version or assumes a stage never goes back. Increment 
   charsets is unchanged. Say if you want one.
 - **Left for the owner:** the word to commit A.
 
-### Increment B — The title of a web page (implemented and reviewed, not yet committed; waits for the owner's word on a security review)
+### Increment B — The title of a web page (committed as 57887a6bcda4cb40d8de5630ad00d07ff973a669, not pushed)
 
 - **Changed:** `engine/kb/extract_std.py` (the first `<title>` outside an SVG is read, to 2,000 characters, and written to `blocks.json`
   as an optional `title` of at most 300), `engine/kb/convert.py` (the optional `title` is checked and cleaned in `parse_blocks_json`;
@@ -314,3 +314,67 @@ a test that names the old version or assumes a stage never goes back. Increment 
   step, unclosed title) all caught.
 - **Left for the owner:** the word to commit B, and whether to open a small plan for finding 4 (checking titles where they are stored
   or shown, for arXiv titles and the citation line).
+
+### Increment C — Index long blocks in pieces (implemented, reviewed and security-reviewed, not yet committed)
+
+- **Changed:** `engine/kb/index.py` (a block longer than `CHUNK_CHARS` = 2,000 is several rows, each cut at a word and each with an
+  `offset` locator for its own start; format number 2; counts `blocks`, `rows`, `skipped`; the resume check compares rows),
+  `engine/kb/locator.py` (new `in_block`, which names a place in a given block without scanning the blocks; `MAX_LOOKAHEAD`),
+  `engine/kb/textutil.py` (`window`, moved from `read.py`, and new `pieces`), `engine/kb/read.py` (uses `textutil.window`),
+  `engine/kb/search.py` (tie order ends with the row, docstrings), tests in `test_search.py` (new `LongBlockTest`), `test_read.py`
+  (`PieceReadTest`; `WindowTest` moved to `test_textutil.py`), `test_textutil.py`, `test_convert.py`, `engine/README.md`, and the
+  sentence about older formats in `docs/specs/book.md` (the search index is derived: another format is refused with the instruction to
+  build it again, which is the owner's command).
+- **Verification run:** `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest engine.tests.test_search engine.tests.test_read
+  engine.tests.test_textutil engine.tests.test_convert` (Python 3.15.0): 325 tests, OK (`test_convert` is added to the plan's list
+  because `first_words` in the locator changed). The new tests failed first. Break-it run on 18 places: all caught, after four
+  fixes of the tests (a dead `rstrip` was removed; the resume check is now tested through `index._current`; pieces must start and
+  end at a word and equal the converted text at their locator's offset). One mutation cannot be observed: dropping the row from the
+  end of the search's `ORDER BY`, because SQLite returns ties in row order anyway; the key is kept so the order is stated.
+- **Expected changes of existing tests:** a search in an 800 KB block of one repeated word now returns the full 10 results (about 400
+  pieces) and not one; a 4,000-character block built to grow now counts 2 skipped (two pieces) and not 1.
+- **Review:** independent `reviewer` agent, 2 exchanges. Round 1 found one **blocking** problem, which I reproduced before fixing: the
+  first twelve words of a place were looked for to the end of its block, so a long block with hardly a word in it (a rule of dots)
+  made every piece read the rest of the block, which is quadratic: 1.1 s, 3.8 s and 17.7 s for 0.5, 1 and 2 million characters,
+  and hours near the 50-million limit, from a crafted page or PDF. Fixed with `MAX_LOOKAHEAD` = 16,384 characters, used by every
+  use of those words (making, naming, checking a locator), so they agree: 4 million characters now take 0.4 s and 10 million 1.0 s.
+  The second look found no blocking finding. Costs the owner should know: (a) a place with fewer than twelve words in the next 16,384
+  characters has the words that are there, or none (then its first 64 characters); a locator issued before on such text is found
+  again by its words (`found_by_text`) and not by its place; (b) a word cut by the bound can never equal a whole word, so a locator
+  on such text made against another conversion may be `not_found`; (c) a run of text with no space or line break (a very long
+  address, Chinese or Japanese without spaces) is cut at 2,000 characters wherever that falls, and a query for a run across the cut
+  does not match; (d) `process` on an index of format 1 reports the instruction to run `index` for each version until it is run.
+- **Effect on the owner's library:** the index in the owner's index root is format 1. After this is committed, `search` is refused with
+  "run `python3 -m kb index`" until the owner runs it. Nothing was run on the owner's library.
+- **Seen, not caused here:** none new (the `ResourceWarning` of an existing test, noted under B, is still there).
+- **Security review (run on the owner's word, 2026-11-06):** one `security-reviewer` agent worked on a copy with a fake store and
+  fake conversions (not the real converter tools or their 1,000,000-byte output cap), sizes up to 2 MB a block and 10 MB in all; 50 MB
+  figures are extrapolated. No critical or high finding. Found sound (tested): coverage of the text by the pieces and every piece
+  locator resolving to its own block; `next` chains over random sizes, through text built to grow; hostile locators through
+  `read.read` (refused, or `found_by_text`/`not_found`, never wrong text); FTS syntax in text and queries; transactional writes with
+  a rollback on an error, a stop or a full memory, and the old index left byte for byte after a failed rebuild; the refusal of a
+  format-1 file, an extra trigger or view, an empty file, a file that is not a database, and a read-only index folder, with `process`
+  reporting once for each version and neither looping nor stalling; no private path in any result. Findings:
+  1. *Medium, fixed:* `locator._kind_of` looked at every block for a heading on every locator made, so a page of N short blocks with
+     no early heading cost N squared in the index (10 s for 20,000 blocks; extrapolated to some 16 minutes near the block limit, from a
+     crafted page of about 1.5 MB). It predates C, which put it on the path under review. `Conversion` now finds out once
+     (`has_headings`); a test fails without it, and the break-it run catches putting the scan back.
+  2. *Informational, fixed:* the index signature did not include the size of a piece, so rows cut at another size but with the same
+     number of rows would have been taken as current. `chunk` is now in the facts that the signature covers (tested with a case of
+     equal row counts). Effect: an index of format 2 written before this fix has another signature, so each version is written
+     once again by the next `process`; nothing is refused.
+  3. *Low, accepted:* one long block can fill a whole page of results. A 1.8 MB block of one repeated word gave 900 dense pieces and a
+     search for it returned 50 of 50 results from that book. Nine hundred short blocks did the same before; it now costs a crafted
+     page one block. A cap per book in the results, or grouping, is not done here.
+  4. *Low, accepted and in the README:* the check that text does not grow too much when normalised runs on the window of up to
+     16,384 characters that starts at a piece, so a clean piece just before a stretch of text that grows (some 800 characters of
+     U+FDFA) is left out of the index and counted as skipped, though `next` still reads it.
+  5. *Low, accepted:* text that grows under normalisation is expensive though linear: about 4 ms for each piece skipped, some 100 s
+     for 50 MB of it, at each `index`, twice in `index_version`, and in a rebuild. Testing the whole block once would avoid it.
+  6. *Informational, accepted:* after a change of format, a version marked `indexed` is not revisited by `process` (only `search`
+     says to run `index`); `forget_inactive` does nothing on an unusable index, which is harmless because it is refused.
+  Second look at the two fixes: an independent `reviewer` agent, no findings (it also confirmed that `Conversion` is built in one
+  place, `build`, and that no other whole-conversion scan is on the index write path).
+- **Verification after the fixes:** the same four modules, 327 tests, OK; break-it run on the two fixes, all caught.
+- **Left for the owner:** the word to commit C, whether findings 3 to 5 should be fixed later, and that the real index must be built
+  again with `python3 -m kb index` once C is committed.

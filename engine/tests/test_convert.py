@@ -13,7 +13,7 @@ from engine.tests.test_convert_run import PROBE, SandboxCase, approve
 from engine.tests.test_store import StoreCase
 
 from kb import __version__ as kb_version
-from kb import KbError, approvals, config, convert, convert_html, convert_pdf, convert_run, locator, scan, stages
+from kb import KbError, approvals, config, convert, convert_html, convert_pdf, convert_run, locator, scan, stages, textutil
 
 
 def tool_json(*blocks, truncated=False, fmt=1, **extra):
@@ -312,6 +312,84 @@ class LocatorTest(unittest.TestCase):
         self.assertEqual(later["at"], {"offset": c.text.index("single")})
         self.assertNotEqual(later["excerpt"]["sha256"], loc["excerpt"]["sha256"])
 
+    def test_a_place_inside_a_block_of_any_conversion_has_an_offset_locator_found_again_by_it(self):
+        words = [f"w{n:04d}" for n in range(400)]
+        for c in (self.web(h("Intro"), p(" ".join(words)), p("a short closing paragraph")),
+                  self.pdf((" ".join(words) + "\n\nAnd a second paragraph.\n\x0c").encode())):
+            at = c.blocks[1 if c.pages is None else 0].start + c.blocks[1 if c.pages is None else 0].text.index("w0200")
+            index = 1 if c.pages is None else 0
+            loc = locator.in_block(REF, c, index, at)
+            self.assertEqual((loc["kind"], loc["at"], loc["conversion"]), ("offset", {"offset": at}, REF))
+            self.assertEqual(loc, locator.at_offset(REF, c, at))  # the same locator, without looking through every block
+            found = locator.resolve(loc, REF, c)
+            self.assertEqual((found["status"], found["block"]), ("found", index))
+            self.assertEqual(locator.first_words(c.text[at:], 1), ["w0200"])
+            self.assertNotEqual(loc["excerpt"]["sha256"], locator.make(REF, c, index)["excerpt"]["sha256"])
+
+    def test_a_place_inside_a_block_must_be_inside_that_block(self):
+        c = self.web(h("Intro"), p("alpha beta gamma"), p("delta epsilon"))
+        for index, offset in ((1, c.blocks[1].start - 1), (1, c.blocks[1].end), (1, c.blocks[2].start), (9, 0), (-1, 0), (True, 0)):
+            with self.assertRaises(KbError, msg=(index, offset)):
+                locator.in_block(REF, c, index, offset)
+        for offset in ("3", 3.0, None, -1, True, 10 ** 10):
+            with self.assertRaises(KbError, msg=offset):
+                locator.in_block(REF, c, 1, offset)
+
+    def test_a_place_with_no_words_is_named_by_its_place_and_its_characters_and_text_built_to_grow_is_refused(self):
+        c = self.web(h("Intro"), p("alpha ... --- ??? !!! beta"), p("\ufdfa" * 300))
+        at = c.blocks[1].start + c.blocks[1].text.index("...")
+        loc = locator.in_block(REF, c, 1, at + 6)
+        self.assertEqual(loc["excerpt"]["words"], 1)  # "beta" is the first word after the punctuation
+        dots = self.web(h("Intro"), p("!!!! ???? ----"))
+        punct = locator.in_block(REF, dots, 1, dots.blocks[1].start + 5)
+        self.assertEqual(punct["excerpt"]["words"], 0)
+        self.assertEqual(locator.resolve(punct, REF, dots)["status"], "found")
+        with self.assertRaises(KbError):
+            locator.in_block(REF, c, 2, c.blocks[2].start + 3)  # a character that becomes eighteen: no locator, as for make()
+
+    def test_naming_many_places_in_great_blocks_costs_little(self):
+        c = self.web(*[p(("lorem ipsum dolor " * 12000)[:200_000]) for _ in range(30)])
+        started = time.monotonic()
+        for block in c.blocks:
+            for offset in range(block.start, block.end - 100, 2000):
+                locator.in_block(REF, c, block.index, offset)
+        self.assertLess(time.monotonic() - started, 10)
+
+    def test_naming_every_piece_of_a_great_block_with_hardly_a_word_in_it_costs_little_and_grows_with_its_size_alone(self):
+        times = []
+        for n in (250_000, 1_000_000):
+            c = self.web(p(". " * n))  # no words at all
+            block = c.blocks[0]
+            started = time.monotonic()
+            for start, end in textutil.pieces(block.text, 2000):
+                locator.in_block(REF, c, 0, block.start + start)
+            times.append(time.monotonic() - started)
+        self.assertLess(times[1], 5)  # it took 18 seconds for two million characters before the look-ahead was bounded
+        self.assertLess(times[1], 12 * max(times[0], 0.05))  # four times the text, not sixteen times the time
+
+    def test_naming_every_block_of_a_page_of_many_short_blocks_with_no_heading_costs_little(self):
+        times = []
+        for n in (5_000, 20_000):
+            c = self.web(*[p(f"short block number {k}") for k in range(n)])  # no heading: the kind is found by looking at every block
+            started = time.monotonic()
+            for index in range(n):
+                locator.make(REF, c, index)
+            times.append(time.monotonic() - started)
+        self.assertLess(times[1], 4)  # about 8 seconds for twenty thousand blocks while each call looked at every block
+        self.assertLess(times[1], 12 * max(times[0], 0.05))  # four times the blocks, not sixteen times the time
+
+    def test_the_words_of_a_place_are_looked_for_only_a_bounded_way_on_and_every_use_of_them_agrees(self):
+        far = self.web(h("Intro"), p(". " * 20_000 + "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu"))
+        block = far.blocks[1]
+        made, inside, at = locator.make(REF, far, 1), locator.in_block(REF, far, 1, block.start), locator.at_offset(REF, far, block.start)
+        self.assertEqual(made["excerpt"], inside["excerpt"])
+        self.assertEqual(inside, locator.at_offset(REF, far, block.start))
+        self.assertLess(inside["excerpt"]["words"], 12)  # the twelve words are beyond the look-ahead
+        self.assertEqual(locator.resolve(inside, REF, far)["status"], "found")
+        self.assertEqual(locator.first_words(far.text, 12), locator.first_words(far.text[:locator.MAX_LOOKAHEAD], 12))
+        near = self.web(p(". " * 100 + "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu"))
+        self.assertEqual(locator.make(REF, near, 0)["excerpt"]["words"], 12)
+
     def test_it_is_found_again_by_its_own_conversion_at_the_same_place(self):
         c = self.web(*self.DOC)
         for index in range(len(c.blocks)):
@@ -454,8 +532,11 @@ class LocatorTest(unittest.TestCase):
         loc = locator.make(REF, big, 0)
         self.assertLess(time.monotonic() - started, 0.5)
         self.assertEqual(loc["excerpt"]["words"], 12)
-        self.assertEqual(locator.make(REF, self.web(p("a" + " " * 100_000 + "b c")), 0)["excerpt"]["words"], 3)  # words far apart are found
-        self.assertEqual(locator.make(REF, self.web(p("x" * 50_000 + " y")), 0)["excerpt"]["words"], 2)  # and so are long ones
+        self.assertEqual(locator.make(REF, self.web(p("a" + " ." * 3_000 + " b c")), 0)["excerpt"]["words"], 3)  # words far apart are found
+        self.assertEqual(locator.make(REF, self.web(p("x" * 10_000 + " y")), 0)["excerpt"]["words"], 2)  # and so are long ones
+        # but only as far on as the look-ahead: beyond it there are no more words, and a longer word is read as far as that
+        self.assertEqual(locator.make(REF, self.web(p("a" + " ." * 50_000 + " b c")), 0)["excerpt"]["words"], 1)
+        self.assertEqual(locator.make(REF, self.web(p("x" * 50_000 + " y")), 0)["excerpt"]["words"], 1)
 
     def test_a_locator_with_odd_numbers_or_strings_is_refused(self):
         good = locator.make(REF, self.web(*self.DOC), 1)

@@ -562,35 +562,32 @@ class SecurityReviewTest(ReadCase):
         self.assertIn("date not recorded", self.read_hit("dawn")["citation"])
 
 
-class WindowTest(unittest.TestCase):
-    """Where a piece ends and the next begins, on texts made for it."""
+class PieceReadTest(ReadCase):
+    def test_a_hit_in_the_middle_of_a_flat_essay_reads_the_passage_and_not_the_top_and_next_goes_on_from_there(self):
+        self.approve_all()
+        words = [f"w{n:05d}" for n in range(9857)]
+        book, version = self.add_book("An essay", "web page", "page.html", page(p(" ".join(words))))
+        process.process(self.store)
+        got = self.read_hit("w05000")
+        self.assertEqual(got["status"], "found")
+        self.assertIn("w05000", got["text"])
+        self.assertNotIn("w00000", got["text"])
+        self.assertEqual(got["matches"], 1)
+        self.assertGreater(got["offset"], 30_000)
+        following = read.read(self.store, book, got["next"], version_id=version)
+        self.assertEqual(following["status"], "found")
+        self.assertEqual(following["offset"], got["end"] + 1)  # the next word after the space
+        self.assertTrue(got["text"].split("\n")[1].split()[-1] < following["text"].split("\n")[1].split()[0])
 
-    def test_a_text_that_fits_is_one_piece_with_nothing_after_it(self):
-        text = "alpha beta gamma delta"
-        self.assertEqual(read._window(text, 0, 22), (22, None))
-        self.assertEqual(read._window(text, 0, 100), (22, None))
-        self.assertEqual(read._window(text, 6, 16), (22, None))  # from the middle, exactly to the end
-
-    def test_a_text_that_does_not_fit_is_cut_at_the_last_break_in_the_later_half(self):
-        text = "aaaa bbbb cccc dddd eeee ffff"  # spaces at 4, 9, 14, 19, 24
-        self.assertEqual(read._window(text, 0, 17), (14, 15))
-        self.assertEqual(read._window(text, 0, 12), (9, 10))
-        self.assertEqual(read._window(text, 5, 12), (14, 15))
-
-    def test_a_line_break_is_a_break_too(self):
-        text = "a" * 60 + "\n" + "b" * 60
-        self.assertEqual(read._window(text, 0, 100), (60, 61))
-
-    def test_a_text_with_no_break_in_the_later_half_is_cut_at_the_amount(self):
-        text = "aaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"  # the only space is in the first half
-        self.assertEqual(read._window(text, 0, 40), (40, 40))
-        self.assertEqual(read._window("a" * 300, 0, 100), (100, 100))
-
-    def test_what_is_left_after_a_cut_is_not_just_space(self):
-        self.assertEqual(read._window("aaaa bbbb      ", 0, 9), (15, None))  # nothing but space follows, so it is the end
-
-    def test_the_next_piece_begins_at_the_first_character_that_is_not_space(self):
-        self.assertEqual(read._window("aaaa bbbb \n\n   cccc dddd", 0, 12), (12, 15))  # the piece "aaaa bbbb", then the next word
+    def test_every_word_of_a_long_block_can_be_found_and_read_where_it_is(self):
+        self.approve_all()
+        words = [f"z{n:04d}" for n in range(1200)]
+        book, version = self.add_book("An essay", "web page", "page.html", page(h("Talk"), p(" ".join(words))))
+        process.process(self.store)
+        for word in words[::37]:
+            got = self.read_hit(word)
+            self.assertEqual(got["status"], "found", word)
+            self.assertIn(word, got["text"], word)
 
 
 class OffsetLocatorTest(ReadCase):

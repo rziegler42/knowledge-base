@@ -20,6 +20,8 @@ from . import KbError, convert, textutil
 VERSION = 1
 KINDS = ("section", "page", "offset")
 WINDOW = 12
+MAX_LOOKAHEAD = 16_384  # how far on from a place its first twelve words are looked for: a place in a text with hardly a word in it
+# (rules of dots, symbols) would otherwise cost the rest of the block, and a long block the square of its size
 MAX_SEARCH_CHARS = 100_000_000  # the normalised text one search may go through: twice the longest text a conversion may have
 MAX_GROWTH = 4  # normalising may lengthen text by this factor (and a little more): real text grows by a small fraction
 LIMIT = 10 ** 9  # the largest number a locator may carry
@@ -42,16 +44,25 @@ def words(text):
     return _WORD.findall(_normalise(text))
 
 
-def first_words(text, n=WINDOW):
-    """The first `n` words of a text, reading only as much of it as that takes (a block may be millions of characters)."""
+def _first_words_in(text, start, end, n):
+    """The first `n` words of text[start:end], reading only as much of it as that takes, without copying the rest, and never
+    more than MAX_LOOKAHEAD characters of it: a place with fewer than `n` words in that stretch has the words that are there (or
+    none), and every use of the words (making a locator, naming a place, checking one) reads the same stretch."""
     if n == 0:
         return []  # no words wanted: nothing to read, and no need to normalise text that may be built to grow
+    end = min(end, start + MAX_LOOKAHEAD)
     size = 4096
     while True:
-        found = words(text[:size])
-        if len(found) > n or size >= len(text):  # more than n words: the n-th is complete even if the cut fell in the next
+        stop = min(end, start + size)
+        found = words(text[start:stop])
+        if len(found) > n or stop >= end:  # more than n words: the n-th is complete even if the cut fell in the next
             return found[:n]
         size *= 4
+
+
+def first_words(text, n=WINDOW):
+    """The first `n` words of a text, reading only as much of it as that takes (a block may be millions of characters)."""
+    return _first_words_in(text, 0, len(text), n)
 
 
 def _hash(parts):
@@ -76,7 +87,7 @@ def _is_int(value, low, high=LIMIT):
 def _kind_of(conversion):
     if conversion.pages is not None:
         return "page"
-    return "section" if any(b.kind == "heading" for b in conversion.blocks) else "offset"
+    return "section" if conversion.has_headings else "offset"
 
 
 def make(ref, conversion, block_index, offset=None):
@@ -101,6 +112,21 @@ def make(ref, conversion, block_index, offset=None):
     return {"v": VERSION, "kind": kind, "at": at,
             "conversion": {"tool": ref["tool"], "version": ref["version"], "generation": ref["generation"]},
             "excerpt": {"words": len(taken), "sha256": _excerpt_hash(taken, source)}}
+
+
+def in_block(ref, conversion, block_index, offset):
+    """An offset locator for a place inside a given block of any conversion: the start of a piece of a long block, which the
+    search index names. Like `at_offset`, but the block is named and not looked for, so it costs what the words cost and not the
+    number of blocks; and like `make`, a place whose text grows too much when normalised has none (a KbError)."""
+    if not _is_int(block_index, 0) or block_index >= len(conversion.blocks):
+        raise KbError(f"the conversion has no block {block_index!r}")
+    block = conversion.blocks[block_index]
+    if not _is_int(offset, block.start) or offset >= block.end:
+        raise KbError("the offset is not inside that block")
+    taken = _first_words_in(conversion.text, offset, block.end, WINDOW)
+    return {"v": VERSION, "kind": "offset", "at": {"offset": offset},
+            "conversion": {"tool": ref["tool"], "version": ref["version"], "generation": ref["generation"]},
+            "excerpt": {"words": len(taken), "sha256": _excerpt_hash(taken, conversion.text[offset:min(block.end, offset + 64)])}}
 
 
 def at_offset(ref, conversion, offset):

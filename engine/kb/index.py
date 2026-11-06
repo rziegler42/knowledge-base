@@ -1,15 +1,19 @@
-"""The keyword index: one SQLite file in the index root, with a row for each block of each converted version.
+"""The keyword index: one SQLite file in the index root, with a row for each block of each converted version, or, for a block
+longer than CHUNK_CHARS, a row for each piece of it.
 
     search.sqlite
       versions     one row per indexed version: its book, title, date added, scan caveats, how complete its conversion
                    was, the conversion the rows come from, and a signature of all that
-      blocks       one row per block: the book, the version, the block's number and its locator (JSON)
-      blocks_fts   the text of each block, in an FTS5 table whose rowid is the row in `blocks`
+      blocks       one row per block, or per piece of a long block: the book, the version, the number of the block it is in
+                   and its locator (JSON). A short block has the locator of its section or page; a piece of a long block has an
+                   `offset` locator for its own start, so a hit in a long page is read from there and not from the top of it
+      blocks_fts   the text of each row, in an FTS5 table whose rowid is the row in `blocks`
 
 Everything a search result shows is copied into the file when it is written, so a search reads this file and nothing else:
 the bulk root can be away. The file is derived from the books and can be thrown away: `rebuild` writes a new one beside the old
 and renames it into place, and gives the same results. Only versions whose conversion is done are indexed, only for a book that
-is active, and a block that cannot have a locator (its text grows too much when normalised) is left out and counted.
+is active, and a block (or a piece of a long one) that cannot have a locator (its text grows too much when normalised) is left
+out and counted.
 
 A file that has anything in it this engine did not put there (a trigger, a view) is refused, read or written, and a rebuild
 replaces it. Writers (a version written, a rebuild, taking out the books put away) take a lock on `search.lock` in the index
@@ -31,7 +35,8 @@ from . import KbError, __version__, convert, locator, stages, textutil
 INDEX_FILE = "search.sqlite"
 LOCK_FILE = "search.lock"
 LOCK_WAIT = 120  # seconds a writer waits for another before it gives up
-FORMAT = 1
+FORMAT = 2  # 2: a long block is in pieces (1 had one row for each block)
+CHUNK_CHARS = 2000  # a block longer than this is indexed in pieces of at most this many characters, cut at a word
 TOOL = f"kb-index {__version__}"
 INACTIVE = ("weeded", "removed", "duplicate")  # the book states that keep a book out of the search
 
@@ -123,19 +128,27 @@ def _indexable(store, book_id, version_id):
         raise KbError("the version has no conversion to index")
     ref, conversion, record = loaded
     check = version.get("conversion_check") or {}
-    rows, skipped = [], 0
+    rows, skipped, blocks = [], 0, 0
     for block in conversion.blocks:
-        try:
-            loc = locator.make(ref, conversion, block.index)
-        except KbError:
-            skipped += 1  # text built to grow when normalised has no locator and is not indexed
-            continue
-        rows.append((block.index, json.dumps(loc, sort_keys=True, separators=(",", ":")), block.text))
+        if len(block.text) <= CHUNK_CHARS:
+            places = [(None, block.text)]
+        else:
+            places = [(block.start + start, block.text[start:end]) for start, end in textutil.pieces(block.text, CHUNK_CHARS)]
+        added = 0
+        for offset, text in places:
+            try:
+                loc = locator.make(ref, conversion, block.index) if offset is None else locator.in_block(ref, conversion, block.index, offset)
+            except KbError:
+                skipped += 1  # text built to grow when normalised has no locator and is not indexed (counted for each piece)
+                continue
+            rows.append((block.index, json.dumps(loc, sort_keys=True, separators=(",", ":")), text))
+            added += 1
+        blocks += 1 if added else 0
     facts = {
         "title": textutil.clean(root.get("title") or "", 300), "added": root.get("added") or "",
         "caveats": version.get("caveats", []), "structure": record["quality"], "partial": bool(check.get("partial")),
         "compared": bool(check.get("compared")), "reasons": check.get("reasons", []), "conversion": ref,
-        "blocks": len(rows), "skipped": skipped,
+        "blocks": blocks, "rows": len(rows), "skipped": skipped, "chunk": CHUNK_CHARS,  # the size of a piece is part of what the rows are
     }
     facts["signature"] = hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()
     return root.get("state"), root.get("current_version"), facts, rows
@@ -161,7 +174,7 @@ def _write(store, book_id, version_id, path):
             with conn:
                 _remove(conn, book_id, version_id)
                 if state != "active":
-                    return {"blocks": 0, "skipped": 0}
+                    return {"blocks": 0, "rows": 0, "skipped": 0}
                 for number, loc, text in rows:
                     _insert_block(conn, book_id, version_id, number, loc, text)
                 ref = facts["conversion"]
@@ -175,12 +188,12 @@ def _write(store, book_id, version_id, path):
                              (current, book_id))
         except sqlite3.Error as e:
             raise IndexWriteError(f"the search index could not be written ({e})") from None
-    return {"blocks": facts["blocks"], "skipped": facts["skipped"]}
+    return {"blocks": facts["blocks"], "rows": facts["rows"], "skipped": facts["skipped"]}
 
 
 def write_version(store, book_id, version_id, path=None):
     """Write the rows of a version, replacing any it had, in one transaction: a failure part way leaves the old rows. A book
-    that is not active has none. Returns {"blocks": n, "skipped": k}. Into the live index it takes the writers' lock."""
+    that is not active has none. Returns {"blocks": the blocks indexed, "rows": the rows written, "skipped": the places left out}. Into the live index it takes the writers' lock."""
     if path is not None:
         return _write(store, book_id, version_id, path)  # a file being built by `rebuild`, which holds the lock
     root = store.cfg["index_root"]
@@ -199,7 +212,7 @@ def _current(index_root, book_id, version_id, facts):
             held = conn.execute("SELECT COUNT(*) FROM blocks WHERE book_id = ? AND version_id = ?", (book_id, version_id)).fetchone()[0]
     except (KbError, sqlite3.Error):
         return False
-    return row is not None and row[0] == facts["signature"] and held == facts["blocks"]
+    return row is not None and row[0] == facts["signature"] and held == facts["rows"]
 
 
 def index_version(store, book_id, version_id):
@@ -272,7 +285,7 @@ def rebuild(store):
     store._guard()  # the library's marker and device: an unmounted drive must not give an empty index
     root = store.cfg["index_root"]
     final, fresh = path_of(root), path_of(root) + ".new"
-    counts = {"books": 0, "versions": 0, "blocks": 0, "skipped": 0, "failed": 0}
+    counts = {"books": 0, "versions": 0, "blocks": 0, "rows": 0, "skipped": 0, "failed": 0}
 
     def remove(path, what):
         if os.path.lexists(path):
@@ -309,6 +322,7 @@ def rebuild(store):
                         continue
                     counts["versions"] += 1
                     counts["blocks"] += done["blocks"]
+                    counts["rows"] += done["rows"]
                     counts["skipped"] += done["skipped"]
             store._guard()  # and the library is still there: if it went away part way, most of it was counted as unreadable
             for stale in (final + "-journal", final + "-wal", final + "-shm"):

@@ -218,13 +218,20 @@ Writing to the index takes a lock (`search.lock` in the index root) that other w
 can run at the same time; the rest of `process` has no locks, so do not run two of them at once.
 
 The index (`kb/index.py`) is one SQLite file in the index root, `search.sqlite`, with a row for each block of the conversion in
-use of each converted version, and everything a result shows copied in, so a search needs the index root and nothing else (the
+use of each converted version (a block longer than 2,000 characters has a row for each piece of it, cut at a word, each with an
+`offset` locator for its own start, so a hit in a long page is read from there and not from the top of it), and everything a result shows copied in, so a search needs the index root and nothing else (the
 bulk drive can be away). It can be thrown away: `index` writes a new one beside the old and renames it into place, and gives the
 same results; a rebuild that fails to write leaves the old one, so does a library that is not there (the library's marker is
 checked first), and a book or version that cannot be read is left out and counted as `failed` (the command then exits with 1).
-A block whose text grows too much when normalised has no locator and is not indexed (it is counted). An index file that holds
+A block, or a piece of one, whose text grows too much when normalised has no locator and is not indexed (it is counted, for each
+piece). The counts of a rebuild name the `blocks` indexed and the `rows` written. An index file that holds
 a trigger, a view or anything else this engine did not put there is refused when read or written, and a rebuild replaces it; an
-empty file, which a crash can leave, is treated as no index.
+empty file, which a crash can leave, is treated as no index. The index is derived and not a book format: one written by an older
+version of the engine (the format number is in the file) is refused, searching or writing, with the instruction to run
+`python3 -m kb index`, which builds it again. Every word of a query must be in one row, so for a block longer than a piece, in one
+piece of it: two words 3,000 characters apart in the same long block do not match together. A piece is cut at a space or a line
+break; a run of text with none (a very long word or address, or Chinese or Japanese written without spaces) is cut at 2,000
+characters wherever that falls, so a query for a run that crosses the cut does not match.
 
 `search` (`kb/search.py`) treats a query as text, never as syntax: it takes the words (letters and digits in any script, at most
 20 of 100 characters each), puts each in quotes and passes the result as a bound parameter, so `OR`, `NEAR`, `col:word`, a quote
@@ -332,7 +339,8 @@ page built by scripts 22 and 29 characters (flagged by the second rule).
 **Locators** (`kb/locator.py`). A locator names the conversion it was made against (tool, version, generation) and a place by
 the structure of that conversion: a heading path and a paragraph number (`section`), a page and the block on it (`page`), or a
 character offset (`offset`, for a page with no headings). It also carries a hash of the first twelve words at the place (lower
-case, no punctuation, compatibility forms folded). The place holds only against the same conversion; against another, the words
+case, no punctuation, compatibility forms folded), looked for in the next 16,384 characters at most: a place with fewer words in
+that stretch (a ruler of dots, a very long word) has the words that are there, or none, and is then named by its first 64 characters. The place holds only against the same conversion; against another, the words
 find the passage again inside any block, and a different split into blocks does not matter. A passage in more than one block is
 reported with how many, and the first is named. A passage that is gone is "not found"; nothing is guessed.
 

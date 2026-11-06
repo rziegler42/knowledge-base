@@ -1,3 +1,4 @@
+import time
 import unittest
 
 from kb import KbError, textutil
@@ -88,3 +89,69 @@ class BlockTextTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowTest(unittest.TestCase):
+    """Where a piece ends and the next begins, on texts made for it."""
+
+    def test_a_text_that_fits_is_one_piece_with_nothing_after_it(self):
+        text = "alpha beta gamma delta"
+        self.assertEqual(textutil.window(text, 0, 22), (22, None))
+        self.assertEqual(textutil.window(text, 0, 100), (22, None))
+        self.assertEqual(textutil.window(text, 6, 16), (22, None))  # from the middle, exactly to the end
+
+    def test_a_text_that_does_not_fit_is_cut_at_the_last_break_in_the_later_half(self):
+        text = "aaaa bbbb cccc dddd eeee ffff"  # spaces at 4, 9, 14, 19, 24
+        self.assertEqual(textutil.window(text, 0, 17), (14, 15))
+        self.assertEqual(textutil.window(text, 0, 12), (9, 10))
+        self.assertEqual(textutil.window(text, 5, 12), (14, 15))
+
+    def test_a_line_break_is_a_break_too(self):
+        text = "a" * 60 + "\n" + "b" * 60
+        self.assertEqual(textutil.window(text, 0, 100), (60, 61))
+
+    def test_a_text_with_no_break_in_the_later_half_is_cut_at_the_amount(self):
+        text = "aaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"  # the only space is in the first half
+        self.assertEqual(textutil.window(text, 0, 40), (40, 40))
+        self.assertEqual(textutil.window("a" * 300, 0, 100), (100, 100))
+
+    def test_what_is_left_after_a_cut_is_not_just_space(self):
+        self.assertEqual(textutil.window("aaaa bbbb      ", 0, 9), (15, None))  # nothing but space follows, so it is the end
+
+    def test_the_next_piece_begins_at_the_first_character_that_is_not_space(self):
+        self.assertEqual(textutil.window("aaaa bbbb \n\n   cccc dddd", 0, 12), (12, 15))  # the piece "aaaa bbbb", then the next word
+
+
+class PiecesTest(unittest.TestCase):
+    def test_a_short_text_is_one_piece_and_an_empty_one_has_none(self):
+        self.assertEqual(textutil.pieces("alpha beta", 100), [(0, 10)])
+        self.assertEqual(textutil.pieces("", 100), [])
+
+    def test_the_pieces_are_in_order_none_is_longer_than_the_size_and_together_they_hold_every_word_once(self):
+        words = [f"w{n:05d}" for n in range(3000)]
+        text = " ".join(words)
+        found = textutil.pieces(text, 500)
+        self.assertGreater(len(found), 30)
+        previous = 0
+        for start, end in found:
+            self.assertGreaterEqual(start, previous)
+            self.assertLessEqual(end - start, 500)
+            self.assertGreater(end, start)
+            self.assertFalse(text[start].isspace() or text[end - 1].isspace(), (start, end))  # each begins and ends at a word
+            previous = end
+        self.assertEqual(" ".join(text[s:e] for s, e in found).split(), words)  # no gap and no repeat
+
+    def test_a_piece_starts_at_the_first_character_that_is_not_space_and_a_text_with_no_break_is_cut_at_the_size(self):
+        text = "aaaa bbbb \n\n   cccc dddd"
+        self.assertEqual([text[s:e].strip() for s, e in textutil.pieces(text, 12)], ["aaaa bbbb", "cccc dddd"])
+        self.assertEqual(textutil.pieces("x" * 5000, 2000), [(0, 2000), (2000, 4000), (4000, 5000)])
+
+    def test_a_great_text_is_cut_in_a_time_that_grows_with_its_size_alone(self):
+        text = ("lorem ipsum dolor " * 300_000)  # 5.4 million characters
+        started = time.monotonic()
+        found = textutil.pieces(text, 2000)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertGreater(len(found), 2700)
+        started = time.monotonic()
+        textutil.pieces("x" * 5_000_000, 2000)
+        self.assertLess(time.monotonic() - started, 5)

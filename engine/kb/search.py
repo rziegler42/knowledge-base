@@ -2,11 +2,11 @@
 
 A query is text, never syntax. It is cut into its words (letters and digits, in any script), each word is put in quotes for
 the index's own query language, and the result is passed as a bound parameter, so an operator, a column name, a quote or SQL in
-a query is only a word to look for. Every word must match. Results are ranked by the index's measure of how well a block
+a query is only a word to look for. Every word must match, in one row: in a block longer than a piece, in one piece of it. Results are ranked by the index's measure of how well a block
 matches (smaller is better), and ties are broken in a fixed order, so the same library gives the same results each time and
 after a rebuild. The index is opened read-only, and a search that runs longer than SEARCH_SECONDS is stopped.
 
-Each result is one block, with the book it is in, the locator to find it again, a short excerpt that carries the untrusted
+Each result is one block, or one piece of a block longer than a piece (the pieces of a block come in their order), with the book it is in, the locator to find it again, a short excerpt that carries the untrusted
 marker, the scan caveats of the version, and how complete its conversion was, so a partial extraction never looks complete.
 The excerpt is cut here from the stored text, not by the index: it is at most EXCERPT_CHARS characters on one line, around the
 first place a word of the query is spelled in the text (or from the start, if none is), so a block of any size gives a short
@@ -38,7 +38,7 @@ _SQL = (
     "v.conv_tool, v.conv_version, v.conv_generation "
     "FROM blocks_fts JOIN blocks b ON b.id = blocks_fts.rowid "
     "JOIN versions v ON v.book_id = b.book_id AND v.version_id = b.version_id "
-    "WHERE blocks_fts MATCH ? ORDER BY bm25(blocks_fts), b.book_id, b.version_id, b.block LIMIT ?")
+    "WHERE blocks_fts MATCH ? ORDER BY bm25(blocks_fts), b.book_id, b.version_id, b.block, b.id LIMIT ?")
 
 
 def words_of(query):
