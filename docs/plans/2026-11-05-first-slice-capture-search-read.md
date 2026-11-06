@@ -705,7 +705,7 @@ covers is an increment breaking an earlier one through the shared store.
 - **Left for the owner:** the word to commit F, and the converters' entries, which only the owner puts on the list by pasting
   them into the config.
 
-### Increment G — Keyword search and rebuild (implemented, reviewed and security-reviewed, not yet committed)
+### Increment G — Keyword search and rebuild (committed as 1ae56389d992d33f61def369e85e355b633d5e00, not pushed)
 
 - **Done.** `engine/kb/index.py` (one SQLite file, `search.sqlite`, in the index root: a `blocks` row and an FTS5 row for each block
   of the conversion in use of each converted version, and a `versions` row holding everything a result shows; written in one
@@ -779,3 +779,74 @@ covers is an increment breaking an earlier one through the shared store.
     nothing, SQLite's own behaviour (FTS5, bm25, the journal) was tested only as far as the tests here go, and the machine is this
     one.
 - **Left for the owner:** the word to commit G.
+
+### Increment H — Read by locator (implemented, reviewed and security-reviewed, not yet committed)
+
+- **Done.** `engine/kb/read.py` (`read(store, book_id, locator, version_id=None, chars=2000)`), `locator.at_offset`, the command
+  `python3 -m kb read BOOK_ID 'LOCATOR_JSON' [--version V] [--chars N]`, and a README paragraph. The text is a window of at most
+  `chars` characters (100 to 20,000) of the converted text from the start of the block found, cut at a word, between a first line
+  that is the untrusted marker and a last line that is an end marker. `next` is an `offset` locator for where the following piece
+  begins (`null` at the end), so reading on is following `next`, for a page with headings, a PDF and a page with none alike.
+  `status` is `found`, `found_by_text` (the passage was looked for by the words the locator carries, and `locator` is then a new
+  one for the conversion read), `not_found` (no text) or `unknown_kind` (the raw value, cleaned and cut to 500 characters, and
+  nothing guessed). A locator whose conversion is still recorded is read from that conversion; if the passage is not in it, or the
+  conversion is gone, the conversion in use is searched by the words. A recorded conversion whose files have changed since it was
+  filed is a refusal, not a reason to look elsewhere. The citation is one line (title, source address or `arXiv:` id, date
+  retrieved, sha256 of the captured file), from the version's records and cleaned; where a record is missing it says so. Nothing
+  returned, and no message of a refusal, holds a path to the library (the library's folders are replaced by `<library>`, and any
+  other absolute path in a message or in an address that is not a web address by `<path>`). The command exits 0 when it read,
+  1 when the passage was not found or the kind is not known, 2 when it refuses.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_read`: 55 tests, OK. The shared files
+  touched are `locator.py` (a function added; the hash of a place with no words changed) and `__main__.py` (one command added), so
+  `test_search` and `test_convert` were run together (212 tests, OK, under the venv) and the other eight engine test files
+  (332 tests, OK). That is every engine test file.
+- **Break-it check.** 76 deliberate faults in scratch copies of the final code: 74 caught. The two that are not are equivalent: a
+  boolean amount (the range check refuses it anyway) and a version that is not there (the store refuses it anyway). The runs
+  showed tests that were too weak, and I strengthened them: a window that ends at the end of the text, a cut at a line break, a
+  cut with no break in range, the text left after a cut, the reported end of a piece (it differs only when a cut lands in the blank
+  line between two blocks), an offset locator at the end of a block, the words an offset locator carries, the amount and the
+  version of the command (the test text was too short to show either), the title and the address in the citation, a hostile
+  value that the raw text cut off before it was shown, a drive path (the generic path pattern removed the test's example anyway),
+  caveats (the junk entries came after the cap that cuts the list, and only one of four fields held the library's folder), and a
+  JSON value that is not an object (a later catch-all refused it with another message).
+- **Reviewer agent.** One exchange, "no blocking findings". Applied: when the passage is not in the conversion a locator names,
+  the conversion in use is searched (the README and docstring had said so, the code had not); a version with no conversion in use is
+  a refusal and not a crash; the citation and title had the library's folders taken out, and an address that is not a web address
+  has any path taken out (a first version of this rewrote `?x=/y` in a web address, found by a test and fixed); a test measured the
+  piece with its newlines collapsed and now measures it as it is. Noted: a recorded conversion that cannot be loaded is refused on
+  purpose, since a changed file is an integrity failure and not a reason to read something else.
+- **Departures from the plan's wording.** The affected areas also include `locator.at_offset` (so that `next` works for every
+  kind of conversion), the `read` command in `__main__.py` and the README. `read` refuses a book that is not active and a version
+  that is not converted. The command exits with 1 for a passage not found or a kind not known.
+- **Not covered.** Reading starts at the beginning of the block found, so a passage found by its words in a long flat page is read
+  from the start of its block, not from the words. The text match behind `found_by_text` looks inside one block at a time. A book
+  is read from the bulk root, so a read, unlike a search, needs it. Nothing checks that the text is true.
+- **Security review.** The owner was asked, with a recommendation to run it before the commit, and answered **yes: "run security
+  review"**. One `security-reviewer` agent worked on a copy: no Critical or High finding, and no way found from a locator to a path,
+  a query or another book's text; a book id or version id from outside is validated before it reaches a path, a locator's numbers
+  and strings are checked and used only as positions and comparisons, and the markers are the first and last lines whatever the
+  page says. A second agent then took a second look at the fixes (no Critical, High or Medium).
+  - *Applied, each with a test that failed first:* **Medium:** a page author could stop a reader following `next` by putting a block
+    of characters that grow eighteen times under normalisation in the text (the place after it could not be named, so a read that
+    ended just before it failed; some sizes of piece read through by luck), so a place in such a block is now named by its position
+    and the hash of its first 64 characters, and asking for no words costs nothing; **Low:** the first version of that fix named a
+    place with no words by position alone, so a locator from one version read unrelated text in another and said "found" (found by
+    the second look), now tied to the characters at the place, and a forged locator with the hash of nothing is `not_found`;
+    paths from stored records could reach a citation, so only a web address without a user name is shown and anything else is
+    "non-web address", the arXiv id and label must have the form arXiv gives them, the library's folders are taken out before
+    whitespace is collapsed and the title again after cleaning, and the `raw` value of an unknown kind is scrubbed too; messages are
+    scrubbed of `file:` addresses, drive and home paths and of paths after a colon, and no longer damage a short path, a web
+    address or a closing bracket; the caveats were copied raw and are now rebuilt from four fixed fields, cleaned, scrubbed and at
+    most 100; the result did not carry the scan caveats and completeness that a search shows, and now does; damaged records gave
+    exceptions that were not refusals (and a traceback with paths on the command line) and now a refusal; a locator that is a dict of
+    an odd shape (non-string keys, a loop) is shown as an unknown kind; a date in other digits is not shown as a date.
+  - *Not fixed, recorded in the README:* the title and citation are text from outside that sit outside the marker lines (the
+    result says `untrusted: true`, and the README says to treat them as data, as for search); each read loads and checks the whole
+    conversion of the version, so following `next` through a very large book costs the size of the book for each piece; the
+    scrub of paths other than the library's folders is best effort (a path with a space in it leaks its tail; the library's
+    folders are removed exactly); a refusal printed by the command before it reaches the book (no config) names the config path;
+    reading from a zero-word place cannot be found by text in another conversion.
+  - *Limits of the evidence:* both reviewers' shells ran only fixed script names, so the first could not run the engine's own
+    command line from a shell of its own and neither could run `git status`; memory use and the cost of following `next` through a
+    very large book were not measured; the machine is this one.
+- **Left for the owner:** the word to commit H.

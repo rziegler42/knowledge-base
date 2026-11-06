@@ -4,7 +4,7 @@ import json
 import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, config, convert_html, convert_pdf, identity, index,
-               library, process, search)
+               library, process, read, search)
 from .store import Store
 
 
@@ -47,6 +47,11 @@ def main(argv=None):
     pr = sub.add_parser("process", help="take every version through the stages it has not finished: scan, convert, index")
     pr.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", help="only this book (may be repeated)")
     sub.add_parser("index", help="build the search index again from the books")
+    rd = sub.add_parser("read", help="the text at a locator that a search returned, in a bounded piece")
+    rd.add_argument("book_id")
+    rd.add_argument("locator", help="the locator, as JSON")
+    rd.add_argument("--version", help="the version the result came from (default: the book's current version)")
+    rd.add_argument("--chars", type=int, default=read.DEFAULT_CHARS, help=f"at most this many characters ({read.MIN_CHARS} to {read.MAX_CHARS})")
     se = sub.add_parser("search", help="keyword search; every word of the query must match")
     se.add_argument("query")
     se.add_argument("--limit", type=int, default=search.DEFAULT_LIMIT, help=f"at most this many results (1 to {search.MAX_LIMIT})")
@@ -64,6 +69,13 @@ def main(argv=None):
             print(json.dumps(counts))
             if counts["failed"]:
                 print(f"{counts['failed']} book or version could not be read and is not in the index", file=sys.stderr)
+                return 1
+            return 0
+        if args.command == "read":
+            out = read.read(Store.open(write=False), args.book_id, args.locator, version_id=args.version, chars=args.chars)
+            print(json.dumps(out, indent=1))
+            if out["status"] not in ("found", "found_by_text"):
+                print(f"{out['status']}: the passage was not read", file=sys.stderr)
                 return 1
             return 0
         if args.command == "search":

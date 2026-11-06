@@ -206,6 +206,7 @@ cd engine
 python3 -m kb process                 # every version of every active book through scan, convert and index (or --book ID)
 python3 -m kb search 'ocelot habits'  # keyword search; every word must match; --limit 1 to 50
 python3 -m kb index                   # build the whole search index again from the books
+python3 -m kb read BOOK_ID 'LOCATOR_JSON' --version V1 --chars 2000   # the text at a locator a search returned
 ```
 
 `process` (`kb/process.py`) takes each version through the stages it has not finished, in order, and prints what it did. A
@@ -237,6 +238,32 @@ and `reasons` from the extractor-size rule, so a partial extraction never looks 
 The excerpt is cut by the engine from the stored text: at most 400 characters on one line, around the first place a word of the
 query is spelled (or from the start of the block), so a block of any size gives a short result and cannot put a line of its own
 after the marker. The title is cleaned when it is indexed.
+
+`read` (`kb/read.py`) gives the text at a locator, as a search result's `locator` and `version_id` name it (the version defaults
+to the book's current one). The text is a window of at most `--chars` characters (100 to 20,000, default 2,000) of the converted
+text, from the start of the block found, cut at a word, between a first line that is the untrusted marker and a last line that
+is an end marker; a page can print those words itself, so the first and last lines are the ones that count. `next` is a locator
+for where the following piece begins (`null` at the end), so reading on is following `next`; each is a locator of kind `offset`.
+`status` says how it was found: `found` (the conversion the locator names is still recorded for the version, and its place
+holds), `found_by_text` (the place no longer holds, or that conversion is gone: the passage was looked for by the words the
+locator carries, in the conversion it names if that is still recorded and otherwise, or if it is not there, in the conversion now
+in use, and `locator` is then a new one for the conversion read; a recorded conversion whose files have changed since it was
+filed is a refusal and is not passed over), `not_found` (no text is given) or
+`unknown_kind` (a locator of a kind this reader does not know: its raw value is shown, cleaned and cut to 500 characters, and
+nothing is guessed). `citation` is one line: the title, the source address (or `arXiv:` and the id), the date retrieved, and the
+sha256 of the file that was captured, from the version's records and cleaned; where a record is missing it says so, and an
+address that is not a web address is shown as "non-web address", so a path on this machine cannot get into a citation. The result
+also carries `caveats` (what the scan found) and `completeness` (`structure`, `partial`, `compared`, `reasons`), as a search
+result does, so a partial extraction or a scan finding is not lost between a search and a read. The title and the citation are
+text from outside, outside the marker lines: treat them as data, as the excerpt. Nothing it returns, and no message of a refusal,
+holds a path to the library or any other path (library folders become `<library>`; absolute, `file:`, drive and home paths in a
+message become `<path>`). The command exits 0 when it read, 1 when the passage was not found or the kind is not known, and 2 when
+it refuses (a book that is not there or not active, a version not converted, records the engine did not write, something that
+is not a locator). A refusal printed by the command before it reaches the book (no config, no library) is the engine's own and
+can name the config path. A block built to grow under normalisation (text that is slow to compare) has no words for a locator, so
+the place that goes on from it is named by its position only, and a reader following `next` reads through it. Each read loads
+and checks the whole conversion of the version, so following `next` through a very large book costs the size of the book for each
+piece.
 
 A book that is removed, weeded or a duplicate leaves the search at the next `process` (or `index`), which takes out its rows
 and puts its versions' `indexed` stage back to pending, so it is indexed again if it becomes active again; a book whose state

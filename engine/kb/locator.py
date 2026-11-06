@@ -44,6 +44,8 @@ def words(text):
 
 def first_words(text, n=WINDOW):
     """The first `n` words of a text, reading only as much of it as that takes (a block may be millions of characters)."""
+    if n == 0:
+        return []  # no words wanted: nothing to read, and no need to normalise text that may be built to grow
     size = 4096
     while True:
         found = words(text[:size])
@@ -54,6 +56,17 @@ def first_words(text, n=WINDOW):
 
 def _hash(parts):
     return hashlib.sha256(" ".join(parts).encode("utf-8")).hexdigest()
+
+
+def _chars_hash(text):
+    """The hash a place with no words carries instead: that of its first 64 characters, as they are. A place that cannot be
+    named by its words (it has none, or its text is built to grow under normalisation) is named by its position and by these,
+    so a position alone is never taken for the place."""
+    return hashlib.sha256(text[:64].encode("utf-8", "replace")).hexdigest()
+
+
+def _excerpt_hash(taken, text):
+    return _hash(taken) if taken else _chars_hash(text)
 
 
 def _is_int(value, low, high=LIMIT):
@@ -87,7 +100,26 @@ def make(ref, conversion, block_index, offset=None):
     taken = first_words(source, WINDOW)
     return {"v": VERSION, "kind": kind, "at": at,
             "conversion": {"tool": ref["tool"], "version": ref["version"], "generation": ref["generation"]},
-            "excerpt": {"words": len(taken), "sha256": _hash(taken)}}
+            "excerpt": {"words": len(taken), "sha256": _excerpt_hash(taken, source)}}
+
+
+def at_offset(ref, conversion, offset):
+    """An offset locator for a place in the converted text of any conversion, not only a page with no headings: the place a
+    reader left off at and wants to go on from. The offset must be inside a block."""
+    if not _is_int(offset, 0):
+        raise KbError("an offset is a whole number")
+    for block in conversion.blocks:
+        if block.start <= offset < block.end:
+            source = conversion.text[offset:block.end]
+            try:
+                taken = first_words(source, WINDOW)
+            except KbError:
+                taken = []  # text built to grow when normalised has no words to compare: it is named by its place and its
+                # first characters, so a reader can still go on through it (and a place alone is never taken for it)
+            return {"v": VERSION, "kind": "offset", "at": {"offset": offset},
+                    "conversion": {"tool": ref["tool"], "version": ref["version"], "generation": ref["generation"]},
+                    "excerpt": {"words": len(taken), "sha256": _excerpt_hash(taken, source)}}
+    raise KbError("the offset is not inside any block of the text")
 
 
 def check(loc):
@@ -132,13 +164,19 @@ def _text_at(loc, conversion, index):
     return conversion.text[loc["at"]["offset"]:block.end] if loc["kind"] == "offset" else block.text
 
 
+def _holds(loc, conversion, index, n, target):
+    """Whether the text at the place a locator names is the text it was made from: its words, or with none, its characters."""
+    text = _text_at(loc, conversion, index)
+    return (_chars_hash(text) if n == 0 else _hash(first_words(text, n))) == target
+
+
 def resolve(loc, ref, conversion):
     """Find a locator again in `conversion`, which `ref` names. Returns {"status": "found" | "found_by_text" | "not_found",
     "block": the block index or None, "matches": how many blocks held it}."""
     loc = check(loc)
     n, target = loc["excerpt"]["words"], loc["excerpt"]["sha256"]
     if loc["conversion"] == {"tool": ref["tool"], "version": ref["version"], "generation": ref["generation"]}:
-        here = [i for i in _place(loc, conversion) if _hash(first_words(_text_at(loc, conversion, i), n)) == target]
+        here = [i for i in _place(loc, conversion) if _holds(loc, conversion, i, n, target)]
         if here:
             return {"status": "found", "block": here[0], "matches": len(here)}
     if n == 0:
