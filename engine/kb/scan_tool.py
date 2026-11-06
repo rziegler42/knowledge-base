@@ -14,6 +14,7 @@ Findings are counts and fixed sentences. Nothing taken from the file is copied i
 text of its own into a caveat. The file is untrusted: every loop here is bounded."""
 import base64
 import bisect
+import itertools
 import json
 import os
 import re
@@ -24,6 +25,8 @@ from html.parser import HTMLParser
 MAX_STREAMS = 2000
 MAX_STREAM_OUT = 2_000_000
 MAX_TOTAL_OUT = 20_000_000
+MAX_ROW = 4_000_000          # the longest row of predicted data it undoes
+MAX_PREDICTED_ROWS = 2_000_000  # the most passes over rows of predicted data it undoes in a file: a row costs the same however short
 KINDS = {
     "malformed": "The file does not look like the kind of file it is named as.",
     "encrypted": "The PDF is encrypted, so most of what it holds cannot be checked.",
@@ -49,6 +52,19 @@ def caveat(kind, count=1):
 
 
 # --- PDF
+_NOT_REGULAR = frozenset(b"\x00\t\n\x0c\r ()<>[]{}/%#")  # white space and delimiters, and the escape mark itself
+
+
+def _unescape_regular(data):
+    """The text of a dictionary with #xx read as the letter it spells, except where that letter is white space, a delimiter or
+    `%` or `#`: those stay as written. In a name they are part of the name and not what they look like (/A#3E#3E is one name, not
+    a name and the end of a dictionary), and a reader that turned them into the real thing would see a structure no viewer sees."""
+    def one(m):
+        value = int(m.group(1), 16)
+        return m.group(0) if value in _NOT_REGULAR else bytes([value])
+    return re.sub(rb"#([0-9A-Fa-f]{2})", one, data)
+
+
 def _unescape_names(data):
     """In a PDF name, #xx stands for the byte xx, so /J#61vaScript is /JavaScript."""
     return re.sub(rb"#([0-9A-Fa-f]{2})", lambda m: bytes([int(m.group(1), 16)]), data)
@@ -75,18 +91,14 @@ def _name_pattern(name):
 _FILTER_KEY_RAW = re.compile(_name_pattern(b"Filter"))  # for the file as it is, before escapes are undone
 _FILTER_KEY = re.compile(rb"/Filter(?![A-Za-z0-9])")      # for text whose escapes are already undone
 _FILTER_VALUE = re.compile(rb"/Filter\s*(\[[^\]]*\]|/[A-Za-z0-9]+)")
-# parameters (or a predictor) given as a reference to another object, which this scan does not follow
-_INDIRECT_PARMS = re.compile(rb"/(?:DecodeParms|DP)\s*(?:\[[^\]]*?[0-9]+\s+[0-9]+\s+R|[0-9]+\s+[0-9]+\s+R)"
-                             rb"|/Predictor\s+[0-9]+\s+[0-9]+\s+R")
+_FILTER_LIST = re.compile(rb"\[[ \t\r\n\x00\x0c]*(?:/[A-Za-z0-9]+[ \t\r\n\x00\x0c]*)*\]")  # a list of filters that holds names and nothing else
 _NAME = re.compile(rb"/([A-Za-z0-9]+)")
-_PREDICTOR = re.compile(rb"/Predictor\s+([0-9]+)")
 _EOL = re.compile(rb"[ \t]*(?:\r\n|\n|\r)")  # what viewers accept after the word stream; the standard asks for less
 _IMAGE_FILTERS = {b"DCTDecode", b"DCT", b"JPXDecode", b"CCITTFaxDecode", b"CCF", b"JBIG2Decode"}
 _FLATE_NAMES = {b"FlateDecode", b"Fl"}
 _A85_NAMES = {b"ASCII85Decode", b"A85"}
 _HEX_NAMES = {b"ASCIIHexDecode", b"AHx"}
 _DECODABLE = _FLATE_NAMES | _A85_NAMES | _HEX_NAMES
-_XREF = re.compile(rb"/Type\s*/XRef(?![A-Za-z0-9])")
 _IMAGE = re.compile(rb"/Subtype\s*/Image(?![A-Za-z0-9])")
 _TYPE = re.compile(rb"/Type\s*/([A-Za-z0-9]+)")
 # the keys without which a viewer cannot read objects out of a stream: an object stream needs /N and /First (and may have /Extends),
@@ -107,12 +119,181 @@ def _is_image(dictionary):
     return bool(types) and all(t == b"XObject" for t in types) and bool(_IMAGE.search(dictionary))
 
 
-def _decode_chain(blob, names, limit):
-    """Undo a list of text and deflate filters, in order. (bytes, "ok") or (what it had, "bad" or "limit")."""
+class _Unreadable(Exception):
+    """Parameters or predicted data that the scan cannot read with certainty. It is never guessed at: the stream is reported as
+    not fully read, and what could be decoded before the predictor is still scanned."""
+
+
+_WS = rb"[ \t\r\n\x00\x0c]"
+_PARMS_KEY = re.compile(rb"/(?:DecodeParms|DP)(?![A-Za-z0-9])")
+_PARM_KEYS = {"predictor": b"Predictor", "colors": b"Colors", "bpc": b"BitsPerComponent", "columns": b"Columns"}
+_PARM_DEFAULTS = {"predictor": 1, "colors": 1, "bpc": 8, "columns": 1}
+_WS_RUN = re.compile(_WS + rb"*")
+_BRACKETS = re.compile(rb"<<|>>")
+
+
+def _dict_inner(text, start):
+    """(the text inside the dictionary that opens at text[start], where it ends). A dictionary of parameters holds numbers and
+    names and nothing nested: a string, a hex string, an array or another dictionary in it, or one that does not close, is
+    refused."""
+    depth = 0
+    for m in _BRACKETS.finditer(text, start):
+        depth += 1 if m.group() == b"<<" else -1
+        if depth == 0:
+            inner = text[start + 2:m.start()]
+            if b"<" in inner or b"(" in inner or b"[" in inner or b"%" in inner:
+                # a string, a hex string, an array or another dictionary, or a comment: a comment can hold brackets and the end of the
+                # dictionary, or sit between a number and `0 R`, and a viewer reads past it where this reader would not
+                raise _Unreadable("the parameters hold more than numbers")
+            return inner, m.end()
+        if depth < 0:
+            break
+    raise _Unreadable("a dictionary of parameters that does not close")
+
+
+def _parm_number(inner, key):
+    """The whole number after /Key in a dictionary of parameters, None if the key is not there. A key twice, or a value that is
+    not a whole number (a real, a negative, a reference, a name), is refused."""
+    found = list(re.finditer(rb"/" + key + rb"(?![A-Za-z0-9])", inner))
+    if not found:
+        return None
+    if len(found) > 1:
+        raise _Unreadable("a parameter given twice")
+    m = re.compile(_WS + rb"+([0-9]{1,9})(?=" + _WS + rb"|/|\Z)(?!" + _WS + rb"+[0-9]+" + _WS + rb"+R(?![A-Za-z0-9]))").match(inner, found[0].end())
+    if not m:
+        raise _Unreadable("a parameter that is not a whole number")
+    return int(m.group(1))
+
+
+def _parm_dict(inner):
+    return {name: (lambda v: _PARM_DEFAULTS[name] if v is None else v)(_parm_number(inner, key)) for name, key in _PARM_KEYS.items()}
+
+
+def _parms(dictionary, names):
+    """The decode parameters of each filter in `names`: None, or a dictionary of the predictor, colours, bits and columns (the
+    defaults where a key is not given). Read from the one /DecodeParms (or /DP) of the dictionary text, given directly: as a
+    dictionary for one filter, or as an array with one entry (null or a dictionary) for each. A reference, a second key, a
+    value that is not plain, or more entries than filters is refused with _Unreadable."""
+    keys = list(_PARMS_KEY.finditer(dictionary))
+    if not keys:
+        return [None] * len(names)
+    if len(keys) > 1:
+        raise _Unreadable("two keys for the parameters")
+    i = _WS_RUN.match(dictionary, keys[0].end()).end()
+    if re.compile(rb"null(?![A-Za-z0-9])").match(dictionary, i):
+        return [None] * len(names)
+    if dictionary.startswith(b"<<", i):
+        if len(names) != 1:
+            raise _Unreadable("one dictionary of parameters for several filters")
+        return [_parm_dict(_dict_inner(dictionary, i)[0])]
+    if dictionary.startswith(b"[", i):
+        close = dictionary.find(b"]", i)
+        if close < 0:
+            raise _Unreadable("an array of parameters that does not close")
+        body, pos, items = dictionary[i + 1:close], 0, []
+        while True:
+            pos = _WS_RUN.match(body, pos).end()
+            if pos >= len(body):
+                break
+            if re.compile(rb"null(?![A-Za-z0-9])").match(body, pos):
+                items.append(None)
+                pos += 4
+            elif body.startswith(b"<<", pos):
+                inner, pos = _dict_inner(body, pos)
+                items.append(_parm_dict(inner))
+            else:
+                raise _Unreadable("an entry of the parameters that is not null or a dictionary")
+        if len(items) > len(names):
+            raise _Unreadable("more parameters than filters")
+        return items + [None] * (len(names) - len(items))
+    raise _Unreadable("parameters that are not a dictionary or an array")
+
+
+_MASK = (255).__and__
+
+
+def _paeth(a, b, c):
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    return a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+
+
+def _undo_predictor(data, parms, rows=None):
+    """The data of a stream with its predictor undone: PNG (predictors 10 to 15, whatever the number, each row says its filter)
+    and TIFF (2, at 8 bits). Rows and the bytes in them are taken as they come; a last row that is cut short is undone as far as
+    it goes. Anything else (another predictor, bits or colours that make no sense, a row type that is no PNG filter, a row longer
+    than MAX_ROW) is refused with _Unreadable. `rows` is a one-item list, the rows left to undo in the file."""
+    predictor = parms["predictor"]
+    if predictor == 1:
+        return data
+    colors, bpc, columns = parms["colors"], parms["bpc"], parms["columns"]
+    if predictor != 2 and not 10 <= predictor <= 15:
+        raise _Unreadable("a predictor this scan does not undo")
+    if not 1 <= colors <= 32 or bpc not in (1, 2, 4, 8, 16) or columns < 1:
+        raise _Unreadable("parameters that make no sense")
+    rowbytes = (colors * bpc * columns + 7) // 8
+    if rowbytes > MAX_ROW:
+        raise _Unreadable("a row too long to undo")
+    bpp = colors if predictor == 2 else max(1, (colors * bpc + 7) // 8)
+    count = -(-len(data) // (rowbytes + (predictor != 2)))
+    if rows is not None:
+        rows[0] -= count * bpp  # a row costs a pass over it for each byte of a pixel, whatever its length
+        if rows[0] < 0:
+            raise _Unreadable("more rows of predicted data than the scan undoes")
+    out = bytearray()
+    if predictor == 2:
+        if bpc != 8:
+            raise _Unreadable("the TIFF predictor at other than 8 bits")
+        for start in range(0, len(data), rowbytes):
+            row = bytearray(data[start:start + rowbytes])
+            for k in range(colors):
+                row[k::colors] = bytes(map(_MASK, itertools.accumulate(row[k::colors])))
+            out += row
+        return bytes(out)
+    prev, step = bytes(min(rowbytes, len(data))), rowbytes + 1  # (not a whole row of zeros for a stream that holds a few bytes)
+    for start in range(0, len(data), step):
+        kind, row = data[start], bytearray(data[start + 1:start + step])
+        if kind == 0:
+            pass
+        elif kind == 1:
+            for k in range(bpp):
+                row[k::bpp] = bytes(map(_MASK, itertools.accumulate(row[k::bpp])))
+        elif kind == 2:
+            row = bytearray([(x + y) & 255 for x, y in zip(row, prev)])
+        elif kind == 3:
+            for i in range(len(row)):
+                row[i] = (row[i] + ((row[i - bpp] if i >= bpp else 0) + prev[i]) // 2) & 255
+        elif kind == 4:
+            for i in range(len(row)):
+                if i >= bpp:
+                    row[i] = (row[i] + _paeth(row[i - bpp], prev[i], prev[i - bpp])) & 255
+                else:
+                    row[i] = (row[i] + prev[i]) & 255
+        else:
+            raise _Unreadable("a row whose filter is not a PNG filter")
+        out += row
+        prev = bytes(row) + prev[len(row):]
+    return bytes(out)
+
+
+def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None):
+    """Undo a list of text and deflate filters, in order, and the predictor of a deflate step that has one. (bytes, "ok") or (what
+    it had, "bad", "limit" or "unreadable": the predictor could not be undone, and the bytes are those before it). `raws`, if
+    given, gets the bytes from before each predictor that was undone."""
     data = blob
-    for name in names:
+    for i, name in enumerate(names):
         if name in _FLATE_NAMES:
             data, state = _inflate(data, limit)
+            if state == "bad":
+                return data, state
+            if parms and parms[i] and parms[i]["predictor"] > 1:
+                try:
+                    undone = _undo_predictor(data, parms[i], rows)
+                except _Unreadable:
+                    return data, "unreadable"
+                if raws is not None:
+                    raws.append(data)  # the bytes before the predictor, for the patterns too: see scan_pdf
+                data = undone
             if state != "ok":
                 return data, state
         elif name in _A85_NAMES:
@@ -230,7 +411,7 @@ def scan_pdf(data):
         caveats.append(caveat("malformed"))
     plain = _unescape_names(data)
     haystacks = [plain]  # the file as it is, which covers every stream that is not compressed
-    total, decoded, budget, covered = 0, 0, [DICT_BUDGET], []
+    total, decoded, budget, covered, rows_left = 0, 0, [DICT_BUDGET], [], [MAX_PREDICTED_ROWS]
     for found in _streams(data, budget):
         if found is None:
             incomplete = True
@@ -240,27 +421,36 @@ def scan_pdf(data):
             incomplete = True  # a stream whose dictionary could not be read, so what filter it uses is unknown
             continue
         covered.append(located[:2])  # the filters named inside this dictionary are accounted for below
-        dictionary = _unescape_names(located[2])
+        dictionary = _unescape_regular(located[2])
+        if len(_FILTER_KEY.findall(dictionary)) > 1:
+            # the text is read without knowing strings or nested dictionaries, so which /Filter is the stream's own is not known: the
+            # first one read could be a decoy that says an image codec, which the scan does not look into. Not guessed at, not skipped.
+            incomplete = True
+            continue
         value = _FILTER_VALUE.search(dictionary)
+        if value and value.group(1).startswith(b"[") and not _FILTER_LIST.fullmatch(value.group(1)):
+            # the list ends at the first bracket the text shows, and a comment, a string, an array or an escape can put one before
+            # the real end: unless it holds nothing but names, the chain read here may be shorter than the viewer's
+            incomplete = True
+            continue
         names = _NAME.findall(value.group(1)) if value else []
         if _FILTER_KEY.search(dictionary) and not names:
             incomplete = True  # a filter written in a way this scan does not read
         elif not names or all(n in _IMAGE_FILTERS for n in names):
             continue  # not compressed, or an image: covered by the plain scan above
         elif all(n in _DECODABLE for n in names):
-            if _INDIRECT_PARMS.search(dictionary) or any(int(p) > 1 for p in _PREDICTOR.findall(dictionary)):
-                # a prediction step changes the bytes before they can be read as text, and parameters given as a
-                # reference are not followed. Cross-reference streams and images use prediction all the time and hold
-                # nothing a viewer runs, so those are skipped; anywhere else it means the stream was not read
-                if not (_XREF.search(dictionary) or _IMAGE.search(dictionary)):
-                    incomplete = True
+            try:
+                parms = _parms(dictionary, names)
+            except _Unreadable:
+                incomplete = True  # parameters given as a reference or in a way this scan does not read: not guessed at, not skipped
                 continue
             decoded += 1
             if decoded > MAX_STREAMS or total >= MAX_TOTAL_OUT:
                 incomplete = True
                 break
             cap = min(MAX_STREAM_OUT, MAX_TOTAL_OUT - total)
-            out, state = _decode_chain(blob, names, cap)
+            raws = []
+            out, state = _decode_chain(blob, names, cap, parms, rows_left, raws)
             total += len(out)
             only_deflate_last = (names[-1] in _FLATE_NAMES and sum(n in _FLATE_NAMES for n in names) == 1
                                  and len(_FILTER_KEY.findall(dictionary)) == 1)  # one filter key: a second might be the real list
@@ -273,6 +463,9 @@ def scan_pdf(data):
                 incomplete = True
             if out:
                 haystacks.append(_unescape_names(out))
+            # a dictionary is read as text, so a decoy /DecodeParms in a string would make the scan undo a predictor that the viewer
+            # never applies, and garble what it reads: the bytes from before the predictor are read as well
+            haystacks.extend(_unescape_names(raw) for raw in raws if raw)
         else:
             incomplete = True  # a filter this scan does not decode (LZW, run-length, crypt, or one it has not heard of)
     if not incomplete and _filter_outside(data, covered):

@@ -193,8 +193,8 @@ from the file. They never stop a book being filed. A scan that cannot run marks 
 
 **No caveat does not mean the file is safe.** It is a pattern scan and not a PDF reader, and it says only what it found. It reads
 the stream markers in one pass and the whole dictionary of each stream, decodes deflate, ASCII85 and hex filters (also layered),
-and reports `scan_incomplete` for anything it could not read: a filter it does not decode (LZW, run-length, crypt), a prediction
-filter outside cross-reference streams and images, deflate data that is damaged, cut short or compressed again inside, a filter
+and reports `scan_incomplete` for anything it could not read: a filter it does not decode (LZW, run-length, crypt), a predictor
+it does not undo or parameters it cannot read with certainty (below), deflate data that is damaged, cut short or compressed again inside, a filter
 declared that it did not tie to a stream it read, or a file or page larger than its limits. A deflate image stream that says it
 is an image (its dictionary holds `/Subtype /Image`, and `/Type /XObject` wherever a type is given and at least once, and none of
 the keys that an object stream or a cross-reference stream cannot be read without: `/N`, `/First`, `/Extends`, `/W`, `/Size`,
@@ -210,14 +210,32 @@ that names no `/Type` is still `scan_incomplete`. **What this leaves:** a script
 first two million bytes of a stream that only claims to be an image (an XObject with `/Subtype /Image`) is reported as a large
 image and not as a script, which is why the caveat says that code after the first part would not be found. A damaged image, one
 in a filter the scan does not read, one with other filters after deflate, one that is compressed again inside, and images beyond
-the twenty million bytes the scan decodes in all (some ten figures of this size), are still `scan_incomplete`. **Known gap, older
-than this change:** a stream that uses a predictor, or an indirect `/DecodeParms`, and carries `/Type /XRef` or the words
-`/Subtype /Image` is not decoded at all, so an object stream dressed that way is not read, whatever its size. **A second known gap,
-also older:** the scan finds a stream by the word `stream` and the dictionary before it by matching brackets, without parsing
+the twenty million bytes the scan decodes in all (some ten figures of this size), are still `scan_incomplete`. **Predictors.** A stream is
+decoded whatever its dictionary says it is, and its predictor is undone before it is read: the PNG predictors (10 to 15; each row
+says its own filter, so the number does not matter) and the TIFF predictor (2, at 8 bits), with the colours, bits and columns in the
+parameters (the defaults where they are not given). A real viewer reads an object stream through a predictor, so a dictionary that
+says `/Type /XRef` or `/Subtype /Image` is not taken at its word and its stream skipped, as it was before. Anything else is
+`scan_incomplete`, never a skip and never a guess: another predictor, bits or colours that make no sense, a row type that is no PNG
+filter, a row longer than four million bytes, more than two million passes over rows of predicted data in a file (a row is charged one for each byte of a pixel, so that wide
+pixels cannot make a cheap file slow), and parameters that are a
+reference, given twice, not a whole number, not direct, or more entries than filters. What was decoded before a predictor that could not
+be undone is still read for the patterns, and so are the bytes from before a predictor that was undone, because the scan reads a
+dictionary as text and a decoy `/DecodeParms` in a string would otherwise make it undo a predictor that a viewer never applies. The structure of a dictionary is read from its text with `#xx` read as the letter it spells, except where that letter is white
+space, a delimiter, `%` or `#` itself: `/A#3E#3E` is one name, not a name and the end of a dictionary, and a reader that turned it
+into the brackets would see a structure no viewer sees. A comment (`%`) in the parameters is
+`scan_incomplete`, because a comment can hold the brackets that end the dictionary or sit between a number and `0 R`, and a number that
+runs into letters or a hash is not a number; and a list of filters that holds anything but names (a comment, a string, an array, a
+number, an escaped bracket) is `scan_incomplete` too, because the list read ends at the first bracket the text shows, which any of
+those can put before the real end. A dictionary with more than one `/Filter` key is `scan_incomplete` too: the text is read without knowing strings, so a decoy
+in a string could say an image codec, which the scan does not look into, ahead of the real filter. A picture with a predictor now counts against the scan's budget of 2,000 streams and twenty
+million decoded bytes, as any stream does (a test builds twenty figures of 950,000 bytes and 1,500 small ones that give no caveat).
+**A known gap, older
+than this change:** the scan finds a stream by the word `stream` and the dictionary before it by matching brackets, without parsing
 strings, so a string in a dictionary that holds a fake `>>`, `stream` and a small deflate stream makes the scan read that, and
 the real stream that follows is taken for part of it: an object stream whose real keys come after such a string, with a script in
 it, gave no caveat at all in a test run by hand. `scan_incomplete` is not reported for it. The fix needs a scan that tracks strings
-and comments, or a check that each stream it finds is an object (`N G obj ... stream`); it is for a later plan.
+and comments, or a check that each stream it finds is an object (`N G obj ... stream`); it is increment C of the plan
+`2026-11-06-scan-hardening`.
 A page's hidden text is found only when it is hidden by the `hidden` attribute or an inline style, not by a stylesheet, by
 position or by colour.
 

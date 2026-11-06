@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import time
 import unittest
 import zlib
@@ -8,7 +9,7 @@ from unittest import mock
 from engine.tests.test_capture_url import Site
 from engine.tests.test_convert_run import PROBE, SandboxCase, approve
 
-from kb import KbError, approvals, capture_url, convert_run, identity, scan, stages
+from kb import KbError, approvals, capture_url, convert_run, identity, scan, scan_tool, stages
 
 
 def pdf(body=b"", trailer=b"trailer << /Root 1 0 R >>"):
@@ -35,6 +36,55 @@ def image(payload, extra=b"/Filter /FlateDecode", compress=True, typed=b"/Type /
 
 
 BIG = 3_000_000  # more than one stream may give back to the scan (MAX_STREAM_OUT is two million)
+
+
+def png_filter(raw, rowbytes, bpp=1, types=(0, 1, 2, 3, 4)):
+    """PNG row filtering, written for the tests and independent of the scan's undoing: each row gets a type byte from `types`
+    in turn and its bytes are replaced by their difference from the prediction."""
+    out, prev = bytearray(), bytes(rowbytes)
+    for n, start in enumerate(range(0, len(raw), rowbytes)):
+        row, kind = raw[start:start + rowbytes], types[n % len(types)]
+        out.append(kind)
+        for i, x in enumerate(row):
+            a = row[i - bpp] if i >= bpp else 0
+            b = prev[i] if i < len(prev) else 0
+            c = prev[i - bpp] if i >= bpp and i < len(prev) else 0
+            if kind == 0:
+                guess = 0
+            elif kind == 1:
+                guess = a
+            elif kind == 2:
+                guess = b
+            elif kind == 3:
+                guess = (a + b) // 2
+            else:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                guess = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+            out.append((x - guess) & 255)
+        prev = row
+    return bytes(out)
+
+
+def tiff_filter(raw, rowbytes, colors=1):
+    """TIFF predictor 2 at 8 bits: each byte is replaced by its difference from the same colour of the pixel before it."""
+    out = bytearray()
+    for start in range(0, len(raw), rowbytes):
+        row = raw[start:start + rowbytes]
+        out += bytes((x - (row[i - colors] if i >= colors else 0)) & 255 for i, x in enumerate(row))
+    return bytes(out)
+
+
+SCRIPT = b"<< /S /JavaScript /JS (app.alert(1)) >> "
+
+
+def script_rows(columns, rows=3):
+    """The text of an action, padded with spaces to whole rows of `columns` bytes."""
+    return (SCRIPT * 8).ljust(columns * rows, b" ")[:columns * rows]
+
+
+def stream_object(dictionary, data, number=5):
+    return f"{number} 0 obj\n".encode() + b"<< " + dictionary + b" >>\nstream\n" + data + b"\nendstream\nendobj\n"
 
 
 def kinds(caveats):
@@ -133,10 +183,10 @@ class PdfScanTest(ScanCase):
         cases = {
             "a cross-reference stream with a predictor": pdf(b"5 0 obj\n<< /Type /XRef /Filter /FlateDecode /W [1 3 1] "
                                                              b"/DecodeParms << /Columns 5 /Predictor 12 >> >>\nstream\n"
-                                                             + zlib.compress(b"x" * 50) + b"\nendstream"),
+                                                             + zlib.compress(png_filter(b"\x01\x00\x00\x10\x00" * 10, 5, types=(2,))) + b"\nendstream"),
             "an image with a PNG predictor": pdf(b"6 0 obj\n<< /Type /XObject /Subtype /Image /Filter /FlateDecode "
-                                                 b"/DecodeParms << /Predictor 15 /Colors 3 >> >>\nstream\n"
-                                                 + zlib.compress(b"y" * 80) + b"\nendstream"),
+                                                 b"/DecodeParms << /Predictor 15 /Colors 3 /Columns 10 >> >>\nstream\n"
+                                                 + zlib.compress(png_filter(bytes(range(90)) * 3, 30, bpp=3)) + b"\nendstream"),
             "an object stream": pdf(b"7 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode >>\nstream\n"
                                     + zlib.compress(b"8 0 << /A 1 >>") + b"\nendstream"),
         }
@@ -144,11 +194,15 @@ class PdfScanTest(ScanCase):
             _b, _v, result = self.scan_bytes("paper.pdf", data)
             self.assertEqual(result["caveats"], [], label)
 
-    def test_a_prediction_filter_anywhere_else_still_counts_as_unreadable(self):
+    def test_a_stream_behind_a_predictor_is_read_wherever_it_is_and_one_whose_predicted_data_is_not_valid_is_incomplete(self):
         self.approve_scan()
-        data = pdf(b"8 0 obj\n<< /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 3 >> >>\nstream\n"
-                   + zlib.compress(b"text") + b"\nendstream")
-        _b, _v, result = self.scan_bytes("paper.pdf", data)
+        good = pdf(b"8 0 obj\n<< /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 3 >> >>\nstream\n"
+                   + zlib.compress(png_filter(b"textabcdef", 3)) + b"\nendstream")
+        _b, _v, result = self.scan_bytes("paper.pdf", good)
+        self.assertEqual(result["caveats"], [])  # decoded, undone and read: nothing in it
+        bad = pdf(b"8 0 obj\n<< /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 3 >> >>\nstream\n"
+                  + zlib.compress(b"text") + b"\nendstream")  # 't' is not a row type
+        _b, _v, result = self.scan_bytes("paper.pdf", bad)
         self.assertIn("scan_incomplete", kinds(result["caveats"]))
 
     def test_the_older_text_encodings_are_decoded_and_read_instead_of_given_up_on(self):
@@ -577,6 +631,403 @@ class HtmlScanTest(ScanCase):
         self.assertEqual(result["status"], "done")
         self.assertEqual(kinds(result["caveats"])["script_elements"], 2)
         self.assertEqual(stages.read(self.store, captured["book_id"], captured["version_id"])["stages"]["fetched"]["status"], "done")
+
+
+class PredictorUndoTest(unittest.TestCase):
+    """The predictors are undone exactly, and what cannot be undone is refused and not guessed at."""
+
+    @property
+    def UNREADABLE(self):
+        return scan_tool._Unreadable
+
+    def test_each_png_row_filter_is_undone_exactly_for_many_shapes_of_row(self):
+        rng = random.Random(3)
+        for colors, bpc, columns in [(1, 8, 7), (3, 8, 5), (4, 8, 3), (1, 16, 4), (3, 16, 2), (1, 1, 17), (1, 4, 9), (1, 2, 13), (2, 8, 11)]:
+            rowbytes = (colors * bpc * columns + 7) // 8
+            bpp = max(1, (colors * bpc + 7) // 8)
+            raw = rng.randbytes(rowbytes * 9)
+            for types in ((0,), (1,), (2,), (3,), (4,), (0, 1, 2, 3, 4), (4, 3, 2, 1, 0, 4)):
+                parms = {"predictor": 15, "colors": colors, "bpc": bpc, "columns": columns}
+                self.assertEqual(scan_tool._undo_predictor(png_filter(raw, rowbytes, bpp, types), parms), raw,
+                                 (colors, bpc, columns, types))
+
+    def test_the_predictor_numbers_ten_to_fifteen_are_all_read_by_the_type_byte_of_each_row(self):
+        raw = random.Random(4).randbytes(60)
+        enc = png_filter(raw, 6, 1)
+        for number in range(10, 16):
+            self.assertEqual(scan_tool._undo_predictor(enc, {"predictor": number, "colors": 1, "bpc": 8, "columns": 6}), raw, number)
+
+    def test_the_tiff_predictor_is_undone_at_eight_bits_for_one_to_four_colours(self):
+        rng = random.Random(5)
+        for colors in (1, 2, 3, 4):
+            columns = 6
+            raw = rng.randbytes(colors * columns * 7)
+            enc = tiff_filter(raw, colors * columns, colors)
+            self.assertEqual(scan_tool._undo_predictor(enc, {"predictor": 2, "colors": colors, "bpc": 8, "columns": columns}), raw, colors)
+
+    def test_no_predictor_and_predictor_one_leave_the_bytes_as_they_are(self):
+        self.assertEqual(scan_tool._undo_predictor(b"abc", {"predictor": 1, "colors": 1, "bpc": 8, "columns": 1}), b"abc")
+
+    def test_a_row_that_is_cut_short_is_undone_as_far_as_it_goes(self):
+        raw = random.Random(6).randbytes(5 * 9)
+        enc = png_filter(raw, 5, 1)
+        parms = {"predictor": 15, "colors": 1, "bpc": 8, "columns": 5}
+        for cut in (1, 2, 3, 4, 5, 6, 7, 11):
+            part = enc[:-cut]
+            out = scan_tool._undo_predictor(part, parms)
+            rows = -(-len(part) // 6)  # one type byte for each row, the last perhaps alone
+            self.assertEqual(len(out), len(part) - rows, cut)
+            self.assertEqual(out, raw[:len(out)], cut)  # whatever comes out is the true start of the data
+
+    def test_every_other_predictor_and_every_parameter_that_makes_no_sense_is_refused(self):
+        ok = {"predictor": 12, "colors": 1, "bpc": 8, "columns": 4}
+        for label, parms in {"predictor 3": dict(ok, predictor=3), "predictor 9": dict(ok, predictor=9), "predictor 16": dict(ok, predictor=16),
+                             "predictor 0": dict(ok, predictor=0), "tiff at 16 bits": dict(ok, predictor=2, bpc=16),
+                             "tiff at 4 bits": dict(ok, predictor=2, bpc=4), "bits 3": dict(ok, bpc=3), "bits 0": dict(ok, bpc=0),
+                             "colors 0": dict(ok, colors=0), "colors 33": dict(ok, colors=33), "columns 0": dict(ok, columns=0),
+                             "an enormous row": dict(ok, columns=10 ** 9)}.items():
+            width = min(16, max(1, (parms["colors"] * parms["bpc"] * parms["columns"] + 7) // 8)) if parms["colors"] < 33 and parms["bpc"] else 4
+            data = (b"\x00" + bytes(width)) * 3  # rows of type none, so that no refusal can come from the data and only the parameters
+            with self.assertRaises(self.UNREADABLE, msg=label):
+                scan_tool._undo_predictor(data, parms)
+
+    def test_a_row_with_a_type_that_is_not_a_png_filter_is_refused(self):
+        for kind in (5, 6, 7, 127, 255):
+            with self.assertRaises(self.UNREADABLE, msg=kind):
+                scan_tool._undo_predictor(bytes([kind]) + b"abcd", {"predictor": 12, "colors": 1, "bpc": 8, "columns": 4})
+
+    def test_a_great_amount_of_predicted_data_is_undone_in_time_that_grows_with_its_size(self):
+        raw = random.Random(7).randbytes(3000 * 700)  # about two million bytes
+        enc = b"".join(b"\x04" + raw[i:i + 3000] for i in range(0, len(raw), 3000))  # Paeth on every row, whatever the bytes
+        started = time.monotonic()
+        scan_tool._undo_predictor(enc, {"predictor": 15, "colors": 3, "bpc": 8, "columns": 1000})
+        self.assertLess(time.monotonic() - started, 8)
+
+    def test_a_few_bytes_behind_a_very_wide_row_do_not_allocate_a_whole_row(self):
+        import tracemalloc
+        parms = {"predictor": 12, "colors": 1, "bpc": 8, "columns": 4_000_000}
+        tracemalloc.start()
+        try:
+            for _ in range(20):
+                scan_tool._undo_predictor(b"\x04abc", parms)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 1_000_000)  # not the four million bytes of a row of zeros, for four bytes of data
+
+    def test_parameters_written_in_every_ordinary_way_are_read(self):
+        read = scan_tool._parms
+        self.assertEqual(read(b"/Filter /FlateDecode", [b"FlateDecode"]), [None])
+        direct = read(b"/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 5 /Colors 3 /BitsPerComponent 4 >>", [b"FlateDecode"])
+        self.assertEqual(direct, [{"predictor": 12, "colors": 3, "bpc": 4, "columns": 5}])
+        self.assertEqual(read(b"/DP << /Predictor 15 >>", [b"FlateDecode"]), [{"predictor": 15, "colors": 1, "bpc": 8, "columns": 1}])
+        both = read(b"/DecodeParms [null << /Predictor 2 /Columns 9 >>]", [b"ASCIIHexDecode", b"FlateDecode"])
+        self.assertEqual(both, [None, {"predictor": 2, "colors": 1, "bpc": 8, "columns": 9}])
+        self.assertEqual(read(b"/DecodeParms null", [b"FlateDecode"]), [None])
+        self.assertEqual(read(b"/DecodeParms [ << /Predictor 12 /Columns 3 >> ]", [b"FlateDecode"])[0]["columns"], 3)
+        self.assertEqual(read(b"/DecodeParms << /Predictor 12 /Columns 3 /Early 1 /K -1 >>", [b"FlateDecode"])[0]["predictor"], 12)  # keys of other filters are ignored
+
+    def test_a_name_escape_that_makes_a_delimiter_or_white_space_is_left_as_it_is_in_the_text_the_structure_is_read_from(self):
+        keep = scan_tool._unescape_regular
+        self.assertEqual(keep(b"/Fil#74er /Pre#64ictor"), b"/Filter /Predictor")  # ordinary letters are read
+        for escape in (b"#3E", b"#3C", b"#5B", b"#5D", b"#28", b"#29", b"#2F", b"#25", b"#20", b"#0A", b"#0D", b"#09", b"#00", b"#0C", b"#23",
+                       b"#7B", b"#7D"):
+            self.assertEqual(keep(b"/A" + escape + b"B"), b"/A" + escape + b"B", escape)  # not a delimiter, not a space, not a mark
+        self.assertEqual(keep(b"#41#6a"), b"Aj")
+        self.assertEqual(keep(b"#4"), b"#4")  # not an escape
+
+    def test_parameters_that_cannot_be_read_with_certainty_are_refused(self):
+        read = scan_tool._parms
+        flate = [b"FlateDecode"]
+        for label, (text, names) in {
+                "a reference": (b"/DecodeParms 9 0 R", flate), "a reference in an array": (b"/DecodeParms [9 0 R]", flate),
+                "the short name as a reference": (b"/DP 9 0 R", flate), "a reference as the predictor": (b"/DecodeParms << /Predictor 9 0 R >>", flate),
+                "a reference as the columns": (b"/DecodeParms << /Predictor 12 /Columns 9 0 R >>", flate),
+                "two keys": (b"/DecodeParms << /Predictor 12 >> /DP << /Predictor 1 >>", flate),
+                "the same key twice": (b"/DecodeParms << /Predictor 12 /Predictor 1 >>", flate),
+                "a real number": (b"/DecodeParms << /Predictor 12 /Columns 5.5 >>", flate),
+                "a negative number": (b"/DecodeParms << /Predictor 12 /Columns -5 >>", flate),
+                "a string": (b"/DecodeParms << /Predictor 12 /Columns (5) >>", flate),
+                "a nested dictionary": (b"/DecodeParms << /Predictor 12 /X << /Columns 5 >> >>", flate),
+                "more entries than filters": (b"/DecodeParms [null null]", flate),
+                "a dictionary for two filters": (b"/DecodeParms << /Predictor 12 >>", [b"ASCIIHexDecode", b"FlateDecode"]),
+                "an unclosed dictionary": (b"/DecodeParms << /Predictor 12", flate), "an unclosed array": (b"/DecodeParms [null", flate),
+                "a name": (b"/DecodeParms /Predictor", flate), "a number": (b"/DecodeParms 12", flate),
+                "a huge number": (b"/DecodeParms << /Predictor 12 /Columns 99999999999999999999 >>", flate),
+                "a comment in the dictionary": (b"/DecodeParms << /Predictor 12 %c\n /Columns 5 >>", flate),
+                "a comment that holds the closing brackets": (b"/DecodeParms << %>>\n/Predictor 12 >>", flate),
+                "a comment in an array": (b"/DecodeParms [ %]\n << /Predictor 12 >> ]", flate),
+                "a reference after a comment": (b"/DecodeParms << /Predictor 1 %c\n0 R >>", flate),
+                "a number that runs into a letter": (b"/DecodeParms << /Predictor 12x >>", flate),
+                "a number that runs into a hash": (b"/DecodeParms << /Predictor 12#41 >>", flate)}.items():
+            with self.assertRaises(self.UNREADABLE, msg=label):
+                read(text, names)
+
+    def test_the_reading_of_parameters_costs_little_on_hostile_text(self):
+        started = time.monotonic()
+        for text in (b"/DecodeParms " + b"[" * 100_000, b"/DecodeParms " + b"<< " * 50_000, b"/DecodeParms [" + b"null " * 100_000 + b"]",
+                     b"/DP " + b"(" * 100_000, b"/DecodeParms << " + b"/Predictor 12 " * 20_000 + b">>"):
+            try:
+                scan_tool._parms(text, [b"FlateDecode"])
+            except scan_tool._Unreadable:
+                pass
+        self.assertLess(time.monotonic() - started, 5)
+
+
+class PredictorScanTest(ScanCase):
+    """Through the real scan tool, in its sandbox: what a claim in a dictionary used to skip is read now."""
+
+    def hidden(self, dictionary, parms, predictor_number=12, columns=40, chain=b"/Filter /FlateDecode", wrap=zlib.compress):
+        data = wrap(png_filter(script_rows(columns), columns, types=(0, 1, 2, 3, 4)))
+        return pdf(stream_object(dictionary + b" " + chain + b" " + parms, data))
+
+    def test_an_object_stream_behind_a_predictor_is_read_whatever_it_claims_to_be(self):
+        self.approve_scan()
+        keys = b"/N 1 /First 10 "
+        claims = {"plain": b"/Type /ObjStm " + keys, "dressed as an image": b"/Type /XObject /Subtype /Image " + keys,
+                  "the words in a string": b"/Type /ObjStm /X (/Subtype /Image) " + keys,
+                  "dressed as a cross-reference stream": b"/Type /XRef /W [1 2 1] /Size 4 " + keys,
+                  "with the keys of both": b"/Type /XRef /W [1 2 1] /Size 4 /Subtype /Image /Type /XObject " + keys}
+        for label, claim in claims.items():
+            for number in (10, 11, 12, 13, 14, 15):
+                parms = b"/DecodeParms << /Predictor %d /Columns 40 >>" % number
+                _b, _v, got = self.scan_bytes("paper.pdf", self.hidden(claim, parms))
+                self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0, f"{label}, predictor {number}: {kinds(got['caveats'])}")
+
+    def test_the_tiff_predictor_and_a_predictor_on_the_second_of_two_filters_are_read_too(self):
+        self.approve_scan()
+        claim = b"/Type /ObjStm /N 1 /First 10"
+        tiff = pdf(stream_object(claim + b" /Filter /FlateDecode /DecodeParms << /Predictor 2 /Columns 40 >>",
+                                 zlib.compress(tiff_filter(script_rows(40), 40))))
+        _b, _v, got = self.scan_bytes("paper.pdf", tiff)
+        self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0)
+        hexed = pdf(stream_object(claim + b" /Filter [/ASCIIHexDecode /FlateDecode] /DecodeParms [null << /Predictor 12 /Columns 40 >>]",
+                                  zlib.compress(png_filter(script_rows(40), 40)).hex().encode() + b">"))
+        _b, _v, got = self.scan_bytes("paper.pdf", hexed)
+        self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0)
+
+    def test_parameters_the_scan_cannot_read_and_predictors_it_does_not_know_are_an_incomplete_scan_not_a_skip(self):
+        self.approve_scan()
+        claim = b"/Type /XRef /W [1 2 1] /Size 4 /N 1 /First 10"
+        for label, parms in {"a reference": b"/DecodeParms 9 0 R", "a reference in an array": b"/DecodeParms [null 9 0 R]",
+                             "a predictor it does not know": b"/DecodeParms << /Predictor 16 /Columns 40 >>",
+                             "no columns for a wide row": b"/DecodeParms << /Predictor 12 /Columns 0 >>"}.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", self.hidden(claim, parms))
+            self.assertIn("scan_incomplete", kinds(got["caveats"]), label)
+
+    def test_what_is_decoded_before_a_predictor_that_cannot_be_undone_is_still_read(self):
+        self.approve_scan()
+        plain = zlib.compress(script_rows(40))  # not predicted at all, though the dictionary says so
+        data = pdf(stream_object(b"/Type /XRef /W [1 2 1] /Size 4 /Filter /FlateDecode /DecodeParms << /Predictor 16 /Columns 40 >>", plain))
+        _b, _v, got = self.scan_bytes("paper.pdf", data)
+        found = kinds(got["caveats"])
+        self.assertGreater(found.get("javascript", 0), 0, found)
+        self.assertEqual(found.get("scan_incomplete"), 1, found)
+
+    def test_a_real_image_and_a_real_cross_reference_stream_behind_a_predictor_give_no_caveat(self):
+        self.approve_scan()
+        picture = stream_object(b"/Type /XObject /Subtype /Image /Width 30 /Height 30 /ColorSpace /DeviceRGB /BitsPerComponent 8 "
+                                b"/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /Columns 30 >>",
+                                zlib.compress(png_filter(random.Random(8).randbytes(90 * 30), 90, bpp=3)), 6)
+        xref = stream_object(b"/Type /XRef /W [1 2 1] /Size 6 /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 4 >>",
+                             zlib.compress(png_filter(bytes([1, 0, 15, 0] * 6), 4, types=(2,))), 7)
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(picture + xref))
+        self.assertEqual(got["caveats"], [])
+
+    def test_twenty_figures_with_predictors_and_fifteen_hundred_small_streams_give_no_caveat_and_twenty_five_hundred_reach_the_limit(self):
+        self.approve_scan()
+        figure = zlib.compress(png_filter(bytes(3000) * 316, 3000, bpp=3, types=(2, 4)))  # about 950,000 bytes decoded
+        figures = b"".join(stream_object(b"/Type /XObject /Subtype /Image /Width 1000 /Height 316 /ColorSpace /DeviceRGB "
+                                         b"/BitsPerComponent 8 /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /Columns 1000 >>",
+                                         figure, 10 + n) for n in range(20))
+        started = time.monotonic()
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(figures))
+        self.assertEqual(got["caveats"], [])
+        self.assertLess(time.monotonic() - started, 40)
+        small = zlib.compress(png_filter(b"abcdefgh", 4))
+        many = lambda n: pdf(b"".join(stream_object(b"/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 4 >>", small, 10 + k) for k in range(n)))
+        _b, _v, fifteen = self.scan_bytes("paper.pdf", many(1500))
+        self.assertEqual(fifteen["caveats"], [])
+        _b, _v, twentyfive = self.scan_bytes("paper.pdf", many(2500))
+        self.assertIn("scan_incomplete", kinds(twentyfive["caveats"]))
+
+    def test_a_decoy_set_of_parameters_in_a_string_cannot_make_the_scan_garble_what_the_viewer_reads_as_it_is(self):
+        self.approve_scan()
+        script = SCRIPT * 2
+        # the real stream has no predictor at all; a string in its dictionary holds one, and the scan, which does not parse strings,
+        # takes it for the stream's own and undoes a Sub row on text that was never filtered. A viewer reads the text as it is.
+        data = zlib.compress(b"\x01" + script)
+        decoy = b"/Type /ObjStm /N 1 /First 10 /Note (/DecodeParms << /Predictor 12 /Columns 100000 >>) /Filter /FlateDecode"
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(decoy, data)))
+        found = kinds(got["caveats"])
+        self.assertGreater(found.get("javascript", 0), 0, found)  # the bytes before the predictor are read as well
+        for nested in (b"/X << /DecodeParms << /Predictor 12 /Columns 100000 >> >>", b"/X [/DP << /Predictor 15 /Columns 100000 >>]"):
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(b"/Type /ObjStm /N 1 /First 10 " + nested + b" /Filter /FlateDecode", data)))
+            self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0, nested)
+
+    def test_a_decoy_filter_in_a_string_cannot_make_the_scan_take_a_deflate_stream_for_a_picture(self):
+        self.approve_scan()
+        # the first /Filter the scan reads says DCTDecode, an image codec the scan does not look into; the real one is deflate
+        real = zlib.compress(SCRIPT * 2)
+        cases = {"a decoy in a string before the real key": b"/Type /ObjStm /N 1 /First 10 /Note (/Filter /DCTDecode) /Filter /FlateDecode",
+                 "a decoy in a nested dictionary before it": b"/Type /ObjStm /N 1 /First 10 /X << /Filter /DCTDecode >> /Filter /FlateDecode",
+                 "a decoy written with an escape": b"/Type /ObjStm /N 1 /First 10 /Note (/Fil#74er /DCTDecode) /Filter /FlateDecode",
+                 "a decoy after the real key": b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode /Note (/Filter /DCTDecode)",
+                 "a decoy of no filter at all": b"/Type /ObjStm /N 1 /First 10 /Note (/Filter /Crypt) /Filter /FlateDecode"}
+        for label, dictionary in cases.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(dictionary, real)))
+            self.assertIn("scan_incomplete", kinds(got["caveats"]), f"{label}: the stream was passed over in silence")
+
+    def test_a_dictionary_that_names_its_filter_once_is_read_as_before(self):
+        self.approve_scan()
+        for dictionary in (b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode", b"/Type /ObjStm /N 1 /First 10 /Filter [/FlateDecode]",
+                           b"/Type /ObjStm /N 1 /First 10 /Fil#74er /FlateDecode", b"/Type /ObjStm /N 1 /First 10 /FFilter /Foo /Filter /FlateDecode"):
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(dictionary, zlib.compress(SCRIPT * 2))))
+            found = kinds(got["caveats"])
+            self.assertGreater(found.get("javascript", 0), 0, dictionary)
+            self.assertNotIn("scan_incomplete", found, dictionary)
+
+    SUB = staticmethod(lambda: zlib.compress(png_filter(script_rows(40), 40, types=(1,))))  # the script, Sub-filtered: not text until undone
+
+    def test_a_name_that_escapes_into_a_delimiter_cannot_close_the_parameters_early(self):
+        self.approve_scan()
+        base = b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode "
+        cases = {"an escaped closing bracket in a key": b"/DecodeParms<</A#3E#3E /Predictor 12 /Columns 40>>",
+                 "an escaped closing bracket in a name value": b"/DecodeParms<</A /B#3E#3E /Predictor 12 /Columns 40>>",
+                 "an escaped space": b"/DecodeParms<</Predictor#2012 /Columns 40>>",
+                 "an escaped opening bracket": b"/DecodeParms<</A#3C#3C /Predictor 12 /Columns 40>>",
+                 "an escaped comment mark": b"/DecodeParms<</A#25 /Predictor 12 /Columns 40>>"}
+        for label, parms in cases.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + parms, self.SUB())))
+            found = kinds(got["caveats"])
+            self.assertTrue(found.get("javascript", 0) > 0 or "scan_incomplete" in found, f"{label}: the script was hidden: {found}")
+        honest = b"/DecodeParms << /Predictor 12 /Columns 40 >>"
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + honest, self.SUB())))
+        self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0)
+        spelled = b"/DecodeParms << /Pre#64ictor 12 /Co#6Cumns 40 >>"  # escapes of ordinary letters are still read
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + spelled, self.SUB())))
+        self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0)
+
+    def test_a_comment_in_the_parameters_cannot_hide_the_predictor_or_a_reference(self):
+        self.approve_scan()
+        base = b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode "
+        cases = {"a comment that holds the closing brackets": b"%<<\n" + base + b"/DecodeParms<< %>>\n/Predictor 12 /Columns 40>>",
+                 "a reference after a comment": base + b"/DecodeParms<</Predictor 1 %c\n0 R /Columns 40>>",
+                 "a reference after a line end and a comment": base + b"/DecodeParms<</Predictor 1\n%c\n0 R /Columns 40>>",
+                 "a geometry that is a reference": base + b"/DecodeParms<</Predictor 12 /Columns 40%c\n0 R>>",
+                 "a geometry that is a reference after a space": base + b"/DecodeParms<</Predictor 12 /Columns 40 %c\n0 R>>",
+                 "a comment before the key": base + b"/DecodeParms<< %c\n/Predictor 12 /Columns 40>>",
+                 "a comment in an array of parameters": base + b"/DecodeParms[ %]\n<</Predictor 12 /Columns 40>>]"}
+        for label, dictionary in cases.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(dictionary, self.SUB())))
+            self.assertIn("scan_incomplete", kinds(got["caveats"]), f"{label}: the script was hidden: {kinds(got['caveats'])}")
+
+    def test_a_number_that_runs_into_letters_is_not_a_number(self):
+        self.approve_scan()
+        base = b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode "
+        for parms in (b"/DecodeParms<</Predictor 12x /Columns 40>>", b"/DecodeParms<</Predictor 12 /Columns 40abc>>",
+                      b"/DecodeParms<</Predictor 12 /Columns 40#41>>"):
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + parms, self.SUB())))
+            self.assertIn("scan_incomplete", kinds(got["caveats"]), parms)
+        close = b"/DecodeParms<</Predictor 12/Columns 40>>"  # no space, the last number against the closing brackets
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + close, self.SUB())))
+        self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0)
+
+    def test_a_comment_in_the_filter_array_cannot_cut_the_chain_short(self):
+        self.approve_scan()
+        hexed = zlib.compress(SCRIPT.hex().encode() * 2)  # the text of the action, in hex, inside deflate: a chain of two filters
+        base = b"/Type /ObjStm /N 1 /First 10 "
+        for label, chain in {"a comment holding the closing bracket": b"/Filter[/FlateDecode %]\n/ASCIIHexDecode]",
+                             "a comment with no space": b"/Filter[/FlateDecode%]\n/ASCIIHexDecode]"}.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + chain, hexed)))
+            self.assertIn("scan_incomplete", kinds(got["caveats"]), f"{label}: {kinds(got['caveats'])}")
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + b"/Filter [/FlateDecode /ASCIIHexDecode]", hexed)))
+        self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0)  # the honest chain reads the same text
+
+    def test_a_filter_list_that_holds_anything_but_names_is_not_read_to_its_first_bracket(self):
+        self.approve_scan()
+        hexed = zlib.compress(SCRIPT.hex().encode() * 2)  # deflate, then hex: a viewer reads the action, a list cut at the first ] does not
+        base = b"/Type /ObjStm /N 1 /First 10 "
+        cases = {"a string that holds a bracket": b"/Filter[/FlateDecode (]) /ASCIIHexDecode]",
+                 "an empty array inside it": b"/Filter[/FlateDecode [] /ASCIIHexDecode]",
+                 "an array inside it": b"/Filter[/FlateDecode [/X] /ASCIIHexDecode]",
+                 "a hex string inside it": b"/Filter[/FlateDecode <5D> /ASCIIHexDecode]",
+                 "a number inside it": b"/Filter[/FlateDecode 5 /ASCIIHexDecode]",
+                 "a dictionary inside it": b"/Filter[/FlateDecode <</A 1>> /ASCIIHexDecode]",
+                 "a name with an escaped bracket": b"/Filter[/FlateDecode#5D /ASCIIHexDecode]",
+                 "a name with a mark that is not a letter": b"/Filter[/FlateDecode /ASCIIHex-Decode]"}
+        for label, chain in cases.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + chain, hexed)))
+            self.assertIn("scan_incomplete", kinds(got["caveats"]), f"{label}: the chain was cut short in silence: {kinds(got['caveats'])}")
+        for chain in (b"/Filter [/FlateDecode /ASCIIHexDecode]", b"/Filter[/FlateDecode/ASCIIHexDecode]", b"/Filter [ /FlateDecode\n/ASCIIHexDecode ]",
+                      b"/Filter [/Fl /AHx]"):
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(base + chain, hexed)))
+            self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0, chain)  # an honest list is read as before
+            self.assertNotIn("scan_incomplete", kinds(got["caveats"]), chain)
+
+    def test_what_the_predictor_made_of_the_data_is_read_as_well_as_the_data_before_it(self):
+        self.approve_scan()
+        claim = b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 40 >>"
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(claim, zlib.compress(png_filter(script_rows(40), 40, types=(1, 2, 3, 4))))))
+        self.assertGreater(kinds(got["caveats"]).get("javascript", 0), 0)  # filtered rows hide it from the bytes before the predictor
+
+    def test_wide_pixels_make_the_rows_cost_more_of_the_budget_and_a_file_of_them_is_cut_short_in_time(self):
+        self.approve_scan()
+        # 32 colours: 33 bytes a row and 32 passes over each row for a Sub filter; the rows alone would be well under the budget
+        rows = zlib.compress(b"\x01" + bytes(32) + (b"\x01" + bytes(32)) * 57_000)
+        parms = b"/Filter /FlateDecode /DecodeParms << /Predictor 11 /Colors 32 /Columns 1 >>"
+        wide = pdf(b"".join(stream_object(parms, rows, 5 + n) for n in range(4)))
+        started = time.monotonic()
+        _b, _v, got = self.scan_bytes("paper.pdf", wide)
+        self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1})
+        self.assertLess(time.monotonic() - started, 30)
+
+    def test_the_budget_charges_a_row_for_the_passes_it_costs(self):
+        rows = [10]
+        parms = {"predictor": 11, "colors": 32, "bpc": 8, "columns": 1}
+        with self.assertRaises(scan_tool._Unreadable):
+            scan_tool._undo_predictor((b"\x01" + bytes(32)) * 1, parms, rows)  # one row of 32 passes against 10 left
+        rows = [32]
+        scan_tool._undo_predictor((b"\x01" + bytes(32)) * 1, parms, rows)
+        self.assertEqual(rows, [0])
+        rows = [100]
+        scan_tool._undo_predictor(b"\x01\x02\x03" * 4, {"predictor": 2, "colors": 3, "bpc": 8, "columns": 1}, rows)
+        self.assertEqual(rows, [100 - 4 * 3])  # the TIFF predictor charges a pass for each colour
+
+    def test_streams_with_a_very_wide_row_and_hardly_any_data_cost_little(self):
+        self.approve_scan()
+        tiny = zlib.compress(b"\x00abc")
+        parms = b"/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 4000000 >>"
+        started = time.monotonic()
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(b"".join(stream_object(parms, tiny, 5 + n) for n in range(1800))))
+        self.assertEqual(got["caveats"], [])
+        self.assertLess(time.monotonic() - started, 20)
+
+    def test_a_great_many_rows_of_one_byte_cost_a_bounded_time_and_are_an_incomplete_scan(self):
+        self.approve_scan()
+        # a row costs the same however short it is: 1.9 million bytes of one-column rows are 950,000 rows in each stream
+        rows = zlib.compress(b"\x00a" * 950_000)
+        parms = b"/Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 1 >>"
+        one = pdf(stream_object(parms, rows))
+        started = time.monotonic()
+        _b, _v, got = self.scan_bytes("paper.pdf", one)
+        self.assertEqual(got["caveats"], [])  # under the budget of rows, read in full
+        three = pdf(b"".join(stream_object(parms, rows, 5 + n) for n in range(3)))
+        _b, _v, got = self.scan_bytes("paper.pdf", three)
+        self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1})  # three of them are more rows than the scan undoes in a file
+        self.assertLess(time.monotonic() - started, 40)
+
+    def test_a_large_picture_behind_a_predictor_is_a_large_picture_and_a_large_stream_of_anything_else_is_incomplete(self):
+        self.approve_scan()
+        rows = bytes(3000) * 1000  # three million bytes of zeros
+        picture = pdf(stream_object(b"/Type /XObject /Subtype /Image /Width 1000 /Height 1000 /Filter /FlateDecode "
+                                    b"/DecodeParms << /Predictor 15 /Colors 3 /Columns 1000 >>", zlib.compress(png_filter(rows, 3000, bpp=3, types=(2,)))))
+        _b, _v, got = self.scan_bytes("paper.pdf", picture)
+        self.assertEqual(kinds(got["caveats"]), {"large_image_streams": 1})
+        other = pdf(stream_object(b"/Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /Columns 1000 >>",
+                                  zlib.compress(png_filter(rows, 3000, bpp=3, types=(2,)))))
+        _b, _v, got = self.scan_bytes("paper.pdf", other)
+        self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1})
 
 
 class ScanStageTest(ScanCase):

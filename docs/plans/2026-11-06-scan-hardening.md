@@ -248,7 +248,7 @@ E's comparison confirms the result on real files.
 
 ## Result
 
-### Increment A — The scan tool has a version of its own (implemented and reviewed, not yet committed)
+### Increment A — The scan tool has a version of its own (committed as c25e1d45ee2ef8718eaf7043e200d127f3a8bd4e, not pushed)
 
 - **Changed:** `engine/kb/approvals.py` (`SCAN_VERSION = "0.0.2"`, used by `builtin_scan_entry`; the unused engine-version import is gone),
   `engine/kb/scan.py` (`TOOL_VERSION = approvals.SCAN_VERSION`), `engine/kb/__main__.py` (the `reconvert --scan` warning asks for the
@@ -267,3 +267,82 @@ E's comparison confirms the result on real files.
   cannot tell `approvals.SCAN_VERSION` from `scan.TOOL_VERSION` (harmless: they are the same object by construction).
 - **Security review:** none asked for (the plan puts that stop at B, C and D).
 - **Left for the owner:** the word to commit A.
+
+### Increment B — Decode what a claim would have skipped (implemented, reviewed and security-reviewed, not yet committed)
+
+- **Changed:** `engine/kb/scan_tool.py` (the parameter reader `_parms`; `_undo_predictor` for the PNG predictors 10 to 15 and the TIFF
+  predictor at 8 bits; `_decode_chain` undoes the predictor of a deflate step; the skip of a stream with a predictor or indirect
+  parameters on the words `/Type /XRef` or `/Subtype /Image` is gone, and `_INDIRECT_PARMS`, `_PREDICTOR` and `_XREF` with it),
+  `engine/kb/approvals.py` (the scan's label, 0.0.3), `engine/tests/test_scan.py`, `engine/tests/test_convert.py` (the history line of
+  `ToolVersionTest`), `engine/README.md`.
+- **The rule.** A stream the scan can decode is decoded whatever its dictionary says. A predictor that is not 2 or 10 to 15, bits or
+  colours that make no sense, a row longer than 4,000,000 bytes, a row type that is no PNG filter, parameters that are a reference, given
+  twice, not a whole number, not direct or more entries than filters, and more than 2,000,000 passes over predicted rows in a file (a row
+  is charged one for each byte of a pixel) are `scan_incomplete`, and what was decoded before such a predictor is still read. The large-image
+  rule of the first fix plan is unchanged and applies to a picture behind a predictor too.
+- **Measured cost** (plain Python, this machine): 20 MB of Paeth rows of 3,000 bytes in 3.7 s, ten streams of 2 MB of Average rows in
+  1.7 s, 2,000,000 Paeth rows of 3 bytes in 1.5 s, against the tool's 60 s limit; the scan tests build twenty figures behind a predictor
+  and 1,500 small streams that give no caveat, and 2,500 small ones that reach the existing limit of 2,000 decoded streams.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_convert_run` (Python
+  3.15.0): 164 tests, OK; `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest engine.tests.test_convert.ToolVersionTest
+  engine.tests.test_search.CommandLineTest`: 14 tests, OK. The new tests were written first and failed where the behaviour is new. Break-it
+  run on about thirty places of the new code: all caught, after several strengthenings (the checks of bits, colours and columns, the
+  size of the previous-row buffer by memory, the decoy cases). The real arXiv paper in the owner's library still reports
+  `large_image_streams 3` and nothing else, and both PDF fixtures report nothing, as before.
+- **Review:** independent `reviewer` agent, 2 exchanges (the second on the fixes). The fixes of the first exchange:
+  1. *Blocking, reproduced and fixed:* a decoy `/DecodeParms` in a string of the dictionary, with no real one, made the scan undo a
+     predictor that a viewer never applies, and an object stream with a script in it gave **no caveat at all** (`{}`). The scan reads
+     a dictionary as text and does not know strings, so it cannot tell; the bytes from before each predictor that was undone are now read
+     for the patterns as well as the undone ones, so the script shows whichever way the viewer reads the stream. Two parameter keys are
+     refused as before.
+  2. *Cost, fixed:* the budget counted rows, but a Sub or TIFF row costs a pass for each byte of a pixel (32 colours: 32 passes of a
+     33-byte row), so about 20 MB of such rows could take 30 to 60 s. It now charges a row for its passes; a test builds the case.
+  3. *Cost, fixed:* the buffer for the row before was a whole row of zeros (up to 4 MB) even for a stream of a few bytes; it is now the
+     size of the data (tested by memory, since the time is not visible).
+  The second exchange found the first two closed and one more hole, **older than B**: the first `/Filter` the scan reads can be a decoy
+  in a string that says an image codec (`/DCTDecode`), which the scan does not look into, ahead of the real `/FlateDecode`; the real
+  stream was then neither decoded nor reported. It is the same kind of claim the plan is about, so it is fixed here: a dictionary with
+  more than one `/Filter` key is `scan_incomplete` (tests for a decoy in a string, in a nested dictionary, written with an escape,
+  after the real key, and for the honest single key). Not changed, with reasons: a chain such as `[/FlateDecode /ASCIIHexDecode]`
+  with a decoy predictor leaves a residual case (the garbled bytes would have to be valid hex or base-85 text too while the raw bytes
+  are; judged implausible, not testable); memory is at most about twice the 20 MB budget more than before (no unbounded growth);
+  random bytes in pictures are now searched twice for a three-byte pattern, about one false match in 16 MB, which only adds a count.
+- **Security review (run on the owner's word, 2026-11-06):** one `security-reviewer` agent, 2 exchanges, asked to hunt dictionary tricks,
+  hostile predictor parameters, cost and memory, and ways to get a script past both the raw and the undone bytes. The first pass ran 32
+  experiments on a copy (hand-built PDFs through `scan_pdf`, not the sandboxed run); the second pass could not run anything (its scratch
+  path was refused after the working directory changed) and read the code, so its one new finding is from reading and was
+  **reproduced by me with a test before it was fixed**. Found sound (tested): the predictor undo against an independent
+  reference written from the specifications on 5,283 random cases (PNG types 0 to 4, TIFF, colours 1 to 32, bits 1, 2, 4, 8 and 16, odd
+  columns, a partial last row, mixed row types) with **0 differences**; chains `[AHx Fl]`, `[A85 Fl]`, `[Fl Fl]` and `[Fl AHx]` with
+  parameters as an array; decoy names such as `/Columns_` and `/Colors-x`; `/FFilter` and `/FDecodeParms` not read as keys; rows at exactly
+  MAX_ROW and one more; the large-image rule not made worse; and cost: seven streams of 2 MB of Paeth rows of 3,000 bytes 2.4 s, Average
+  1.2 s, one-byte rows 0.4 to 0.7 s, 32 colours 0.7 s, parameter dictionaries near the size limit 0.15 s for 100 of them, peak memory
+  about 150 MB at the 20 MB cap (131 MB for ten streams of `#41`, about twice what it was without a predictor). Findings:
+  1. *High, fixed:* `/DecodeParms<</A#3E#3E /Predictor 12 /Columns 8>>`: the scan unescaped the whole dictionary before reading it,
+     so the escaped `>>` closed the parameter dictionary early, the scan read predictor 1, a viewer read predictor 12, and an object stream
+     with a script in it gave **no caveat** (`[]`; the honest twin gave `javascript`). The raw bytes did not help (they are filtered).
+     The structure is now read from text where an escape that spells white space, a delimiter, `%` or `#` is left as written (those
+     are part of the name, as in a viewer), while the haystacks still use the full unescape.
+  2. *High, fixed:* a comment hid the predictor or a reference: `<< %>>` ended the parameter dictionary early; `/Predictor 1 %c` then a
+     line with `0 R` (object 1 being 12) hid a reference; `/Columns 1000%c` and a line with `0 R` changed the row geometry. A
+     comment in a parameter dictionary or in an array of parameters is now `scan_incomplete`, and a number must end at white space, `/`
+     or the end (a number that runs into letters, a hash or a point is refused).
+  3. *Medium, fixed (older than B):* a comment in the `/Filter` array closed it early (`[/FlateDecode %]` then `/ASCIIHexDecode]`), so
+     the scan read one filter where a viewer reads two. The second pass found the same with a string that holds `]`, an empty array or a
+     number in the list. A list of filters is now accepted only if it holds names and white space and nothing else; any other is
+     `scan_incomplete`. Each shape has a test, with honest twins (`[/Fl /AHx]`, no spaces, line ends) that read as before.
+  Notes, not changed: the stream is still found by the word `stream` and the dictionary before it by matching brackets (increment C);
+  a decoy `/Filter` or `/DecodeParms` that looks like the real one is refused when there are two; a name such as `/ASCIIHex-Decode` in a
+  list is refused as an unknown filter further on (the stricter character class in the list pattern adds nothing a test can see);
+  ASCII85's `z` expands 4 times with no per-stream cap, which is older than B and bounded by the size of the input; a residual case of
+  a chain with a filter after deflate and a decoy predictor (the garbled bytes would also have to be valid text for the next filter)
+  was judged implausible.
+- **Verification after the security review's fixes:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan
+  engine.tests.test_convert_run`: 170 tests, OK; `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest
+  engine.tests.test_convert.ToolVersionTest engine.tests.test_search.CommandLineTest`: 14 tests, OK. Break-it run on the fixes (the
+  full unescape again, each member of the delimiter set, the parameter comment check, the number boundary, the filter list check): all
+  caught, and one check that turned out to be dead code was removed. The real arXiv paper still reports `large_image_streams 3` and
+  nothing else, and both PDF fixtures report nothing.
+- **Left for the owner:** the word to commit B. This commit changes the scan tool's script, so its entry in the owner's config no longer
+  matches (label 0.0.3); increment E is where it is put in. Increment C (the reader that knows strings and comments) is what closes the
+  rest of the class.
