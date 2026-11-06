@@ -386,3 +386,32 @@ E's comparison confirms the result on real files.
   behaviour for `0obj` was not checked against any viewer (the scan treats it as a header and as the word `obj` both ways, which fails safe).
 - **Left for the owner:** the word to commit C (and whether the hex fix wants a second independent run). This commit changes the scan
   tool's script, so its entry in the owner's config no longer matches (label 0.0.4); increment E puts it in.
+
+### Increment D — Nothing but white space after a stream's data (implemented and reviewed; security review not yet decided; not committed)
+
+- **Done:** in `engine/kb/scan_tool.py` a deflate step whose data goes on after its end, an ASCII85 step with anything after `~>`, and a
+  hex step with anything after `>` is unreadable (`scan_incomplete`) unless what follows is PDF white space (`_BLANK`: space, tab, CR,
+  LF, NUL, FF). The check runs at every step of a chain, before the predictor, and is skipped in the limit state by design (nothing past
+  the cap is decoded, so there is nothing to hide). Label 0.0.5 (`approvals.SCAN_VERSION`, history line in `ToolVersionTest`);
+  `engine/README.md` states the rule. The plan names `engine/kb/scan.py` for the label; the label lives in `approvals.py` (`scan.py`
+  reads it), so `scan.py` is unchanged.
+- **Verification run:** `unittest engine.tests.test_scan engine.tests.test_convert_run`: 210 tests, OK; `unittest
+  engine.tests.test_convert.ToolVersionTest engine.tests.test_search.CommandLineTest`: 14 tests, OK. Break-it: five mutations (the check
+  off for each of deflate, ASCII85 and hex; the Python white-space set instead of the PDF set; a narrower set), all caught. 62 real PDFs
+  (the arXiv paper, 2 fixtures, system PDFs): the same caveats before and after.
+- **Review (independent reviewer, one round):** no blocking finding. Two test gaps, fixed: a large image with bytes after its data is
+  unchanged (`large_image_streams` only), and junk after an inner deflate step inside a chain. One of my first test cases was wrong
+  (`endstream` inside the data cuts it cleanly and hides nothing) and was removed. Not changed: a hex stream with NUL inside its digits
+  was already unreadable before D.
+- **Security review (owner said yes; independent, run on a copy):** no finding of any severity. Tested: 32 targeted cases (trailing white
+  space and junk, a second zlib stream, `~ >`, a lone `~`, a benign end mark followed by a second stream, hex with trailing digits or a
+  NUL, every order of flate, ASCII85 and hex with junk at each layer, the same filter twice, a predictor with trailing junk); 1.5 million
+  generated PDFs against a lenient-viewer oracle (the first zlib stream only, ASCII85 to the first `~`, hex ignoring non-hex bytes, data
+  read both to `endstream` and by `/Length`): no case where the oracle sees an action and the scan gives no caveat, no exception;
+  400,000 byte-level mutations of the two fixtures and 40 generated PDFs: no exception, none over 1 s; 50 MB files with the new check:
+  0.13 to 0.42 s, linear copies only. The by-design large-image exemption still reports `large_image_streams` for trailing data past
+  the 2 MB limit (a caveat, not silence). Notes, not changed: padding with `\x0b` or `\x1a` and concatenated zlib streams are
+  `scan_incomplete` (over-flagging, the safe direction). Limits: the oracle is the reviewer's model of viewers, not a real viewer; only two
+  fixtures exist for mutation; parameter dictionaries and object streams were not fuzzed beyond the marker.
+- **Not run:** viewer behaviour for bytes after the end of the data.
+- **Left for the owner:** the word to commit D.

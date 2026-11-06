@@ -1160,6 +1160,38 @@ class ReaderTest(unittest.TestCase):
         self.assertGreater(honest.get("javascript", 0), 0)  # the honest twin is read, as before
         self.assertNotIn("scan_incomplete", honest)
 
+    def test_anything_but_white_space_after_the_end_of_a_streams_data_is_reported(self):
+        payload = b"1 0 " + SCRIPT * 2
+        ends = {"deflate": (b"/FlateDecode", zlib.compress(payload)),
+                "ascii85": (b"/ASCII85Decode", base64.a85encode(payload + b" " * (-len(payload) % 4)) + b"~>"),
+                "hex": (b"/ASCIIHexDecode", payload.hex().encode() + b">"),
+                "ascii85 then deflate": (b"[/ASCII85Decode /FlateDecode]", base64.a85encode(zlib.compress(payload)) + b"~>"),
+                "hex then deflate": (b"[/ASCIIHexDecode /FlateDecode]", zlib.compress(payload).hex().encode() + b">"),
+                "deflate then hex": (b"[/FlateDecode /ASCIIHexDecode]", zlib.compress(payload.hex().encode() + b">"))}
+
+        def make(filt, data):
+            return b"9 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Length %d /Filter %s >>\nstream\n" % (len(data), filt) + data + b"\nendstream\nendobj\n"
+
+        for label, (filt, data) in ends.items():
+            plain = self.found(pdf(make(filt, data)))
+            self.assertGreater(plain.get("javascript", 0), 0, label)
+            self.assertNotIn("scan_incomplete", plain, label)
+            for white in (b" ", b"\n", b"\r\n", b"\r", b"\t \x00\x0c\n"):  # what a writer puts before endstream
+                found = self.found(pdf(make(filt, data + white)))
+                self.assertGreater(found.get("javascript", 0), 0, f"{label} + {white!r}")
+                self.assertNotIn("scan_incomplete", found, f"{label} + {white!r}")
+            for extra in (b"x", b" x", b"\x00\x01", b"%", b"\n\n\x01"):
+                self.assertIn("scan_incomplete", self.found(pdf(make(filt, data + extra))), f"{label} + {extra!r}")
+        # a deflate stream cut short is still reported
+        self.assertIn("scan_incomplete", self.found(pdf(make(b"/FlateDecode", zlib.compress(payload)[:-6]))))
+
+    def test_a_large_image_is_the_same_with_bytes_after_the_end_of_its_data(self):
+        # the decoder stops at its limit, so what lies past the end is never reached: nothing here to hide, and nothing new to report
+        flat = zlib.compress(b"\0" * BIG)
+        for tail in (b"", b"\n", b"junk"):
+            got = self.found(pdf(image(flat + tail, extra=b"/Filter /FlateDecode", compress=False)))
+            self.assertEqual(got, {"large_image_streams": 1}, tail)
+
     def test_a_real_object_whose_header_has_no_white_space_before_obj_is_read_not_only_reported(self):
         script = zlib.compress(b"<< /S /JavaScript /JS (x) >>")
         real = b"9 0obj\n<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode >>\nstream\n" + script + b"\nendstream\nendobj\n"

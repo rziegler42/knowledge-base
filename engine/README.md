@@ -248,7 +248,9 @@ them took 44 seconds). A real compressed stream swallowed into the data of a fak
 by its offset and the scan that reads the file in order can disagree about where an object is in a file written to make them
 disagree, and the cases found are the ones above. The data of a stream ends at the first `endstream`, so a stream that holds that
 word in its middle, with its real end after it, is cut there: a deflate stream cut there is `scan_incomplete`, and so is an
-ASCII85 stream with no `~>` or a hex stream with no `>` in what the scan has (the letters of the word are ASCII85 digits). A stream needs an `N G obj` header: a dictionary and `stream`
+ASCII85 stream with no `~>` or a hex stream with no `>` in what the scan has (the letters of the word are ASCII85 digits). A stream whose data goes on after its end (after the end of
+the deflate data, after `~>`, after `>`) with anything but white space is `scan_incomplete` too: its length is not what the scan took it
+to be. A stream needs an `N G obj` header: a dictionary and `stream`
 without one is `scan_incomplete`.
 A page's hidden text is found only when it is hidden by the `hidden` attribute or an inline style, not by a stylesheet, by
 position or by colour.

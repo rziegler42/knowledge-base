@@ -70,6 +70,9 @@ def _unescape_names(data):
     return re.sub(rb"#([0-9A-Fa-f]{2})", lambda m: bytes([int(m.group(1), 16)]), data)
 
 
+_BLANK = b" \t\r\n\x00\x0c"  # the white space of a PDF; a writer may put some between the end of a stream's data and endstream
+
+
 def _inflate(blob, limit):
     """(output, state): "ok" when the stream ended cleanly, "limit" when more was left than the limit allowed, "bad" when
     it is not deflate data or ends early."""
@@ -80,6 +83,8 @@ def _inflate(blob, limit):
         return b"", "bad"
     if d.unconsumed_tail:
         return out, "limit"
+    if d.eof and d.unused_data.strip(_BLANK):
+        return out, "bad"  # the data goes on after the end of the deflate data: the stream is not the length the scan took it for
     return out, "ok" if d.eof else "bad"
 
 
@@ -302,7 +307,9 @@ def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None):
                 # the letters of endstream are ASCII85 digits, so the scan may have cut the stream short where a viewer, reading by
                 # /Length, read on; text with its end mark is the whole of what a viewer decodes, text without it may not be
                 return b"", "bad"
-            text = (text[2:] if text.startswith(b"<~") else text).split(b"~>")[0]
+            text, _, rest = (text[2:] if text.startswith(b"<~") else text).partition(b"~>")
+            if rest.strip(_BLANK):
+                return b"", "bad"  # more after the end mark
             try:
                 data = base64.a85decode(text, ignorechars=b" \t\n\r\v\f\x00")
             except (ValueError, TypeError):
@@ -310,7 +317,10 @@ def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None):
         else:  # ASCIIHexDecode: pairs of hex digits up to >, an odd last digit standing for that digit and a zero
             if b">" not in data:
                 return b"", "bad"  # no end mark: the scan may have cut the stream where a viewer, reading by /Length, read on
-            text = re.sub(rb"\s", b"", data.split(b">")[0])
+            text, _, rest = data.partition(b">")
+            if rest.strip(_BLANK):
+                return b"", "bad"  # more after the end mark
+            text = re.sub(rb"\s", b"", text)
             try:
                 data = bytes.fromhex((text + b"0" if len(text) % 2 else text).decode("ascii"))
             except (ValueError, UnicodeDecodeError):

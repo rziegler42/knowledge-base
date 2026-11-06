@@ -1801,7 +1801,8 @@ class ToolVersionTest(unittest.TestCase):
     HISTORY = {
         "scan_tool.py": [("0.0.2", "e4c34c89655ef89d2dccd37881461ecbd928dcd90c84384105a13ea823e0d120"),
                          ("0.0.3", "ce7e067d127f8f0409053e1650841fa8488fbfa4e72ef900c217e78b7881933e"),
-                         ("0.0.4", "719d99ef7335685a70615167a2452d0e961e8ce85a08d7cb3bfbbd6deee8d381")],
+                         ("0.0.4", "719d99ef7335685a70615167a2452d0e961e8ce85a08d7cb3bfbbd6deee8d381"),
+                         ("0.0.5", "a4e64c88326aa6948158ca044df6fd866c113d7a2ad9f3680a5bb1db43c83664")],
         "extract_std.py": [("0.0.2", "803c21453f3eaf923f745cf51d760c4edaf4104153fadce6f693f37b6cbc35ff")],
         "extract_traf.py": [("2.3.1-kb1", "98ee329c2cb94b2b207648c655b55938eb824179283177f0593119df2bfb1774")],
     }
