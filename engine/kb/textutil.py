@@ -25,6 +25,28 @@ def clean(text, limit, tail=False):
     return kept[-limit:].lstrip() if tail else kept[:limit].rstrip()
 
 
+def _letters(text):
+    """Only the letters of a text, in their plain lower-case forms (compatibility forms such as fullwidth or bold letters are
+    folded first; accents are not letters, so they go), so that spellings of a phrase that differ in spacing, joiners or form are one.
+    Only the ASCII letters are kept: after folding, every real spelling of the markers is ASCII, and a letter that reads as punctuation
+    (a modifier letter, a click, a stretch mark) must not split the phrase."""
+    folded = unicodedata.normalize("NFKD", text).casefold()
+    return "".join(c for c in folded if c.isascii() and c.isalpha())
+
+
+# The words both markers around text from outside carry (search.MARKER: "untrusted text from an outside source", read.END_MARKER:
+# "end of untrusted text"): a title that holds them could imitate the end of the untrusted section.
+MARKER_WORDS = "untrustedtext"
+
+
+def title(text, limit):
+    """A title made safe to store and show: cleaned and cut like any text from outside, and empty when its letters, folded, hold the
+    words of an untrusted-text marker (no title is better than one that imitates the markers). Look-alike letters from another
+    alphabet are not folded: this is a guard, not a filter of meaning."""
+    kept = clean(text, limit)
+    return "" if MARKER_WORDS in _letters(kept) else kept
+
+
 def block_text(text):
     """The text of one converted block: its lines are kept (a line break in a page or a PDF is part of its structure), spaces
     inside a line are collapsed, empty lines go, and everything `clean` removes goes too. Line separators of every kind

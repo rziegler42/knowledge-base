@@ -25,6 +25,7 @@ from . import KbError, config, ids, incoming, library, stages, textutil
 
 BOOKS = "books"
 FORMAT = 1
+TITLE_CHARS = 500  # a title is kept to this length (the limit an arXiv title was already cut to)
 _VERSION = re.compile(r"v[1-9][0-9]{0,5}")
 _PAYLOAD = re.compile(r"original|derived/[a-z0-9][a-z0-9._-]{0,63}/[0-9]{1,6}")
 _SHELF = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
@@ -192,7 +193,7 @@ class Store:
             if os.path.lexists(dest):
                 continue  # an id is never reused
             root = {
-                "format": FORMAT, "book_id": book_id, "library_id": self.library_id, "title": title or "",
+                "format": FORMAT, "book_id": book_id, "library_id": self.library_id, "title": textutil.title(title, TITLE_CHARS),
                 "authors": authors or [], "year": year, "kind": kind, "language": language,
                 "identity_keys": identity_keys or {}, "shelf": shelf, "added": now(),
                 "auto_filed": bool(auto_filed), "state": "active", "current_version": None, "same_work": [],
@@ -277,6 +278,8 @@ class Store:
         for name, value in fields.items():
             if name not in checks or not checks[name](value):
                 raise KbError(f"cannot set {name!r} to that value")
+        if "title" in fields:
+            fields = {**fields, "title": textutil.title(fields["title"], TITLE_CHARS)}
         self.read_book(book_id)
         self._guard()
         self._rewrite(self.book_file(book_id), lambda root: root.update(fields))

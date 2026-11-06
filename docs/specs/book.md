@@ -110,7 +110,11 @@ they have their own specs.
 
 - **[proposed]** The root file holds the book id and library id, the title, authors, year, kind (for example preprint, thesis, web
   page), language, identity keys, the home shelf, the date added, whether it was auto-filed, a state (active, weeded, removed, or duplicate for a candidate that turned out to be another book),
-  the current version, and any "same work" links.
+  the current version, and any "same work" links. The title is text from outside, and every title the store files is made by one rule:
+  cleaned of control, direction and zero-width characters, cut to 500 characters, and empty when its letters, folded, hold the words of an
+  untrusted-text marker (so a title cannot imitate the end of the untrusted section). A look-alike letter from another alphabet is not
+  folded: the rule is a guard, and the title stays data to whoever reads it. A true title that holds both words next to each other (a paper about "untrusted text") is stored
+  empty too: the guard cannot tell it from an imitation.
 
 ### Versions
 

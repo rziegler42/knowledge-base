@@ -95,7 +95,7 @@ def parse_atom(body, base_id, wanted_version):
     doi = text(entry, "doi", _ARXIV).strip()
     return {
         "arxiv_id": base_id, "label": f"v{version}", "version": version,
-        "title": _clean(text(entry, "title"), TITLE_MAX), "authors": authors[:AUTHORS_MAX], "year": year,
+        "title": textutil.title(text(entry, "title"), TITLE_MAX), "authors": authors[:AUTHORS_MAX], "year": year,
         "abstract": _clean(text(entry, "summary"), ABSTRACT_MAX), "categories": categories,
         "primary_category": primary_term if re.fullmatch(r"[A-Za-z][A-Za-z.\-]{0,40}", primary_term) else None,
         "doi": doi if re.fullmatch(r"10\.[0-9]{4,9}/[!-~]{1,180}", doi) else None,

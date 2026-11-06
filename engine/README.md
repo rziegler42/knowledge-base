@@ -137,6 +137,11 @@ optional `arXiv:` in front. Whitespace and anything else is refused before any r
 - A DOI comes from that untrusted answer, so it is kept in the version's source record as a claim and is not an identity key
   or an index entry: a hostile answer could otherwise claim a DOI before the real paper does. The arXiv id decides which book a
   paper belongs to.
+- Every title the store files, from any source (an arXiv record, a page, a later import), is made by one rule, `textutil.title`: it
+  is cleaned and cut to 500 characters like other text from outside, and it is empty when its letters hold the words of an
+  untrusted-text marker (see the page title under Conversion for what is folded and what is not). `Store.create_book` and
+  `Store.set_metadata` apply it, and so does the arXiv parser, so the book's title and the version's `source` record agree. A true title that holds both words side by side (a paper about "untrusted text") is stored empty too,
+  because the guard cannot tell it from an imitation; an arXiv book has no second source to fill it, a web page does.
 - The book's title, authors and year are copied from the current version once, and the version they came from is noted in
   the root file, so an edit of them is not undone by a later request; a newer version replaces them. The default API
   address is https, which has not been tried against the real service.

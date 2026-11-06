@@ -223,4 +223,37 @@ is left for the owner: read the plan, and say whether to approve it or to ask fo
 
 ## Result
 
-Empty until work starts.
+### Increment A — One rule for a title, applied where titles are stored (implemented, reviewed and security-reviewed; not committed)
+
+- **Done:** `textutil.title(text, limit)` (clean, cut, and empty when the folded ASCII letters hold `untrustedtext`) with `_letters` and
+  `MARKER_WORDS` moved out of `convert.py`; `Store.create_book` and `Store.set_metadata` file every title through it (500 characters,
+  `store.TITLE_CHARS`; a title that is not text is still refused; `title=None` is stored as an empty title, as the web-page path already
+  did); `capture_arxiv` makes the parsed title with it, so the book's title and the version's `source` record agree; `parse_blocks_json`
+  calls it. The README and `docs/specs/book.md` state the rule and the cost of it (below).
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_textutil engine.tests.test_store
+  engine.tests.test_capture_arxiv`: 118 tests, OK; `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest
+  engine.tests.test_convert`: 164 tests, OK. The new tests failed first (no `textutil.title`; the store and the arXiv record held the
+  marker title). Break-it: eight mutations (rule off, no compatibility fold, no case fold, digits counted, `create_book`, `set_metadata`,
+  the arXiv parser, the page title): all caught, after one survivor (digits counted as letters) got a test.
+- **Review (independent reviewer, one round):** no blocking finding. Applied: the indentation of the spec text; a known cost written in
+  the README and the spec and pinned by a test (a true title with "untrusted text" side by side is stored empty, for example a paper on
+  defending against injection in untrusted text; an arXiv book has no second source to fill it). Noted: `create_book(title=None)` now
+  stores an empty title.
+- **Security review (owner said yes; independent, on a copy):** no Critical, High or Medium finding. Tested: marker spellings through
+  the rule (fullwidth, bold, ligatures, superscripts, every hidden character between the letters, combining marks, a marker at the
+  cut), a hostile Atom record through the real parser (entities, CDATA, comments, duplicate and foreign-namespace titles), the full
+  capture with a mocked fetch (book and source agree in all six cases), odd types in the store (bytes, str subclasses with overridden
+  methods: refused or rebuilt as plain text), 400,000 fuzzed strings (no exception, no title above its limit, no surviving marker,
+  `title(title(x)) == title(x)`), and cost (linear: 2 MB 0.4 s, 10 MB about 2 s). One Low finding, **fixed:** a letter that reads as
+  punctuation or a stretch line (a modifier letter such as `ʼ`, the tatweel, a click, the prolonged sound mark `ー`) between the
+  words kept the marker out of the check, so `[end of untrustedʼ text]` was stored. Reproduced; the comparison now keeps ASCII letters
+  only (every real spelling of the markers is ASCII after folding), with a test that failed first. Not changed, with reasons:
+  look-alike letters (Cyrillic, Greek, small capitals, enclosed and regional-indicator letters) still pass, a limit the plan and the
+  README state; the cost of cleaning a very long title is paid only by a direct caller of the store (the arXiv answer is capped at
+  1 MB, a page title at 2,000 characters; a title of 100 MB would take about 20 s and a few GB), and cutting before cleaning would change
+  what `clean` returns for every other use; the authors, abstract and other `source` fields are only cleaned, which is a stated
+  non-goal and becomes a question if a later feature shows them in a citation or an index (a marker split across a title and a
+  neighbouring field is for increment C to judge when the citation joins fields); books already stored and hand-edited `book.json`
+  files are for increment B (display).
+- **Not run:** the wider engine tests (the changed modules are `textutil`, `store`, `capture_arxiv` and `convert`; their tests were run).
+- **Left for the owner:** the word to commit A.

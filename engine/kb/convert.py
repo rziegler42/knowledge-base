@@ -16,7 +16,6 @@ one block). The extractor-size rule (`check_partial`) is separate: it marks a bo
 import json
 import os
 import re
-import unicodedata
 from collections import namedtuple
 
 from . import KbError, approvals, config, convert_html, convert_pdf, convert_run, incoming, stages, textutil
@@ -52,13 +51,6 @@ class Conversion:
         self.chars = len(self.text)
 
 
-def _letters(text):
-    """Only the letters of a text, in their plain lower-case forms (compatibility forms such as fullwidth or bold letters are
-    folded first; accents are not letters, so they go), so that spellings of a phrase that differ in spacing, joiners or form are one."""
-    folded = unicodedata.normalize("NFKD", text).casefold()
-    return "".join(c for c in folded if c.isalpha())
-
-
 def parse_blocks_json(raw):
     """The blocks in the output of an HTML tool, checked. Refuses anything that is not exactly the expected form."""
     try:
@@ -72,9 +64,7 @@ def parse_blocks_json(raw):
     if "title" in obj:  # optional: the page's own title, as text
         if not isinstance(obj["title"], str) or len(obj["title"]) > MAX_TITLE_RAW:
             raise KbError("the tool's title is not in the expected form")
-        title = textutil.clean(obj["title"], TITLE_CHARS) or None
-        if title and "untrustedtext" in _letters(title):
-            title = None  # it would imitate the markers around text from outside (search.MARKER, read.END_MARKER): no title is better
+        title = textutil.title(obj["title"], TITLE_CHARS) or None  # empty if it would imitate the markers around text from outside
     if not isinstance(obj["truncated"], bool) or not isinstance(obj["blocks"], list):
         raise KbError("the tool's blocks are not in the expected form")
     if len(obj["blocks"]) > MAX_BLOCKS:
