@@ -346,3 +346,43 @@ E's comparison confirms the result on real files.
 - **Left for the owner:** the word to commit B. This commit changes the scan tool's script, so its entry in the owner's config no longer
   matches (label 0.0.3); increment E is where it is put in. Increment C (the reader that knows strings and comments) is what closes the
   rest of the class.
+
+### Increment C — Read each object forward, with strings and comments known (implemented, reviewed and security-reviewed; not committed)
+
+- **Done:** `engine/kb/scan_tool.py` no longer walks backward from the word `stream`. It reads the file forward, object by object,
+  from `N G obj` headers (and `trailer`), reading each value with strings, hex strings, comments, names and nesting known, so a
+  bracket or the word `stream` inside a string or a comment is part of it. Label 0.0.4 (`approvals.SCAN_VERSION`, with its
+  hash in `ToolVersionTest.HISTORY`); `engine/README.md` describes the reader and what `scan_incomplete` now covers.
+- **Bounds:** 16,384 bytes of stream dictionary, 100 levels of nesting, a million objects, twelve million steps, and 20 objects it
+  could not finish (the reader stops there and says so). At the 50 MB capture limit the slowest hostile shape measured 5.6 s
+  (1,000-byte unclosed strings after each header); 4 MB of the same shape took 44 s before the cap.
+- **Verification run:** `unittest engine.tests.test_scan engine.tests.test_convert_run`: 205 tests, OK; `unittest
+  engine.tests.test_convert.ToolVersionTest engine.tests.test_search.CommandLineTest`: 14 tests, OK. Break-it runs on the reader (about
+  30 mutations over three rounds): every one caught after tests were added for the ones missed (one equivalent mutant and some dead
+  code removed). 62 real PDFs (the arXiv paper, 2 fixtures, system PDFs): the same caveats before and after, none newly incomplete,
+  slowest 0.1 s.
+- **Review (independent reviewer, two rounds):** round one found a quadratic hex-string search, a quadratic unclosed-string search (44 s at
+  4 MB), a real object swallowed into a string with an unusual header (a comment between its numbers, many digits) giving **no caveat**,
+  an object whose value is the next header, and decoy tests that passed for a weak reason: all fixed with a test that failed first (the
+  cap of 20 unfinished objects; the word `obj`/`endobj` in a value is structure; a header as a value is unfinished; decoy tests now
+  assert the real stream is read). Round two found a header written `9 0obj` (no white space before `obj`) missed by the new structure
+  check, and a comment with no line end after each of many objects searching to the end of the file every time (60 s at 0.6 MB): both
+  fixed (a header may have no white space before `obj`; the position after which no line end exists is remembered). Not fixed here, by
+  design: hex or ASCII85 data that holds the word `endstream` in its middle is cut there (increment D); the word `obj` as a whole word
+  in an honest string (for example a title) is `scan_incomplete`, a false alarm that fails safe and is to be counted in increment E.
+- **Security review (independent, run on a copy; 6 million fuzzed inputs, 5 million insertion cases, a 45-case evasion battery, hostile
+  shapes up to 60 MB, none slower than 8 s):** no crash, no early stop that left `scan_incomplete` unset, nothing else silent. One
+  Medium finding, **fixed:** the letters of `endstream` are ASCII85 digits, so an ASCII85 stream a viewer reads whole by its `/Length`
+  can hold them; the scan cut the data there, the truncated text decoded cleanly and the action after it gave **no caveat**
+  (reproduced: `{}` against `javascript` for the same file without the letters). Fix: an ASCII85 step whose text holds no `~>` is
+  unreadable, so the file is `scan_incomplete`. The second look (read only; its tools were refused) found the same hole for ASCIIHex
+  (the scan cuts before the letters and the cut text has no `>`): reproduced by a test that failed first, fixed the same way (no `>`
+  means unreadable). Both have tests (the honest twins are read as before) and failed under a break-it run. Three old fixtures built
+  ASCII85 or hex text without its end mark and were given it. Low notes, not changed: 16 million `#41` escapes in 48 MB pushed one
+  process to about 1.4 to 2.6 GB (older than C; not checked against the sandbox's limit), and the cap of 20 unfinished objects bounds
+  the number of retries and not the bytes each reads (no real impact found). The hex fix has not had an independent run of its own.
+  Verification after the fixes: 208 tests, OK (`test_scan`, `test_convert_run`); 14 tests, OK; 62 real PDFs unchanged.
+- **Not run:** the scan on the four books (increment E); viewer
+  behaviour for `0obj` was not checked against any viewer (the scan treats it as a header and as the word `obj` both ways, which fails safe).
+- **Left for the owner:** the word to commit C (and whether the hex fix wants a second independent run). This commit changes the scan
+  tool's script, so its entry in the owner's config no longer matches (label 0.0.4); increment E puts it in.

@@ -298,12 +298,18 @@ def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None):
                 return data, state
         elif name in _A85_NAMES:
             text = data.strip()
+            if b"~>" not in text:
+                # the letters of endstream are ASCII85 digits, so the scan may have cut the stream short where a viewer, reading by
+                # /Length, read on; text with its end mark is the whole of what a viewer decodes, text without it may not be
+                return b"", "bad"
             text = (text[2:] if text.startswith(b"<~") else text).split(b"~>")[0]
             try:
                 data = base64.a85decode(text, ignorechars=b" \t\n\r\v\f\x00")
             except (ValueError, TypeError):
                 return b"", "bad"
         else:  # ASCIIHexDecode: pairs of hex digits up to >, an odd last digit standing for that digit and a zero
+            if b">" not in data:
+                return b"", "bad"  # no end mark: the scan may have cut the stream where a viewer, reading by /Length, read on
             text = re.sub(rb"\s", b"", data.split(b">")[0])
             try:
                 data = bytes.fromhex((text + b"0" if len(text) % 2 else text).decode("ascii"))
@@ -319,61 +325,215 @@ def _deflate_header(data):
     """Whether data begins like zlib data of any window size: a method of 8 and a check value that makes the two bytes a multiple
     of 31. More than the four common headers, and a few more things that are not: it errs on the side of calling it deflate."""
     return len(data) >= 2 and data[0] & 0x0F == 8 and (data[0] << 8 | data[1]) % 31 == 0
-MAX_MARKERS = 2_000_000
 MAX_DICT = 16384          # the longest stream dictionary the scan reads
-MAX_STEPS = 256           # the most brackets it follows to find where one dictionary opens
-DICT_BUDGET = 64_000_000  # the most bytes it will look back over, in all, to find dictionaries
+MAX_DEPTH = 100           # the deepest nesting of brackets in one object it reads
+MAX_OBJECTS = 1_000_000   # the most objects it reads in a file: each costs about the same
+MAX_UNFINISHED = 20       # the most objects it tries and cannot finish: after a broken one it reads on from the next header, so
+# a file of broken objects could have it read the same long stretch over and over; an honest file has none, and one with this many is
+# reported either way
+MAX_READ_STEPS = 12_000_000  # the most steps it takes in all (a bracket, a string escape, a comment), so that a file of nothing but
+# string escapes or comments costs as much as its size and no more
+
+_HEADER_TEXT = rb"(?<![0-9])[0-9]{1,10}" + _WS + rb"+[0-9]{1,5}" + _WS + rb"*obj(?![A-Za-z0-9])"
+_TOP = re.compile(rb"(?P<obj>" + _HEADER_TEXT + rb")|(?P<trailer>(?<![A-Za-z0-9])trailer(?![A-Za-z0-9]))")
+_HEADER_AT = re.compile(_HEADER_TEXT)
+# what an object value has no business holding: the word obj or endobj. Every object header holds obj, however it is written (a comment
+# between its numbers, digits without end, glued to a word), and a viewer does not need an endobj, so the word and not the whole header.
+_STRUCTURE = re.compile(rb"(?<![A-Za-z/])(?:end)?obj(?![A-Za-z0-9])")
+_STREAM_KW = re.compile(rb"(?<![A-Za-z0-9])stream[ \t]*(?:\r\n|\n|\r)")
+_LINE_END = re.compile(rb"[\r\n]")
+_SPECIAL = re.compile(rb"[()<>\[\]%]")
+_STRING_SPECIAL = re.compile(rb"[()\\]")
+_TOKEN = re.compile(rb"/?[^\x00\t\n\x0c\r ()<>\[\]{}/%]*")  # a name, a number or a keyword
 
 
-def _dictionary_before(data, i, budget):
-    """(start, end, text) of the dictionary that ends just before position i (the word stream), with the dictionaries nested
-    in it, or None if there is none, it is longer than MAX_DICT or has more than MAX_STEPS brackets, or the scan has spent
-    its budget of look-back. The budget is charged for the bytes actually looked over."""
-    j = i
-    while j > 0 and data[j - 1] in b" \t\r\n\x00\x0c":
-        j -= 1
-    if data[j - 2:j] != b">>" or budget[0] <= 0:
-        return None
-    low, depth, pos, steps = max(0, j - MAX_DICT), 1, j - 2, 0
-    while pos > low and steps < MAX_STEPS:
-        steps += 1
-        opens, closes = data.rfind(b"<<", low, pos), data.rfind(b">>", low, pos)
-        budget[0] -= (pos - (opens if opens >= 0 else low)) + (pos - (closes if closes >= 0 else low)) + 16
-        if opens < 0 and closes < 0:
-            break
-        if closes > opens:
-            depth, pos = depth + 1, closes
-        else:
-            depth, pos = depth - 1, opens
-            if depth == 0:
-                return opens, j, data[opens:j]
-    return None
+class _Unfinished(Exception):
+    """An object the reader cannot read to its end."""
 
 
-def _streams(data, budget):
-    """Each stream of a PDF as (the text of its dictionary or None, its bytes), found in one forward pass, so the cost is
-    linear in the size of the file however the markers are arranged. Yields None once if it gave up on a limit."""
-    pos, seen = 0, 0
+class _OverBudget(Exception):
+    """The reader has taken all the steps it is allowed in a file."""
+
+
+def _step(state):
+    state["steps"] -= 1
+    if state["steps"] < 0:
+        raise _OverBudget
+
+
+def _skip_blank(data, i, state):
+    """The position after white space and comments from i."""
+    n = len(data)
     while True:
-        i = data.find(b"stream", pos)
-        if i < 0:
-            return
-        pos = i + 6
-        seen += 1
-        if seen > MAX_MARKERS:
-            yield None
-            return
-        if data[i - 3:i] == b"end":
-            continue
-        eol = _EOL.match(data, pos)
-        if not eol:
-            continue
-        start = eol.end()
-        end = data.find(b"endstream", start)
+        i = _WS_RUN.match(data, i).end()
+        if i < n and data[i] == 0x25:
+            if i >= state.get("no_line_end", n + 1):
+                return n  # already searched from before here and found none
+            m = _LINE_END.search(data, i)
+            if m is None:
+                state["no_line_end"] = i  # a comment with no line end ends the file: say so once, not once per object
+                return n
+            _step(state)
+            i = m.end()
+        else:
+            return i
+
+
+def _string_end(data, i, state):
+    """The position after the literal string that opens at data[i]: parentheses nest, and a backslash takes the byte after it (an
+    escaped parenthesis, a backslash, a line end; the digits of an octal escape are ordinary). None if it never closes."""
+    depth, pos = 1, i + 1
+    while True:
+        m = _STRING_SPECIAL.search(data, pos)
+        if m is None:
+            return None
+        _step(state)
+        c, p = data[m.start()], m.start()
+        if c == 0x5c:
+            pos = p + 2
+        elif c == 0x28:
+            depth, pos = depth + 1, p + 1
+        else:
+            depth, pos = depth - 1, p + 1
+            if depth == 0:
+                return pos
+
+
+def _container_end(data, i, state):
+    """The position after the dictionary or array that opens at data[i], reading strings, hex strings and comments as such, so a
+    bracket inside one is not a bracket. _Unfinished if it does not close, closes with the wrong bracket or nests deeper than
+    MAX_DEPTH."""
+    stack, pos = [], i
+    while True:
+        m = _SPECIAL.search(data, pos)
+        if m is None:
+            raise _Unfinished
+        _step(state)
+        p = m.start()
+        c = data[p]
+        if c == 0x28:
+            pos = _string_end(data, p, state)
+            if pos is None:
+                raise _Unfinished
+        elif c == 0x25:
+            e = _LINE_END.search(data, p)
+            if e is None:
+                raise _Unfinished
+            pos = e.end()
+        elif c == 0x3c:
+            if data.startswith(b"<<", p):
+                stack.append(0)
+                pos = p + 2
+                if len(stack) > MAX_DEPTH:
+                    raise _Unfinished
+            else:
+                e = data.find(b">", p + 1)
+                if e < 0:
+                    raise _Unfinished
+                pos = e + 1
+        elif c == 0x3e:
+            if data.startswith(b">>", p):
+                if not stack or stack.pop() != 0:
+                    raise _Unfinished
+                pos = p + 2
+                if not stack:
+                    return pos
+            else:
+                pos = p + 1  # a single > closes nothing
+        elif c == 0x5b:
+            stack.append(1)
+            pos = p + 1
+            if len(stack) > MAX_DEPTH:
+                raise _Unfinished
+        elif c == 0x5d:
+            if not stack or stack.pop() != 1:
+                raise _Unfinished
+            pos = p + 1
+            if not stack:
+                return pos
+        else:
+            pos = p + 1  # a closing parenthesis with no string open
+
+
+def _read_value(data, i, state):
+    """(the position after the object value that starts at i, the span of its dictionary or None). Any value is read, not only a
+    dictionary: a string or an array can hold text that looks like an object, and must be read to its end. _Unfinished if it
+    cannot be."""
+    i = _skip_blank(data, i, state)
+    if i >= len(data):
+        raise _Unfinished
+    c = data[i]
+    if c == 0x3c:
+        if data.startswith(b"<<", i):
+            end = _container_end(data, i, state)
+            return end, (i, end)
+        end = data.find(b">", i + 1)
         if end < 0:
-            return  # no end to this one or to any later one: the rest is scanned as plain bytes
-        yield _dictionary_before(data, i, budget), data[start:end]
-        pos = end + 9
+            raise _Unfinished
+        return end + 1, None
+    if c == 0x5b:
+        return _container_end(data, i, state), None
+    if c == 0x28:
+        end = _string_end(data, i, state)
+        if end is None:
+            raise _Unfinished
+        return end, None
+    end = _TOKEN.match(data, i).end()
+    if end == i or _HEADER_AT.match(data, i):  # nothing a value can start with, or the next object's header: this one has no value
+        raise _Unfinished
+    return end, None
+
+
+def _streams(data, state):
+    """Each stream of a PDF as (its dictionary as (start, end, text) or None, its bytes), found by reading the file forward: from
+    each `N G obj` header the object's value is read (strings, comments and all), and a dictionary followed by the word stream is
+    a stream whose data runs to the first endstream. What the reader cannot account for sets state["incomplete"]: a stream
+    keyword outside any object it read, an object that cannot be finished, a value that holds another object's header or end
+    (which is what swallowing a real object in a string looks like), a stream with no end. A real compressed stream swallowed into
+    the data of another stream is found by the check that every /Filter key lies in a dictionary that was read."""
+    n, pos = len(data), 0
+    try:
+        while True:
+            m = _TOP.search(data, pos)
+            if _STREAM_KW.search(data, pos, m.start() if m else n):
+                state["incomplete"] = True  # the word stream where no object the reader read is
+            if m is None:
+                return
+            state["objects"] += 1
+            if state["objects"] > MAX_OBJECTS:
+                state["incomplete"] = True
+                return
+            try:
+                end, span = _read_value(data, m.end(), state)
+            except _Unfinished:
+                state["incomplete"] = True
+                state["unfinished"] += 1
+                if state["unfinished"] >= MAX_UNFINISHED:
+                    return
+                pos = m.end()
+                continue
+            if _STRUCTURE.search(data, m.end(), end):
+                state["incomplete"] = True
+            pos = end
+            if m.lastgroup != "obj" or span is None:
+                continue
+            after = _skip_blank(data, end, state)
+            if not data.startswith(b"stream", after):
+                continue
+            eol = _EOL.match(data, after + 6)
+            if eol is None:
+                state["incomplete"] = True
+                continue
+            start = eol.end()
+            stop = data.find(b"endstream", start)
+            if stop < 0:
+                state["incomplete"] = True
+                return  # no end to this one: the rest is scanned as plain bytes, and said so
+            located = (span[0], span[1], data[span[0]:span[1]]) if span[1] - span[0] <= MAX_DICT else None
+            pos = stop + 9
+            yield located, data[start:stop]
+    except _OverBudget:
+        state["incomplete"] = True
 
 
 _PATTERNS = {
@@ -411,11 +571,9 @@ def scan_pdf(data):
         caveats.append(caveat("malformed"))
     plain = _unescape_names(data)
     haystacks = [plain]  # the file as it is, which covers every stream that is not compressed
-    total, decoded, budget, covered, rows_left = 0, 0, [DICT_BUDGET], [], [MAX_PREDICTED_ROWS]
-    for found in _streams(data, budget):
-        if found is None:
-            incomplete = True
-            break
+    total, decoded, covered, rows_left = 0, 0, [], [MAX_PREDICTED_ROWS]
+    reader = {"incomplete": False, "steps": MAX_READ_STEPS, "objects": 0, "unfinished": 0}  # what the forward reader keeps
+    for found in _streams(data, reader):
         located, blob = found
         if located is None:
             incomplete = True  # a stream whose dictionary could not be read, so what filter it uses is unknown
@@ -468,6 +626,7 @@ def scan_pdf(data):
             haystacks.extend(_unescape_names(raw) for raw in raws if raw)
         else:
             incomplete = True  # a filter this scan does not decode (LZW, run-length, crypt, or one it has not heard of)
+    incomplete = incomplete or reader["incomplete"]  # what the reader could not account for
     if not incomplete and _filter_outside(data, covered):
         incomplete = True  # a filter is declared somewhere that is not the dictionary of a stream the scan read
     for kind, pattern in _PATTERNS.items():

@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import random
@@ -223,15 +224,15 @@ class PdfScanTest(ScanCase):
     def test_streams_the_scan_cannot_read_are_reported_as_incomplete_not_passed_silently(self):
         self.approve_scan()
         cases = {
-            "ascii85 that is not ascii85": pdf(b"<< /Filter /ASCII85Decode >>\nstream\n" + b"zzzz{{{{}}}}" + b"\nendstream"),
-            "hex that is not hex": pdf(b"<< /Filter [/ASCIIHexDecode /FlateDecode] >>\nstream\nXYZ41424344>\nendstream"),
-            "run-length coding": pdf(b"<< /Filter /RunLengthDecode >>\nstream\nxxxx\nendstream"),
-            "a crypt filter": pdf(b"<< /Filter /Crypt >>\nstream\nxxxx\nendstream"),
-            "a made-up filter": pdf(b"<< /Filter /SomethingNew >>\nstream\nxxxx\nendstream"),
-            "lzw": pdf(b"<< /Filter /LZWDecode >>\nstream\nxxxx\nendstream"),
-            "a flate stream that is not flate": pdf(b"<< /Filter /FlateDecode >>\nstream\nthis is not deflate data\nendstream"),
-            "a flate stream cut short": pdf(b"<< /Filter /FlateDecode >>\nstream\n"
-                                            + zlib.compress(b"hello world" * 500)[:30] + b"\nendstream"),
+            "ascii85 that is not ascii85": pdf(b"9 0 obj\n<< /Filter /ASCII85Decode >>\nstream\n" + b"zzzz{{{{}}}}" + b"\nendstream\nendobj\n"),
+            "hex that is not hex": pdf(b"9 0 obj\n<< /Filter [/ASCIIHexDecode /FlateDecode] >>\nstream\nXYZ41424344>\nendstream\nendobj\n"),
+            "run-length coding": pdf(b"9 0 obj\n<< /Filter /RunLengthDecode >>\nstream\nxxxx\nendstream\nendobj\n"),
+            "a crypt filter": pdf(b"9 0 obj\n<< /Filter /Crypt >>\nstream\nxxxx\nendstream\nendobj\n"),
+            "a made-up filter": pdf(b"9 0 obj\n<< /Filter /SomethingNew >>\nstream\nxxxx\nendstream\nendobj\n"),
+            "lzw": pdf(b"9 0 obj\n<< /Filter /LZWDecode >>\nstream\nxxxx\nendstream\nendobj\n"),
+            "a flate stream that is not flate": pdf(b"9 0 obj\n<< /Filter /FlateDecode >>\nstream\nthis is not deflate data\nendstream\nendobj\n"),
+            "a flate stream cut short": pdf(b"9 0 obj\n<< /Filter /FlateDecode >>\nstream\n"
+                                            + zlib.compress(b"hello world" * 500)[:30] + b"\nendstream\nendobj\n"),
         }
         for label, data in cases.items():
             _b, _v, result = self.scan_bytes("paper.pdf", data)
@@ -276,7 +277,7 @@ class PdfScanTest(ScanCase):
                             "a decoy inside the dictionary": b"4 0 obj\n<< /Note (<<) /Filter /FlateDecode >>\nstream\n" + script + b"\nendstream\nendobj\n"}.items():
             _b, _v, result = self.scan_bytes("paper.pdf", pdf(body))
             found = kinds(result["caveats"])
-            self.assertTrue("javascript" in found or "scan_incomplete" in found, f"{label}: {found}")
+            self.assertIn("javascript", found, f"{label}: the real stream was not read: {found}")  # read, not only flagged
 
     def test_a_real_stream_behind_a_decoy_is_still_found_when_its_filter_key_is_written_with_escapes(self):
         self.approve_scan()
@@ -286,7 +287,7 @@ class PdfScanTest(ScanCase):
             real = b"3 0 obj\n<< /Type /ObjStm " + key + b" /FlateDecode >>\nstream\n" + script + b"\nendstream\nendobj\n"
             _b, _v, result = self.scan_bytes("paper.pdf", pdf(decoy + real))
             found = kinds(result["caveats"])
-            self.assertTrue("javascript" in found or "scan_incomplete" in found, f"{key!r}: {found}")
+            self.assertIn("javascript", found, f"{key!r}: the real stream was not read: {found}")
 
     def test_many_markers_each_with_a_long_run_of_brackets_before_it_cost_the_scan_little(self):
         """Without a budget on the look-back this takes minutes: every marker looks back over the same long run."""
@@ -336,7 +337,7 @@ class PdfScanTest(ScanCase):
 
     def test_image_streams_are_not_a_reason_to_call_the_scan_incomplete(self):
         self.approve_scan()
-        jpeg = pdf(b"<< /Type /XObject /Subtype /Image /Filter /DCTDecode >>\nstream\n\xff\xd8\xff\xe0 binary \xff\xd9\nendstream")
+        jpeg = pdf(b"3 0 obj\n<< /Type /XObject /Subtype /Image /Filter /DCTDecode >>\nstream\n\xff\xd8\xff\xe0 binary \xff\xd9\nendstream\nendobj\n")
         _b, _v, result = self.scan_bytes("paper.pdf", jpeg)
         self.assertEqual(result["caveats"], [])
 
@@ -354,10 +355,10 @@ class PdfScanTest(ScanCase):
         self.approve_scan()
         _b, _v, result = self.scan_bytes("paper.pdf", pdf(flate(b"\0" * BIG)))
         self.assertEqual(kinds(result["caveats"]), {"scan_incomplete": 1})
-        for label, body in {"an object stream": b"<< /Type /ObjStm /N 1 /First 5 /Filter /FlateDecode >>\nstream\n",
-                            "a form": b"<< /Type /XObject /Subtype /Form /Filter /FlateDecode >>\nstream\n",
-                            "no type": b"<< /Filter /FlateDecode >>\nstream\n"}.items():
-            _b, _v, got = self.scan_bytes("paper.pdf", pdf(body + zlib.compress(b"\0" * BIG) + b"\nendstream"))
+        for label, body in {"an object stream": b"9 0 obj\n<< /Type /ObjStm /N 1 /First 5 /Filter /FlateDecode >>\nstream\n",
+                            "a form": b"9 0 obj\n<< /Type /XObject /Subtype /Form /Filter /FlateDecode >>\nstream\n",
+                            "no type": b"9 0 obj\n<< /Filter /FlateDecode >>\nstream\n"}.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(body + zlib.compress(b"\0" * BIG) + b"\nendstream\nendobj\n"))
             self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1}, label)
 
     def test_a_large_image_and_a_large_stream_that_is_not_one_give_both_kinds(self):
@@ -454,7 +455,7 @@ class PdfScanTest(ScanCase):
                  + b") /N 1 /First 10 >>\nstream\n" + real + b"\nendstream\nendobj")
         _b, _v, got = self.scan_bytes("paper.pdf", pdf(decoy))
         found = kinds(got["caveats"])
-        self.assertEqual(found.get("scan_incomplete"), 1, found)
+        self.assertGreater(found.get("javascript", 0), 0, found)  # read through its own dictionary, the real stream is found
         self.assertNotIn("large_image_streams", found)
         for word in (b"stream", b"endstream", b"endobj", b"xref"):  # none of these is in the bytes of an honest compressed image
             _b, _v, marked = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG + word + b"\0" * 100)))
@@ -496,7 +497,7 @@ class PdfScanTest(ScanCase):
     def test_a_large_image_where_deflate_is_the_last_and_only_deflate_filter_is_a_large_image(self):
         self.approve_scan()
         import base64
-        payload = base64.a85encode(zlib.compress(b"\0" * BIG))
+        payload = base64.a85encode(zlib.compress(b"\0" * BIG)) + b"~>"  # a conforming stream ends with its end mark
         for label, extra in {"ascii85 then deflate": b"/Filter [/ASCII85Decode /FlateDecode]",
                              "abbreviated names": b"/Filter [/A85 /Fl]"}.items():
             _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(payload, extra=extra, compress=False)))
@@ -560,7 +561,7 @@ class PdfScanTest(ScanCase):
 
     def test_a_pdf_with_thousands_of_streams_is_cut_off_and_reported_as_incomplete(self):
         self.approve_scan()
-        body = b"".join(b"<< /Filter /FlateDecode >>\nstream\n" + zlib.compress(b"x") + b"\nendstream\n" for _ in range(2500))
+        body = b"".join(b"%d 0 obj\n<< /Filter /FlateDecode >>\nstream\n" % (10 + k) + zlib.compress(b"x") + b"\nendstream\nendobj\n" for k in range(2500))
         _b, _v, result = self.scan_bytes("paper.pdf", pdf(body))
         self.assertEqual(result["status"], "done")
         self.assertIn("scan_incomplete", kinds(result["caveats"]))
@@ -935,7 +936,7 @@ class PredictorScanTest(ScanCase):
 
     def test_a_comment_in_the_filter_array_cannot_cut_the_chain_short(self):
         self.approve_scan()
-        hexed = zlib.compress(SCRIPT.hex().encode() * 2)  # the text of the action, in hex, inside deflate: a chain of two filters
+        hexed = zlib.compress(SCRIPT.hex().encode() * 2 + b">")  # the text of the action, in hex, inside deflate: a chain of two filters
         base = b"/Type /ObjStm /N 1 /First 10 "
         for label, chain in {"a comment holding the closing bracket": b"/Filter[/FlateDecode %]\n/ASCIIHexDecode]",
                              "a comment with no space": b"/Filter[/FlateDecode%]\n/ASCIIHexDecode]"}.items():
@@ -946,7 +947,7 @@ class PredictorScanTest(ScanCase):
 
     def test_a_filter_list_that_holds_anything_but_names_is_not_read_to_its_first_bracket(self):
         self.approve_scan()
-        hexed = zlib.compress(SCRIPT.hex().encode() * 2)  # deflate, then hex: a viewer reads the action, a list cut at the first ] does not
+        hexed = zlib.compress(SCRIPT.hex().encode() * 2 + b">")  # deflate, then hex: a viewer reads the action, a list cut at the first ] does not
         base = b"/Type /ObjStm /N 1 /First 10 "
         cases = {"a string that holds a bracket": b"/Filter[/FlateDecode (]) /ASCIIHexDecode]",
                  "an empty array inside it": b"/Filter[/FlateDecode [] /ASCIIHexDecode]",
@@ -1028,6 +1029,357 @@ class PredictorScanTest(ScanCase):
                                   zlib.compress(png_filter(rows, 3000, bpp=3, types=(2,)))))
         _b, _v, got = self.scan_bytes("paper.pdf", other)
         self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1})
+
+
+class ReaderTest(unittest.TestCase):
+    """The scan finds a stream through its own object, read forward with strings and comments known. These go straight to the scan
+    function, which is what the tool runs; a few are run through the sandboxed tool in PredictorScanTest and ScanStageTest."""
+    REAL_DICT = b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode"
+
+    def real(self, number=9, dictionary=None):
+        """An object stream with the action in it (deflate): what a viewer reads and the scan must not miss."""
+        return stream_object(self.REAL_DICT if dictionary is None else dictionary, zlib.compress(b"1 0 " + SCRIPT * 2), number)
+
+    def found(self, data):
+        return kinds(scan_tool.scan_pdf(data))
+
+    def assert_not_hidden(self, data, message=""):
+        found = self.found(data)
+        self.assertTrue(found.get("javascript", 0) > 0 or "scan_incomplete" in found, f"{message}: the action was hidden: {found}")
+        return found
+
+    def assert_read(self, data, message=""):
+        found = self.found(data)
+        self.assertGreater(found.get("javascript", 0), 0, f"{message}: {found}")
+        self.assertNotIn("scan_incomplete", found, message)
+
+    # -- what used to steer the scan
+    def test_a_stream_marker_in_a_string_of_a_dictionary_is_part_of_the_string_and_the_real_stream_is_read(self):
+        decoy = b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode /Note (>>\nstream\nFAKEDATA\n) /More 1"
+        self.assert_read(pdf(stream_object(decoy, zlib.compress(b"1 0 " + SCRIPT * 2))), "a small decoy")
+
+    def test_a_fake_endstream_in_a_string_with_the_brackets_balanced_is_part_of_the_string(self):
+        decoy = b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode /Note (>>\nstream\nFAKE\nendstream << ) /More 1"
+        self.assert_read(pdf(stream_object(decoy, zlib.compress(b"1 0 " + SCRIPT * 2))), "balanced")
+        decoy = b"/Type /ObjStm /N 1 /First 10 /Note (endstream endobj) /Filter /FlateDecode"
+        self.assertTrue(self.found(pdf(stream_object(decoy, zlib.compress(b"1 0 " + SCRIPT * 2)))).get("javascript", 0) > 0)
+
+    def test_a_fake_object_header_in_a_string_cannot_hide_the_real_stream(self):
+        carrier = b"4 0 obj\n<< /Note (6 0 obj << /Filter /FlateDecode >> stream\nXX\nendstream) >>\nendobj\n"
+        string_object = b"4 0 obj\n(6 0 obj << /Filter /FlateDecode >> stream\nXX\nendstream)\nendobj\n"
+        array = b"4 0 obj\n[(6 0 obj << >> stream\n) <363020> (endobj)]\nendobj\n"
+        trailer = b"trailer\n<< /Info (7 0 obj << >> stream\nZ\nendstream) >>\n"
+        for label, data in {"in a string of a dictionary": carrier + self.real(), "in an object that is a string": string_object + self.real(),
+                            "in an array": array + self.real(), "in a trailer": self.real() + trailer + self.real(10)}.items():
+            found = self.found(pdf(data))
+            self.assertGreater(found.get("javascript", 0), 0, f"{label}: the real stream was not read: {found}")  # read, whatever else
+            self.assertIn("scan_incomplete", found, label)  # and the file is reported: it holds text that looks like another object
+
+    def test_a_fake_object_header_in_a_comment_is_reported(self):
+        for label, comment in {"a whole fake object": b"% 9 0 obj << /Filter /FlateDecode >> stream\nFAKEDATA\nendstream\n",
+                               "a header and an open string": b"% 9 0 obj (\n",
+                               "after other words": b"%%EOF 9 0 obj <</Filter/FlateDecode>>stream\nXXXX\nendstream\n"}.items():
+            found = self.assert_not_hidden(pdf(comment + self.real()), label)
+            self.assertIn("scan_incomplete", found, label)
+
+    def test_a_fake_object_in_plain_junk_that_would_swallow_the_real_stream_is_reported(self):
+        fake = b"junk 9 0 obj << /Filter /FlateDecode >>\nstream\nXX\n"  # no endstream of its own: it runs into the next real one
+        found = self.assert_not_hidden(pdf(fake + self.real(10)), "junk")
+        self.assertIn("scan_incomplete", found)
+        fake = b"9 0 obj (\n"  # an open string that a later parenthesis would close, swallowing what lies between
+        late = b"11 0 obj\n(close)\nendobj\n"
+        found = self.assert_not_hidden(pdf(fake + self.real(10) + late), "an open string")
+        self.assertIn("scan_incomplete", found)
+
+    def test_a_fake_header_in_the_data_of_a_stream_is_only_data_and_the_real_stream_after_it_is_read(self):
+        fake = stream_object(b"/Length 99", b"7 0 obj << /A 1 >> stream\nQ", 5)
+        self.assert_read(pdf(fake + self.real(10)), "in stream data")
+
+    def test_a_stream_keyword_outside_every_object_is_reported(self):
+        found = self.found(pdf(self.real() + b"stream\nSOMETHING\nendstream\n"))
+        self.assertIn("scan_incomplete", found)
+        found = self.found(pdf(b"<< /A 1 >>\nstream\nXX\nendstream\n" + self.real()))
+        self.assertIn("scan_incomplete", found)
+        self.assertGreater(found.get("javascript", 0), 0)
+
+    def test_a_whole_real_object_wrapped_in_a_string_of_another_objects_dictionary_is_reported(self):
+        hexed = stream_object(b"/Type /ObjStm /N 1 /First 10 /Filter /ASCIIHexDecode", (b"1 0 " + SCRIPT * 2).hex().encode() + b">", 9)
+        # the carrier is a stream with a valid hex body, so nothing else about it is wrong; the real object sits inside a string
+        carrier = b"8 0 obj\n<< /Filter /ASCIIHexDecode /Note (" + hexed.replace(b"/Filter /ASCIIHexDecode", b"/F2 /X") + b") >>\nstream\n4142>\nendstream\nendobj\n"
+        self.assertIn("scan_incomplete", self.found(pdf(carrier)))
+        unwrapped = pdf(hexed)
+        self.assertGreater(self.found(unwrapped).get("javascript", 0), 0)  # the real object read for itself is found
+
+    def test_a_real_object_with_a_header_written_in_an_unusual_way_and_wrapped_in_a_string_is_reported(self):
+        for label, header in {"a comment between the numbers": b"9 %c\n0 obj", "many digits": b"00000000000009 0 obj", "a long generation": b"9 000000 obj",
+                              "a comment and line ends": b"9\n%x\n0\nobj", "glued to a word": b"endobj9 0 obj"}.items():
+            hexed = (header + b"\n<< /Type /ObjStm /N 1 /First 10 /F2 /X >>\nstream\n" + (b"1 0 " + SCRIPT * 2).hex().encode() + b">\nendstream\n")  # no endobj: viewers do not need one
+            carrier = b"8 0 obj\n<< /Filter /ASCIIHexDecode /Note (" + hexed + b") >>\nstream\n4142>\nendstream\nendobj\n"
+            self.assertIn("scan_incomplete", self.found(pdf(carrier)), label)
+
+    def test_a_header_with_no_white_space_before_obj_is_still_a_header(self):
+        for label, header in {"0obj": b"9 0obj", "0obj with a comment": b"9 %c\n0obj", "endobj glued to a digit": b"0endobj 9 0obj"}.items():
+            hexed = (header + b"<< /Type /ObjStm /N 1 /First 10 /F2 /X >>\nstream\n" + (b"1 0 " + SCRIPT * 2).hex().encode() + b">\nendstream\n")
+            carrier = b"8 0 obj\n<< /Filter /ASCIIHexDecode /Note (" + hexed + b") >>\nstream\n4142>\nendstream\nendobj\n"
+            self.assertIn("scan_incomplete", self.found(pdf(carrier)), label)
+
+    def test_ascii85_text_that_spells_endstream_does_not_cut_a_stream_short_unnoticed(self):
+        # the letters of endstream are all ASCII85 digits, so a stream a viewer reads whole by its /Length can hold them: the scan cuts
+        # it there, and what it cut off holds the action. An ASCII85 stream with no ~> in what the scan has is reported.
+        payload = b"1 0 " + SCRIPT * 2
+        payload += b" " * (-len(payload) % 4)
+        junk = base64.a85decode(b"endst") + base64.a85decode(b"ream!")
+        text = base64.a85encode(b"AAAA" + junk + payload) + b"~>"
+        self.assertIn(b"endstream", text)
+
+        def make(data, extra=b""):
+            return b"9 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Length %d /Filter /ASCII85Decode %s>>\nstream\n" % (len(data), extra) + data + b"\nendstream\nendobj\n"
+
+        self.assertIn("scan_incomplete", self.found(pdf(make(text))))
+        for label, data in {"without the ~>": text[:-2], "a chain": text}.items():
+            self.assertIn("scan_incomplete", self.found(pdf(make(data))), label)
+        honest = base64.a85encode(b"AAAA" + b"BBBBBBBB" + payload) + b"~>"
+        found = self.found(pdf(make(honest)))
+        self.assertGreater(found.get("javascript", 0), 0)  # the honest twin is read, as before
+        self.assertNotIn("scan_incomplete", found)
+        found = self.found(pdf(make(b"<~" + honest)))  # the opening mark is allowed
+        self.assertGreater(found.get("javascript", 0), 0)
+
+    def test_hex_text_that_spells_endstream_or_has_no_end_mark_does_not_cut_a_stream_short_unnoticed(self):
+        # a viewer reads hex by /Length and skips what is not a digit (n s t r m), so text with the word in it and a script after it
+        # reads on; the scan cuts at the word and what is left has no >
+        payload = (b"1 0 " + SCRIPT * 2).hex().encode()
+
+        def make(data):
+            return b"9 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Length %d /Filter /ASCIIHexDecode >>\nstream\n" % len(data) + data + b"\nendstream\nendobj\n"
+
+        cut = b"41414141" + b"endstream" + payload + b">"
+        self.assertIn("scan_incomplete", self.found(pdf(make(cut))))
+        self.assertIn("scan_incomplete", self.found(pdf(make(b"41414141" + payload))))  # no end mark at all
+        honest = self.found(pdf(make(b"41414141" + payload + b">")))
+        self.assertGreater(honest.get("javascript", 0), 0)  # the honest twin is read, as before
+        self.assertNotIn("scan_incomplete", honest)
+
+    def test_a_real_object_whose_header_has_no_white_space_before_obj_is_read_not_only_reported(self):
+        script = zlib.compress(b"<< /S /JavaScript /JS (x) >>")
+        real = b"9 0obj\n<< /Type /ObjStm /N 1 /First 4 /Filter /FlateDecode >>\nstream\n" + script + b"\nendstream\nendobj\n"
+        found = self.found(pdf(real))
+        self.assertGreater(found.get("javascript", 0), 0)
+        self.assertNotIn("scan_incomplete", found)
+
+    def test_comments_with_no_line_end_after_many_objects_cost_in_proportion_to_the_file(self):
+        data = pdf(b"1 0 obj<<>>%" * 50_000).replace(b"\n", b" ")
+        started = time.monotonic()
+        self.found(data)
+        took = time.monotonic() - started
+        self.assertLess(took, 5, f"{took:.1f} s for {len(data) / 1e6:.1f} MB")  # 60 s when each object searches to the end of the file
+
+    def test_an_object_whose_value_is_the_header_of_the_next_object_is_reported_and_the_next_one_is_read(self):
+        found = self.found(pdf(b"8 0 obj " + self.real(9)))
+        self.assertIn("scan_incomplete", found)
+        self.assertGreater(found.get("javascript", 0), 0)
+        self.assertEqual(self.found(pdf(b"8 0 obj 42 endobj 9 0 obj 7 endobj")), {})  # a number as a value is fine
+
+    def test_a_closed_string_or_dictionary_that_wraps_the_real_object_is_reported(self):
+        for label, wrap_open, wrap_close in (("a string", b"9 0 obj (\n", b")\nendobj\n"), ("a string in a dictionary", b"9 0 obj <<\n/X (\n", b")\n>>\nendobj\n"),
+                                              ("a string in an array", b"9 0 obj [(\n", b")]\nendobj\n")):
+            found = self.found(pdf(wrap_open + self.real(10) + wrap_close))
+            self.assertIn("scan_incomplete", found, label)
+
+    def test_an_object_whose_value_starts_with_a_delimiter_it_cannot_read_is_reported(self):
+        for value in (b")", b">>", b"]", b"}", b">"):
+            found = self.found(pdf(b"9 0 obj\n" + value + b"\nendobj\n" + self.real(10)))
+            self.assertIn("scan_incomplete", found, value)
+            self.assertGreater(found.get("javascript", 0), 0, value)  # and the object after it is still read
+
+    def test_an_honest_trailer_whose_string_holds_the_word_stream_is_not_a_stream_outside_an_object(self):
+        trailer = b"trailer\n<< /Root 1 0 R /Info (made with the stream\ntool) >>\n"
+        self.assert_read(pdf(self.real() + trailer), "a string with the word stream and a line end")
+        self.assertIn("scan_incomplete", self.found(pdf(self.real() + b"made with the stream\ntool\n")))  # outside a trailer it is not allowed
+
+    # -- the strings the reader must get right
+    def test_strings_with_escapes_nesting_and_look_alike_brackets_are_read_to_their_real_end(self):
+        notes = [b"(a\\)b >> stream\nc\\(d)", b"(a (b >> stream\n) c)", b"(\\051 >> stream\n)", b"(line\\\n>> stream\n continues)",
+                 b"(back\\\\) /Z 1", b"(\\(\\(\\( >> stream\n)", b"<3E3E> /K (<<) /L (>>)", b"<3C3C0A73747265616D0A>",
+                 b"(>> stream\r\n) /A#28 (x)", b"()", b"((()))", b"(a%b >> stream\n)"]
+        notes += [b"(x (y) >> stream\n z)", b"(x (y (z) >> w) >> v)", b"(1 (2) 3) (4 (5) >> 6)"]
+        for note in notes:
+            before = b"/Type /ObjStm /N 1 /First 10 /Filter /FlateDecode /Note " + note
+            after = b"/Type /ObjStm /N 1 /First 10 /Note " + note + b" /Filter /FlateDecode"  # what comes after the note must not be lost
+            for dictionary in (before, after):
+                self.assert_read(pdf(stream_object(dictionary, zlib.compress(b"1 0 " + SCRIPT * 2))), repr(dictionary))
+
+    def test_a_percent_sign_inside_a_string_is_not_a_comment_and_one_outside_is(self):
+        in_string = b"/Type /ObjStm /N 1 /First 10 /Note (100% sure) /Filter /FlateDecode"
+        self.assert_read(pdf(stream_object(in_string, zlib.compress(b"1 0 " + SCRIPT * 2))), "in a string")
+        comment = b"/Type /ObjStm /N 1 /First 10 %a comment (with a bracket\n/Filter /FlateDecode"
+        self.assert_read(pdf(stream_object(comment, zlib.compress(b"1 0 " + SCRIPT * 2))), "a comment with an open parenthesis")
+
+    # -- the limits
+    def test_an_object_that_never_closes_is_reported_and_the_objects_after_it_are_still_read(self):
+        for label, broken in {"a dictionary": b"3 0 obj\n<< /A 1 /B [1 2\n", "a string": b"3 0 obj\n<< /A (never\n", "an array": b"3 0 obj\n[1 2 3\n",
+                              "a hex string": b"3 0 obj\n<48656C\n", "mismatched brackets": b"3 0 obj\n<< /A [1 >> ]\n",
+                              "an open hex string in a dictionary": b"3 0 obj\n<< /A <48 >>\nendobj\n"}.items():
+            found = self.found(pdf(broken + self.real()))
+            self.assertIn("scan_incomplete", found, label)
+            if label != "a hex string":  # an open hex string runs to the next > which is in the real object: read as a viewer would
+                self.assertGreater(found.get("javascript", 0), 0, label)
+
+    def test_nesting_up_to_the_limit_is_read_and_one_past_it_is_reported(self):
+        depth = scan_tool.MAX_DEPTH
+        for opener, closer, label, per in ((b"[", b"]", "arrays", 1), (b"<<", b">>", "dictionaries", 1), (b"<< /A [", b"] >>", "both", 2)):
+            reps = depth // per  # nesting of exactly the limit (2 * 50 for the mixed one)
+            one = pdf(b"3 0 obj\n" + opener * reps + closer * reps + b"\nendobj\n" + self.real())
+            self.assertNotIn("scan_incomplete", self.found(one), f"{label}: nothing wrong at the limit")
+            past = pdf(b"3 0 obj\n" + opener * (reps + 1) + closer * (reps + 1) + b"\nendobj\n" + self.real())
+            found = self.found(past)
+            self.assertIn("scan_incomplete", found, label)
+            self.assertGreater(found.get("javascript", 0), 0, label)
+
+    def test_a_stream_dictionary_up_to_the_size_limit_is_read_and_one_past_it_is_reported(self):
+        base = b"<< " + self.REAL_DICT + b" /Pad ("
+        room = scan_tool.MAX_DICT - len(base) - len(b") >>")
+        at = base + b"x" * room + b") >>"
+        self.assertEqual(len(at), scan_tool.MAX_DICT)
+        self.assert_read(pdf(b"9 0 obj\n" + at + b"\nstream\n" + zlib.compress(b"1 0 " + SCRIPT * 2) + b"\nendstream\nendobj\n"), "at the limit")
+        past = base + b"x" * (room + 1) + b") >>"
+        found = self.found(pdf(b"9 0 obj\n" + past + b"\nstream\n" + zlib.compress(b"1 0 " + SCRIPT * 2) + b"\nendstream\nendobj\n"))
+        self.assertIn("scan_incomplete", found)
+
+    # -- honest files
+    def test_honest_shapes_are_read_without_a_caveat(self):
+        data = zlib.compress(b"1 0 " + SCRIPT * 2)
+        shapes = {
+            "no white space between tokens": b"1 0 obj<</Type/ObjStm/N 1/First 10/Filter/FlateDecode>>stream\n" + data + b"\nendstream endobj",
+            "a stream keyword and a carriage return": b"1 0 obj\n<< " + self.REAL_DICT + b" >>\nstream\r" + data + b"\rendstream\rendobj\r",
+            "a carriage return and a line feed": b"1 0 obj\r\n<< " + self.REAL_DICT + b" >>\r\nstream\r\n" + data + b"\r\nendstream\r\nendobj\r\n",
+            "a space after the stream keyword": b"1 0 obj\n<< " + self.REAL_DICT + b" >>\nstream \n" + data + b"\nendstream\nendobj\n",
+            "a comment between the header and the dictionary": b"1 0 obj % an object\n<< " + self.REAL_DICT + b" >>\nstream\n" + data + b"\nendstream\nendobj\n",
+            "a comment between the dictionary and the stream": b"1 0 obj\n<< " + self.REAL_DICT + b" >> % data follows\nstream\n" + data + b"\nendstream\nendobj\n",
+            "comments between objects": b"% a comment\n" + stream_object(self.REAL_DICT, data, 1) + b"% another, about an obj\n% 1 2\n",
+        }
+        for label, body in shapes.items():
+            self.assert_read(b"%PDF-1.5\n" + body + b"\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n", label)
+        full = (b"junk before the header\n%PDF-1.5\n%\xe2\xe3\xcf\xd3\n" + stream_object(self.REAL_DICT, data, 1) + b"xref\n0 2\n0000000000 65535 f \n0000000015 00000 n \n"
+                b"trailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n123\n%%EOF\n" + b"3 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n3 1\n0000000999 00000 n \n"
+                b"trailer\n<< /Size 4 /Prev 123 >>\nstartxref\n456\n%%EOF\njunk after the end \x00\x01\x02 with no keyword\n")
+        self.assert_read(full, "junk, a header comment, two cross-reference sections and trailers")
+
+    def test_an_honest_object_stream_a_cross_reference_stream_and_plain_objects_give_no_caveat(self):
+        body = (stream_object(b"/Type /XRef /W [1 2 1] /Size 4 /Filter /FlateDecode", zlib.compress(bytes(40)), 4)
+                + stream_object(b"/Type /ObjStm /N 1 /First 4 /Filter /FlateDecode", zlib.compress(b"8 0 << /A 1 >>"), 5)
+                + b"6 0 obj\n<< /Type /Page /MediaBox [0 0 612 792] /Contents 7 0 R /Parent 2 0 R /Title (Page (one)) >>\nendobj\n"
+                + stream_object(b"/Length 20", b"BT /F1 12 Tf (Hi) Tj ET", 7) + b"8 0 obj\n42\nendobj\n9 0 obj\n/Name\nendobj\n10 0 obj\n(a string)\nendobj\n"
+                + b"11 0 obj\n[1 2 [3 4] <</A 1>> (x)]\nendobj\n12 0 obj\n<0A0B>\nendobj\n13 0 obj\ntrue\nendobj\n14 0 obj\nnull\nendobj\n")
+        self.assertEqual(self.found(pdf(body)), {})
+
+    def test_a_stream_with_no_endstream_is_reported(self):
+        found = self.found(pdf(b"9 0 obj\n<< /Length 5 >>\nstream\nabcde"))
+        self.assertIn("scan_incomplete", found)
+        found = self.found(pdf(self.real() + b"10 0 obj\n<< /A 1 >>\nstream\nabcde"))
+        self.assertIn("scan_incomplete", found)
+        self.assertGreater(found.get("javascript", 0), 0)
+
+    def test_a_stream_keyword_without_a_line_end_is_reported(self):
+        self.assertIn("scan_incomplete", self.found(pdf(b"9 0 obj\n<< /A 1 >>\nstream XXXX\nendstream\nendobj\n")))
+
+    def test_the_filter_key_check_is_by_exact_position(self):
+        # a /Filter anywhere that is not in a stream dictionary the reader read is still reported
+        self.assertIn("scan_incomplete", self.found(pdf(b"3 0 obj\n<< /Filter /Standard /V 1 >>\nendobj\n")))
+        self.assertIn("scan_incomplete", self.found(pdf(self.real() + b"trailer\n<< /Filter /FlateDecode >>\n")))
+        self.assertEqual(self.found(pdf(b"3 0 obj\n<< /A 1 >>\nendobj\n")), {})
+
+    # -- cost
+    def timed(self, data, limit):
+        started = time.monotonic()
+        scan_tool.scan_pdf(data)
+        took = time.monotonic() - started
+        self.assertLess(took, limit)
+        return took
+
+    def test_a_file_of_a_great_many_small_objects_is_read_in_time_that_grows_with_its_size(self):
+        make = lambda n: pdf(b"".join(b"%d 0 obj\n<</Type/Page/MediaBox[0 0 612 792]/Count %d>>\nendobj\n" % (k, k) for k in range(1, n + 1)))
+        small, large = self.timed(make(50_000), 15), self.timed(make(200_000), 40)
+        self.assertLess(large, 8 * max(small, 0.25))
+
+    def test_a_great_many_decoys_cost_in_proportion(self):
+        decoy = lambda k: b"%d 0 obj\n<< /Note (>>\nstream\nFAKE\nendstream\n7 0 obj << /Filter /X >>) /Filter /Fake >>\nendobj\n" % k
+        small = self.timed(pdf(b"".join(decoy(k) for k in range(1, 10_001))), 20)
+        self.assertLess(self.timed(pdf(b"".join(decoy(k) for k in range(1, 40_001))), 60), 8 * max(small, 0.25))
+
+    def test_nesting_to_the_limit_over_and_over_and_past_it_costs_in_proportion(self):
+        depth = scan_tool.MAX_DEPTH
+        one = lambda k: b"%d 0 obj\n" % k + b"[" * depth + b"]" * depth + b"\nendobj\n"
+        past = lambda k: b"%d 0 obj\n" % k + b"[" * (depth + 5) + b"\nendobj\n"
+        self.timed(pdf(b"".join(one(k) for k in range(1, 6_000))), 20)
+        self.timed(pdf(b"".join(past(k) for k in range(1, 6_000))), 20)
+
+    def test_a_long_run_of_comments_and_one_very_long_comment_cost_little(self):
+        self.timed(pdf(b"".join(b"%% comment number %d about nothing\n" % k for k in range(300_000))), 20)
+        self.timed(pdf(b"1 0 obj\n" + b"%" + b"x" * 8_000_000 + b"\n<< /A 1 >>\nendobj\n"), 20)
+        self.timed(pdf(b"%" + b"x" * 8_000_000), 20)  # a comment that never ends
+        self.timed(pdf(b"".join(b"%% 1 0 obj %d\n" % k for k in range(200_000))), 30)  # comments that look like headers
+
+    def test_one_very_long_string_and_a_great_many_short_ones_cost_in_proportion(self):
+        self.timed(pdf(b"1 0 obj\n(" + b"a" * 10_000_000 + b")\nendobj\n"), 20)
+        self.timed(pdf(b"1 0 obj\n(" + b"\\)" * 2_000_000 + b")\nendobj\n"), 30)
+        self.timed(pdf(b"1 0 obj\n[" + b"(x)" * 1_000_000 + b"]\nendobj\n"), 30)
+        self.timed(pdf(b"1 0 obj\n(" + b"(" * 3_000_000), 20)  # nested and never closed
+
+    def test_stream_keywords_and_header_look_alikes_scattered_everywhere_cost_in_proportion(self):
+        self.timed(pdf(b"stream\n" * 600_000), 20)
+        self.timed(pdf(b"1 0 " * 1_500_000), 20)  # numbers that never become a header
+        self.timed(pdf(b"1" * 6_000_000 + b" 0 obj"), 20)  # a long run of digits
+        self.timed(pdf(b"1 0 obj " * 400_000), 40)  # headers with nothing after them
+        self.timed(pdf(b"1 0 obj\n<< /A 1 >>\nstream\n" * 100_000), 40)  # streams that never end
+
+    def test_a_file_with_more_objects_than_the_scan_reads_is_reported_and_so_is_one_that_takes_more_steps_than_it_may(self):
+        many = pdf(b"".join(b"%d 0 obj\n<< /A 1 >>\nendobj\n" % k for k in range(1, 11)))
+        self.assertEqual(self.found(many), {})
+        with mock.patch.object(scan_tool, "MAX_OBJECTS", 5):
+            self.assertIn("scan_incomplete", self.found(many))
+        with mock.patch.object(scan_tool, "MAX_READ_STEPS", 12):
+            self.assertIn("scan_incomplete", self.found(many))
+        strings = pdf(b"1 0 obj\n(" + b"\\)" * 50 + b")\nendobj\n")
+        self.assertEqual(self.found(strings), {})
+        with mock.patch.object(scan_tool, "MAX_READ_STEPS", 20):
+            self.assertIn("scan_incomplete", self.found(strings))
+
+    def test_objects_that_each_open_something_that_never_closes_cost_in_proportion_to_the_file_and_are_reported(self):
+        # every header opens a hex string, an array with a hex string, or a string that nothing closes: each one used to search
+        # the rest of the file again (a 4 MB file of the last kind took 44 seconds)
+        cases = {"hex strings": pdf(b"1 0 obj <\n" * 300_000), "arrays with hex strings": pdf(b"1 0 obj [<\n" * 200_000),
+                 "strings": pdf((b"1 0 obj (" + b"x" * 1000 + b"\n") * 4_000),
+                 "dictionaries with strings": pdf((b"1 0 obj << /A (" + b"x" * 1000 + b"\n") * 4_000),
+                 "comments inside arrays": pdf((b"1 0 obj [ %" + b"x" * 1000 + b"\n") * 4_000)}
+        for label, data in cases.items():
+            started = time.monotonic()
+            found = self.found(data)
+            took = time.monotonic() - started
+            self.assertLess(took, 6, f"{label}: {took:.1f} s for {len(data) / 1e6:.1f} MB")  # about a second; 17 to 44 s without the cap
+            self.assertIn("scan_incomplete", found, label)
+
+    def test_the_scan_stops_reading_objects_after_a_number_it_cannot_finish_and_says_so(self):
+        broken = lambda k: b"%d 0 obj\n<< /A (never closed\n" % k
+        limit = scan_tool.MAX_UNFINISHED
+        below = pdf(b"".join(broken(k) for k in range(1, limit)) + b"\n)" + b"\n)" * 4 + b"\n" + self.real(900))
+        found = self.found(below)
+        self.assertIn("scan_incomplete", found)
+        # many broken objects, each closed by a later parenthesis, then a real one: below the limit the real one is still read
+        closers = b"".join(b"%d 0 obj\n<< /A (broken\n" % k + b")\n>>\nendobj\n" for k in range(1, limit - 1))
+        self.assertGreater(self.found(pdf(closers + self.real(900))).get("javascript", 0), 0)
+        # past the limit the reading stops at the limit; the file is reported, and the plain bytes are still searched
+        past = pdf(b"".join(broken(k) for k in range(1, limit + 20)) + b"\n" + self.real(900))
+        found = self.found(past)
+        self.assertIn("scan_incomplete", found)
+        self.assertEqual(found.get("javascript", 0), 0)  # the reading stopped at the limit, so the real object after it was not read
+
+    def test_the_real_paper_and_the_fixtures_give_what_they_gave(self):
+        import glob
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
+        for path in sorted(glob.glob(os.path.join(here, "*.pdf"))):
+            with open(path, "rb") as f:
+                self.assertEqual(self.found(f.read()), {}, os.path.basename(path))
 
 
 class ScanStageTest(ScanCase):

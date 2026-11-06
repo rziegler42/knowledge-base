@@ -192,7 +192,7 @@ hidden by the `hidden` attribute or an inline style. It records counts and fixed
 from the file. They never stop a book being filed. A scan that cannot run marks the stage failed with the reason.
 
 **No caveat does not mean the file is safe.** It is a pattern scan and not a PDF reader, and it says only what it found. It reads
-the stream markers in one pass and the whole dictionary of each stream, decodes deflate, ASCII85 and hex filters (also layered),
+the file forward, object by object (below), takes the whole dictionary of each stream, decodes deflate, ASCII85 and hex filters (also layered),
 and reports `scan_incomplete` for anything it could not read: a filter it does not decode (LZW, run-length, crypt), a predictor
 it does not undo or parameters it cannot read with certainty (below), deflate data that is damaged, cut short or compressed again inside, a filter
 declared that it did not tie to a stream it read, or a file or page larger than its limits. A deflate image stream that says it
@@ -229,13 +229,27 @@ number, an escaped bracket) is `scan_incomplete` too, because the list read ends
 those can put before the real end. A dictionary with more than one `/Filter` key is `scan_incomplete` too: the text is read without knowing strings, so a decoy
 in a string could say an image codec, which the scan does not look into, ahead of the real filter. A picture with a predictor now counts against the scan's budget of 2,000 streams and twenty
 million decoded bytes, as any stream does (a test builds twenty figures of 950,000 bytes and 1,500 small ones that give no caveat).
-**A known gap, older
-than this change:** the scan finds a stream by the word `stream` and the dictionary before it by matching brackets, without parsing
-strings, so a string in a dictionary that holds a fake `>>`, `stream` and a small deflate stream makes the scan read that, and
-the real stream that follows is taken for part of it: an object stream whose real keys come after such a string, with a script in
-it, gave no caveat at all in a test run by hand. `scan_incomplete` is not reported for it. The fix needs a scan that tracks strings
-and comments, or a check that each stream it finds is an object (`N G obj ... stream`); it is increment C of the plan
-`2026-11-06-scan-hardening`.
+**How it finds a stream.** The scan reads the file forward. In the space between objects it looks for an `N G obj` header (and for
+`trailer`); from a header it reads the object's value with a reader that knows literal strings (nesting, escapes, octal), hex
+strings, comments, names, arrays and dictionaries, takes the exact text of the dictionary, and, if the word `stream` and a line end
+follow, the data up to the first `endstream`. So a bracket, the word `stream` or `endstream`, or text that looks like an object
+inside a string or a comment of a dictionary is part of that string and no longer steers the scan (it used to: a string holding a
+fake `>>`, `stream` and a small deflate stream made the scan read the fake one and take the real stream for part of it, and an
+object stream with a script in it gave no caveat at all). It is `scan_incomplete` when the scan cannot account for something: the
+word `stream` and a line end where no object it read is (in the space between objects, not in a string or in data); an object it
+cannot read to its end, or whose brackets nest more than 100 deep, or whose value is the next object's header; an object value or
+stream dictionary that holds the word `obj` or `endobj` (every object header holds `obj`, however its numbers are written, and a
+viewer does not need an `endobj`: this is what a real object swallowed into a string looks like); a stream dictionary longer than
+16,384 bytes; a stream with no `endstream` or with the word `stream` and no line end after it; a `/Filter` key that is not in a
+dictionary it read; more than a million objects; or more than twelve million steps in all. It stops reading after 20 objects it
+could not finish, and says so (a file of broken objects would otherwise have it read the same long stretch again and again: 4 MB of
+them took 44 seconds). A real compressed stream swallowed into the data of a fake one is found by the check on `/Filter` keys.
+**What this leaves:** the scan does not follow the cross-reference table or `/Length` as a viewer does; a viewer that finds an object
+by its offset and the scan that reads the file in order can disagree about where an object is in a file written to make them
+disagree, and the cases found are the ones above. The data of a stream ends at the first `endstream`, so a stream that holds that
+word in its middle, with its real end after it, is cut there: a deflate stream cut there is `scan_incomplete`, and so is an
+ASCII85 stream with no `~>` or a hex stream with no `>` in what the scan has (the letters of the word are ASCII85 digits). A stream needs an `N G obj` header: a dictionary and `stream`
+without one is `scan_incomplete`.
 A page's hidden text is found only when it is hidden by the `hidden` attribute or an inline style, not by a stylesheet, by
 position or by colour.
 
