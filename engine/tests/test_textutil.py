@@ -78,6 +78,16 @@ class TitleTest(unittest.TestCase):
         self.assertEqual(textutil.title("a title longer than ten untrusted text", 10), "a title lo")
 
 
+class ScrubRootsTest(unittest.TestCase):
+    def test_the_libraries_folders_are_taken_out_in_every_place_they_are_named(self):
+        import types
+        store = types.SimpleNamespace(bulk="/Volumes/my  lib", cfg={"index_root": "/Users/me/index", "bulk_root": "/Volumes/my  lib"})
+        self.assertEqual(textutil.scrub_roots(store, "a /Volumes/my  lib/b /Users/me/index/c"), "a <library>/b <library>/c")
+        self.assertEqual(textutil.scrub_roots(store, "nothing here"), "nothing here")
+        bare = types.SimpleNamespace(bulk="/b", cfg={})
+        self.assertEqual(textutil.scrub_roots(bare, "x /b y"), "x <library> y")
+
+
 class CleanIsStableTest(unittest.TestCase):
     """What clean() returns is its own cleaned form, however it was cut, because other code compares a stored string with it."""
 

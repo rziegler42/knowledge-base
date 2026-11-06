@@ -145,7 +145,7 @@ def _indexable(store, book_id, version_id):
             added += 1
         blocks += 1 if added else 0
     facts = {
-        "title": textutil.clean(root.get("title") or "", 300), "added": root.get("added") or "",
+        "title": textutil.scrub_roots(store, textutil.title(textutil.scrub_roots(store, str(root.get("title") or "")), 300)), "added": root.get("added") or "",
         "caveats": version.get("caveats", []), "structure": record["quality"], "partial": bool(check.get("partial")),
         "compared": bool(check.get("compared")), "reasons": check.get("reasons", []), "conversion": ref,
         "blocks": blocks, "rows": len(rows), "skipped": skipped, "chunk": CHUNK_CHARS,  # the size of a piece is part of what the rows are

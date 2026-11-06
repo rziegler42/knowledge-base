@@ -256,4 +256,28 @@ is left for the owner: read the plan, and say whether to approve it or to ask fo
   neighbouring field is for increment C to judge when the citation joins fields); books already stored and hand-edited `book.json`
   files are for increment B (display).
 - **Not run:** the wider engine tests (the changed modules are `textutil`, `store`, `capture_arxiv` and `convert`; their tests were run).
-- **Left for the owner:** the word to commit A.
+- **Committed** as 39a57247427472feb1bb6672086480452207cf2a (not pushed).
+
+### Increment B — The same rule where a title is shown (implemented and reviewed; not committed)
+
+- **Done:** `textutil.scrub_roots(store, text)` (the folder helper, moved from `read.py`, which keeps `_scrub_roots` as a thin call to
+  it); `index.py` builds the indexed title by scrub, `textutil.title` (300), scrub; `search._results` passes the indexed title through
+  `textutil.title` when it builds a result (so a marker title already in an index is empty without a rebuild); `read.py` makes the
+  title of a result and of the citation with `textutil.title` (200), with the existing scrubs. The README and `docs/specs/reading.md`
+  state it.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_textutil engine.tests.test_search
+  engine.tests.test_read`: 193 tests, OK (the plan named test_search and test_read, and test_textutil because the helper moved into
+  `textutil`). The new tests failed first (five of six): a marker title written into the index with no rebuild, a hand-edited book file
+  with a marker title, a library folder in a title, a folder split by a hidden character, an honest twin (passed before and after).
+  Break-it on six uses of the rule (search, the index's marker check, the index's scrub before and after cleaning, the citation title,
+  the result title): all caught, after two survivors got tests (the stored row holds no marker title; the index scrubs before
+  cleaning, by a spy on `scrub_roots`).
+- **Review (independent reviewer, one round):** no blocking finding. Applied: the Reading spec says a search result has no folder in
+  its title once the index is rebuilt. Noted, not changed: search has no store, so a folder in a title indexed before the rule stays in
+  a search result until `python3 -m kb index` (increment D); the reviewer agrees a store should not be added to search, since the
+  folder is the library's own path that a page or an arXiv record cannot know. No path found where a title reaches a result, a
+  citation or a message without the rule; a changed title is re-indexed because the title is part of the version's signature. One
+  existing read test expects the citation to start with `untitled.`, which increment C changes.
+- **Not run:** the other test modules (the changed modules are `textutil`, `index`, `search` and `read`; their tests were run); a
+  security review (the plan asks at A and C only).
+- **Left for the owner:** the word to commit B.

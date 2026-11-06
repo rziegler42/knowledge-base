@@ -47,6 +47,16 @@ def title(text, limit):
     return "" if MARKER_WORDS in _letters(kept) else kept
 
 
+def scrub_roots(store, text):
+    """Text with the library's folders taken out (`store` is anything with `bulk` and a `cfg` that may name `index_root` and
+    `bulk_root`). Done on text that is not yet cleaned, so a folder written with odd spacing still matches, and again after cleaning,
+    which can join a folder that a hidden character had split."""
+    for private in (store.bulk, store.cfg.get("index_root"), store.cfg.get("bulk_root")):
+        if private:
+            text = text.replace(private, "<library>")
+    return text
+
+
 def block_text(text):
     """The text of one converted block: its lines are kept (a line break in a page or a PDF is part of its structure), spaces
     inside a line are collapsed, empty lines go, and everything `clean` removes goes too. Line separators of every kind

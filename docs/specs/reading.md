@@ -102,6 +102,9 @@ cover, or the module declaration's exact form, which is designed in the module's
 
 ### What a result holds
 
+- **[proposed]** A title in a result or a citation line is text from outside and is made by the one title rule of `book.md` where it is shown
+  as well as where it is stored, and has no library folder in it (a search result has none once the index is rebuilt: search has
+  no access to the library's folders, so a folder in a title indexed before the rule stays until the next `index`).
 - **[proposed]** A result holds: the title, the shelf (only if the token may see it), a short summary, why it matched (which query,
   which variant and level, and the score), the date its book was added, whether it is flagged near-scope or partial, its caveats
   (including a retraction or withdrawal flag), the source's quality hints (citation count, venue, peer review) with the date they were

@@ -57,10 +57,7 @@ def _parse(where):
 
 def _scrub_roots(store, text):
     """Text with the library's folders taken out."""
-    for private in (store.bulk, store.cfg.get("index_root"), store.cfg.get("bulk_root")):
-        if private:
-            text = text.replace(private, "<library>")
-    return text
+    return textutil.scrub_roots(store, text)
 
 
 def _address(store, value):
@@ -78,7 +75,7 @@ def _address(store, value):
 
 def _citation(store, root, version):
     source = version.get("source") or {}
-    title = textutil.clean(_scrub_roots(store, str(root.get("title") or "")), 200) or "untitled"
+    title = textutil.title(_scrub_roots(store, str(root.get("title") or "")), 200) or "untitled"
     if isinstance(source.get("arxiv_id"), str) and _ARXIV_ID.fullmatch(source["arxiv_id"]):
         label = source.get("label") if isinstance(source.get("label"), str) and _LABEL.fullmatch(source["label"]) else ""
         where = f"arXiv:{source['arxiv_id']}{label}"
@@ -161,7 +158,7 @@ def _read(store, book_id, loc, version_id, chars):
     if found["status"] == "not_found" and ref != in_use:
         ref, conversion = in_use, in_use_conversion  # not in the conversion it names: look in the one in use, by its words
         found = locator.resolve(loc, ref, conversion)
-    title = _scrub_roots(store, textutil.clean(_scrub_roots(store, str(root.get("title") or "")), 200))  # again: cleaning can join a split folder
+    title = _scrub_roots(store, textutil.title(_scrub_roots(store, str(root.get("title") or "")), 200))  # again: cleaning can join a split folder
     base = {"book_id": book_id, "version_id": version_id, "title": title, "conversion": ref, "untrusted": True,
             "caveats": _caveats(store, version), "completeness": _completeness(version, ref),
             "citation": _scrub_roots(store, _citation(store, root, version))}
