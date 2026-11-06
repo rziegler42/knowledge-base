@@ -24,7 +24,7 @@ import stat
 import sys
 import unicodedata
 
-from . import KbError, __version__, config
+from . import KbError, config
 
 KNOWN_FORMATS = ("pdf", "html")
 _NAME = re.compile(r"[a-z][a-z0-9-]{0,40}")
@@ -197,11 +197,14 @@ def describe(name, version, command, reads, formats, timeout=30, max_output=1_00
                            "max_output": max_output})
 
 
+SCAN_VERSION = "0.0.2"  # the scan tool's own label: raised, with a line in the history of ToolVersionTest, whenever scan_tool.py changes
+
+
 def builtin_scan_entry():
     """The entry for the scan tool that ships with the engine, run by the interpreter that runs the engine."""
     exe, prefix = python_runtime()
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scan_tool.py")
     # -I: no user site, no environment variables, no script directory on the path. -S: no `site` module at all, so
     # nothing in the runtime folder (a .pth file, a sitecustomize) runs at start-up; the scan needs only the standard library.
-    return describe("kb-scan", __version__, [exe, "-I", "-S", script, "{input}", "{output}"], reads=[prefix],
+    return describe("kb-scan", SCAN_VERSION, [exe, "-I", "-S", script, "{input}", "{output}"], reads=[prefix],
                     formats=list(KNOWN_FORMATS), timeout=60, max_output=1_000_000, pin=[script])

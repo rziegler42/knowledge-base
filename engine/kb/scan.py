@@ -6,11 +6,11 @@ overruns) marks the stage failed with the reason, the book stays filed, and conv
 import json
 import os
 
-from . import KbError, __version__, approvals, convert_run, stages, textutil
+from . import KbError, approvals, convert_run, stages, textutil
 from .scan_tool import KINDS
 
 TOOL_NAME = "kb-scan"
-TOOL_VERSION = __version__
+TOOL_VERSION = approvals.SCAN_VERSION  # its own label, not the engine's: see approvals.SCAN_VERSION
 TOOL_LABEL = f"{TOOL_NAME} {TOOL_VERSION}"
 MAX_CAVEATS = 50
 FORMATS = {".pdf": "pdf", ".html": "html", ".htm": "html"}

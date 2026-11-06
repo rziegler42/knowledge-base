@@ -4,7 +4,7 @@ import json
 import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, config, convert_html, convert_pdf, identity, index,
-               library, process, read, search, stages)
+               library, process, read, scan, search, stages)
 from .store import Store
 
 
@@ -82,9 +82,9 @@ def main(argv=None):
                       f"list in the config with its entries, and check `python3 -m kb tools` first", file=sys.stderr)
             if args.scan:
                 try:
-                    approvals.find("kb-scan", __version__, cfg)
+                    approvals.find(scan.TOOL_NAME, scan.TOOL_VERSION, cfg)
                 except KbError:
-                    print(f"warning: kb-scan {__version__} is not on the approved list, so `process` cannot make the scan again; "
+                    print(f"warning: {scan.TOOL_NAME} {scan.TOOL_VERSION} is not on the approved list, so `process` cannot make the scan again; "
                           f"run `python3 -m kb describe-tool all`, put its entries in the config, and check `python3 -m kb tools` first",
                           file=sys.stderr)
             report = stages.redo_books(store, args.books, scan=args.scan, reason="made again at the owner's command")

@@ -248,15 +248,16 @@ again, so after a tool was changed and you approved the new entry, the books alr
 the scan as well (and so all three), and prints what it put back, version by version. It deletes nothing: the next `process` makes
 the conversion again, and each tool is run again only if its **version** is not the one that made the output already filed; the
 output of another version is not adopted, it is kept beside the new one as the next generation (`derived/<tool>/2`), and a tool
-whose version did not change is not run again. So a tool whose script changes must carry a new version: the scan tool and the plain
-extractor carry the engine's version (`kb.__version__`, now 0.0.2), the article extractor's wrapper the number after `kb` in its
+whose version did not change is not run again. So a tool whose script changes must carry a new version: the plain extractor carries
+the engine's version (`kb.__version__`, now 0.0.2), the scan tool a label of its own (`approvals.SCAN_VERSION`, now 0.0.2, so that
+changing the scan does not re-label and re-convert the extractor), the article extractor's wrapper the number after `kb` in its
 version, and a test fails when a script's text changes without a new label. A version that has not been fetched, and a book that is
 not active, are left alone; a book named that is not there is a refusal before anything is changed; a version whose state cannot
 be read is reported (exit code 1) and the others go on. Every version of a book is put back, not only the current one. **Put the new
 tool entries in the config first** (`describe-tool all`, then `tools`), and replace the list rather than add to it: the conversion
 uses the first entry of that name that handles the kind of file, so an old entry listed first would be used and fail. `reconvert`
 warns on the error stream when the first `kb-html-std` entry is not at this engine's version (or, with `--scan`, when `kb-scan` is
-not approved at it), because `process` would then finish the stage with the other extractor alone, as it does with any tool that
+not approved at the scan tool's own version), because `process` would then finish the stage with the other extractor alone, as it does with any tool that
 is not approved, and you would have to run `reconvert` again. If the new conversion cannot be made (the tool is not approved, or
 it fails), `process` marks the stage failed and says so in its report, the old conversion stays the one in use and its rows stay
 searchable until a rebuild (`index`) takes the version out of the index; read the report. Not covered: the old outputs stay on disk (the cost is their size); between

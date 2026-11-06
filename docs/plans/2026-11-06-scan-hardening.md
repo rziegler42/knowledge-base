@@ -1,6 +1,6 @@
 # Scan hardening: no way to hide an object stream from the PDF scan without saying so
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-06
 Candidate: none (no roadmap exists; these are findings of the security reviews of increments D and E of 2026-11-06-first-walk-through-fixes)
 Specs: pipeline, book
@@ -248,4 +248,22 @@ E's comparison confirms the result on real files.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The scan tool has a version of its own (implemented and reviewed, not yet committed)
+
+- **Changed:** `engine/kb/approvals.py` (`SCAN_VERSION = "0.0.2"`, used by `builtin_scan_entry`; the unused engine-version import is gone),
+  `engine/kb/scan.py` (`TOOL_VERSION = approvals.SCAN_VERSION`), `engine/kb/__main__.py` (the `reconvert --scan` warning asks for the
+  scan's label), tests in `test_convert.py` (`ToolVersionTest`) and `test_search.py` (`CommandLineTest`), and two README sentences.
+  The value is unchanged (0.0.2), so no label moves and the owner's approved entries still match.
+- **A deviation in where the constant lives, on purpose.** The plan says one constant in `scan.py`. `scan.py` imports `approvals`, so
+  `approvals.builtin_scan_entry` cannot import `scan` at load time; the constant is in `approvals.py` and `scan.TOOL_VERSION` is set from
+  it. The plan's outcome (`scan.TOOL_VERSION` is the scan's label and is no longer the engine's) holds.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_stages` (Python 3.15.0):
+  110 tests, OK; `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest engine.tests.test_convert engine.tests.test_search`:
+  269 tests, OK. The new tests failed first. Break-it run on 4 places (the entry ignores the constant, the stage ignores it, the warning
+  asks for the engine's version, the extractor check asks for the scan's): all caught.
+- **Review:** independent `reviewer` agent, 1 exchange, no blocking findings, no security risk (a constant moved and a label compared).
+  Applied: two stale comments in the tests and one in `__init__.py`. Not changed: the plan's wording of where the constant lives (the
+  approved text is not edited; the deviation is recorded above); the two label values are equal today, so one half of the warning test
+  cannot tell `approvals.SCAN_VERSION` from `scan.TOOL_VERSION` (harmless: they are the same object by construction).
+- **Security review:** none asked for (the plan puts that stop at B, C and D).
+- **Left for the owner:** the word to commit A.

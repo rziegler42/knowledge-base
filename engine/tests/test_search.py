@@ -1292,7 +1292,7 @@ class CommandLineTest(SearchCase):
                          {(b, s) for b in (one[0], two[0]) for s in ("scanned", "converted", "indexed")})
 
     def test_reconvert_warns_when_a_tool_that_would_make_the_book_again_is_not_approved_in_its_current_version(self):
-        self.approve_all()  # the built-in scan at this engine's version, and a plain extractor approved as 0.0.1
+        self.approve_all()  # the built-in scan at the scan tool's own version, and a plain extractor approved as 0.0.1
         one = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
         self.assertEqual(self.run_kb("process").returncode, 0)
         out = self.run_kb("reconvert")
@@ -1330,6 +1330,30 @@ class CommandLineTest(SearchCase):
         approve([scan_entry, new, old])  # the new one first: that is the one that is used
         right_order = self.run_kb("reconvert")
         self.assertNotIn("warning", right_order.stderr)
+
+    def run_main(self, *args):
+        import contextlib
+        import io
+        from kb.__main__ import main
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(list(args))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_reconvert_with_scan_asks_for_the_scan_tools_own_version_and_not_the_engines(self):
+        self.approve_all()
+        self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        std = self.copier("kb-html-std", __version__, "html", "page.html", "blocks.json")
+        with mock.patch.object(scan, "TOOL_VERSION", "9.9.9"):
+            approve([approvals.builtin_scan_entry(), std])  # approved at the label it really has, which is not the one asked for under the patch
+            code, _out, err = self.run_main("reconvert", "--scan")
+            self.assertEqual(code, 0, err)
+            self.assertIn("warning: kb-scan 9.9.9", err)
+            self.assertNotIn("warning: kb-html-std", err)
+            approve([dict(approvals.builtin_scan_entry(), version="9.9.9"), std])  # approved at the scan's own label
+            code, _out, err = self.run_main("reconvert", "--scan")
+            self.assertEqual(code, 0, err)
+            self.assertNotIn("warning", err)
 
     def test_reconvert_exits_with_1_and_says_so_when_a_version_cannot_be_read_and_still_does_the_others(self):
         self.approve_all()

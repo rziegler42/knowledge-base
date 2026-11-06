@@ -1792,8 +1792,9 @@ class StoreConversionsTest(StoreCase):
 class ToolVersionTest(unittest.TestCase):
     """A tool script that changes must carry a new version label. Otherwise an output made by the old script has the label of the
     new one, and a conversion or scan made again would adopt it as current. Each script's history: (label, sha256), oldest first.
-    When a script changes, add a line with its new hash and a label that no earlier line has (raise `kb.__version__` for the scan
-    tool and the plain extractor, the number after `kb` in `convert_html.TRAF_VERSION` for the article extractor's wrapper).
+    When a script changes, add a line with its new hash and a label that no earlier line has (raise `approvals.SCAN_VERSION` for the
+    scan tool, `kb.__version__` for the plain extractor, the number after `kb` in `convert_html.TRAF_VERSION` for the article
+    extractor's wrapper).
     This catches a changed script and forces the history to be written, but it cannot make a person add a line and not edit the
     last one in place: that rests on this docstring and on review. (The earlier texts of 0.0.1 are not recorded, because several
     texts carried that one label, which is the fault this guards against.)"""
@@ -1822,8 +1823,19 @@ class ToolVersionTest(unittest.TestCase):
             self.assertEqual(len(labels), len(set(labels)), f"{script}: a label was reused for another version of the script")
             self.assertEqual(len({digest for _, digest in history}), len(history), f"{script}: the same text is recorded twice")
 
-    def test_the_scan_and_the_plain_extractor_carry_the_version_of_the_engine(self):
-        self.assertEqual((scan.TOOL_VERSION, convert_html.std_entry()["version"]), (kb_version, kb_version))
+    def test_the_plain_extractor_carries_the_version_of_the_engine_and_the_scan_tool_a_version_of_its_own(self):
+        self.assertEqual(convert_html.std_entry()["version"], kb_version)
+        self.assertEqual(approvals.builtin_scan_entry()["version"], approvals.SCAN_VERSION)
+        self.assertEqual(scan.TOOL_VERSION, approvals.SCAN_VERSION)
+        self.assertEqual(scan.TOOL_LABEL, f"{scan.TOOL_NAME} {approvals.SCAN_VERSION}")
+
+    def test_raising_the_scans_version_does_not_move_the_plain_extractors_and_raising_the_engines_does_not_move_the_scans(self):
+        with mock.patch.object(approvals, "SCAN_VERSION", "7.7.7"):
+            self.assertEqual(approvals.builtin_scan_entry()["version"], "7.7.7")
+            self.assertEqual(convert_html.std_entry()["version"], kb_version)
+        with mock.patch.object(convert_html, "__version__", "9.9.9"):
+            self.assertEqual(convert_html.std_entry()["version"], "9.9.9")
+            self.assertEqual(approvals.builtin_scan_entry()["version"], approvals.SCAN_VERSION)
 
 
 class DescribeToolsTest(ConvertCase):
