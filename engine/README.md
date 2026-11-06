@@ -5,8 +5,8 @@ workbench except for model calls, which this first slice does not make. The desi
 [`docs/specs/`](../docs/specs/README.md) and the build plan is
 [`docs/plans/2026-11-05-first-slice-capture-search-read.md`](../docs/plans/2026-11-05-first-slice-capture-search-read.md).
 
-The engine sets up a library, captures web pages and arXiv papers, scans them, and converts them to text. Search and reading come
-next. Requirements: Python 3.15 (the version it was written and tested with); the engine itself uses only the standard library. Two
+The engine sets up a library, captures web pages and arXiv papers, scans them, converts them to text, indexes the text, searches
+it by keyword and reads a passage back by locator. Requirements: Python 3.15 (the version it was written and tested with); the engine itself uses only the standard library. Two
 of the converters need more, and the conversion section below says what: the pinned packages in `engine/.venv` for the article
 extractor, and poppler for PDFs.
 
@@ -15,8 +15,9 @@ extractor, and poppler for PDFs.
 From the repository root:
 
 ```sh
-python3 -m unittest engine.tests.test_setup engine.tests.test_store engine.tests.test_stages
-engine/.venv/bin/python -m unittest engine.tests.test_convert     # the conversion tests, which use the pinned environment
+python3 -m unittest engine.tests.test_setup engine.tests.test_store engine.tests.test_stages engine.tests.test_textutil \
+    engine.tests.test_capture_url engine.tests.test_capture_arxiv engine.tests.test_scan engine.tests.test_convert_run
+engine/.venv/bin/python -m unittest engine.tests.test_convert engine.tests.test_search engine.tests.test_read   # these use the pinned environment
 ```
 
 ## Set up a library

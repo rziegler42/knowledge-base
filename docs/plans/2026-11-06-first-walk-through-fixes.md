@@ -315,7 +315,7 @@ a test that names the old version or assumes a stage never goes back. Increment 
 - **Left for the owner:** the word to commit B, and whether to open a small plan for finding 4 (checking titles where they are stored
   or shown, for arXiv titles and the citation line).
 
-### Increment C — Index long blocks in pieces (implemented, reviewed and security-reviewed, not yet committed)
+### Increment C — Index long blocks in pieces (committed as 26b1a9dea7da5b9fb91e81a204a7e241b431defd, not pushed)
 
 - **Changed:** `engine/kb/index.py` (a block longer than `CHUNK_CHARS` = 2,000 is several rows, each cut at a word and each with an
   `offset` locator for its own start; format number 2; counts `blocks`, `rows`, `skipped`; the resume check compares rows),
