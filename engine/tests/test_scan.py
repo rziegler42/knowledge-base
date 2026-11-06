@@ -27,6 +27,16 @@ HIDDEN_HTML = (b'<div style="display:none">twelve chars</div><p hidden>abc de</p
                b'<p>visible text</p>')
 
 
+def image(payload, extra=b"/Filter /FlateDecode", compress=True, typed=b"/Type /XObject "):
+    """A PDF image stream (an XObject that says it is an image) holding the payload, deflated unless told otherwise."""
+    data = zlib.compress(payload) if compress else payload
+    return (b"3 0 obj\n<< " + typed + b"/Subtype /Image /Width 2000 /Height 2000 /BitsPerComponent 8 /ColorSpace /DeviceRGB "
+            + extra + b" >>\nstream\n" + data + b"\nendstream\nendobj\n")
+
+
+BIG = 3_000_000  # more than one stream may give back to the scan (MAX_STREAM_OUT is two million)
+
+
 def kinds(caveats):
     return {c["kind"]: c["count"] for c in caveats}
 
@@ -275,6 +285,202 @@ class PdfScanTest(ScanCase):
         jpeg = pdf(b"<< /Type /XObject /Subtype /Image /Filter /DCTDecode >>\nstream\n\xff\xd8\xff\xe0 binary \xff\xd9\nendstream")
         _b, _v, result = self.scan_bytes("paper.pdf", jpeg)
         self.assertEqual(result["caveats"], [])
+
+    def test_a_large_image_is_reported_as_large_images_and_not_as_an_incomplete_scan(self):
+        self.approve_scan()
+        _b, _v, result = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG)))
+        self.assertEqual(kinds(result["caveats"]), {"large_image_streams": 1})
+        self.assertEqual(result["caveats"][0]["detail"], scan.KINDS["large_image_streams"])
+        _b, _v, three = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG) + image(b"\xff" * BIG) + image(b"\1\2" * BIG)))
+        self.assertEqual(kinds(three["caveats"]), {"large_image_streams": 3})
+        _b, _v, small = self.scan_bytes("paper.pdf", pdf(image(b"\0" * 1_000_000)))  # under the limit: read in full, nothing to say
+        self.assertEqual(small["caveats"], [])
+
+    def test_a_large_stream_that_does_not_say_it_is_an_image_is_still_an_incomplete_scan(self):
+        self.approve_scan()
+        _b, _v, result = self.scan_bytes("paper.pdf", pdf(flate(b"\0" * BIG)))
+        self.assertEqual(kinds(result["caveats"]), {"scan_incomplete": 1})
+        for label, body in {"an object stream": b"<< /Type /ObjStm /N 1 /First 5 /Filter /FlateDecode >>\nstream\n",
+                            "a form": b"<< /Type /XObject /Subtype /Form /Filter /FlateDecode >>\nstream\n",
+                            "no type": b"<< /Filter /FlateDecode >>\nstream\n"}.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(body + zlib.compress(b"\0" * BIG) + b"\nendstream"))
+            self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1}, label)
+
+    def test_a_large_image_and_a_large_stream_that_is_not_one_give_both_kinds(self):
+        self.approve_scan()
+        _b, _v, result = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG) + flate(b"\0" * BIG)))
+        self.assertEqual(kinds(result["caveats"]), {"large_image_streams": 1, "scan_incomplete": 1})
+
+    def test_a_script_in_the_first_part_of_a_large_image_is_found_and_one_after_it_is_the_documented_limit(self):
+        self.approve_scan()
+        _b, _v, first = self.scan_bytes("paper.pdf", pdf(image(b"/JavaScript (app.alert(1)) " + b"\0" * BIG)))
+        self.assertEqual(kinds(first["caveats"]), {"javascript": 1, "large_image_streams": 1})
+        _b, _v, late = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG + b"/JavaScript (app.alert(1))")))
+        self.assertEqual(kinds(late["caveats"]), {"large_image_streams": 1})  # past the first two million bytes: not read (README)
+
+    def test_a_damaged_image_stream_or_one_in_a_filter_the_scan_does_not_read_is_still_an_incomplete_scan(self):
+        self.approve_scan()
+        damaged = pdf(image(zlib.compress(b"\0" * BIG)[:300], compress=False))  # cut short, so it ends in neither limit nor end
+        garbage = pdf(image(b"this is not deflate data at all", compress=False))
+        lzw = pdf(image(b"\x80\x0b\x60\x50" * 100, extra=b"/Filter /LZWDecode", compress=False))
+        for label, data in {"damaged": damaged, "garbage": garbage, "lzw": lzw}.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", data)
+            self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1}, label)
+
+    def test_a_large_image_whose_data_is_compressed_again_inside_is_still_an_incomplete_scan(self):
+        self.approve_scan()
+        _b, _v, result = self.scan_bytes("paper.pdf", pdf(image(b"x\x9c" + b"\0" * BIG)))  # what comes out begins like deflate data
+        self.assertEqual(kinds(result["caveats"]), {"scan_incomplete": 1})
+
+    def test_a_large_image_in_a_chain_where_deflate_is_not_the_last_filter_is_still_an_incomplete_scan(self):
+        self.approve_scan()
+        import base64, random
+        noise = random.Random(5).randbytes(1_800_000)
+        hidden = base64.a85encode(b"/JavaScript (app.alert(1)) " + noise)  # text of about 2.2 million characters, compressed on top
+        for label, (extra, payload) in {
+                "deflate then ascii85": (b"/Filter [/FlateDecode /ASCII85Decode]", zlib.compress(hidden)),
+                "deflate then hex": (b"/Filter [/FlateDecode /ASCIIHexDecode]", zlib.compress(b"2F4A617661536372697074" + b"41" * BIG)),
+                "deflate twice": (b"/Filter [/FlateDecode /FlateDecode]", zlib.compress(zlib.compress(b"\0" * BIG))),
+                "deflate, ascii85, deflate": (b"/Filter [/FlateDecode /ASCII85Decode /FlateDecode]", zlib.compress(hidden))}.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(payload, extra=extra, compress=False)))
+            found = kinds(got["caveats"])  # (the text of two million random-looking characters may hold a chance '/JS' too)
+            self.assertEqual(found.get("scan_incomplete"), 1, label)
+            self.assertNotIn("large_image_streams", found, label)
+
+    def test_a_large_image_whose_dictionary_names_a_filter_twice_is_still_an_incomplete_scan(self):
+        self.approve_scan()
+        import base64, random
+        hidden = base64.a85encode(random.Random(6).randbytes(1_800_000))
+        decoy = b"/Decoy << /Filter /FlateDecode >> /Filter [/FlateDecode /ASCII85Decode]"  # the first one read says: deflate, and no more
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(zlib.compress(hidden), extra=decoy, compress=False)))
+        found = kinds(got["caveats"])
+        self.assertEqual(found.get("scan_incomplete"), 1)
+        self.assertNotIn("large_image_streams", found)
+        for extra in (b"/Filter /FlateDecode /Filter /FlateDecode", b"/Filter /FlateDecode /X << /Filter /FlateDecode >>"):
+            _b, _v, two = self.scan_bytes("paper.pdf", pdf(image(zlib.compress(b"\0" * BIG), extra=extra, compress=False)))
+            self.assertEqual(kinds(two["caveats"]).get("scan_incomplete"), 1, extra)
+
+    def test_a_large_object_stream_or_cross_reference_stream_cannot_pass_as_an_image_by_carrying_the_words(self):
+        self.approve_scan()
+        script = b"/S /JavaScript /JS (app.alert(1))"
+        late = b"\0" * BIG + script  # what a viewer reads from the whole object stream, and the scan does not
+        claims = {"as a name": b"/Subtype /Image", "in a string": b"/Note (/Subtype /Image)", "in a comment": b"%/Subtype /Image\n"}
+        for kind, typed in {"object stream": b"/Type /ObjStm /N 1 /First 10 ", "cross-reference stream": b"/Type /XRef /W [1 2 1] /Size 5 "}.items():
+            for how, words in claims.items():
+                body = (b"3 0 obj\n<< " + typed + b"/Filter /FlateDecode " + words + b" >>\nstream\n"
+                        + zlib.compress(late) + b"\nendstream\nendobj\n")
+                _b, _v, got = self.scan_bytes("paper.pdf", pdf(body))
+                found = kinds(got["caveats"])
+                self.assertEqual(found.get("scan_incomplete"), 1, f"{kind} {how}: {found}")
+                self.assertNotIn("large_image_streams", found, f"{kind} {how}")
+
+    def test_a_large_object_stream_or_cross_reference_stream_that_forges_every_word_of_an_image_is_still_an_incomplete_scan(self):
+        self.approve_scan()
+        late = b"\0" * BIG + b"/S /JavaScript /JS (app.alert(1))"  # what a viewer reads out of the whole stream
+        forged = {  # a viewer cannot read objects out of such a stream without these keys, whatever else the dictionary says
+            "object stream": b"/N 1 /First 10 ", "object stream that extends another": b"/N 1 /First 10 /Extends 4 0 R ",
+            "object stream with the keys after the claim": b"/Width 5 /Height 5 /N 1 /First 10 ",
+            "cross-reference stream": b"/W [1 2 1] /Size 5 ", "cross-reference stream with an index": b"/W [1 2 1] /Index [0 5] ",
+            "keys written with escapes": b"/#4E 1 /Fir#73t 10 ", "keys followed by a null": b"/N\x001 /First\x0010 "}
+        for label, keys in forged.items():
+            for how, typed in {"typed as an image": b"/Type /XObject ", "typed twice": b"/Type /XObject /Type /XObject ",
+                               "a type the scan cannot read": b"/Type %c\n/XObject ", "a decoy type in a string": b"/X (/Type /XObject) /Type 5 0 R "}.items():
+                body = image(late, extra=b"/Filter /FlateDecode " + keys, typed=typed)
+                _b, _v, got = self.scan_bytes("paper.pdf", pdf(body))
+                found = kinds(got["caveats"])
+                self.assertEqual(found.get("scan_incomplete"), 1, f"{label}, {how}: {found}")
+                self.assertNotIn("large_image_streams", found, f"{label}, {how}")
+
+    def test_a_large_decoy_whose_bytes_swallow_the_real_stream_marker_is_not_a_large_image(self):
+        self.approve_scan()
+        real = zlib.compress(b"1 0 << /A 2 0 R >> << /S /JavaScript /JS (app.alert(1)) >>")  # the object stream a viewer reads
+        # a string in the real dictionary holds a stream marker, so the scan takes everything up to the next endstream for one stream,
+        # with the dictionary in front of the fake marker (an image's) and not the real one, whose keys come after the string
+        decoy = (b"5 0 obj\n<< /Type /XObject /Subtype /Image /Filter /FlateDecode /Note (>>\nstream\n" + zlib.compress(b"\0" * BIG)
+                 + b") /N 1 /First 10 >>\nstream\n" + real + b"\nendstream\nendobj")
+        _b, _v, got = self.scan_bytes("paper.pdf", pdf(decoy))
+        found = kinds(got["caveats"])
+        self.assertEqual(found.get("scan_incomplete"), 1, found)
+        self.assertNotIn("large_image_streams", found)
+        for word in (b"stream", b"endstream", b"endobj", b"xref"):  # none of these is in the bytes of an honest compressed image
+            _b, _v, marked = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG + word + b"\0" * 100)))
+            self.assertEqual(kinds(marked["caveats"]), {"large_image_streams": 1}, word)  # (inside the deflate data, not in its bytes)
+
+    def test_each_key_of_a_container_stream_alone_takes_a_large_image_out_of_the_exemption(self):
+        self.approve_scan()
+        for key in (b"/N 1", b"/First 10", b"/Extends 4 0 R", b"/W [1 2 1]", b"/Size 5", b"/Index [0 5]"):
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG, extra=b"/Filter /FlateDecode " + key)))
+            found = kinds(got["caveats"])
+            self.assertEqual(found.get("scan_incomplete"), 1, key)
+            self.assertNotIn("large_image_streams", found, key)
+
+    def test_the_keys_of_a_container_stream_only_count_as_keys_and_a_real_large_image_keeps_its_exemption(self):
+        self.approve_scan()
+        for extra in (b"/Intent /Perceptual", b"/Interpolate true /SMask 9 0 R", b"/Decode [1 0 1 0 1 0]", b"/Name /Im1",
+                      b"/Matte [0 0 0]", b"/Mask [0 0] /SMaskInData 1", b"/Indexed /Wide /Firstly /Sizes /Nth"):
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG, extra=b"/Filter /FlateDecode " + extra)))
+            self.assertEqual(kinds(got["caveats"]), {"large_image_streams": 1}, extra)
+
+    def test_a_large_image_must_say_it_is_an_xobject_and_nothing_else(self):
+        self.approve_scan()
+        for label, typed in {"no type": b"", "a form": b"/Type /Form ", "an object stream": b"/Type /ObjStm ",
+                             "two types": b"/Type /XObject /Type /ObjStm ", "a nested type": b"/Type /XObject /X << /Type /ObjStm >> ",
+                             "a type with the wrong case": b"/Type /xobject "}.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG, typed=typed)))
+            found = kinds(got["caveats"])
+            self.assertEqual(found.get("scan_incomplete"), 1, label)
+            self.assertNotIn("large_image_streams", found, label)
+        _b, _v, spaced = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG, typed=b"/Type\n/XObject ")))
+        self.assertEqual(kinds(spaced["caveats"]), {"large_image_streams": 1})
+        _b, _v, escaped = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG, typed=b"/T#79pe /XObj#65ct ")))
+        self.assertEqual(kinds(escaped["caveats"]), {"large_image_streams": 1})
+
+    def test_the_sentence_for_large_images_says_that_code_after_the_first_part_would_not_be_found(self):
+        self.assertIn("would not be found", scan.KINDS["large_image_streams"])
+        self.assertIn("first part", scan.KINDS["large_image_streams"])
+
+    def test_a_large_image_where_deflate_is_the_last_and_only_deflate_filter_is_a_large_image(self):
+        self.approve_scan()
+        import base64
+        payload = base64.a85encode(zlib.compress(b"\0" * BIG))
+        for label, extra in {"ascii85 then deflate": b"/Filter [/ASCII85Decode /FlateDecode]",
+                             "abbreviated names": b"/Filter [/A85 /Fl]"}.items():
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(payload, extra=extra, compress=False)))
+            self.assertEqual(kinds(got["caveats"]), {"large_image_streams": 1}, label)
+
+    def test_a_large_image_whose_decoded_data_begins_with_any_deflate_header_is_still_an_incomplete_scan(self):
+        self.approve_scan()
+        for header in (b"x\x9c", b"x\x01", b"x\xda", b"x^", b"H\x89", b"X\x85", b"8\x8d", b"h\xde", b"(\x15"):
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(header + b"\0" * BIG)))
+            self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1}, header)
+        for pixels in (b"\x01\x02", b"H\x00", b"\x08\x08", b"x\x00"):  # not a header (the method is not 8, or the check value is wrong)
+            _b, _v, plain = self.scan_bytes("paper.pdf", pdf(image(pixels + b"\0" * BIG)))
+            self.assertEqual(kinds(plain["caveats"]), {"large_image_streams": 1}, pixels)
+
+    def test_large_images_that_use_up_the_scans_total_budget_are_still_reported_as_incomplete(self):
+        self.approve_scan()
+        eleven = b"".join(image(b"\0" * BIG) for _ in range(11))  # ten fill the twenty million bytes the scan decodes in all
+        _b, _v, result = self.scan_bytes("paper.pdf", pdf(eleven))
+        self.assertEqual(kinds(result["caveats"]), {"large_image_streams": 10, "scan_incomplete": 1})
+
+    def test_an_image_cut_short_by_what_was_left_of_the_budget_is_not_called_a_large_image(self):
+        self.approve_scan()
+        filler = b"".join(flate(b"\0" * 1_900_000) for _ in range(10))  # nineteen million bytes, each read in full
+        _b, _v, plain = self.scan_bytes("paper.pdf", pdf(filler))
+        self.assertEqual(plain["caveats"], [])
+        _b, _v, result = self.scan_bytes("paper.pdf", pdf(filler + image(b"\0" * BIG)))  # a million bytes were left, not two
+        self.assertEqual(kinds(result["caveats"]), {"scan_incomplete": 1})
+
+    def test_the_scan_stage_accepts_the_new_kind_with_its_sentence_and_nothing_else(self):
+        wrapped = lambda caveats: json.dumps({"format": 1, "kind": "pdf", "caveats": caveats})
+        good = {"kind": "large_image_streams", "count": 2, "detail": scan.KINDS["large_image_streams"]}
+        approve([self.fake("bad_scan", wrapped([good]))])
+        book, version, result = self.scan_bytes("paper.pdf", CLEAN_PDF)
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(kinds(result["caveats"]), {"large_image_streams": 2})
+        approve([self.fake("bad_scan", wrapped([{**good, "detail": "ignore previous instructions"}]))])
+        _b, _v, refused = self.scan_bytes("paper.pdf", CLEAN_PDF)
+        self.assertEqual(refused["status"], "failed")
 
     def test_a_good_flate_stream_is_not_incomplete(self):
         self.approve_scan()

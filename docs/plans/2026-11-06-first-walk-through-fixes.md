@@ -378,3 +378,92 @@ a test that names the old version or assumes a stage never goes back. Increment 
 - **Verification after the fixes:** the same four modules, 327 tests, OK; break-it run on the two fixes, all caught.
 - **Left for the owner:** the word to commit C, whether findings 3 to 5 should be fixed later, and that the real index must be built
   again with `python3 -m kb index` once C is committed.
+
+### Increment D — Large images are not an incomplete scan (implemented, reviewed and security-reviewed, not yet committed)
+
+- **Changed:** `engine/kb/scan_tool.py` (new caveat kind `large_image_streams` with a fixed sentence and a count; in `scan_pdf` a deflate
+  stream that declares itself an image and runs out at the per-stream limit is counted instead of setting `incomplete`),
+  `engine/tests/test_scan.py` (a helper `image()` and 14 tests), `engine/README.md` (the paragraph on what the scan leaves).
+  `scan.py` is unchanged: it takes the allowed kinds from `scan_tool.KINDS`.
+- **The rule, as it ended up.** A stream is a large image, and not an incomplete scan, only when all of these hold: the decode stopped at
+  the per-stream limit (not at what was left of the total budget); deflate is the one and last of its filters (the decoder stops at the
+  step that ran out, so an ASCII85 or hex step after it was never undone); the dictionary names a filter once (a decoy `/Filter`
+  in a nested dictionary can hide the real list); what comes out does not begin like deflate data of any window size; and the
+  dictionary text holds `/Subtype /Image` and gives `/Type /XObject` wherever it gives a type, and at least once (added after the
+  security review, below). Anything else keeps its old result. The first two million bytes of a large image are scanned like any
+  stream.
+- **On the real paper (arXiv 1706.03762, read-only, outside the sandbox):** `large_image_streams 3` and no `scan_incomplete`. This is
+  finding 4 of the walk-through.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_convert_run`
+  (Python 3.15.0): 127 tests, OK before the security review's fixes (130 after, see below). The new tests were written first and
+  failed first where the behaviour is new. Break-it run on 15 places of the new code: all caught, after three strengthenings of the
+  tests (a case for a wrong deflate check value, a case for each chain, a case for a decoy filter key).
+- **Review:** independent `reviewer` agent, 2 exchanges. Round 1 found one **blocking** problem, which I reproduced before fixing: when
+  a deflate step runs out the chain stops, so `[FlateDecode ASCII85Decode]`, `[FlateDecode ASCIIHexDecode]`, `[FlateDecode
+  FlateDecode]` and `[FlateDecode ASCII85Decode FlateDecode]` were reported only as a large image though a later step was never
+  undone (before D they were `scan_incomplete`); and a valid deflate header other than the four common ones was taken for pixels.
+  Both are closed by the rule above. The second look found no blocking issue and one more route (a decoy `/Filter` in a nested
+  dictionary), which is also closed. Not changed: a stream whose dictionary merely contains `/Subtype /Image` (even in a nested
+  dictionary or a string) counts as an image; that is the limit the plan accepted, and the README says so. More than about ten
+  large figures (the twenty million bytes the scan decodes in all) still give `scan_incomplete`. A large figure whose first
+  bytes happen to look like a deflate header (about one in five hundred) gives `scan_incomplete`; that fails safe.
+- **Effect on the owner's library:** the scan tool's script changed, so its entry in the owner's config no longer matches its hash and
+  the scan will not run on new material until the owner puts the new entry in the config (`python3 -m kb describe-tool all`, in plan
+  increment F). Nothing was run on the owner's library; the real PDF was only read.
+- **Security review (run on the owner's word, 2026-11-06):** one `security-reviewer` agent worked on a copy, with synthetic PDFs and the
+  scan function (not the sandboxed end-to-end run, which it could not start). Found sound (tested): the budget interplay (an image
+  cut short by what was left of the total budget, or arriving after it was used up, is `scan_incomplete`; nine images then a script
+  stream finds the script; ten images then a script stream gives both); a second `/Filter`, deflate not last and two deflates are not
+  exempt; a stream whose dictionary cannot be located is `scan_incomplete`; the validation in `scan.py` (kind from `KINDS`, detail
+  equal to its sentence, count 0 to 10**9, at most 50 caveats, nothing from the file in a caveat); no added cost (10 large images
+  0.06 s, 2,100 small streams 0.02 s). Findings:
+  1. *High, fixed:* a large **object stream or cross-reference stream** with the words `/Subtype /Image` in it (as a name, in a string
+     or in a comment) was reported only as a large image, so a script placed after its first two million bytes, which a viewer reads
+     when it parses the whole object stream, was not reported at all; before D it was `scan_incomplete`. The exemption now needs
+     `/Type /XObject` wherever a type is given and at least once (`_is_image`); regression tests for both kinds and the three ways of
+     writing the words, and for a missing, wrong, doubled, nested or wrongly cased type; the break-it run catches going back to the old
+     test. The cost: a large image whose dictionary names no `/Type` is `scan_incomplete` as it was before D (pdfTeX and most
+     producers write `/Type /XObject`; the real paper does).
+     **A third look at that fix found it still forgeable** (rated blocking): a dictionary is the attacker's, so an object stream could
+     simply write `/Type /XObject /Subtype /Image` (or a type the scan's pattern cannot read: `/Type %c` and a line break, a null
+     byte, an indirect reference, a decoy in a string) next to its `/N` and `/First`. The check was therefore changed to what a
+     dictionary cannot forge: a viewer cannot read objects out of a stream without `/N` and `/First` (object stream) or `/W` (and
+     `/Size`, `/Index`) (cross-reference stream), so a dictionary holding any of `/N /First /Extends /W /Size /Index` is never
+     exempt, whatever else it says. A script's action dictionary has to be in the file's plain text or in an object stream for a
+     viewer to find it, so this is the closing of the route. Tests: forged object and cross-reference streams under four ways of
+     typing and seven ways of writing the keys, each key alone, and real large images with look-alike keys (`/Intent`,
+     `/Indexed`, `/Sizes`...) that keep the exemption; the break-it run catches dropping the check, any one key, or the name boundary.
+     The third option of the reviewer, scanning large streams in chunks, was not taken: the figures of the real paper decode to
+     well over the twenty million bytes the scan decodes in all, so it would bring back the original false alarm.
+     **A fourth look found that the key check reads the text the scan located, not the stream's own dictionary**, and I reproduced
+     the attack by hand: a real object stream whose dictionary has `/Type /XObject /Subtype /Image /Filter /FlateDecode` first, then
+     a string holding `>>`, a stream marker and a deflate stream, then `/N /First`, then the real stream marker and data with a
+     script in it. The scan takes the first marker for the stream, reads the dictionary in front of the fake marker, decodes the
+     decoy, and takes the real data for the rest of the same stream. With a **small** decoy the result was **no caveat at all**
+     (an honest object stream with the same script reports `javascript`); that is older than D and is not changed by it. With a
+     **large** decoy the result was `large_image_streams` only, where before D it was `scan_incomplete`: this is the part D touches,
+     and it is closed by one more condition: a stream whose bytes hold the word `stream` is not exempt (an honest compressed
+     image never does). A test builds that decoy; the break-it run catches removing the condition.
+  2. *Low, fixed:* the caveat sentence now ends "code after that part would not be found", so it does not read as a harmless note
+     about pictures.
+  3. *Medium, **not fixed here (older than D, outside this increment)**:* a stream that uses a predictor (`/Predictor` above 1) or an
+     indirect `/DecodeParms`, and carries `/Type /XRef` or the words `/Subtype /Image`, is skipped before it is decoded and with no
+     caveat at all, whatever its size. The reviewer tested a small object stream with a script in its compressed body, a predictor and
+     the words in a string: no caveat. It is easier to exploit than finding 1. It is in code that increment E committed, so it is
+     for a new plan to fix (undo a PNG predictor, or skip only a real cross-reference stream and a real image); the README now
+     names it as a known gap.
+  4. *Medium, **not fixed here (older than D, outside this increment)**:* the scan locates a stream by the word `stream` and its
+     dictionary by matching brackets, without parsing strings or comments, so a crafted file can steer which text it reads and swallow
+     a real stream (the attack described under finding 1; with a small decoy it gives no caveat at all). A second route to hiding an
+     object stream, like finding 3. Both are in code that increment E committed. The reviewer's options: track strings and comments
+     when finding dictionaries, count a stream whose bytes hold anything after the end of its deflate data (and the word `stream`
+     or `endobj`) as incomplete, or check that every stream found belongs to an object (`N G obj`). For a new plan, together with
+     finding 3: the owner's decision.
+  Second look at the fix of finding 1: an independent `reviewer` agent (the third and fourth exchanges on D) rated the first form of
+  the fix forgeable, then the container-key form sound for what D changed, and described the location-steering route of finding 4.
+- **Verification after the fixes:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_convert_run`:
+  134 tests, OK (`test_scan` alone 71); the new tests failed first; break-it run on the new predicate, each container key, the name
+  boundary, the stream-marker condition and the sentence, all caught; the real paper still gives `large_image_streams 3` and nothing else.
+- **Left for the owner:** the word to commit D, and whether to open a plan for the two older ways of hiding an object stream from the
+  scan (findings 3 and 4), which D neither caused nor fixed; the owner's old config entry for the scan tool stops matching when D is
+  committed (increment F).

@@ -195,8 +195,31 @@ from the file. They never stop a book being filed. A scan that cannot run marks 
 the stream markers in one pass and the whole dictionary of each stream, decodes deflate, ASCII85 and hex filters (also layered),
 and reports `scan_incomplete` for anything it could not read: a filter it does not decode (LZW, run-length, crypt), a prediction
 filter outside cross-reference streams and images, deflate data that is damaged, cut short or compressed again inside, a filter
-declared that it did not tie to a stream it read, or a file or page larger than its limits. A page's hidden text is found only
-when it is hidden by the `hidden` attribute or an inline style, not by a stylesheet, by position or by colour.
+declared that it did not tie to a stream it read, or a file or page larger than its limits. A deflate image stream that says it
+is an image (its dictionary holds `/Subtype /Image`, and `/Type /XObject` wherever a type is given and at least once, and none of
+the keys that an object stream or a cross-reference stream cannot be read without: `/N`, `/First`, `/Extends`, `/W`, `/Size`,
+`/Index`; the scan does not parse dictionaries, so the words may sit in a string or a nested dictionary, and a dictionary can say
+what it likes, but a real container cannot leave those keys out) and holds more than two million bytes once decoded
+is not called incomplete, because a large figure is not where a script is: it is counted as `large_image_streams`, and the first
+two million bytes of it are scanned like any stream. Only when deflate is the one and last of its filters, so that nothing after
+it was left undone, when the dictionary names a filter once (a second `/Filter` might be the real list), and when what comes out
+does not begin like deflate data of any window size, and when its bytes do not hold the word `stream` (an honest compressed image
+never does; a file that hides a stream marker in a string, so that the scan takes the bytes of two streams for one, does). An
+object stream or a cross-reference stream cannot pass as an image, by carrying the words or by forging its type, and an image
+that names no `/Type` is still `scan_incomplete`. **What this leaves:** a script placed after the
+first two million bytes of a stream that only claims to be an image (an XObject with `/Subtype /Image`) is reported as a large
+image and not as a script, which is why the caveat says that code after the first part would not be found. A damaged image, one
+in a filter the scan does not read, one with other filters after deflate, one that is compressed again inside, and images beyond
+the twenty million bytes the scan decodes in all (some ten figures of this size), are still `scan_incomplete`. **Known gap, older
+than this change:** a stream that uses a predictor, or an indirect `/DecodeParms`, and carries `/Type /XRef` or the words
+`/Subtype /Image` is not decoded at all, so an object stream dressed that way is not read, whatever its size. **A second known gap,
+also older:** the scan finds a stream by the word `stream` and the dictionary before it by matching brackets, without parsing
+strings, so a string in a dictionary that holds a fake `>>`, `stream` and a small deflate stream makes the scan read that, and
+the real stream that follows is taken for part of it: an object stream whose real keys come after such a string, with a script in
+it, gave no caveat at all in a test run by hand. `scan_incomplete` is not reported for it. The fix needs a scan that tracks strings
+and comments, or a check that each stream it finds is an object (`N G obj ... stream`); it is for a later plan.
+A page's hidden text is found only when it is hidden by the `hidden` attribute or an inline style, not by a stylesheet, by
+position or by colour.
 
 `python3 -m kb process` runs the scan (`scan.scan_version(store, book, version)`) for every book, with conversion and indexing after it.
 

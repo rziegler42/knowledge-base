@@ -33,6 +33,7 @@ KINDS = {
     "xfa_forms": "The PDF contains XFA forms, which can carry scripts.",
     "external_actions": "The PDF can submit forms, import data or open other files.",
     "rich_media": "The PDF contains rich media, which can carry code.",
+    "large_image_streams": "The PDF contains large images, of which only the first part was checked for code; code after that part would not be found.",
     "scan_incomplete": "Part of the file was not checked: it exceeded a limit of the scan, or is built in a way the scan does not read.",
     "script_elements": "The page contains script elements.",
     "event_handlers": "The page contains event-handler attributes.",
@@ -87,6 +88,23 @@ _HEX_NAMES = {b"ASCIIHexDecode", b"AHx"}
 _DECODABLE = _FLATE_NAMES | _A85_NAMES | _HEX_NAMES
 _XREF = re.compile(rb"/Type\s*/XRef(?![A-Za-z0-9])")
 _IMAGE = re.compile(rb"/Subtype\s*/Image(?![A-Za-z0-9])")
+_TYPE = re.compile(rb"/Type\s*/([A-Za-z0-9]+)")
+# the keys without which a viewer cannot read objects out of a stream: an object stream needs /N and /First (and may have /Extends),
+# a cross-reference stream /W (and has /Size and /Index). A dictionary that has any of them is not a picture's, whatever else it says.
+# This is about the dictionary text the scan located. A crafted file can steer which text that is (a string holding a stream marker),
+# which is why the exemption also refuses a stream whose bytes hold the word stream.
+_CONTAINER_KEYS = re.compile(rb"/(?:N|First|Extends|W|Size|Index)(?![A-Za-z0-9])")
+
+
+def _is_image(dictionary):
+    """Whether a stream dictionary may be treated as a picture: none of the keys of an object stream or a cross-reference stream (a
+    viewer reads objects, and so the actions in them, out of those), a /Subtype /Image, and a /Type that is /XObject wherever it is
+    given and given at least once. The scan does not parse dictionaries, so the words may sit in a string or a nested dictionary,
+    and a dictionary can say what it likes; what it cannot do is leave out the keys a viewer needs to use it as a container."""
+    if _CONTAINER_KEYS.search(dictionary):
+        return False  # the claim can be forged; these keys cannot be left out of a stream a viewer reads objects from
+    types = _TYPE.findall(dictionary)
+    return bool(types) and all(t == b"XObject" for t in types) and bool(_IMAGE.search(dictionary))
 
 
 def _decode_chain(blob, names, limit):
@@ -114,6 +132,12 @@ def _decode_chain(blob, names, limit):
 
 
 _ZLIB_MAGIC = (b"x\x9c", b"x\x01", b"x\xda", b"x^")
+
+
+def _deflate_header(data):
+    """Whether data begins like zlib data of any window size: a method of 8 and a check value that makes the two bytes a multiple
+    of 31. More than the four common headers, and a few more things that are not: it errs on the side of calling it deflate."""
+    return len(data) >= 2 and data[0] & 0x0F == 8 and (data[0] << 8 | data[1]) % 31 == 0
 MAX_MARKERS = 2_000_000
 MAX_DICT = 16384          # the longest stream dictionary the scan reads
 MAX_STEPS = 256           # the most brackets it follows to find where one dictionary opens
@@ -201,7 +225,7 @@ def _filter_outside(data, covered):
 
 
 def scan_pdf(data):
-    caveats, incomplete = [], False
+    caveats, incomplete, large_images = [], False, 0
     if b"%PDF-" not in data[:1024]:
         caveats.append(caveat("malformed"))
     plain = _unescape_names(data)
@@ -235,9 +259,17 @@ def scan_pdf(data):
             if decoded > MAX_STREAMS or total >= MAX_TOTAL_OUT:
                 incomplete = True
                 break
-            out, state = _decode_chain(blob, names, min(MAX_STREAM_OUT, MAX_TOTAL_OUT - total))
+            cap = min(MAX_STREAM_OUT, MAX_TOTAL_OUT - total)
+            out, state = _decode_chain(blob, names, cap)
             total += len(out)
-            if state != "ok" or out[:2] in _ZLIB_MAGIC:  # damaged, cut short, or compressed again inside
+            only_deflate_last = (names[-1] in _FLATE_NAMES and sum(n in _FLATE_NAMES for n in names) == 1
+                                 and len(_FILTER_KEY.findall(dictionary)) == 1)  # one filter key: a second might be the real list
+            if (state == "limit" and cap == MAX_STREAM_OUT and only_deflate_last and not _deflate_header(out)
+                    and _is_image(dictionary) and b"stream" not in blob):  # a stream marker in its bytes: structure was swallowed
+                # a picture too big to read to the end: its first part was read, and it is reported as that. Only when the deflate
+                # step that ran out is the last of the filters: the chain stops there, and anything after it was not undone
+                large_images += 1
+            elif state != "ok" or out[:2] in _ZLIB_MAGIC:  # damaged, cut short, or compressed again inside
                 incomplete = True
             if out:
                 haystacks.append(_unescape_names(out))
@@ -249,6 +281,8 @@ def scan_pdf(data):
         count = sum(len(re.findall(pattern, h)) for h in haystacks)
         if count:
             caveats.append(caveat(kind, count))
+    if large_images:
+        caveats.append(caveat("large_image_streams", large_images))
     if incomplete:
         caveats.append(caveat("scan_incomplete"))
     return caveats
