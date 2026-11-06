@@ -179,6 +179,13 @@ class BuildTest(unittest.TestCase):
         self.assertEqual((c.quality, c.pages), ("flat", 2))
         self.assertEqual([b.page for b in c.blocks], [1, 2])
 
+    def test_each_block_knows_its_number_among_the_blocks_of_its_page(self):
+        parsed = convert.parse_paged_text(b"a\n\nb\n\nc\n\x0cd\n\x0c\x0ce\n\nf\n\x0c")
+        c = convert.build(parsed.items, pages=parsed.pages)
+        self.assertEqual([(b.page, b.on_page) for b in c.blocks], [(1, 1), (1, 2), (1, 3), (2, 1), (4, 1), (4, 2)])
+        web = self.build(h("T"), p("x"))
+        self.assertEqual([b.on_page for b in web.blocks], [0, 0])  # a page of the web has no pages
+
     def test_building_twice_gives_the_same_conversion(self):
         items = convert.parse_blocks_json(tool_json(h("A"), p("x"), p("y"))).items
         a, b = convert.build(items), convert.build(items)
@@ -347,6 +354,14 @@ class LocatorTest(unittest.TestCase):
         self.assertEqual(loc["excerpt"]["words"], 0)
         self.assertEqual(locator.resolve(loc, REF, c)["status"], "found")
         self.assertEqual(locator.resolve(loc, OTHER, c)["status"], "not_found")
+
+    def test_making_a_locator_for_every_block_of_a_page_with_a_great_many_blocks_costs_little(self):
+        items = [{"kind": "paragraph", "level": None, "text": f"paragraph {n} of one long page", "page": 1} for n in range(20_000)]
+        conversion = convert.build(items, pages=1)
+        started = time.monotonic()
+        made = [locator.make(REF, conversion, b.index) for b in conversion.blocks]
+        self.assertLess(time.monotonic() - started, 2)  # it was 8 seconds when each locator counted the blocks before it
+        self.assertEqual(made[12_345]["at"], {"page": 1, "block": 12_346})
 
     def test_finding_a_passage_by_text_in_a_long_book_takes_seconds_at_most(self):
         import random

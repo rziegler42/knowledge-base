@@ -78,8 +78,7 @@ def make(ref, conversion, block_index, offset=None):
     if kind == "section":
         at, source = {"path": list(block.path), "paragraph": block.paragraph}, block.text
     elif kind == "page":
-        on_page = sum(1 for b in conversion.blocks[:block_index + 1] if b.page == block.page)
-        at, source = {"page": block.page, "block": on_page}, block.text
+        at, source = {"page": block.page, "block": block.on_page}, block.text
     else:
         where = block.start if offset is None else offset
         if not _is_int(where, block.start) or where >= block.end:

@@ -82,6 +82,20 @@ def mark(store, book_id, version_id, stage, status, reason="", tool=""):
     config.write_json_atomic(store.stages_file(book_id, version_id), state, 0o644)
 
 
+def reset(store, book_id, version_id, stage, reason):
+    """Put a stage whose result lives outside the book back to pending, which `mark` does not allow for a stage that is done.
+    Only `indexed` is such a stage: its result is rows in the search index, and when a book leaves the index they are gone,
+    so the stage is no longer done. Nothing is changed for a stage that is already pending."""
+    if stage != "indexed":
+        raise KbError(f"the stage {stage} cannot be put back: only the index lives outside the book")
+    store._guard()
+    state = read(store, book_id, version_id)
+    if state["stages"][stage]["status"] == "pending":
+        return
+    state["stages"][stage] = {"status": "pending", "reason": textutil.clean(reason, 500), "tool": "", "at": _now()}
+    config.write_json_atomic(store.stages_file(book_id, version_id), state, 0o644)
+
+
 def due(store, book_id, version_id):
     """The stages to run now, in order: pending or failed, with their inputs ready."""
     state = read(store, book_id, version_id)

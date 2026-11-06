@@ -139,6 +139,11 @@ elif mode == "fixed_scan":
     write_text(os.path.join(out, "scan.json"), args[0])
 elif mode == "emit":  # write the named file with the given content, as a converter would
     write_text(os.path.join(out, args[0]), args[1])
+elif mode == "copy_as":  # copy one input file to one output file: a converter whose "conversion" is the file itself
+    with open(os.path.join(inp, args[0]), "rb") as f:
+        data = f.read()
+    with open(os.path.join(out, args[1]), "wb") as f:
+        f.write(data)
 elif mode == "emit_two":  # two named files, as a converter that leaves something extra behind would
     write_text(os.path.join(out, args[0]), args[1])
     write_text(os.path.join(out, args[2]), args[3])

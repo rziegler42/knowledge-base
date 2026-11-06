@@ -607,7 +607,7 @@ covers is an increment breaking an earlier one through the shared store.
 - **Left for the owner:** the word to commit increments E, and whether the findings listed above as not covered are acceptable
   for the next increment, F, which runs real converters under this same runner.
 
-### Increment F — Converters and locators (implemented, reviewed and security-reviewed, not yet committed)
+### Increment F — Converters and locators (committed as 2b981383d50bfa23f622c03ba09f1c2ea5dbe506, not pushed)
 
 - **Done.** `engine/kb/convert.py` (what a tool may hand back, checked in full; blocks, section paths, structure quality; the
   extractor-size rule; the stage `convert_version` and `load_in_use`), `convert_html.py` and `convert_pdf.py` (the approved-list
@@ -704,3 +704,78 @@ covers is an increment breaking an earlier one through the shared store.
     it), ran a small fuzz of PDFs only, and tested on this machine's macOS, Python and poppler.
 - **Left for the owner:** the word to commit F, and the converters' entries, which only the owner puts on the list by pasting
   them into the config.
+
+### Increment G — Keyword search and rebuild (implemented, reviewed and security-reviewed, not yet committed)
+
+- **Done.** `engine/kb/index.py` (one SQLite file, `search.sqlite`, in the index root: a `blocks` row and an FTS5 row for each block
+  of the conversion in use of each converted version, and a `versions` row holding everything a result shows; written in one
+  transaction; `rebuild` writes a new file beside the old and renames it in, so a failure leaves the old one; `index_version` is the
+  stage `indexed`), `search.py` (a query is cut into its words, each put in quotes and bound as a parameter; at most 20 words of
+  100 characters; ranked by bm25 with a fixed tie order; at most 50 results), `process.py` (scan, convert, index for every
+  version of every active book), the commands `process [--book ID]`, `index` and `search QUERY [--limit N]`, a probe mode
+  `copy_as`, and a README section. A result carries the book id, title, version, whether it is the current version, the locator, an
+  excerpt that begins with the untrusted marker, `untrusted: true`, the date added, the scan caveats, how complete the conversion
+  was (`structure`, `partial`, `compared`, `reasons`) and the conversion it came from.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_search`: 80 tests, OK. The security
+  review's fixes changed `convert.py` (blocks know their number on their page), `locator.py` and `stages.py` (`reset`), so the
+  other test files were run too: `test_convert` (under the venv), `test_stages`, `test_store` with `test_search`: 264 tests, OK; and
+  `test_textutil`, `test_convert_run`, `test_scan`, `test_capture_url`, `test_capture_arxiv`, `test_setup`: 278 tests, OK. That is
+  every engine test file.
+- **Break-it check.** 89 deliberate faults in scratch copies of the final code: 86 caught. The three that are not: the shortcut
+  that returns at once for a stage already done (equivalent: the rest of the function does the same without writing), the check
+  for a missing index file in `forget_inactive` (equivalent: the exception handler after it gives the same answer), and an
+  `OSError` catch in `forget_inactive` whose cases are already handled one level in. Earlier runs showed tests that were too weak
+  or passed for another reason, and I strengthened them: a query too long as a whole was refused only for the length of its
+  words; "no words" was refused only because the index rejected an empty query; a missing index was refused only because an
+  empty file it had just made was of the wrong shape; the format number and the table check each hid the other; an unconverted
+  version was refused by a later check with another message; the ranking test did not separate ranking from the order of books;
+  a damaged index was not exercised while reading; the count of rows in the resume check had no test; the lock test could not
+  tell a waiting `forget_inactive` from one with nothing to do; and no test damaged a book's own file for the rebuild. Some misses
+  were the harness's own (a fault aimed at the wrong test class).
+- **Reviewer agent.** One exchange of six, "no blocking findings". Applied: a book that is removed, weeded or a duplicate after it
+  was indexed stayed searchable until `index`, so `process` now begins by taking out the rows of books that are no longer active
+  (`index.forget_inactive`), and only when the book's state can be read, so an absent bulk drive does not empty the index; the
+  current-version flag of a book's older versions is updated when a new version is indexed, and a book with no current version no
+  longer breaks the write; `process` also reports a `MemoryError` in one book and goes on; the test that claimed to prove rows are
+  taken out now does, and a weak "index unharmed" test compares the whole index before and after; two stale README sentences.
+- **Departures from the plan's wording.**
+  - "One row per block": a block whose text grows more than four times under normalisation has no locator (increment F) and is not
+    indexed; it is counted in `versions.skipped`.
+  - The conversion (tool, version, generation) is on the `versions` row and in each locator, not repeated on each block row.
+  - `process` is in `engine/kb/process.py`, which the plan's affected areas do not list.
+  - "How complete its source was": the capture is whole or refused (a page or PDF over the size limit is not captured), so a result
+    reports the completeness of the conversion only.
+- **Not covered.** A new title after a book was indexed shows in search only after `index`. `process` does not notice that the index
+  file was deleted while the stage says done (run `index`). Writing to the index takes a lock that other writers wait for (up to
+  120 seconds), but the rest of `process` has no locks between two runs. The scan has no limit on how often a version that fails
+  it is tried again (each try is bounded by the tool's limits). The marker is a prefix, so a consumer must treat the whole excerpt
+  and the title as data. The index is in the index root and is backed up with it. Search reads text the tools produced; nothing
+  checks that it is true.
+- **Security review.** The owner was asked, with a recommendation to run it before the commit, and answered **yes: "Go with your
+  recommended review"**. One `security-reviewer` agent worked on a copy; no injection path was found (a query is cut into words that
+  cannot hold a quote and bound as a parameter, and nothing in it reaches a file or a process), and a book that is damaged or
+  hostile cannot reach another book's rows. A second agent then took a second look at the fixes, but its shell allowed only the
+  first reviewer's script names, so it could read and not run; I treated its findings as claims and tried each myself.
+  - *Applied, each with a test that failed first:* **High:** a block that repeats a word made `snippet()` cost the square of the
+    repeats (20,000 repeats took 1.8 s, a block of 2 million characters would take hours, per search): the excerpt is now cut by the
+    engine from the stored text, at most 400 characters on one line around the first match, and a search is stopped after 10
+    seconds; **Medium:** the locator counted the blocks before it for every block of a PDF page (8 s for 20,000 blocks, 13 minutes
+    at the limit), now counted once; a book put away and brought back was never indexed again (the stage stayed done), so
+    `stages.reset` puts the `indexed` stage back to pending, in `process` and in a rebuild, and only the states weeded, removed and
+    duplicate take a book out; one damaged book stopped `process` and `index` for all, now reported or counted and the rest go
+    on (an unexpected error type included); a rebuild next to a `process` could lose a version, now writers take a lock; a rebuild
+    could install an index made while the library was away, now it checks the library at the start and before it puts the new
+    index in place; a journal of the old index could be replayed into the new one, now removed; **Low:** titles are cleaned when
+    indexed; an excerpt cannot put a line of its own after the marker (its newlines are gone); an empty index file, which a crash
+    can leave, is treated as no index; the index is opened read-only for a search and an index that holds a trigger or a view is
+    refused; rows of a foreign shape and an index path that is not a file address are refusals; a leftover that cannot be removed
+    is a refusal.
+  - *Not fixed:* an excerpt is up to 402 characters (400 and two ellipses); a search waits up to 5 seconds for a file that is
+    being written; a writer waits up to 120 seconds for another, which with a hung writer is 120 seconds for each version; the
+    scan has no cap on repeated tries; the part of the excerpt search that runs after the query is not under the deadline (the
+    measured cost for words that nearly match everywhere was small); a rebuild that counts failures is still installed, and the
+    command exits with 1 and says how many were left out, so a single damaged book does not block the rest.
+  - *Limits of the evidence:* the first reviewer left two of its own test scripts running (stopped by me), the second could run
+    nothing, SQLite's own behaviour (FTS5, bm25, the journal) was tested only as far as the tests here go, and the machine is this
+    one.
+- **Left for the owner:** the word to commit G.

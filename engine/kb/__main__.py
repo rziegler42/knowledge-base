@@ -3,7 +3,8 @@ import argparse
 import json
 import sys
 
-from . import KbError, __version__, approvals, capture_arxiv, capture_url, config, convert_html, convert_pdf, identity, library
+from . import (KbError, __version__, approvals, capture_arxiv, capture_url, config, convert_html, convert_pdf, identity, index,
+               library, process, search)
 from .store import Store
 
 
@@ -43,11 +44,30 @@ def main(argv=None):
     d.add_argument("tool", nargs="?", default="kb-scan", choices=[*DESCRIBABLE, "all"],
                    help="which tool (default kb-scan); all prints the four as one list")
     sub.add_parser("tools", help="list the approved tools and say whether each still matches what was approved")
+    pr = sub.add_parser("process", help="take every version through the stages it has not finished: scan, convert, index")
+    pr.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", help="only this book (may be repeated)")
+    sub.add_parser("index", help="build the search index again from the books")
+    se = sub.add_parser("search", help="keyword search; every word of the query must match")
+    se.add_argument("query")
+    se.add_argument("--limit", type=int, default=search.DEFAULT_LIMIT, help=f"at most this many results (1 to {search.MAX_LIMIT})")
     args = parser.parse_args(argv)
     try:
         if args.command == "describe-tool":
             entries = [make() for make in DESCRIBABLE.values()] if args.tool == "all" else DESCRIBABLE[args.tool]()
             print(json.dumps(entries, indent=1))
+            return 0
+        if args.command == "process":
+            print(json.dumps(process.process(Store.open(), book_ids=args.books), indent=1))
+            return 0
+        if args.command == "index":
+            counts = index.rebuild(Store.open())
+            print(json.dumps(counts))
+            if counts["failed"]:
+                print(f"{counts['failed']} book or version could not be read and is not in the index", file=sys.stderr)
+                return 1
+            return 0
+        if args.command == "search":
+            print(json.dumps(search.search(config.load()["index_root"], args.query, limit=args.limit), indent=1))
             return 0
         if args.command == "tools":
             cfg = config.load()

@@ -35,7 +35,7 @@ PARTIAL_RATIO = 2.0
 THIN_CHARS = 200
 THIN_RAW_BYTES = 3000
 
-Block = namedtuple("Block", "index kind level text page path paragraph start end")
+Block = namedtuple("Block", "index kind level text page path paragraph start end on_page")  # on_page: its number among the blocks of its page, 0 if none
 Parsed = namedtuple("Parsed", "items truncated pages")
 
 
@@ -110,7 +110,7 @@ def parse_paged_text(raw):
 def build(items, pages=None):
     """The conversion for checked items: each block gets its section path, its paragraph number within the section and its
     place in the converted text. Deterministic, so a locator made against it is found again by the same input."""
-    blocks, stack, paragraph, position = [], [], 0, 0
+    blocks, stack, paragraph, position, on_page = [], [], 0, 0, {}
     for index, item in enumerate(items):
         text = item["text"]
         if item["kind"] == "heading":
@@ -120,8 +120,11 @@ def build(items, pages=None):
             paragraph = 0
         else:
             paragraph += 1
-        blocks.append(Block(index, item["kind"], item["level"], text, item.get("page"), tuple(t for _, t in stack),
-                            paragraph, position, position + len(text)))
+        page = item.get("page")
+        if page is not None:
+            on_page[page] = on_page.get(page, 0) + 1  # counted as the blocks are made, not by each locator looking back
+        blocks.append(Block(index, item["kind"], item["level"], text, page, tuple(t for _, t in stack),
+                            paragraph, position, position + len(text), on_page.get(page, 0) if page is not None else 0))
         position += len(text) + 2  # the blank line between blocks
     headings = [b for b in blocks if b.kind == "heading"]
     quality = "flat" if not headings else ("full" if blocks[0].kind == "heading" else "partial")

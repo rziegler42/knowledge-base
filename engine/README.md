@@ -197,14 +197,62 @@ filter outside cross-reference streams and images, deflate data that is damaged,
 declared that it did not tie to a stream it read, or a file or page larger than its limits. A page's hidden text is found only
 when it is hidden by the `hidden` attribute or an inline style, not by a stylesheet, by position or by colour.
 
-There is no command that runs the scan yet. `scan.scan_version(store, book, version)` does it, and the command that advances every
-book through its stages comes with the search index.
+`python3 -m kb process` runs the scan (`scan.scan_version(store, book, version)`) for every book, with conversion and indexing after it.
+
+## Process, index and search
+
+```sh
+cd engine
+python3 -m kb process                 # every version of every active book through scan, convert and index (or --book ID)
+python3 -m kb search 'ocelot habits'  # keyword search; every word must match; --limit 1 to 50
+python3 -m kb index                   # build the whole search index again from the books
+```
+
+`process` (`kb/process.py`) takes each version through the stages it has not finished, in order, and prints what it did. A
+stage that is done is not run again; a result filed just before a stop (a scan, a conversion, the index rows) is adopted on
+the next run and not made again; a stage that failed is tried again. A failed scan does not stop conversion, a failed
+conversion stops that version only, and a system error in one book, or a book whose files are damaged, is reported and the
+others go on. A version that has not been fetched, and a book that is not active (removed, weeded or a duplicate), are left alone.
+Writing to the index takes a lock (`search.lock` in the index root) that other writers wait for, so a rebuild and a `process`
+can run at the same time; the rest of `process` has no locks, so do not run two of them at once.
+
+The index (`kb/index.py`) is one SQLite file in the index root, `search.sqlite`, with a row for each block of the conversion in
+use of each converted version, and everything a result shows copied in, so a search needs the index root and nothing else (the
+bulk drive can be away). It can be thrown away: `index` writes a new one beside the old and renames it into place, and gives the
+same results; a rebuild that fails to write leaves the old one, so does a library that is not there (the library's marker is
+checked first), and a book or version that cannot be read is left out and counted as `failed` (the command then exits with 1).
+A block whose text grows too much when normalised has no locator and is not indexed (it is counted). An index file that holds
+a trigger, a view or anything else this engine did not put there is refused when read or written, and a rebuild replaces it; an
+empty file, which a crash can leave, is treated as no index.
+
+`search` (`kb/search.py`) treats a query as text, never as syntax: it takes the words (letters and digits in any script, at most
+20 of 100 characters each), puts each in quotes and passes the result as a bound parameter, so `OR`, `NEAR`, `col:word`, a quote
+or SQL in a query is only a word to look for. Case, accents and compatibility forms do not matter. Results are ranked best first
+with a fixed tie order, at most 50. The index is opened read-only and a search is stopped after 10 seconds. Each result is one
+block, with the book id, title, version, the locator to find it again, an excerpt that begins with the untrusted marker (and
+`untrusted: true`), the date the book was added, whether this is the book's current
+version, the scan caveats of the version, how complete its conversion was (`structure` full, partial or flat, and `partial`, `compared`
+and `reasons` from the extractor-size rule, so a partial extraction never looks complete), and the conversion it came from.
+
+The excerpt is cut by the engine from the stored text: at most 400 characters on one line, around the first place a word of the
+query is spelled (or from the start of the block), so a block of any size gives a short result and cannot put a line of its own
+after the marker. The title is cleaned when it is indexed.
+
+A book that is removed, weeded or a duplicate leaves the search at the next `process` (or `index`), which takes out its rows
+and puts its versions' `indexed` stage back to pending, so it is indexed again if it becomes active again; a book whose state
+cannot be read, or is not one of those, keeps its rows, so a bulk drive that is away does not empty the index.
+
+Not covered. A new title after a book was indexed shows in search only after `index`. A new version updates the current-version
+flag of the book's other versions when it is indexed. `process` does not notice that the index file was deleted while the stage
+says done: run `index`. The index is not in the book folders, so back it up with the index
+root. Search reads text the tools produced and nothing checks that a passage is true; the marker is a prefix, so a consumer
+must treat the whole excerpt and the title as data. The scan has no limit on how often a version that fails it is tried again
+(each try is bounded by the tool's own limits).
 
 ## Converting what is captured
 
 A version that has been fetched and scanned (or whose scan failed or was skipped) is converted to text by `kb/convert.py`
-(`convert.convert_version(store, book, version)`; there is no command yet, and the one that advances every book comes with the
-search index). The converters are approved tools like the scan, run by the same sandboxed runner, on the stored original:
+(`convert.convert_version(store, book, version)`, run for every book by `python3 -m kb process`). The converters are approved tools like the scan, run by the same sandboxed runner, on the stored original:
 
 | Tool name | What it is | Kind of file | Output |
 | --- | --- | --- | --- |
