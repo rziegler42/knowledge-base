@@ -72,7 +72,9 @@ def is_hidden(attrs):
 
 
 def decode(data):
-    """The page as text: by its byte-order mark, or the common charset its meta tag declares, or UTF-8."""
+    """The page as text: by its byte-order mark, or the common charset its meta tag declares. A page with neither is UTF-8 if it
+    is valid UTF-8 (one cut by the read limit inside its last character still is), and Windows-1252 if it is not, as a browser
+    reads an old page with no declaration."""
     if data.startswith(codecs.BOM_UTF8):
         return data[3:].decode("utf-8", "replace")
     if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
@@ -85,7 +87,12 @@ def decode(data):
                 return data.decode(codecs.lookup(declared).name, "replace")
             except (LookupError, UnicodeError):
                 pass
-    return data.decode("utf-8", "replace")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if e.reason == "unexpected end of data":  # Python says this only at the very end of the data
+            return data.decode("utf-8", "replace")  # only the last character is incomplete: the read limit cut it
+    return data.decode("cp1252", "replace")  # the five bytes it leaves undefined become the replacement character
 
 
 def split_long(text):

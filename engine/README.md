@@ -349,7 +349,12 @@ reported with how many, and the first is named. A passage that is gone is "not f
   than that, or one nested more than 10,000 deep (the plain extractor then stops reading, since it could no longer tell which
   element a closing tag ends), is converted only as far as that.
 - The plain extractor reads a page in the character set it declares only if that is a common text encoding (UTF-8, Latin-1 and the
-  ISO-8859, Windows, KOI8, GB, Big5, EUC and Shift-JIS families); any other name is ignored and the page is read as UTF-8.
+  ISO-8859, Windows, KOI8, GB, Big5, EUC and Shift-JIS families); any other name is ignored. A page with no usable declaration is
+  read as UTF-8 if it is valid UTF-8 (a page cut by the read limit inside its last character still is) and as Windows-1252 if it
+  is not, the way a browser reads an old page; the five bytes Windows-1252 leaves undefined become the replacement character. The
+  rule cannot tell a page cut by the read limit from a complete one, so an undeclared Windows-1252 page whose only non-ASCII byte is
+  its last byte is read as UTF-8 and ends in a replacement character; and a UTF-8 page with one stray bad byte and no declaration
+  is read wholly as Windows-1252.
 - `describe-tool pdftotext` runs the `pdftotext` that is first on your path (`-v`) and `otool` on it, outside the sandbox, to
   find its version and libraries. It first refuses any program that is not in a Homebrew package folder
   (`<prefix>/Cellar/<package>/<version>`), so nothing else is run, and it lists only whole package folders. Read the printed

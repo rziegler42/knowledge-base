@@ -247,4 +247,22 @@ a test that names the old version or assumes a stage never goes back. Increment 
 
 ## Result
 
-Empty until work starts.
+### Increment A — Read a page with no declared encoding (implemented and reviewed, not yet committed)
+
+- **Changed:** `engine/kb/extract_std.py` (`decode()`), `engine/tests/test_convert.py` (4 new tests, `import random`), `engine/README.md`.
+- **Rule:** byte-order mark, then a declared charset on the list (as before), then strict UTF-8, where an incomplete last character (the
+  read limit) still counts as UTF-8, and otherwise Windows-1252 with undefined bytes replaced.
+- **Verification run:** `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest engine.tests.test_convert.ExtractorFunctionsTest
+  engine.tests.test_convert.StdExtractorTest` (Python 3.15.0): 25 tests, OK. The 4 new tests failed first (the dash byte 0x97 came out
+  as a replacement character). Break-it run on the file with a restore: removing the Windows-1252 fallback, the cut-character tolerance,
+  the strict attempt, or sending a declared charset to the wrong codec was each caught; dropping an end-of-data check was an
+  equivalent change (Python reports "unexpected end of data" only at the end), so that check was removed. Not run: the rest of
+  `test_convert` (it does not use `decode`); a search of the tests found no other one that feeds the plain extractor invalid UTF-8.
+- **Review:** independent `reviewer` agent, 1 exchange, no blocking findings, no security risk found. Applied: the cut-character test now
+  compares exactly (one replacement, nothing dropped); the README states the two misreads the rule accepts (an undeclared Windows-1252
+  page whose only non-ASCII byte is its last, and a UTF-8 page with one stray bad byte and no declaration). Not changed: the check
+  relies on CPython's message `unexpected end of data` (tests would catch a change); the random-bytes test only shows no crash,
+  which is what the step asks.
+- **Not run:** a security review. The change decodes untrusted page bytes but adds no lookup, no path and no command; the list of
+  charsets is unchanged. Say if you want one.
+- **Left for the owner:** the word to commit A.

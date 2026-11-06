@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import random
 import re
 import shutil
 import sys
@@ -530,6 +531,11 @@ class StdExtractorTest(SandboxCase):
         sjis = "<meta charset=shift_jis><p>日本語</p>".encode("shift_jis")
         self.assertEqual(self.extract(sjis).items[0]["text"], "日本語")
 
+    def test_a_page_with_no_declaration_that_is_not_utf8_is_read_as_windows_1252(self):
+        page = b"<html><body><p>other subject \x97 but it\x92s \x93fine\x94 caf\xe9</p></body></html>"
+        self.assertEqual(self.extract(page).items[0]["text"], "other subject — but it’s “fine” caf\xe9")
+        self.assertNotIn("�", self.extract(page).items[0]["text"])
+
     def test_nesting_deeper_than_any_page_stops_the_reading_and_says_so_instead_of_dropping_the_skip_rules(self):
         deep = b"<div>" * 10_100 + b"<nav>NAVTEXT</nav><script>SCRIPTTEXT</script><p hidden>HIDDENTEXT</p><p>VISIBLE</p>"
         parsed = self.extract(deep)
@@ -614,6 +620,40 @@ class ExtractorFunctionsTest(unittest.TestCase):
         self.assertEqual(x.strip_comments("display/**/:none"), "display:none")
         self.assertTrue(x.is_hidden([("style", "display:none/* never closed")]))
         self.assertFalse(x.is_hidden([("style", "/* never closed display:none")]))  # the comment swallows the rest, as in CSS
+
+    def test_decode_reads_valid_utf8_as_it_is_and_other_bytes_as_windows_1252(self):
+        x = load_script("extract_std")
+        self.assertEqual(x.decode("caf\xe9 — 日本".encode("utf-8")), "caf\xe9 — 日本")  # valid UTF-8: unchanged
+        self.assertEqual(x.decode(b"a \x97 b \x93q\x94 caf\xe9"), "a — b “q” caf\xe9")  # not UTF-8, no declaration
+        self.assertEqual(x.decode(b"plain ascii"), "plain ascii")
+        self.assertEqual(x.decode(b""), "")
+        # the five bytes Windows-1252 leaves undefined are replaced, and nothing is raised
+        self.assertEqual(x.decode(b"a\x81b\x8dc\x8fd\x90e\x9df"), "a�b�c�d�e�f")
+
+    def test_decode_does_not_take_a_utf8_page_cut_in_the_middle_of_a_character_for_windows_1252(self):
+        x = load_script("extract_std")
+        text = "caf\xe9 — 日本\U0001f600"
+        data = text.encode("utf-8")
+        for cut in range(len(data) + 1):  # the read limit may fall anywhere, inside any character
+            got = x.decode(data[:cut])
+            self.assertEqual(got, data[:cut].decode("utf-8", "replace"), cut)  # the cut character: one replacement, nothing dropped
+            self.assertLessEqual(got.count("�"), 1, cut)
+        self.assertEqual(x.decode(data[:-1]), "caf\xe9 — 日本�")  # an emoji cut after three bytes: one replacement
+        # a page that is not UTF-8 earlier in the text is Windows-1252 even if it also ends in a lone lead byte
+        self.assertEqual(x.decode(b"\x97 then \xe2"), "— then \xe2")
+
+    def test_decode_keeps_the_marks_and_declarations_it_had_before_and_survives_any_bytes(self):
+        x = load_script("extract_std")
+        self.assertEqual(x.decode(b"\xef\xbb\xbfcaf\xc3\xa9"), "caf\xe9")
+        self.assertEqual(x.decode("﻿ab".encode("utf-16-le")), "ab")
+        self.assertEqual(x.decode(b"<meta charset=iso-8859-1>caf\xe9"), "<meta charset=iso-8859-1>caf\xe9")
+        self.assertEqual(x.decode(b"<meta charset=shift_jis>" + "日本".encode("shift_jis")), "<meta charset=shift_jis>日本")
+        self.assertEqual(x.decode(b"<meta charset=nonsense>caf\xc3\xa9"), "<meta charset=nonsense>caf\xe9")
+        self.assertEqual(x.decode(b"<meta charset=nonsense>\x97"), "<meta charset=nonsense>—")  # an unknown name: no declaration
+        self.assertEqual(x.decode(b"<meta charset=utf-8>\x97"), "<meta charset=utf-8>�")  # declared UTF-8 stays UTF-8
+        rng = random.Random(7)
+        for _ in range(300):
+            self.assertIsInstance(x.decode(bytes(rng.randrange(256) for _ in range(rng.randrange(0, 200)))), str)
 
     def test_padding_in_front_of_a_hiding_style_does_not_hide_the_hiding(self):
         x = load_script("extract_std")
