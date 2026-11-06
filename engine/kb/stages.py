@@ -96,6 +96,60 @@ def reset(store, book_id, version_id, stage, reason):
     config.write_json_atomic(store.stages_file(book_id, version_id), state, 0o644)
 
 
+REDO_FROM = ("scanned", "converted", "indexed")  # the stages whose result can be made again; each puts back the ones after it
+
+
+def redo(store, book_id, version_id, stage, reason):
+    """Make a stage, and the stages after it, again: the owner's command, for when a tool was changed and approved anew. Every
+    one of them that is done goes back to pending (a stage that is pending, failed or skipped is left as it is), so the next
+    `process` runs it again. Nothing that was filed is touched: the payloads stay, and a tool whose version is the same as the one
+    that made them is not run again. A version that has not been fetched is left alone. Returns the stages put back, in order."""
+    if not isinstance(stage, str) or stage not in REDO_FROM:
+        raise KbError(f"only {', '.join(REDO_FROM)} can be made again")
+    store._guard()
+    state = read(store, book_id, version_id)
+    if state["stages"]["fetched"]["status"] != "done":
+        return []
+    reason, put_back = textutil.clean(reason, 500), []
+    for name in REDO_FROM[REDO_FROM.index(stage):]:
+        if state["stages"][name]["status"] == "done":
+            state["stages"][name] = {"status": "pending", "reason": reason, "tool": "", "at": _now()}
+            put_back.append(name)
+    if put_back:
+        config.write_json_atomic(store.stages_file(book_id, version_id), state, 0o644)
+    return put_back
+
+
+def redo_books(store, book_ids, scan, reason):
+    """`redo` for every version of the books named (all of them, if none are named), from the conversion on, or from the scan if
+    `scan` is true. Books that are not active are left alone. A book named that is not there is a refusal before anything is
+    done. A version that cannot be read is reported and the others go on. Returns what was put back, version by version."""
+    if book_ids is None:
+        wanted = store.list_books()
+    else:
+        wanted = list(book_ids)
+        for book_id in wanted:
+            store.read_book(book_id)
+    stage, report = ("scanned" if scan else "converted"), []
+    for book_id in wanted:
+        try:
+            if store.read_book(book_id).get("state") != "active":
+                continue
+            versions = store.version_ids(book_id)
+        except KbError as e:
+            report.append({"book_id": book_id, "version_id": None, "error": textutil.clean(str(e), 300)})
+            continue
+        for version_id in versions:
+            try:
+                put_back = redo(store, book_id, version_id, stage, reason)
+            except KbError as e:
+                report.append({"book_id": book_id, "version_id": version_id, "error": textutil.clean(str(e), 300)})
+                continue
+            if put_back:
+                report.append({"book_id": book_id, "version_id": version_id, "stages": put_back})
+    return report
+
+
 def due(store, book_id, version_id):
     """The stages to run now, in order: pending or failed, with their inputs ready."""
     state = read(store, book_id, version_id)

@@ -4,7 +4,7 @@ import json
 import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, config, convert_html, convert_pdf, identity, index,
-               library, process, read, search)
+               library, process, read, search, stages)
 from .store import Store
 
 
@@ -46,6 +46,11 @@ def main(argv=None):
     sub.add_parser("tools", help="list the approved tools and say whether each still matches what was approved")
     pr = sub.add_parser("process", help="take every version through the stages it has not finished: scan, convert, index")
     pr.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", help="only this book (may be repeated)")
+    rc = sub.add_parser("reconvert", help="put the conversion (and the index) of books back to pending, so that `process` makes them "
+                                          "again with the tools approved now; nothing is deleted")
+    rc.add_argument("--book", action="append", dest="books", metavar="BOOK_ID",
+                    help="only this book (may be repeated); with none, every active book, and every version of it")
+    rc.add_argument("--scan", action="store_true", help="the scan as well, for when the scan tool was changed")
     sub.add_parser("index", help="build the search index again from the books")
     rd = sub.add_parser("read", help="the text at a locator that a search returned, in a bounded piece")
     rd.add_argument("book_id")
@@ -64,6 +69,30 @@ def main(argv=None):
         if args.command == "process":
             print(json.dumps(process.process(Store.open(), book_ids=args.books), indent=1))
             return 0
+        if args.command == "reconvert":
+            store = Store.open()
+            cfg = config.load()
+            try:  # the entry the conversion would use is the first of that name that handles web pages
+                std_used = approvals.find_for("kb-html-std", "html", cfg)["version"]
+            except KbError:
+                std_used = None
+            if std_used != __version__:
+                print(f"warning: kb-html-std {__version__} is not the entry `process` would use (the first one on the list is "
+                      f"{std_used or 'missing'}), so it cannot make this with it; run `python3 -m kb describe-tool all`, replace the "
+                      f"list in the config with its entries, and check `python3 -m kb tools` first", file=sys.stderr)
+            if args.scan:
+                try:
+                    approvals.find("kb-scan", __version__, cfg)
+                except KbError:
+                    print(f"warning: kb-scan {__version__} is not on the approved list, so `process` cannot make the scan again; "
+                          f"run `python3 -m kb describe-tool all`, put its entries in the config, and check `python3 -m kb tools` first",
+                          file=sys.stderr)
+            report = stages.redo_books(store, args.books, scan=args.scan, reason="made again at the owner's command")
+            print(json.dumps(report, indent=1))
+            failed = [r for r in report if "error" in r]
+            if failed:
+                print(f"{len(failed)} version could not be read and was left as it was", file=sys.stderr)
+            return 1 if failed else 0
         if args.command == "index":
             counts = index.rebuild(Store.open())
             print(json.dumps(counts))

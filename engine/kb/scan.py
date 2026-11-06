@@ -6,7 +6,7 @@ overruns) marks the stage failed with the reason, the book stays filed, and conv
 import json
 import os
 
-from . import KbError, __version__, approvals, convert_run, stages
+from . import KbError, __version__, approvals, convert_run, stages, textutil
 from .scan_tool import KINDS
 
 TOOL_NAME = "kb-scan"
@@ -56,7 +56,9 @@ def _read_result(store, book_id, version_id, name):
 
 def _record(store, book_id, version_id, name):
     """Take a filed scan output: check it, put its caveats on the version, and only then mark the stage done."""
-    store.adopt_payload(book_id, version_id, name)  # hash check, read-only marking, the version file's payload list
+    manifest = store.adopt_payload(book_id, version_id, name)  # hash check, read-only marking, the version file's payload list
+    if manifest.get("tool") != TOOL_LABEL:  # made by another version of the tool than the one approved now
+        raise KbError(f"the scan output was made by {textutil.literal(manifest.get('tool'), 60)}, not by {TOOL_LABEL}")
     caveats = _read_result(store, book_id, version_id, name)
     store.set_version_caveats(book_id, version_id, caveats)
     stages.mark(store, book_id, version_id, "scanned", "done", tool=TOOL_LABEL)

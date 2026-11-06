@@ -706,6 +706,49 @@ class ScanStageTest(ScanCase):
             again = scan.scan_version(self.store, book, version)
         self.assertEqual(kinds(again["caveats"]), kinds(first["caveats"]))
 
+    def reported(self, kind):
+        return json.dumps({"format": 1, "kind": "pdf", "caveats": [{"kind": kind, "count": 1, "detail": scan.KINDS[kind]}]})
+
+    def generations(self, book, version):
+        folder = os.path.join(self.store.version_dir(book, version), "derived", scan.TOOL_NAME)
+        return sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+
+    def test_a_scan_made_by_another_version_of_the_tool_is_not_adopted_when_the_scan_is_made_again(self):
+        approve([self.fake("bad_scan", self.reported("javascript"))])
+        book, version, first = self.scan_bytes("paper.pdf", CLEAN_PDF)
+        self.assertEqual(kinds(first["caveats"]), {"javascript": 1})
+        self.assertEqual(stages.redo(self.store, book, version, "scanned", "the scan tool changed"), ["scanned"])
+        with mock.patch.object(scan, "TOOL_VERSION", "9.9.9"), mock.patch.object(scan, "TOOL_LABEL", f"{scan.TOOL_NAME} 9.9.9"):
+            approve([self.fake("bad_scan", self.reported("embedded_files"))])
+            second = scan.scan_version(self.store, book, version)
+        self.assertEqual(second["status"], "done")
+        self.assertEqual(kinds(second["caveats"]), {"embedded_files": 1})  # the new tool's output, not the old one's
+        self.assertEqual(kinds(self.store.read_version(book, version)["caveats"]), {"embedded_files": 1})
+        self.assertEqual(self.generations(book, version), ["1", "2"])  # the old output is kept beside it
+        self.store.verify_payload(book, version, f"derived/{scan.TOOL_NAME}/1")
+        self.assertEqual(stages.read(self.store, book, version)["stages"]["scanned"]["tool"], f"{scan.TOOL_NAME} 9.9.9")
+
+    def test_a_scan_made_by_the_same_version_of_the_tool_is_adopted_and_not_made_again(self):
+        approve([self.fake("bad_scan", self.reported("javascript"))])
+        book, version, first = self.scan_bytes("paper.pdf", CLEAN_PDF)
+        stages.redo(self.store, book, version, "scanned", "r")
+        again = scan.scan_version(self.store, book, version)
+        self.assertEqual(kinds(again["caveats"]), {"javascript": 1})
+        self.assertEqual(self.generations(book, version), ["1"])  # nothing was run: the output of this version of the tool is current
+
+    def test_an_output_filed_by_another_version_just_before_a_stop_is_not_adopted_either(self):
+        approve([self.fake("bad_scan", self.reported("javascript"))])
+        book, version = self.file_original("paper.pdf", CLEAN_PDF)
+        with mock.patch.object(scan, "_record", side_effect=KeyboardInterrupt):  # stopped after the output was filed
+            with self.assertRaises(KeyboardInterrupt):
+                scan.scan_version(self.store, book, version)
+        self.assertEqual(self.generations(book, version), ["1"])
+        with mock.patch.object(scan, "TOOL_VERSION", "9.9.9"), mock.patch.object(scan, "TOOL_LABEL", f"{scan.TOOL_NAME} 9.9.9"):
+            approve([self.fake("bad_scan", self.reported("embedded_files"))])
+            result = scan.scan_version(self.store, book, version)
+        self.assertEqual(kinds(result["caveats"]), {"embedded_files": 1})
+        self.assertEqual(self.generations(book, version), ["1", "2"])
+
     def test_a_stop_after_the_output_is_filed_is_resumed_without_running_the_tool_again(self):
         self.approve_scan()
         book, version = self.file_original("paper.pdf", pdf(b"<< /S /Launch >>"))

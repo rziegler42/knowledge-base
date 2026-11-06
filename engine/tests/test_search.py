@@ -11,7 +11,7 @@ from engine.tests import ENGINE_DIR
 from engine.tests.test_convert import ConvertCase, blocks_text, h, p
 from engine.tests.test_convert_run import PROBE, approve
 
-from kb import KbError, approvals, convert, convert_run, index, locator, process, scan, search, stages
+from kb import __version__, KbError, approvals, convert, convert_run, index, locator, process, scan, search, stages
 
 
 class Stop(BaseException):
@@ -1178,6 +1178,78 @@ class DamageTest(SearchCase):
         self.assertEqual(len(self.search("ocelot")), 2)
 
 
+class ReconvertSearchTest(SearchCase):
+    """A book made again after a tool changed: the search follows, and a stop on the way loses nothing."""
+
+    def approve_with(self, traf_version):
+        approve([approvals.builtin_scan_entry(), self.copier("trafilatura", traf_version, "html", "page.html", "blocks.json"),
+                 self.copier("kb-html-std", "0.0.1", "html", "page.html", "blocks.json"),
+                 self.copier("pdftotext", "26.10.0-kb1", "pdf", "paper.pdf", "text.txt")])
+
+    def conversions(self, query="ocelot"):
+        return {(r["conversion"]["tool"], r["conversion"]["version"], r["conversion"]["generation"]) for r in self.search(query)}
+
+    def locator_generations(self, book):
+        with sqlite3.connect(self.db_path()) as db:
+            return {(json.loads(loc)["conversion"]["version"], json.loads(loc)["conversion"]["generation"])
+                    for (loc,) in db.execute("SELECT locator FROM blocks WHERE book_id = ?", (book,))}
+
+    def test_the_search_shows_the_conversion_made_again_and_no_row_of_the_old_one(self):
+        self.approve_with("2.3.1-kb1")
+        book, version = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        process.process(self.store)
+        self.assertEqual(self.conversions(), {("trafilatura", "2.3.1-kb1", 1)})
+        stages.redo_books(self.store, [book], scan=False, reason="the tools changed")
+        self.approve_with("2.3.1-kb2")  # the extractor that was in use has a new version
+        report = process.process(self.store)
+        self.assertEqual({r["stage"] for r in report if r["book_id"] == book}, {"converted", "indexed"})  # the scan was not made again
+        self.assertEqual(self.conversions(), {("trafilatura", "2.3.1-kb2", 2)})
+        self.assertEqual(self.locator_generations(book), {("2.3.1-kb2", 2)})  # no row of the old conversion is left
+        with sqlite3.connect(self.db_path()) as db:
+            rows = db.execute("SELECT COUNT(*) FROM blocks WHERE book_id = ?", (book,)).fetchone()[0]
+            self.assertEqual(rows, db.execute("SELECT COUNT(*) FROM blocks_fts WHERE rowid IN (SELECT id FROM blocks WHERE book_id = ?)", (book,)).fetchone()[0])
+        self.assertEqual(rows, len(convert.load_in_use(self.store, book, version)[1].blocks))
+
+    def test_between_the_reset_and_the_next_process_the_search_still_answers_from_the_old_rows(self):
+        self.approve_with("2.3.1-kb1")
+        book, version = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        process.process(self.store)
+        before = self.search("ocelot")
+        stages.redo_books(self.store, [book], scan=False, reason="r")
+        self.assertEqual(self.search("ocelot"), before)  # a stop here loses nothing: the index is as it was
+        self.assertEqual(index.rebuild(self.store)["versions"], 0)  # a rebuild leaves out a version whose conversion is not done
+        self.assertEqual(self.search("ocelot"), [])  # so until process has run, a rebuild takes the book out of the search
+        process.process(self.store)  # and process puts it back: the conversion of the same tool version is adopted, not made again
+        self.assertEqual(self.search("ocelot"), before)
+
+    def test_a_stop_between_the_new_conversion_and_the_new_rows_is_finished_by_the_next_process(self):
+        self.approve_with("2.3.1-kb1")
+        book, version = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        process.process(self.store)
+        stages.redo_books(self.store, [book], scan=False, reason="r")
+        self.approve_with("2.3.1-kb2")
+        with mock.patch.object(index, "write_version", side_effect=Stop):
+            with self.assertRaises(Stop):
+                process.process(self.store)
+        self.assertEqual(stages.read(self.store, book, version)["stages"]["converted"]["status"], "done")
+        self.assertEqual(stages.read(self.store, book, version)["stages"]["indexed"]["status"], "pending")
+        self.assertEqual(self.conversions(), {("trafilatura", "2.3.1-kb1", 1)})  # the rows are still the old ones
+        process.process(self.store)
+        self.assertEqual(self.conversions(), {("trafilatura", "2.3.1-kb2", 2)})
+        self.assertEqual(self.locator_generations(book), {("2.3.1-kb2", 2)})
+
+    def test_a_book_that_was_not_made_again_keeps_its_rows(self):
+        self.approve_with("2.3.1-kb1")
+        one = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        two = self.add_book("Harbour notes", "web page", "page.html", HARBOUR)
+        process.process(self.store)
+        stages.redo_books(self.store, [one[0]], scan=False, reason="r")
+        self.approve_with("2.3.1-kb2")
+        process.process(self.store)
+        self.assertEqual(self.locator_generations(one[0]), {("2.3.1-kb2", 2)})
+        self.assertEqual(self.locator_generations(two[0]), {("2.3.1-kb1", 1)})  # untouched: still the first conversion
+
+
 class CommandLineTest(SearchCase):
     def run_kb(self, *args):
         return subprocess.run([sys.executable, "-m", "kb", *args], cwd=ENGINE_DIR,
@@ -1199,6 +1271,88 @@ class CommandLineTest(SearchCase):
         self.assertEqual(built.returncode, 0, built.stderr)
         self.assertEqual(json.loads(built.stdout)["blocks"], 3)
         self.assertEqual(json.loads(self.run_kb("search", "ocelot").stdout), results)
+
+    def test_reconvert_says_what_it_put_back_and_process_makes_it_again(self):
+        self.approve_all()
+        one = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        two = self.add_book("Harbour notes", "web page", "page.html", HARBOUR)
+        self.assertEqual(self.run_kb("process").returncode, 0)
+        named = self.run_kb("reconvert", "--book", one[0])
+        self.assertEqual(named.returncode, 0, named.stderr)
+        self.assertEqual(json.loads(named.stdout), [{"book_id": one[0], "version_id": one[1], "stages": ["converted", "indexed"]}])
+        everything = self.run_kb("reconvert", "--scan")
+        self.assertEqual(everything.returncode, 0, everything.stderr)
+        got = {d["book_id"]: d["stages"] for d in json.loads(everything.stdout)}
+        self.assertEqual(got, {one[0]: ["scanned"], two[0]: ["scanned", "converted", "indexed"]})  # one's conversion was put back before
+        again = self.run_kb("reconvert")
+        self.assertEqual((again.returncode, json.loads(again.stdout)), (0, []))  # nothing is done now: nothing to put back
+        done = self.run_kb("process")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual({(r["book_id"], r["stage"]) for r in json.loads(done.stdout)},
+                         {(b, s) for b in (one[0], two[0]) for s in ("scanned", "converted", "indexed")})
+
+    def test_reconvert_warns_when_a_tool_that_would_make_the_book_again_is_not_approved_in_its_current_version(self):
+        self.approve_all()  # the built-in scan at this engine's version, and a plain extractor approved as 0.0.1
+        one = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        self.assertEqual(self.run_kb("process").returncode, 0)
+        out = self.run_kb("reconvert")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("warning: kb-html-std", out.stderr)
+        self.assertIn(__version__, out.stderr)
+        self.assertIn("describe-tool", out.stderr)
+        self.assertNotIn("warning: kb-scan", out.stderr)  # that one is approved at this version
+        self.assertEqual([d["stages"] for d in json.loads(out.stdout)], [["converted", "indexed"]])  # it still does what was asked
+        approve([approvals.builtin_scan_entry(), self.copier("kb-html-std", __version__, "html", "page.html", "blocks.json"),
+                 self.copier("trafilatura", "2.3.1-kb1", "html", "page.html", "blocks.json")])
+        quiet = self.run_kb("reconvert", "--scan")
+        self.assertEqual(quiet.returncode, 0, quiet.stderr)
+        self.assertNotIn("warning", quiet.stderr)
+        stale_scan = dict(approvals.builtin_scan_entry(), version="0.0.1")  # the scan tool approved at the version before this one
+        approve([stale_scan, self.copier("kb-html-std", __version__, "html", "page.html", "blocks.json")])
+        without = self.run_kb("reconvert")  # the scan is not made again, so its approval does not matter
+        self.assertNotIn("warning", without.stderr)
+        with_scan = self.run_kb("reconvert", "--scan")
+        self.assertIn("warning: kb-scan", with_scan.stderr)
+        self.assertNotIn("warning: kb-html-std", with_scan.stderr)
+
+    def test_reconvert_warns_when_an_old_entry_of_the_plain_extractor_comes_first_on_the_list(self):
+        self.approve_all()
+        self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        self.assertEqual(self.run_kb("process").returncode, 0)
+        old = self.copier("kb-html-std", "0.0.1", "html", "page.html", "blocks.json")
+        new = self.copier("kb-html-std", __version__, "html", "page.html", "blocks.json")
+        scan_entry = approvals.builtin_scan_entry()
+        approve([scan_entry, old, new])  # process uses the first entry of that name: the old one
+        first_old = self.run_kb("reconvert")
+        self.assertEqual(first_old.returncode, 0, first_old.stderr)
+        self.assertIn("warning: kb-html-std", first_old.stderr)
+        self.assertIn("0.0.1", first_old.stderr)
+        approve([scan_entry, new, old])  # the new one first: that is the one that is used
+        right_order = self.run_kb("reconvert")
+        self.assertNotIn("warning", right_order.stderr)
+
+    def test_reconvert_exits_with_1_and_says_so_when_a_version_cannot_be_read_and_still_does_the_others(self):
+        self.approve_all()
+        one = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        two = self.add_book("Harbour notes", "web page", "page.html", HARBOUR)
+        self.assertEqual(self.run_kb("process").returncode, 0)
+        with open(self.store.stages_file(*one), "w") as f:
+            f.write("{not json")
+        out = self.run_kb("reconvert")
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("could not be read", out.stderr)
+        report = json.loads(out.stdout)
+        self.assertEqual([r["book_id"] for r in report if "error" in r], [one[0]])
+        self.assertIn({"book_id": two[0], "version_id": two[1], "stages": ["converted", "indexed"]}, report)
+
+    def test_reconvert_refuses_a_book_that_is_not_there_before_it_changes_anything(self):
+        self.approve_all()
+        one = self.add_book("Ocelot habits", "web page", "page.html", OCELOT)
+        self.assertEqual(self.run_kb("process").returncode, 0)
+        refused = self.run_kb("reconvert", "--book", one[0], "--book", "01ZZZZZZZZZZZZZZZZZZZZZZZZ")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("refused", refused.stderr)
+        self.assertEqual(stages.read(self.store, *one)["stages"]["converted"]["status"], "done")
 
     def test_process_can_be_limited_to_named_books_from_the_command_line(self):
         self.approve_all()

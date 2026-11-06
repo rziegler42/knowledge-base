@@ -230,6 +230,7 @@ cd engine
 python3 -m kb process                 # every version of every active book through scan, convert and index (or --book ID)
 python3 -m kb search 'ocelot habits'  # keyword search; every word must match; --limit 1 to 50
 python3 -m kb index                   # build the whole search index again from the books
+python3 -m kb reconvert [--book ID] [--scan]   # make the conversion (and the index) of books again at the next `process`
 python3 -m kb read BOOK_ID 'LOCATOR_JSON' --version V1 --chars 2000   # the text at a locator a search returned
 ```
 
@@ -240,6 +241,29 @@ conversion stops that version only, and a system error in one book, or a book wh
 others go on. A version that has not been fetched, and a book that is not active (removed, weeded or a duplicate), are left alone.
 Writing to the index takes a lock (`search.lock` in the index root) that other writers wait for, so a rebuild and a `process`
 can run at the same time; the rest of `process` has no locks, so do not run two of them at once.
+
+**Making a book again** (`python3 -m kb reconvert [--book ID ...] [--scan]`, `stages.redo_books`). A stage that is done is not run
+again, so after a tool was changed and you approved the new entry, the books already in the library keep what the old tool made.
+`reconvert` puts the conversion and the index of the active books named (all, if none is named) back to pending, with `--scan`
+the scan as well (and so all three), and prints what it put back, version by version. It deletes nothing: the next `process` makes
+the conversion again, and each tool is run again only if its **version** is not the one that made the output already filed; the
+output of another version is not adopted, it is kept beside the new one as the next generation (`derived/<tool>/2`), and a tool
+whose version did not change is not run again. So a tool whose script changes must carry a new version: the scan tool and the plain
+extractor carry the engine's version (`kb.__version__`, now 0.0.2), the article extractor's wrapper the number after `kb` in its
+version, and a test fails when a script's text changes without a new label. A version that has not been fetched, and a book that is
+not active, are left alone; a book named that is not there is a refusal before anything is changed; a version whose state cannot
+be read is reported (exit code 1) and the others go on. Every version of a book is put back, not only the current one. **Put the new
+tool entries in the config first** (`describe-tool all`, then `tools`), and replace the list rather than add to it: the conversion
+uses the first entry of that name that handles the kind of file, so an old entry listed first would be used and fail. `reconvert`
+warns on the error stream when the first `kb-html-std` entry is not at this engine's version (or, with `--scan`, when `kb-scan` is
+not approved at it), because `process` would then finish the stage with the other extractor alone, as it does with any tool that
+is not approved, and you would have to run `reconvert` again. If the new conversion cannot be made (the tool is not approved, or
+it fails), `process` marks the stage failed and says so in its report, the old conversion stays the one in use and its rows stay
+searchable until a rebuild (`index`) takes the version out of the index; read the report. Not covered: the old outputs stay on disk (the cost is their size); between
+`reconvert` and `process` the search still answers from the old rows, which name the old conversion (a read from one of their
+locators finds the passage by its words in the new one), but a rebuild (`index`) leaves the books put back out of the index until
+`process` has run; the locators of the old conversion are found again by their words in the new one
+(`found_by_text`), not by their place.
 
 The index (`kb/index.py`) is one SQLite file in the index root, `search.sqlite`, with a row for each block of the conversion in
 use of each converted version (a block longer than 2,000 characters has a row for each piece of it, cut at a word, each with an

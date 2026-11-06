@@ -379,7 +379,7 @@ a test that names the old version or assumes a stage never goes back. Increment 
 - **Left for the owner:** the word to commit C, whether findings 3 to 5 should be fixed later, and that the real index must be built
   again with `python3 -m kb index` once C is committed.
 
-### Increment D — Large images are not an incomplete scan (implemented, reviewed and security-reviewed, not yet committed)
+### Increment D — Large images are not an incomplete scan (committed as 1f3a110725af77643bd3c6c64b2db3c4ed63580d, not pushed)
 
 - **Changed:** `engine/kb/scan_tool.py` (new caveat kind `large_image_streams` with a fixed sentence and a count; in `scan_pdf` a deflate
   stream that declares itself an image and runs out at the per-stream limit is counted instead of setting `incomplete`),
@@ -467,3 +467,64 @@ a test that names the old version or assumes a stage never goes back. Increment 
 - **Left for the owner:** the word to commit D, and whether to open a plan for the two older ways of hiding an object stream from the
   scan (findings 3 and 4), which D neither caused nor fixed; the owner's old config entry for the scan tool stops matching when D is
   committed (increment F).
+
+### Increment E — Convert a book again (implemented, reviewed and security-reviewed, not yet committed)
+
+- **Changed:** `engine/kb/stages.py` (`redo`, which puts a stage and the stages after it back to pending when they are done, for a fetched
+  version, writing once and atomically; `redo_books`, which does that for the books named, or every active book, and every version of
+  each), `engine/kb/scan.py` (an existing scan output whose manifest tool is not the label approved now is refused, so the scan is run
+  again as the next generation), `engine/kb/__main__.py` (`reconvert [--book ID ...] [--scan]`, with a warning when the plain extractor,
+  or with `--scan` the scan tool, is not approved at this engine's version), `engine/kb/__init__.py` (version 0.0.2), tests, and the
+  README paragraph 'Making a book again'.
+- **A departure from the plan's wording, on purpose.** The plan says the tools whose scripts changed get new labels, 'the engine's
+  version, and the revision of the article extractor's wrapper'. Only the engine's version was raised. `extract_traf.py` and the
+  wrapper's options were not changed by A to D, so its label (`2.3.1-kb1`) is unchanged: raising it would only run trafilatura again
+  to the same output and ask the owner to approve an unchanged tool again. `convert_html.py`, which the plan lists as an affected area,
+  is therefore not changed. The independent review agreed that it does not matter.
+- **What the command does.** It deletes nothing. A conversion is made again by `process` only for a tool whose version differs from
+  the one that made the output already filed; that output stays on disk as generation 1 beside the new generation 2, and is no longer
+  recorded. A tool with the same version is not run again. A scan output made by another version is not adopted.
+- **A guard against the fault this fixes.** `ToolVersionTest` pins the text of each tool script to a label history: a script that
+  changes without a line with a new label fails. It cannot stop a person editing the last line in place; that rests on its docstring
+  and on review, which is said in it. A stronger form would derive the label from the script's hash, so that no one has to remember;
+  that changes how labels look and is not done here.
+- **Verification run (the whole engine suite, as the plan names for the end of E):** under the system Python, `test_setup test_store
+  test_stages test_textutil test_capture_url test_capture_arxiv test_scan test_convert_run`: 381 tests OK; under the venv, `test_convert
+  test_search test_read`: 319 tests OK (317 before the warning and its review's fix were added; the whole suite was run again after
+  the last change). The new tests were written first and failed where the behaviour is new. Break-it run on 17 places of the new code (a version not
+  fetched, a stage name, the order of stages, what is put back, the cleaning of the reason, the write guard, books not active, a book
+  not there, the scan flag, an unreadable version, the scan label check, `--scan`, the exit code, and the warning): all caught,
+  after four strengthenings of the tests.
+- **Review:** independent `reviewer` agent, 1 exchange, no blocking findings, no security risk named. Applied: the warning (the review
+  found that `reconvert` before the new entries are approved lets `process` finish the stage with one extractor only, so a second
+  `reconvert` would be needed), and the README now says that every version of a book is put back and that the old rows name the old
+  conversion and how a read of them is answered. Not changed, with reasons: the guard test cannot enforce a new label (above);
+  `redo_books` is atomic for each version and not across versions (a second run finishes the rest and reports only what it did); a
+  scan that fails has no cap on its generations, which is older than E.
+- **Security review (run on the owner's word, 2026-11-06):** one `security-reviewer` agent worked on a copy with faked tools (not the
+  sandboxed runner, and no real concurrent processes). No critical, high or medium finding. Found sound (tested): the scan label check
+  refuses a manifest tool that is missing, not text, a list or a dictionary, an old label, a 5,000-character string and a string with
+  control and direction characters (the message is quoted and cut); the caveats and the stage come from the label, not from the
+  manifest, which the engine writes itself; five repeated `reconvert` and `process` cycles make no new generation of a scan or a
+  conversion (the output of the current label is adopted), a downgrade makes the next generation and no old-label output is adopted as
+  current, and an unapproved tool after a reset marks the stage failed without looping; `redo` leaves `stages.json` byte for byte
+  after a stop or an error in the replace, leaves no temporary file, and replaces a symlinked `stages.json` rather than writing
+  through it; hostile state files (wrong types, deep nesting) and hostile book files give an error entry and the others go on
+  (exit 1); book ids (a 26-character id), stage names and version ids cannot make a path, and the reason is cleaned; the warning
+  prints only constants. Findings:
+  1. *Low, fixed:* the warning only asked whether a `kb-html-std` entry of the engine's version was on the list, but the conversion
+     uses the **first** entry of that name that handles the kind, so an old entry listed first would be used, fail its pins every time,
+     and the new entry would never be reached, without a warning. It now checks the first entry (a test with the old one first and
+     with the new one first; the break-it run catches going back to the old check) and the README says to replace the list.
+  2. *Low, documented:* when the new conversion cannot be made, the old one stays in use and its rows stay searchable until a rebuild
+     takes the version out; the README says to read the `process` report.
+  Notes, not changed: a scan that fails after its output was filed runs again as a new generation on every `process`, with no cap
+  (the conversion has one), older than E and owner-triggered; a folder with a non-ASCII digit as its name under `derived/kb-scan` would
+  block the scan of that version (it needs write access to the library); a symlinked book or `v` folder would be followed, as in
+  `process`; two runs of `process` and `reconvert` at the same time can lose a reset or redo a finished stage, because `stages.json`
+  has no lock: the worst outcome is work done again or a second `reconvert`, and no stale conversion can be adopted as current,
+  because every adoption checks the label. The README already says not to run two `process` runs at once.
+- **Verification after the security review's fix:** the command tests (`engine.tests.test_search.CommandLineTest`, 9 tests) pass and the
+  break-it run on the warning (4 places) catches all; the rest of the suite is as under Verification run.
+- **Left for the owner:** the word to commit E. The owner's config entries for the scan tool and the plain extractor stop matching
+  with this version (0.0.2): increment F is where they are put in, and the list should be replaced, not added to.

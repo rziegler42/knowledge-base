@@ -1201,6 +1201,47 @@ class WebStageTest(ConvertCase):
     def titled(self, text):
         return blocks_text(h("Heading"), p(PARAGRAPH_A), p(PARAGRAPH_B), title=text)
 
+    def generations(self, book, version, tool):
+        folder = os.path.join(self.store.version_dir(book, version), "derived", tool)
+        return sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+
+    def test_after_a_tool_has_a_new_version_a_conversion_made_again_is_the_next_generation_and_the_old_one_is_kept(self):
+        approve([self.traf(), self.std()])
+        book, version = self.file_original(title="")
+        convert.convert_version(self.store, book, version)
+        self.assertEqual(self.store.read_book(book)["title"], "")
+        stages.redo(self.store, book, version, "converted", "the tools changed")
+        self.assertEqual(self.stage(book, version)["status"], "pending")
+        approve([self.traf(), self.fake("kb-html-std", "0.0.2", "blocks.json", self.titled("A title the new version finds"))])
+        result = convert.convert_version(self.store, book, version)
+        self.assertEqual(result["status"], "done")
+        records = {(c["tool"], c["version"], c["generation"]) for c in self.store.read_version(book, version)["conversions"]}
+        self.assertEqual(records, {("trafilatura", "2.3.1-kb1", 1), ("kb-html-std", "0.0.2", 2)})  # the unchanged tool is not run again
+        self.assertEqual(self.generations(book, version, "kb-html-std"), ["1", "2"])
+        self.assertEqual(self.generations(book, version, "trafilatura"), ["1"])
+        self.store.verify_payload(book, version, "derived/kb-html-std/1")  # the old output is kept as it was, and is no longer recorded
+        self.assertEqual(self.store.read_book(book)["title"], "A title the new version finds")
+        self.assert_original_intact(book, version)
+
+    def test_a_conversion_made_again_by_the_same_versions_of_the_tools_is_adopted_and_not_made_again(self):
+        approve([self.traf(), self.std()])
+        book, version = self.file_original()
+        convert.convert_version(self.store, book, version)
+        before = self.store.read_version(book, version)["conversions"]
+        stages.redo(self.store, book, version, "converted", "r")
+        convert.convert_version(self.store, book, version)
+        self.assertEqual(self.store.read_version(book, version)["conversions"], before)
+        self.assertEqual((self.generations(book, version, "kb-html-std"), self.generations(book, version, "trafilatura")), (["1"], ["1"]))
+
+    def test_the_old_conversion_stays_the_one_in_use_until_the_new_one_is_made(self):
+        approve([self.traf(), self.std()])
+        book, version = self.file_original()
+        convert.convert_version(self.store, book, version)
+        stages.redo(self.store, book, version, "converted", "r")
+        v = self.store.read_version(book, version)  # reset and not yet made again: what was recorded is still there
+        self.assertEqual(v["conversion_in_use"]["generation"], 1)
+        self.assertEqual(convert.load_in_use(self.store, book, version)[2]["tool"], "trafilatura")
+
     def test_a_book_with_no_title_gets_the_title_the_page_gives_once(self):
         approve([self.traf(), self.std(self.titled("The Page Title"))])  # the one in use has no title: the other's is taken
         book, version = self.file_original(title="")
@@ -1748,6 +1789,43 @@ class StoreConversionsTest(StoreCase):
 
 
 @unittest.skipUnless(os.path.isdir(convert_html.VENV) and POPPLER, VENV_MISSING + " / pdftotext is not installed")
+class ToolVersionTest(unittest.TestCase):
+    """A tool script that changes must carry a new version label. Otherwise an output made by the old script has the label of the
+    new one, and a conversion or scan made again would adopt it as current. Each script's history: (label, sha256), oldest first.
+    When a script changes, add a line with its new hash and a label that no earlier line has (raise `kb.__version__` for the scan
+    tool and the plain extractor, the number after `kb` in `convert_html.TRAF_VERSION` for the article extractor's wrapper).
+    This catches a changed script and forces the history to be written, but it cannot make a person add a line and not edit the
+    last one in place: that rests on this docstring and on review. (The earlier texts of 0.0.1 are not recorded, because several
+    texts carried that one label, which is the fault this guards against.)"""
+    HISTORY = {
+        "scan_tool.py": [("0.0.2", "e4c34c89655ef89d2dccd37881461ecbd928dcd90c84384105a13ea823e0d120")],
+        "extract_std.py": [("0.0.2", "803c21453f3eaf923f745cf51d760c4edaf4104153fadce6f693f37b6cbc35ff")],
+        "extract_traf.py": [("2.3.1-kb1", "98ee329c2cb94b2b207648c655b55938eb824179283177f0593119df2bfb1774")],
+    }
+
+    def current_label(self, script):
+        return {"scan_tool.py": scan.TOOL_VERSION, "extract_std.py": convert_html.std_entry()["version"],
+                "extract_traf.py": convert_html.TRAF_VERSION}[script]
+
+    def test_the_label_of_each_script_is_the_one_its_current_text_was_recorded_with(self):
+        import hashlib
+        for script, history in self.HISTORY.items():
+            with open(os.path.join(convert_html.HERE, script), "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()
+            label, recorded = history[-1]
+            self.assertEqual(digest, recorded, f"{script} changed: add a line to HISTORY with its new hash and a new version label")
+            self.assertEqual(self.current_label(script), label, f"{script}: the label it carries is not the one recorded for it")
+
+    def test_no_label_is_used_for_two_different_versions_of_a_script(self):
+        for script, history in self.HISTORY.items():
+            labels = [label for label, _ in history]
+            self.assertEqual(len(labels), len(set(labels)), f"{script}: a label was reused for another version of the script")
+            self.assertEqual(len({digest for _, digest in history}), len(history), f"{script}: the same text is recorded twice")
+
+    def test_the_scan_and_the_plain_extractor_carry_the_version_of_the_engine(self):
+        self.assertEqual((scan.TOOL_VERSION, convert_html.std_entry()["version"]), (kb_version, kb_version))
+
+
 class DescribeToolsTest(ConvertCase):
     def run_kb(self, *args):
         import subprocess
