@@ -414,4 +414,33 @@ E's comparison confirms the result on real files.
   `scan_incomplete` (over-flagging, the safe direction). Limits: the oracle is the reviewer's model of viewers, not a real viewer; only two
   fixtures exist for mutation; parameter dictionaries and object streams were not fuzzed beyond the marker.
 - **Not run:** viewer behaviour for bytes after the end of the data.
-- **Left for the owner:** the word to commit D.
+- **Committed** as 017f55c9b78f41dc9e0f4271bf44582f2390bb23 (not pushed).
+
+### Increment E — Approve the new scan and scan the four books again (done; not committed)
+
+- **Entries:** `python3 -m kb describe-tool all` printed four entries. The scan script on disk is the committed one (the same sha256,
+  `a4e64c88…3664`, as `git show HEAD:engine/kb/scan_tool.py`, and `git status` clean for it); the pins of the other three tools
+  were unchanged. The readable folders are the Python framework folder, the project's own virtual-environment `site-packages` (for
+  `trafilatura`, unchanged from earlier approvals; it lies inside the home folder but is not the home folder and holds none of the config,
+  library or index) and the Homebrew library folders (for `pdftotext`); none is, contains or lies inside the config, the library or the
+  index. The owner asked the agent to make the change; the helper (shown first as a dry run: it removed `kb-scan 0.0.2` and added `kb-scan
+  0.0.5`, nothing else) replaced the `approved_tools` list after a backup of the config (mode 600, beside it). `python3 -m kb tools`:
+  all four `ok`.
+- **Rescan, with the owner's word:** `python3 -m kb reconvert --scan --book <id>` for the four books together, then `python3 -m kb
+  process`: all four stages done for each book (scanned, converted, indexed); `process` took 0.7 s in all. `python3 -m kb search` still
+  returns results.
+- **Comparison (caveats of each book before, with `kb-scan 0.0.2`, and after, with `kb-scan 0.0.5`):**
+
+  | Book | Before | After |
+  |---|---|---|
+  | essay (Paul Graham) | `script_elements 11` | `script_elements 11` |
+  | Wikipedia article | `script_elements 5`, `javascript_urls 1`, `hidden_text 50` | `script_elements 5`, `javascript_urls 1`, `hidden_text 50` |
+  | script-built page | `script_elements 2` | `script_elements 2` |
+  | arXiv paper (PDF) | `large_image_streams 3` | `large_image_streams 3` |
+
+  Nothing changed, and no book newly says `scan_incomplete`; the arXiv paper reports `large_image_streams` and nothing else, as the plan
+  requires. The caveats now carry the tool label `kb-scan 0.0.5`.
+- **Not run:** a scan of a wider set of PDFs through the library (the 62 files of the earlier before/after comparisons were run on the
+  scan function alone, not through `process`); live walk-through J and workbench package I remain deferred.
+- **Left for the owner:** the word to commit E (this record), whether to push (the local commits ahead of the remote are the plan
+  commit and increments A to D), and the follow-up plan on title safety.
