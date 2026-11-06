@@ -1,6 +1,6 @@
 # Fixes from the first walk-through
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-06
 Candidate: none (no roadmap exists; these are the findings of the first walk-through, recorded in the Result of 2026-11-05-first-slice-capture-search-read.md)
 Specs: book, reading
