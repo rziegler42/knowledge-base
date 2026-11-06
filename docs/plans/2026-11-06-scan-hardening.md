@@ -1,6 +1,6 @@
 # Scan hardening: no way to hide an object stream from the PDF scan without saying so
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-06
 Candidate: none (no roadmap exists; these are findings of the security reviews of increments D and E of 2026-11-06-first-walk-through-fixes)
 Specs: pipeline, book
