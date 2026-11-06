@@ -780,7 +780,7 @@ covers is an increment breaking an earlier one through the shared store.
     one.
 - **Left for the owner:** the word to commit G.
 
-### Increment H — Read by locator (implemented, reviewed and security-reviewed, not yet committed)
+### Increment H — Read by locator (committed as 1011e9705c8757a5d3c9d10351195997b39218c4, not pushed)
 
 - **Done.** `engine/kb/read.py` (`read(store, book_id, locator, version_id=None, chars=2000)`), `locator.at_offset`, the command
   `python3 -m kb read BOOK_ID 'LOCATOR_JSON' [--version V] [--chars N]`, and a README paragraph. The text is a window of at most
@@ -850,3 +850,54 @@ covers is an increment breaking an earlier one through the shared store.
     command line from a shell of its own and neither could run `git status`; memory use and the cost of following `next` through a
     very large book were not measured; the machine is this one.
 - **Left for the owner:** the word to commit H.
+
+### Increment I — The thin workbench package (deferred by the owner's word, 2026-11-06)
+
+The owner said yes to running J before I, so I is not built. It stays deferrable as the plan says, and J's findings (below) are to
+be taken into account before it is built. Nothing was changed in the plan's text.
+
+### Increment J — Loading walk-through (first batch done; the rest waits for the owner's word)
+
+- **Approval of the tools.** The owner approved the four tools by putting `describe-tool all` in the config on 2026-11-06 (`kb tools`
+  showed all four `ok`). I checked beforehand that every hash in the printed entries matched the file on disk, that the three
+  scripts are the committed versions, and that no folder to read touched the config, the library, the index or the home folder.
+- **The list the owner said yes to** (four addresses, chosen to cover each case; all one request each with an honest user agent,
+  three seconds apart): `https://paulgraham.com/hamming.html` (an essay written with line breaks and no paragraph tags),
+  `https://en.wikipedia.org/wiki/Simulated_annealing` (a structured article), `https://quotes.toscrape.com/js/` (a page whose text is
+  built by scripts) and arXiv `1706.03762`. The rest of the proposed list (six pages and two papers) was shown and is not yet run.
+- **Counts.** Captured 4 of 4. Scanned 4 of 4 (one with `scan_incomplete`, see 4). Converted 4 of 4. Indexed 4 of 4. A passage
+  found by search and read back with `read`: 4 of 4. `process` took about two seconds for all four, with both extractors and the
+  scan in the sandbox. The index was then rebuilt from the book folders: 4 books, 4 versions, 399 blocks, 0 failed, and the results
+  of ten test queries were identical before and after, with every field.
+- **What each did.** The essay: trafilatura returned nothing (0 characters), the plain extractor returned 69,502 characters in one
+  flat block, and the rule marked the book partial ("one extractor returned much less text than the other") and used the plain one,
+  as designed. The Wikipedia article: trafilatura 115 blocks and 27,804 characters, structure full; the plain extractor 208 blocks and
+  30,917 characters; not marked partial; the scan found 5 script elements, 1 `javascript:` address and 50 pieces of hidden text,
+  as expected of Wikipedia. The scripted page: both extractors returned about 25 characters, and the thin-text rule marked it
+  partial. The paper: 15 pages, 282 blocks, 39,902 characters, structure flat, a page locator found and read ("page 4, block 2",
+  "Multi-Head Attention"), and a correct arXiv citation.
+- **What did not work well** (none stopped the pipeline; each is a finding, not fixed here because J's affected area is the Result
+  section only):
+  1. **Web pages have no title.** The book title of a captured web page is empty, so a search result shows an empty title and a
+     citation reads "untitled". Nothing takes the page's `<title>`; the specs say titles come from the source's own records
+     first, including HTML metadata.
+  2. **A hit in a flat page reads from the start of the page.** The essay is one block of 69,502 characters. The search excerpt
+     shows the matching passage, but the locator a search returns points at the start of the block, so `read` gave "Talk at
+     Bellcore, 7 March 1986", not the passage. Essays written with line breaks are common. (The review of G had suggested
+     splitting long blocks into several index rows; the same applies here.)
+  3. **A page in an old encoding shows replacement characters.** The essay is Windows-1252 with no declaration (no `<meta>`, and no
+     charset recorded in the headers), so its dashes (byte 0x97) are not valid UTF-8 and came out as `�`. A browser reads it as an
+     em-dash. The plain extractor reads a declared charset or UTF-8 and nothing else; a page with no declaration that is not valid
+     UTF-8 should be read as Windows-1252.
+  4. **`scan_incomplete` on an ordinary PDF.** The arXiv paper has three large figures (RGB images about 2,200 pixels tall) that
+     decompress to more than the scan's 2,000,000-byte limit for one stream, so the scan reports that it could not read everything. It
+     is true and misleading: pixels are not where a script is, and most papers with a large figure will carry this caveat, which
+     would teach a reader to ignore it. Options: leave it; skip image streams (which lets a script hidden in a stream that claims to
+     be an image go unseen); or report large image streams under their own caveat kind and keep `scan_incomplete` for the cases of
+     an unknown filter or a damaged stream.
+  5. **trafilatura returns nothing for an old table-based page** (the essay). Expected of an article extractor and handled by the
+     size rule, which is what the second extractor is for.
+  6. **A search needs every word in one block** ("attention heads encoder decoder" found nothing, "multi-head attention" 8 blocks).
+     By design; noted because it is stricter than many readers expect.
+- **Left for the owner:** whether to run the rest of the list (six pages and two papers), whether the findings above are to be
+  fixed (a new plan would be needed: the fixes change committed code, which the approved plan does not cover), and the word to push.
