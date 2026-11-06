@@ -468,7 +468,7 @@ a test that names the old version or assumes a stage never goes back. Increment 
   scan (findings 3 and 4), which D neither caused nor fixed; the owner's old config entry for the scan tool stops matching when D is
   committed (increment F).
 
-### Increment E — Convert a book again (implemented, reviewed and security-reviewed, not yet committed)
+### Increment E — Convert a book again (committed as 96b4c264cfb83985771b33b3421be80388e333f1, not pushed)
 
 - **Changed:** `engine/kb/stages.py` (`redo`, which puts a stage and the stages after it back to pending when they are done, for a fetched
   version, writing once and atomically; `redo_books`, which does that for the books named, or every active book, and every version of
@@ -528,3 +528,58 @@ a test that names the old version or assumes a stage never goes back. Increment 
   break-it run on the warning (4 places) catches all; the rest of the suite is as under Verification run.
 - **Left for the owner:** the word to commit E. The owner's config entries for the scan tool and the plain extractor stop matching
   with this version (0.0.2): increment F is where they are put in, and the list should be replaced, not added to.
+
+### Increment F — Apply the fixes to the first four books (done on the owner's library; this record not yet committed)
+
+- **Step 1, the owner's act.** I printed the four entries (`describe-tool all`) and checked them before asking: every pinned hash
+  matches the file on disk, the three scripts are identical to the committed ones, and no readable folder is, contains or lies inside the
+  config, the library, the index or the home folder (a first version of that check was too blunt and flagged the repository's own
+  folders; I corrected the rule and reran it). Only two entries differed from the owner's config: `kb-scan` and `kb-html-std`, 0.0.1 to
+  0.0.2. The owner did not know how to edit the config, so I wrote a small helper (a throwaway in the scratch folder, not part of the
+  repository) that shows the change by default and with `--write` saves a mode-600 copy of the config, replaces only the `approved_tools`
+  list and reads it back to validate; I tested it on a copy first. **The owner ran it and `kb tools` shows all four tools `ok`** (the
+  config as it was is kept beside it as `config.json.bak-<date>`).
+- **Step 2.** The books in the library were checked to be exactly the four of the walk-through, all active. `reconvert --scan --book`
+  for each of the four ids put the scan, the conversion and the index of each back (no warning); `index` was run next, and then
+  `process`. **A departure from the plan's wording, with the reason:** the plan says to run `process` and no separate `index` before it,
+  because an `index` would index the old conversions and mark them done. The owner's index was still of format 1, which `process` cannot
+  write to, so a rebuild had to come first. It was safe because `rebuild` skips a version whose conversion is not done and does not mark
+  any stage: the result was `{"versions": 0, "rows": 0}` and all twelve stages were still pending afterwards (checked). `process` then
+  did 12 of 12 stages (scan, conversion and index for each of four books) in under a second.
+- **Counts.** Four books, all four scanned, converted and indexed. The index after a rebuild: 4 versions, 399 blocks, 436 rows (the
+  essay's one 69,502-character block is now 35 rows, the paper's 282 blocks 285 rows because three paragraphs are longer than a
+  piece, and the other two books one row for each block), 0 skipped, 0 failed.
+- **Before and after, book by book** (the "before" is the read-only snapshot taken before step 2):
+
+  | | title | scan caveats | conversions | in use |
+  |---|---|---|---|---|
+  | essay (Paul Graham) | none -> "Richard Hamming: You and Your Research" | script_elements 11, same | trafilatura 0 chars; kb-html-std 0.0.1 gen 1 -> 0.0.2 gen 2, 69,502 chars | kb-html-std (the size rule), partial as before |
+  | Wikipedia article | none -> "Simulated annealing - Wikipedia" | same three | trafilatura 115 blocks, 27,804 chars (same); kb-html-std 0.0.1 -> 0.0.2, 208 blocks | trafilatura, not partial, as before |
+  | script-built page | none -> "Quotes to Scrape" | script_elements 2, same | trafilatura 29 chars (same); kb-html-std 0.0.1 -> 0.0.2, 23 chars | trafilatura, partial (thin text) as before |
+  | arXiv paper | "Attention Is All You Need", same | **scan_incomplete 1 -> large_image_streams 3** | pdftotext 282 blocks, 39,902 chars (same) | pdftotext, as before |
+
+- **The five fixes, checked on their books.**
+  1. *Encoding:* the essay's text in use has **0** replacement characters (it had them before; the dash byte 0x97 now reads as an em
+     dash). The character count is the same, 69,502, since one replacement character became one dash.
+  2. *Titles:* each of the three web pages has the title its page gives. A title is not replaced if a book has one (the paper's stays).
+  3. *Long pages:* a five-word phrase from the middle of the essay found one hit with an `offset` locator at 33,978 of 69,502, and a
+     `read` at the default size returned 1,457 characters from there that contain the phrase and do not start at the top of the page
+     (before, a hit in the essay read "Talk at Bellcore, 7 March 1986"). **The read starts at the beginning of the piece that holds the
+     match, here 1,026 characters before the phrase, not at the phrase itself.** (My first check read only 400 characters and did not
+     reach the phrase; the window was the mistake, not the engine.)
+  4. *Large images:* the paper has `large_image_streams` 3 and no `scan_incomplete`.
+  5. *Making a book again:* the old outputs are kept as generation 1 beside the new generation 2 for the scan and for `kb-html-std`;
+     trafilatura and pdftotext, whose versions did not change, were adopted and not run again; every original still verifies.
+- **Rebuild.** The index file was deleted and `python3 -m kb index` rebuilt it: ten queries (Hamming; important problems; annealing;
+  Metropolis temperature; cooling schedule; Quotes; attention; multi-head attention; positional encoding; the) gave the **same results
+  as before the delete, with every field**.
+- **What did not work, or is not as it looks.**
+  - The essay is still marked partial and the script-built page is still marked partial: those are the extractor-size rule working as
+    designed (trafilatura read nothing from the old table-based essay; the script-built page has hardly any text).
+  - The title of the Wikipedia article carries " - Wikipedia", and the script-built page's title is "Quotes to Scrape": they are the
+    pages' own `<title>` text, cleaned, as the plan says; no attempt is made to shorten them.
+  - Nothing failed in this increment.
+- **Not done, left for the owner:** the word to commit F; the rest of the live walk-through (six more pages and two papers; the plan's
+  increment J) and the workbench package (increment I of the first plan), both after these fixes; the two follow-up plans the owner asked
+  for (scan hardening: the predictor skip and the string-steered stream location; and title safety: a title checked where it is stored
+  or shown, for arXiv titles and the citation line) once this plan is done; and a push (16 local commits ahead of the remote).
