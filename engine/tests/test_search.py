@@ -18,9 +18,9 @@ class Stop(BaseException):
     """A stop in the middle of the work: not an error the program handles, as a killed process is not."""
 
 
-def page(*blocks, pad=0):
+def page(*blocks, pad=0, **extra):
     """A web page for the fake converters: they copy it, so it is the blocks.json they hand back."""
-    return (blocks_text(*blocks) + " " * pad).encode()
+    return (blocks_text(*blocks, **extra) + " " * pad).encode()
 
 
 def paper(*pages):
@@ -163,6 +163,17 @@ class SearchResultsTest(SearchCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM blocks").fetchone()[0], expected)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM blocks_fts").fetchone()[0], expected)
         self.assertFalse(any(name == index.INDEX_FILE for name in os.listdir(self.bulk)))
+
+    def test_a_web_page_with_no_title_is_found_under_the_title_its_page_gives(self):
+        self.approve_all()
+        titled = page(h("Habits"), p("The ocelot hunts at night."), title="Ocelots of the  Americas")
+        untitled = page(h("Habits"), p("The ocelot hunts at night."))
+        a, _ = self.add_book("", "web page", "page.html", titled)
+        b, _ = self.add_book("", "web page", "page.html", untitled)
+        c, _ = self.add_book("Chosen by the owner", "web page", "page.html", titled)
+        process.process(self.store)
+        by_book = {r["book_id"]: r["title"] for r in self.search("ocelot")}
+        self.assertEqual(by_book, {a: "Ocelots of the Americas", b: "", c: "Chosen by the owner"})
 
 
 class QueryIsTextTest(SearchCase):

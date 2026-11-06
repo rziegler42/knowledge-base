@@ -302,6 +302,17 @@ class ReadTest(ReadCase):
         for private in (self.base, self.bulk):
             self.assertNotIn(private, json.dumps(self.read_hit("dawn")))
 
+    def test_a_page_title_is_the_title_and_the_start_of_the_citation(self):
+        self.approve_all()
+        book, version = self.add_book("", "web page", "page.html", page(h("Habits"), p("The ocelot hunts at night."),
+                                                                      title="Ocelots of the Americas"))
+        self.store.set_version_source(book, version, {"address_final": "https://example.org/ocelots", "sha256": "ab" * 32,
+                                                       "retrieved": "2026-11-04T10:00:00+00:00"})
+        process.process(self.store)
+        r = self.read_hit("ocelot")
+        self.assertEqual(r["title"], "Ocelots of the Americas")
+        self.assertTrue(r["citation"].startswith("Ocelots of the Americas. https://example.org/ocelots."), r["citation"])
+
     def test_a_hostile_title_is_cleaned_in_the_result_and_in_the_citation(self):
         books = self.library()
         book = books["harbour"][0]

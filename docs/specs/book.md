@@ -68,7 +68,8 @@ they have their own specs.
   2026-11-04, six were documents, one a thread, one a listing, one script-built and one a repository page (evidence note 17 in `knowledge-base.md`).
 - **[proposed]** The manifest of a web page requires only what every page had: the address asked for, the final address after
   redirects, the retrieval date, the response headers kept, and the hash of the raw bytes. A title was present on every page. An
-  author, a published date, a language and a canonical address were present on some, and are optional fields.
+  author, a published date, a language and a canonical address were present on some, and are optional fields. The engine takes the
+  title from the page's own `<title>` when the book has none, and never replaces one it has.
 
 ### Identity
 

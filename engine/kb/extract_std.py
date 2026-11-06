@@ -20,6 +20,8 @@ MAX_HTML = 10_000_000
 MAX_BLOCK = 1_000_000  # a longer block is cut into pieces (the engine refuses one longer than 2,000,000)
 MAX_BLOCKS = 150_000
 MAX_DEPTH = 10_000
+MAX_TITLE = 300  # a title is kept to this length
+MAX_TITLE_RAW = 2000  # and not read beyond this many characters, whatever the page puts in it
 
 SKIP = {"script", "style", "noscript", "template", "svg", "math", "iframe", "object", "embed", "canvas", "nav", "footer",
         "aside", "form", "button", "select", "option", "textarea", "dialog", "head", "title"}
@@ -118,6 +120,10 @@ class Extractor(HTMLParser):
         self.skipping = 0
         self.kinds = []  # the (kind, level) of the elements on the stack that give their text a kind
         self.stopped = False  # set when the page nests deeper than any page does: nothing after that point is read
+        self.title_pieces = []  # the text of the first <title> outside an svg
+        self.title_state = 0  # 0: none yet, 1: being read, 2: read
+        self.title_depth = 0  # the depth of the stack under the title element
+        self.title_chars = 0
 
     def flush(self):
         if not self.pieces:
@@ -148,8 +154,19 @@ class Extractor(HTMLParser):
         if kind:
             self.kinds.append(kind)
 
+    def page_title(self):
+        """The page's title as one cleaned line of at most MAX_TITLE characters, or None. A title that was never closed is none:
+        what follows it in the page would be taken for it."""
+        if self.title_state != 2:
+            return None
+        text = " ".join("".join(self.title_pieces).split())
+        text = _SURROGATE.sub("\ufffd", text)[:MAX_TITLE].strip()  # a lone surrogate cannot be written out
+        return text or None
+
     def pop(self):
         tag, skipped, kind = self.stack.pop()
+        if self.title_state == 1 and len(self.stack) < self.title_depth:
+            self.title_state = 2  # the title element has ended, by its closing tag or because something around it did
         self.open[tag] -= 1
         self.skipping -= 1 if skipped else 0
         if kind:
@@ -175,6 +192,8 @@ class Extractor(HTMLParser):
             return
         skipped = tag in SKIP or is_hidden(attrs)
         self.push(tag, skipped, KIND.get(tag))
+        if tag == "title" and self.title_state == 0 and not self.stopped and not self.open.get("svg"):
+            self.title_state, self.title_depth = 1, len(self.stack)
 
     def handle_endtag(self, tag):
         if self.stopped or tag in VOID or not self.open.get(tag):
@@ -188,6 +207,9 @@ class Extractor(HTMLParser):
             self.flush()
 
     def handle_data(self, data):
+        if self.title_state == 1 and not self.stopped and self.title_chars < MAX_TITLE_RAW:
+            self.title_pieces.append(data[:MAX_TITLE_RAW - self.title_chars])
+            self.title_chars += len(self.title_pieces[-1])
         if not self.skipping and not self.stopped:
             self.pieces.append(data)
 
@@ -206,6 +228,8 @@ def main(argv):
     parser.feed(decode(data[:MAX_HTML]))
     parser.close()
     result = {"format": 1, "truncated": truncated or parser.truncated, "blocks": parser.blocks}
+    if parser.page_title():
+        result["title"] = parser.page_title()
     with open(os.path.join(out, "blocks.json"), "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False)
     return 0

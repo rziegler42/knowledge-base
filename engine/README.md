@@ -269,7 +269,7 @@ A book that is removed, weeded or a duplicate leaves the search at the next `pro
 and puts its versions' `indexed` stage back to pending, so it is indexed again if it becomes active again; a book whose state
 cannot be read, or is not one of those, keeps its rows, so a bulk drive that is away does not empty the index.
 
-Not covered. A new title after a book was indexed shows in search only after `index`. A new version updates the current-version
+Not covered. A new title after a book was indexed shows in search only after `index` (`process` does this for a title taken from a page, because it indexes after it converts). A new version updates the current-version
 flag of the book's other versions when it is indexed. `process` does not notice that the index file was deleted while the stage
 says done: run `index`. The index is not in the book folders, so back it up with the index
 root. Search reads text the tools produced and nothing checks that a passage is true; the marker is a prefix, so a consumer
@@ -308,7 +308,12 @@ is the revision of our command line or wrapper, raised when its options change.
 **What a conversion is.** Each tool writes one file, which is read back as untrusted data and checked in full (`convert.py`).
 The text is a list of blocks (heading, paragraph, list item, quote, code, table row; for a PDF, the paragraphs of each page),
 cleaned of control, direction, zero-width and other hidden characters, with line breaks kept. The converted text is the blocks
-joined by blank lines. Each conversion is filed as a derived payload (`derived/<tool>/<n>/`) and recorded on the version
+joined by blank lines. A web page's tool may also hand back the page's own `<title>` (the plain extractor does: the first one outside
+an SVG, read to at most 2,000 characters). It is cleaned and cut to 300 characters like other text from outside, and when the
+book has no title the conversion stage sets the book's title from it, preferring the conversion in use and then the other,
+once. A title that was never closed is no title, and a title whose letters contain "untrustedtext" (it would imitate the
+markers around text from outside; case, spacing, joiners, accents and compatibility forms such as fullwidth letters are folded away, a
+look-alike letter from another alphabet is not) is dropped. This is a partial protection: the result is flagged `untrusted` as a whole. A title the book already has is never replaced, and the version it came from is noted in `metadata_source`. Each conversion is filed as a derived payload (`derived/<tool>/<n>/`) and recorded on the version
 (`conversions`, `conversion_in_use`, `conversion_check` in `version.json`) with its tool, version, generation, structure quality,
 block and character counts, and page count. The structure quality is **full** (headings, and the text starts under one),
 **partial** (headings, but some text lies before the first) or **flat** (no headings; a PDF is text with page marks only, and a

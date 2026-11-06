@@ -247,7 +247,7 @@ a test that names the old version or assumes a stage never goes back. Increment 
 
 ## Result
 
-### Increment A — Read a page with no declared encoding (implemented and reviewed, not yet committed)
+### Increment A — Read a page with no declared encoding (committed as 3314480d3464c0dcec7239c2bfbddc2f662775f9, not pushed)
 
 - **Changed:** `engine/kb/extract_std.py` (`decode()`), `engine/tests/test_convert.py` (4 new tests, `import random`), `engine/README.md`.
 - **Rule:** byte-order mark, then a declared charset on the list (as before), then strict UTF-8, where an incomplete last character (the
@@ -266,3 +266,51 @@ a test that names the old version or assumes a stage never goes back. Increment 
 - **Not run:** a security review. The change decodes untrusted page bytes but adds no lookup, no path and no command; the list of
   charsets is unchanged. Say if you want one.
 - **Left for the owner:** the word to commit A.
+
+### Increment B — The title of a web page (implemented and reviewed, not yet committed; waits for the owner's word on a security review)
+
+- **Changed:** `engine/kb/extract_std.py` (the first `<title>` outside an SVG is read, to 2,000 characters, and written to `blocks.json`
+  as an optional `title` of at most 300), `engine/kb/convert.py` (the optional `title` is checked and cleaned in `parse_blocks_json`;
+  `Parsed` and `Conversion` carry it; `_take_title` sets the book's title when it has none, from the conversion in use and then the
+  other, with `metadata_source`, after `set_version_conversions` and before the stage is marked), tests in `test_convert.py`,
+  `test_search.py` and `test_read.py`, `engine/README.md`, one sentence in `docs/specs/book.md`.
+- **Verification run:** `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest engine.tests.test_convert engine.tests.test_search
+  engine.tests.test_read` (Python 3.15.0): 284 tests, OK. The new tests failed first (missing `title`, `TITLE_CHARS`, `page_title`).
+  Break-it run on 18 places of the new code: all caught; one (the raw-limit guard while reading) was first missed, so a test that
+  feeds a title in 5,000 small pieces was added and catches it. Not run: the other test modules (they do not use the changed
+  functions beyond what these three cover).
+- **Seen, not caused here:** a `ResourceWarning` for an unclosed database comes from the existing test
+  `test_one_row_for_each_block_and_nothing_else_in_the_index_folder` (`with sqlite3.connect(...)` commits but does not close). Left
+  alone: unrelated cleanup.
+- **Review:** independent `reviewer` agent, 1 exchange, no blocking findings, no security risk beyond one that existed before. Not
+  applied, with reasons: (1) on a parser older than 3.15 a nested or empty `<title>` can end capture at the wrong point or take
+  the first, empty one; the result is still bounded and cleaned, and the engine's Python is 3.15; a title is also taken from
+  inside a template or hidden element (only SVG is excluded), a content-quality matter since `<title>` is always in the skipped head.
+  (2) The test for a title that is never closed checks only that it is bounded and cheap. (3) The "once" step of the first stage test
+  passes because a finished stage returns early; the guard itself is tested by two other tests. (4) Search results scrub no library
+  folder from a title, only `read` does; this predates B, a page cannot normally know the owner's folders, and the plan's wording is
+  met for `read`. (5) `metadata_source` is overwritten when a title is set; current capture paths create web pages with an empty
+  title and no other metadata. (6) `MAX_TITLE_RAW` has the same value in the two files with two meanings, both commented.
+- **Security review (run on the owner's word, 2026-11-06):** a `security-reviewer` agent ran 30 experiments on a copy and a second one
+  looked at the fixes. No critical or high finding. Cleaning, the type, size and extra-key checks, the raw cap, the SVG handling,
+  never replacing a title (also across versions), resuming after a stop, and no write outside `book.json` were found sound
+  (tested). Findings and what was done:
+  1. *Medium, applied:* a page title could carry the text of the untrusted-text markers (`search.MARKER`, `read.END_MARKER`) and
+     imitate the end of the untrusted section. A title whose letters contain `untrustedtext` (case, spacing, joiners, accents and
+     compatibility forms folded) is now dropped; tests cover the markers themselves and fullwidth, bold, circled, hyphenated,
+     underscored and accented spellings, and the break-it run catches removing the check or either folding step. **Partial:** a
+     look-alike letter from another alphabet (Cyrillic) still gets through, and a title with plain instructions and no marker words
+     is not blocked. The result is flagged `untrusted` as a whole and the README says to treat the title as data.
+  2. *Low, applied:* an unclosed `<title>` swallowed the rest of the page and its markup became the title. A title that was never
+     closed is now no title (tests). It relies on Python 3.15's parser, where `<title>` holds raw text; on an older Python an
+     ancestor's end tag can still end it.
+  3. *Low, accepted:* search results do not scrub library folders from titles, as `read` does; a page can only echo a path its author
+     wrote. *Low, accepted:* look-alike letters and long runs of combining marks survive cleaning.
+  4. *Second look, not done in B (for the owner):* the check sits where a tool's title is read. An arXiv title (the paper's author
+     controls it) is stored without it, as before this change, and the book's `set_metadata` and the citation line (a title can
+     put a fake address and date before the real ones) are unchanged. A check where titles are stored or shown would cover all of
+     them. This reaches back into the capture and read code that A to H committed, so it is not in this plan.
+- **Verification after the fixes:** the same three modules, 287 tests, OK; break-it run on the fixes (marker check, each folding
+  step, unclosed title) all caught.
+- **Left for the owner:** the word to commit B, and whether to open a small plan for finding 4 (checking titles where they are stored
+  or shown, for arXiv titles and the citation line).

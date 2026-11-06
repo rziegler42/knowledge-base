@@ -16,6 +16,7 @@ one block). The extractor-size rule (`check_partial`) is separate: it marks a bo
 import json
 import os
 import re
+import unicodedata
 from collections import namedtuple
 
 from . import KbError, approvals, config, convert_html, convert_pdf, convert_run, incoming, stages, textutil
@@ -26,6 +27,8 @@ MAX_BLOCKS = 200_000
 MAX_PAGES = 100_000
 MAX_BLOCK_CHARS = 2_000_000
 MAX_TOTAL_CHARS = 50_000_000
+TITLE_CHARS = 300  # a page title is kept to this length
+MAX_TITLE_RAW = 2000  # the longest title a tool may hand back; the plain extractor stops reading one at this length
 PATH_PART_CHARS = 80
 
 # The first values of the extractor-size rule. They rest on a test of ten web pages, not on a larger study: a thread of 71
@@ -36,16 +39,23 @@ THIN_CHARS = 200
 THIN_RAW_BYTES = 3000
 
 Block = namedtuple("Block", "index kind level text page path paragraph start end on_page")  # on_page: its number among the blocks of its page, 0 if none
-Parsed = namedtuple("Parsed", "items truncated pages")
+Parsed = namedtuple("Parsed", "items truncated pages title", defaults=(None,))  # title: the page's own, cleaned, or None
 
 
 class Conversion:
     """The blocks of one conversion, with the converted text, its structure quality and, for a PDF, its page count."""
 
-    def __init__(self, blocks, quality, pages):
-        self.blocks, self.quality, self.pages = blocks, quality, pages
+    def __init__(self, blocks, quality, pages, title=None):
+        self.blocks, self.quality, self.pages, self.title = blocks, quality, pages, title
         self.text = "\n\n".join(b.text for b in blocks)
         self.chars = len(self.text)
+
+
+def _letters(text):
+    """Only the letters of a text, in their plain lower-case forms (compatibility forms such as fullwidth or bold letters are
+    folded first; accents are not letters, so they go), so that spellings of a phrase that differ in spacing, joiners or form are one."""
+    folded = unicodedata.normalize("NFKD", text).casefold()
+    return "".join(c for c in folded if c.isalpha())
 
 
 def parse_blocks_json(raw):
@@ -54,9 +64,16 @@ def parse_blocks_json(raw):
         obj = json.loads(raw)
     except (ValueError, RecursionError, MemoryError):  # not JSON, not UTF-8, nested far too deep, or too big to hold
         raise KbError("the tool's blocks are not readable JSON") from None
-    if (not isinstance(obj, dict) or set(obj) != {"format", "blocks", "truncated"} or type(obj["format"]) is not int
+    if (not isinstance(obj, dict) or set(obj) - {"title"} != {"format", "blocks", "truncated"} or type(obj["format"]) is not int
             or obj["format"] != FORMAT):
         raise KbError("the tool's blocks are not in the expected form")
+    title = None
+    if "title" in obj:  # optional: the page's own title, as text
+        if not isinstance(obj["title"], str) or len(obj["title"]) > MAX_TITLE_RAW:
+            raise KbError("the tool's title is not in the expected form")
+        title = textutil.clean(obj["title"], TITLE_CHARS) or None
+        if title and "untrustedtext" in _letters(title):
+            title = None  # it would imitate the markers around text from outside (search.MARKER, read.END_MARKER): no title is better
     if not isinstance(obj["truncated"], bool) or not isinstance(obj["blocks"], list):
         raise KbError("the tool's blocks are not in the expected form")
     if len(obj["blocks"]) > MAX_BLOCKS:
@@ -82,7 +99,7 @@ def parse_blocks_json(raw):
         if total > MAX_TOTAL_CHARS:
             raise KbError(f"the converted text is longer than {MAX_TOTAL_CHARS} characters")
         items.append({"kind": kind, "level": level, "text": text})
-    return Parsed(items, obj["truncated"], None)
+    return Parsed(items, obj["truncated"], None, title)
 
 
 def parse_paged_text(raw):
@@ -107,7 +124,7 @@ def parse_paged_text(raw):
     return Parsed(items, False, len(pages))
 
 
-def build(items, pages=None):
+def build(items, pages=None, title=None):
     """The conversion for checked items: each block gets its section path, its paragraph number within the section and its
     place in the converted text. Deterministic, so a locator made against it is found again by the same input."""
     blocks, stack, paragraph, position, on_page = [], [], 0, 0, {}
@@ -128,7 +145,7 @@ def build(items, pages=None):
         position += len(text) + 2  # the blank line between blocks
     headings = [b for b in blocks if b.kind == "heading"]
     quality = "flat" if not headings else ("full" if blocks[0].kind == "heading" else "partial")
-    return Conversion(blocks, quality, pages)
+    return Conversion(blocks, quality, pages, title)
 
 
 def check_partial(sizes, raw_bytes, truncated, ratio):
@@ -187,7 +204,7 @@ def _read_payload(store, book_id, version_id, name, filename, parse, manifest):
     with open(os.path.join(store.payload_path(book_id, version_id, name), filename), "rb") as f:
         raw = f.read(MAX_RAW + 1)
     parsed = parse_blocks_json(raw) if parse == "blocks-json" else parse_paged_text(raw)
-    return build(parsed.items, pages=parsed.pages), parsed.truncated
+    return build(parsed.items, pages=parsed.pages, title=parsed.title), parsed.truncated
 
 
 def load_conversion(store, book_id, version_id, record):
@@ -261,6 +278,17 @@ def _summary(version, status):
             "check": version["conversion_check"]}
 
 
+def _take_title(store, book_id, version_id, made, in_use):
+    """A book with no title gets the title its page gives itself: that of the conversion in use, or else of the first other one
+    that has one. A title the book already has is never replaced."""
+    if (store.read_book(book_id).get("title") or "").strip():
+        return
+    ordered = sorted(made, key=lambda pair: {k: pair[0][k] for k in _ATTRS} != in_use)  # the one in use first, the order kept
+    title = next((conversion.title for _, conversion in ordered if conversion.title), None)
+    if title:
+        store.set_metadata(book_id, title=title, metadata_source=version_id)
+
+
 def convert_version(store, book_id, version_id):
     """Convert a version that has been fetched and whose scan has finished (done, failed or skipped: a failed scan does
     not block conversion). Returns {"status": "done", ...}, {"status": "failed", "reason": ...} or {"status": "skipped",
@@ -311,5 +339,6 @@ def convert_version(store, book_id, version_id):
     chosen = max(records, key=lambda r: r["chars"]) if check["partial"] else records[0]
     in_use = {k: chosen[k] for k in _ATTRS}
     store.set_version_conversions(book_id, version_id, records, in_use, check)
+    _take_title(store, book_id, version_id, made, in_use)  # before the stage is marked, so a stop here is repaired by the next run
     stages.mark(store, book_id, version_id, "converted", "done", tool=" + ".join(sizes))
     return _summary(store.read_version(book_id, version_id), "done")
