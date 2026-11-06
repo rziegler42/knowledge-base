@@ -7,16 +7,18 @@ description: Draft a plan in docs/plans from its template, with lettered increme
 Use this when a roadmap candidate, or other bounded work, needs a written plan before anything
 is built. A plan does not authorize work: only the owner's explicit statement of approval does.
 
-1. Read `docs/plans/README.md`, the roadmap that holds the candidate and the specs the work
-   touches. Search `docs/plans/` for a plan on the same work. If one exists, stop and tell the
+1. Read `docs/plans/README.md` and the specs the work touches. If the plan names a candidate,
+   read the roadmap that holds it. Search `docs/plans/` for a plan on the same work. If one exists, stop and tell the
    owner instead of writing a second.
 2. Name the file `docs/plans/YYYY-MM-DD-<topic>.md`: today's date and a lowercase kebab-case
    topic. Never rename or move it later.
 3. Copy the template that sits beside this skill, `template.md`, into `docs/plans/` under that
    name and fill it in. The header lines (`Status:`, `Created:`, `Candidate:`, `Specs:`) come
    before the first `##` heading, the status is `Proposed`, and `Created:` is the date in the file name.
-4. Give the plan exactly one `Candidate:` line: `<roadmap>#<id>`, or `none` followed by a
-   one-line reason. Search the roadmap so the candidate ID exists.
+4. Give the plan exactly one `Candidate:` line: `<roadmap>#<id>` for bounded new work that
+   advances the finish line of a roadmap, or `none` followed by a one-line reason for work too
+   small to need roadmap direction, such as a correction that follows from a finding. Search the
+   roadmap so the candidate ID exists, for a named candidate.
 5. Under `## Increments`, write each increment as `### Increment <label> — <title>`. Labels run
    `A` to `Z`, then `AA`, `AB`, are unique and follow execution order. Each increment is one
    verified, reviewed local commit; split an increment that is too large for one commit.
@@ -55,4 +57,5 @@ Rules:
 - Nothing tracked points to anything untracked.
 - Use only reading, searching and editing, and the commands named here: `wb run code-work check`, `wb settings`,
   once the owner has said to approve, `wb plan-status` and `wb approve-plan`, and, at `delegated`, the commands of
-  `delegate-approval`. Run no other command.
+  `delegate-approval`. Where a module provides `memory-recall`, one search per task through it is also allowed. Run no
+  other command.

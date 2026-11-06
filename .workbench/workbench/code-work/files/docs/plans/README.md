@@ -18,7 +18,9 @@ candidate becomes a verified, reviewed, committed result.
 A plan has, in order:
 
 1. A title, a `Status:` line and a `Created:` date, which is the date in the file name.
-2. `Candidate: <roadmap>#<id>`, or `Candidate: none` with a one-line reason. Exactly one.
+2. `Candidate: <roadmap>#<id>` for bounded new work that advances the finish line of a roadmap, or
+   `Candidate: none` with a one-line reason for work too small to need roadmap direction, such as
+   a correction that follows from a finding. Exactly one.
 3. `Specs:` naming zero or more specs the plan implements or changes.
 4. Goal, scope, non-goals, and assumptions and constraints.
 5. Completion criteria for the whole plan.

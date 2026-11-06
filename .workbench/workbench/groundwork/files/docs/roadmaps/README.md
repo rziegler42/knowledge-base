@@ -7,7 +7,16 @@ roadmap is a tracked, committed document, kept with the project's documentation.
 ## Naming
 
 A roadmap is named by its scope in lowercase kebab-case, with no number or date, for
-example `first-release.md`. There may be several.
+example `first-release.md`. There may be several roadmaps.
+
+A scope is a body of work with its own finish line: one the owner can call finished, or pause, without
+that deciding anything about other scopes. New work that shares the finish line of the roadmap it
+would join is added to it as a candidate; otherwise a new roadmap is proposed to the owner, with its
+scope and its finish line, and written once the owner accepts or renames it. An agent never adds to the
+nearest roadmap because it is nearest. A candidate is bounded new
+work that advances the finish line of its roadmap; work too small to need roadmap direction is a plan
+with `Candidate: none`. At about 15 candidates an agent asks the owner whether the roadmap has outgrown
+its scope; this is a question, not a limit.
 
 ## Contents
 
@@ -34,6 +43,6 @@ and changing direction needs the owner.
 
 Retire a roadmap by setting its status to `Archived`, as a plan is archived by status. Never
 move or rename the file: a candidate is cited as `<roadmap>#<id>`, so the name stays. Keep
-one roadmap that is not archived for each scope and update it in place; a replacement takes a
+one roadmap that is not archived for each scope, each with its own finish line, and update it in place; a replacement takes a
 new name, and the old one is archived when it is written. Retiring or replacing a roadmap
 changes direction, so it needs the owner.
