@@ -288,58 +288,94 @@ owner approves it again.
 
 ## Result
 
-### Increment A — Measure how often the two alarms happen, and where (measured; the findings change the plan; waits for the owner; not committed)
+### Increment A — Measure how often the alarms happen, and where (done, reviewed and confirmed by the owner)
 
-- **Done so far:** the tracked generator `engine/tests/bench_pdf.py` (`large_images(total, count, seed=1, zeros=3_000_000)` and
-  `expanding_streams(total, zeros=2_000_000)`) with its test `engine/tests/test_bench_pdf.py` (8 tests; they failed first, for the
-  missing module and then for the size of the 100-image file; the break-it run on the generator is all caught but one equivalent
-  mutant). Files were generated at 50 MB with the arguments `large_images(50_000_000, N, seed=1)` for N = 10, 100, 1,000 and
-  `expanding_streams(50_000_000)`, with Python 3.15.0 and zlib 1.2.12; sizes and sha256: `images_10` 50,002,817 bytes
-  `8b1fe2a2f30d3de91090fda1c59b356831a5034832bca3a6a1e8de5ed7d39a0d`; `images_100` 49,988,391 bytes
-  `a7ee4e6c1a6186af14a8026b6f60e4b5d24b5d02bcb262a1d44bca5a5e59521a`; `images_1000` 50,206,882 bytes
-  `802ab5cd9b34e17a0e7d0a15f3c097aba3fd9949f760403ef1c4a85f4e770c78`; `expanding` 49,999,322 bytes
-  `3f7c0769e7c6a96651ed02f5ca2b20226ae5a31ee314ab3e891c6d78cde65ed0`.
-- **The current scan on those files** (`/usr/bin/time -l`, `python3 -I -S engine/kb/scan_tool.py`, at commit 401ac55): 0.25 to 0.36 s
-  and at most 191 MB peak resident memory on all four, because its 20 MB output budget stops it early: `images_10` gives
-  `javascript 2` and `large_image_streams 10`; `images_100` and `images_1000` give `javascript 2`, `large_image_streams 10` and
-  `scan_incomplete`; `expanding` gives `scan_incomplete`. The `javascript 2` is chance matches of `/JS` in 50 MB of seeded noise.
-- **Cost of decoding and pattern search alone:** about 3 ms per decoded megabyte (inflate 0.3 ms, name unescaping and the seven
-  patterns 2.5 to 3.5 ms) on the generated files and on the real GPT-3 paper. That paper has 360 decodable streams, of which **83**
-  are past the 2 MB limit (not about 60), and decoding all of them at the 2 MB window is 253 MB in 0.72 s.
-- **Survey of real PDFs so far:** the 60 PDFs found on this machine (10.1 MB in all, the largest 2.9 MB, slowest scan 0.06 s) hold
-  1,437 decodable streams and 22 unfiltered ones, no large image and no stream past the limit; five say `malformed` (not PDFs) and
-  one says `javascript` for a match outside any stream. The three captured papers: 2 MB (Attention Is All You Need) with 3 large
-  images and no match; 444 KB (the Bahdanau paper), no caveat; 6.8 MB (GPT-3): 83 large images, one match of `/JS` (in the raw
-  bytes of a large image), `scan_incomplete` from the 20 MB budget. So the system PDFs say nothing about the hard case, and the real
-  evidence is one paper of three.
-- **Proposed numbers for B (to be confirmed by the owner once more papers are measured):** a cumulative work limit of 1,000 MB
-  decoded (about 3 s of decoding and search at the measured rate, so a real 50 MB file with up to 500 large images stays under it, and
-  a hostile file stops within a few seconds; real photographic data may inflate slower, which the papers will show), the 2 MB
-  window unchanged (no reduced window needed at these rates), memory bounded by one piece plus the file and the reader (the
-  current scan already peaks at about 190 MB on a 50 MB file).
-- **The six papers the owner approved** (1512.03385, 1810.04805, 2010.11929, 2103.00020, 2204.02311, 1409.1556; fetched with the
-  engine's capture, two requests each, then `process`): ResNet, BERT, ViT and VGG scan clean (0 to 0.6 s). **CLIP (2103.00020, 6.8 MB)
-  is `scan_incomplete`**, with 3,544 decodable streams and no large image: the scan decodes at most `MAX_STREAMS` = 2,000 streams
-  and stops. **PaLM (2204.02311, 2.7 MB) says `javascript 1`**, a chance `/JS` in the raw bytes of a stream that was decoded to the
-  end (not of a large image), and 4 `large_image_streams`. Over all nine real papers: 3 raise an alarm that is not true
-  (GPT-3: `javascript` and `scan_incomplete`; CLIP: `scan_incomplete`; PaLM: `javascript`), 6 do not.
-- **Findings the approved plan did not anticipate (measured, not guessed):**
-  1. **A third cause of `scan_incomplete`: the count of streams.** `MAX_STREAMS` = 2,000 stops the scan of an ordinary 6.8 MB paper.
-     Raising it is cheap (the cost is per decoded byte), but see 2.
-  2. **Raising what the scan decodes makes the other alarm worse.** With `MAX_STREAMS` raised, CLIP goes from `scan_incomplete` to
-     **`javascript 24`**. All 24 are in the decoded pixels of one ordinary image (`/Subtype /Image` with no `/Type /XObject`, a
-     predictor, 567 x 567 RGB, 964,467 bytes): a flat region of the colour #2F4A53 spells `/JS` in its three bytes, and a flat region
-     repeats it. So the false `javascript` is not only chance in random bytes: **a picture can spell the pattern, any number of
-     times**, and every image that the scan decodes in full is a source. Increment B alone (decode more) would trade
-     `scan_incomplete` for a louder `javascript`, so B cannot be done without the classification of C, and C must cover the
-     decoded pixel data of image streams and not only the raw bytes of large images.
-  3. **`_is_image` is stricter than the PDF format**: it needs `/Type /XObject`, which a real image may omit (this one does). Such an
-     image is not recognised as one by the large-image rule or by any classification built on it.
-  4. The chance `/JS` in PaLM sits in a stream decoded to the end; excluding the raw bytes of streams decoded to the end (a non-goal
-     of this plan) would remove that one, but not the other two (a large image; pixels).
-- **Consequence for the plan.** The approved text of B and C did not cover findings 1 to 3, and changing the design to cover them is
-  more than a correction to a Result: the work stopped (a plan changed beyond its status, review record and result needs the owner's
-  new approval) and the owner asked for the plan to be amended. It was (see the Review record); the work resumes when the owner has
-  approved the amended plan.
-- **Not done in A:** the review of the generator, the confirmation of numbers (the numbers above for B depend on the decision), and
-  the commit.
+- **Provenance:** run on 2026-11-06 and 2026-11-07 (UTC) on this machine with Python 3.15.0 and zlib 1.2.12, at commits 401ac55 (the
+  plan as first approved) and 07c2984 (as amended); the measuring scripts are throwaway and outside the repository, as the plan
+  says, and call the scan's own functions; the arXiv papers were fetched with the engine's capture (two requests each) and processed.
+  Sizes in megabytes are 10^6 bytes.
+- **The tracked generator** `engine/tests/bench_pdf.py` (`large_images(total, count, seed=1, zeros=3_000_000)`,
+  `expanding_streams(total, zeros=2_000_000)` and `tiny_streams(total, seed=1, size=100)`) with `engine/tests/test_bench_pdf.py` (12
+  tests, OK; they failed first; the break-it run on the generator is all caught but one equivalent mutant: an impossible size raises
+  `ValueError` either way). Files generated at 50 MB with `large_images(50_000_000, N, seed=1)` for N = 10, 100, 1,000,
+  `expanding_streams(50_000_000)` and `tiny_streams(50_000_000, seed=1)`:
+
+  | File | Bytes | sha256 |
+  |---|---|---|
+  | `images_10` | 50,002,817 | `8b1fe2a2f30d3de91090fda1c59b356831a5034832bca3a6a1e8de5ed7d39a0d` |
+  | `images_100` | 49,988,391 | `a7ee4e6c1a6186af14a8026b6f60e4b5d24b5d02bcb262a1d44bca5a5e59521a` |
+  | `images_1000` | 50,206,882 | `802ab5cd9b34e17a0e7d0a15f3c097aba3fd9949f760403ef1c4a85f4e770c78` |
+  | `expanding` | 49,999,322 | `3f7c0769e7c6a96651ed02f5ca2b20226ae5a31ee314ab3e891c6d78cde65ed0` |
+  | `tiny` | 49,999,960 | `cb5666db1134b8473c1853761047177caf172b5c0dad36c5a4bcbcecbc959d85` |
+
+  The digests hold for this zlib build only (`zlib.compress` output is not fixed across builds): B's check of them is on this
+  machine, and a different zlib needs the digests recorded again. The sizes are within 1% (`images_1000` is +0.41%; the tests assert
+  0.1% for 8 MB and 100 images). What the generator is not: the noise is incompressible and the zeros inflate and search faster than
+  pictures do, so the cost per megabyte differs between the three image files; there is no predictor (`/DecodeParms`), which the CLIP
+  image uses; and no content built to make the pattern search slow. B's benchmarks add a stream with a predictor and bytes dense in
+  `/` and `#`.
+- **The current scan on the generated files** (`/usr/bin/time -l`, `python3 -I -S engine/kb/scan_tool.py`, at 401ac55): 0.25 to
+  0.36 s and 175 to 191 MB peak resident memory on all five, because the 20 MB output budget (and the 2,000-stream limit) stop it
+  early: `images_10` gives `javascript 2` and `large_image_streams 10`; `images_100` and `images_1000` give `javascript 2`,
+  `large_image_streams 10` and `scan_incomplete`; `expanding` and `tiny` give `scan_incomplete`. The `javascript 2` are chance matches
+  of `/JS` in 50 MB of seeded noise. These are baselines of a scan that does not work through the whole file, so the memory bound of
+  completion criterion 3 is measured in B, not here.
+- **Cost:** decoding plus the pattern search is about 3 ms per decoded megabyte (inflate 0.3 ms; name unescaping and the seven patterns
+  2.5 to 3.5 ms) on the generated files and on the real GPT-3 paper; the real-data rate comes from that one paper. The scan takes 7.9
+  microseconds a stream on the 266,548 tiny streams (2.12 s with the stream limit raised in-process; peak 242 MB in that process, which
+  also held the CLIP paper) and 104 microseconds a stream on CLIP's 3,544 (0.38 s).
+- **The nine real papers** (the stored copies; "decoded" is the number of streams the scan can decode; "past" is the number of those
+  that decode past the 2 MB window; "decoded MB" is the output of all decodable streams at that window):
+
+  | Paper | Size | Caveats now | Streams | Decoded | Past | Decoded MB | Scan |
+  |---|---|---|---|---|---|---|---|
+  | Attention (1706.03762) | 2.22 MB | `large_image_streams 3` | 2,712 | 147 | 3 | 11.3 | 0.10 s |
+  | GPT-3 (2005.14165) | 6.77 MB | `javascript 1`, `large_image_streams 9`, `scan_incomplete` | 360 | 360 | 83 | 253.2 | 0.08 s |
+  | Bahdanau (1409.0473) | 0.44 MB | none | 172 | 172 | 0 | 0.8 | 0.01 s |
+  | ResNet (1512.03385) | 0.82 MB | none | 72 | 71 | 0 | 1.2 | 0.02 s |
+  | BERT (1810.04805) | 0.78 MB | none | 131 | 97 | 0 | 2.3 | 0.02 s |
+  | ViT (2010.11929) | 3.74 MB | none | 1,109 | 852 | 0 | 9.8 | 0.61 s |
+  | CLIP (2103.00020) | 6.81 MB | `scan_incomplete` | 3,611 | 3,544 | 0 | 16.3 | 0.17 s |
+  | PaLM (2204.02311) | 2.71 MB | `javascript 1`, `large_image_streams 4` | 1,289 | 1,286 | 4 | 14.7 | 0.10 s |
+  | VGG (1409.1556) | 0.20 MB | none | 27 | 26 | 0 | 0.6 | 0.01 s |
+
+  Three of nine raise an alarm that is not true. *Where every match of every pattern sits* (all seven patterns counted): only `/JS`
+  ever matches, and only in binary places: GPT-3 one, in the raw bytes of a large image; PaLM one, in the raw bytes of a stream
+  decoded to the end; CLIP twenty-four, in the decoded pixels of one image (`/Subtype /Image`, no `/Type /XObject`, a predictor,
+  567 x 567 RGB, 964,467 bytes) when the stream limit is raised (the scan as it is stops before that image). In **text places**
+  (outside streams, unfiltered streams, the decoded content of streams that are not image-shaped) the nine papers have **no match at
+  all**, so the chance rate there is not yet seen (about one in twenty for each random megabyte is expected). The CLIP matches are
+  24 in nine runs of a repeated three bytes (the colour #2F4A53): a flat region repeats `/JS`, so the byte after a run is the next
+  pixel's (the last run is followed by `/JT`).
+- **The sixty PDFs found on this machine** (10.1 MB in all, the largest 2.9 MB, the slowest scan 0.06 s) hold 1,437 decodable streams
+  and 22 unfiltered ones, no large image and no stream past the limit; five say `malformed` (not PDFs) and one says `javascript` for a
+  match outside any stream. They say nothing about the hard case.
+- **What the plan did not anticipate (measured):** (1) a third cause of `scan_incomplete`, the stream-count limit of 2,000 (CLIP has
+  3,544 decodable streams); (2) a second kind of false `javascript`, pixels that spell the pattern, so that raising what the scan
+  decodes makes the first alarm louder (CLIP goes from `scan_incomplete` to `javascript 24`); (3) `_is_image` requires
+  `/Type /XObject`, which the format makes optional. These led to the owner's amendment of the plan (see the Review record).
+- **Shape of a use** (the twelve bytes before a match printable or white space, and a byte after it that can begin a value: white
+  space, `(`, `<` or a digit) on the matches in binary places of the nine papers: **none of the 26** has it. With C, all 26 become
+  `pattern_in_binary_data`, three of the nine papers (GPT-3 1, PaLM 1, CLIP 24) still carry that weaker caveat, and none shows
+  `javascript` or `scan_incomplete`. The "none" is not robust against another colour: a different flat colour could leave a digit or
+  a space after a run.
+- **Numbers proposed for B and C (for the owner to confirm):** a limit of **2,500 MB** decoded in all (about 7.5 s at 3 ms a
+  megabyte; GPT-3 at the full 2 MB window decodes 253 MB, all of its 360 decodable streams; `images_1000` at the full window is about
+  2,000 MB and so passes, while a file with more than 1,250 images that each decode to the window does not: the limit is a work bound,
+  and such a file is `scan_incomplete` by design, which the Goal and criterion 2 do not promise against); a limit of **500,000
+  streams** decoded (about 4 s at 8 microseconds; the reader allows 1,000,000 objects); the 2 MB per-stream window unchanged; memory
+  held to one piece plus the file and the reader (175 to 242 MB measured, against the 600 MB of criterion 3, whose real measurement
+  is B's); the shape of a use as above. A hostile file adds the stream time, the decoding time and the reader's pass (under 1 s on
+  50 MB): about 4 + 7.5 + 1 seconds, inside the 20 seconds of criterion 3.
+- **Open for the owner:** with C as written three of nine papers still carry a weaker caveat. The plan keeps it so that nothing is
+  silent; dropping binary-place matches that have no shape of a use would silence them, and with them the (rare) real action hidden in
+  image bytes behind non-printable bytes. That is the owner's decision, at the checkpoint of C.
+- **Review (independent reviewer, one round):** no blocking finding; applied here: the stale test count, the superseded statements,
+  the arithmetic and the meaning of the limit for `images_1000`, the source of the 242 MB, the per-paper table, the counts per place
+  for all seven patterns, the CLIP runs, and the limits of the generator. Not changed: the type checks of the generator's arguments
+  (a `bool` is accepted as a whole number) and the helper `streams()` in the test, which uses the reader's private function and will
+  be adapted in C.
+- **Confirmed by the owner (2026-11-06):** the limits of **2,500 MB** decoded in all and **500,000 streams** decoded, the 2 MB window
+  unchanged, and the shape of a use as above, for increments B and C. The question of binary-place matches without the shape of a use
+  stays open for the checkpoint of C (the plan's text keeps them as the weaker `pattern_in_binary_data`).
+- **Done in A:** all of its steps; the commit adds the generator, its test and this record.
