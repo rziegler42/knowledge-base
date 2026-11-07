@@ -1,6 +1,6 @@
 # Model calls from the engine
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-07
 Candidate: cards#model-calls
 Specs: models
@@ -185,4 +185,31 @@ plan does not edit the spec.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The registry and one call (2026-11-07)
+
+Built `engine/kb/models.py` and `engine/tests/test_models.py`. The registry is the `models` object and the `models_on` switch of
+the owner's config. `call` starts `wb run ask-ollama ask` with an argument list, no shell, the project root as the working
+directory and a new session; it sends the prompt on standard input, reads at most 2 MB of output and 4 KB of errors, and kills
+the process group at its time limit or at the output cap. Refusals before sending: a prompt over 256 KB (counted in bytes), an
+empty or non-text prompt, an unlisted model, the switch off or not a real boolean, a launcher that is not found, and any wrong
+entry in the registry (one wrong entry refuses all). A reply must be one JSON object with `contract` the integer 2, `ok` a real
+boolean, `vendor` `ollama`, a valid model name, non-empty reply text within 256 KB, and `usage` with both counts; a repeated key,
+`NaN` and deep nesting are refused. A failure reason from the bridge or its error output is cleaned and cut. The reply text is
+returned unchanged, because cleaning and marking it is increment B.
+
+Verification run: `python3 -m unittest engine.tests.test_models engine.tests.test_setup` gave 76 tests, OK (46 in the new file).
+Tests were written first and failed with an import error before the module existed. Nine deliberate breaks of the module were each
+caught by a test (kill only the process and not its group; a server name that may start with a dash; the contract compared by
+value only; repeated keys allowed; `ok` of any type; the prompt limit counted in characters; failure text not cleaned; no output
+cap; a missing switch counted as on). One of them (no output cap) made its test hang and not fail, so that test now has a short
+time limit. My script was killed in that run and left the module broken for a moment; I restored it from a copy and checked it
+was identical before going on. Not run: any live call, and any test file other than the two named.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: the model name now follows the bridge's rule (segments
+joined by a slash, at most 128 characters, no `..`), in the registry and in the reply, after the reviewer pointed out that a
+namespaced model could not be listed and that a good reply naming one would have been refused (checked against the bridge's
+`valid_model`); the longest `timeout` is now 3600, the bridge's own bound (checked against the bridge); a trailing-newline and
+a few more hostile values were added to the tests, with a test per fix written first and seen to fail. Not applied: a group kill
+for a grandchild that outlives a normal exit and holds no pipe, and a pid-reuse worry about the kill. Neither can leave a call
+hanging, and the second cannot happen in the order the code runs. No security review was asked for or run; the owner has not
+asked for one.
