@@ -213,3 +213,33 @@ a few more hostile values were added to the tests, with a test per fix written f
 for a grandchild that outlives a normal exit and holds no pipe, and a pid-reuse worry about the kill. Neither can leave a call
 hanging, and the second cannot happen in the order the code runs. No security review was asked for or run; the owner has not
 asked for one.
+
+### Increment B — The checked reply and the generation record (2026-11-07)
+
+Added to `engine/kb/models.py`: `Job` (a name, a prompt version, the shape of the expected JSON object and optionally a schema
+file name, all checked when it is made), `run_job` (one call, then the shape check, then the record) and the schema option of
+`call`. A shape names each key with a type (`string`, `strings`, `integer`, `boolean`), its limits and whether it is optional.
+The answer must be one JSON object with exactly those keys. Text is cleaned of control and hidden characters, a value that is
+too long is refused and not cut (its length is checked before cleaning, so padding cannot hide it), and text that cleans to
+nothing is refused. A refusal names the key and the kind of fault and quotes no model text. The result is
+`{"untrusted": True, "values": ..., "record": ...}`; the record holds the model the server reported, the registry name, the
+prompt version, the UTC date and the two token counts (kept as `None` when the server gave none). A schema is a tracked file in
+`engine/kb/schemas/`, named by a plain file name; the engine checks the name, that no link lies in its path below the project
+root, that it is a regular file of at most 64 KB and one JSON object, and passes the bridge its path relative to the project.
+No schema or temporary file is written. The one schema added is `model-try.json`, for increment C.
+
+Verification run: `python3 -m unittest engine.tests.test_models engine.tests.test_setup` gave 100 tests, OK (70 in the new
+file). Tests were written first and failed because the new interface did not exist. Ten deliberate breaks were each caught (the
+length checked after cleaning; an unlisted key allowed; a boolean counted as an integer; text not cleaned; a link in the schema
+path allowed; the schema size limit off by one; an optional key treated as required; text that cleans to nothing allowed; list
+items not cleaned; the upper bound of an integer dropped). One survived at first, the explicit link check, because a link is also
+refused by the next check; the tests now assert that the reason says link. One test of mine was wrong (it counted the fake
+launcher's own record files) and was narrowed to the project folder. Not run: any live call, and any test file other than the two.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: `check_answer` is now private (`_check_answer`),
+because a direct caller could pass a shape that `Job` had not checked; no behaviour changed and no test needed. Noted for
+increment C and the card stage: cleaned text can still contain the words of the end-of-untrusted-text marker, because only
+`textutil.title` guards against them, so whatever prints the values must put them between marker lines and must not rely on the
+values being free of marker text; C's `model-try` does so and has a test for it. Not applied: a check that a job's shape agrees
+with its schema file (the engine's check is the authority and a mismatch shows at the first live call), and the small gap between
+the engine's check of the schema file and the bridge's read, which the bridge checks again.

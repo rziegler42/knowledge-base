@@ -380,5 +380,214 @@ class ReplyTest(Base):
         self.assertEqual(self.call()["reply"], text)
 
 
+SHAPE = {"summary": {"type": "string", "max": 200},
+         "topics": {"type": "strings", "max_items": 3, "max": 20},
+         "score": {"type": "integer", "low": 0, "high": 10},
+         "flag": {"type": "boolean", "optional": True}}
+ANSWER = {"summary": "A short summary.", "topics": ["a", "b"], "score": 4}
+
+
+def job(**over):
+    kw = {"name": "card-try", "prompt_version": "v1", "shape": SHAPE}
+    kw.update(over)
+    return models.Job(**kw)
+
+
+class JobTest(Base):
+    def run_job(self, answer=None, text=None, cfg=None, j=None):
+        self.plan(stdout=json.dumps(dict(GOOD, reply=text if text is not None else json.dumps(ANSWER if answer is None else answer))))
+        return models.run_job(cfg or config(), "local", "a question", j or job(), launcher=self.launcher, root=self.root)
+
+    def bad(self, **kw):
+        with self.assertRaises(KbError) as cm:
+            self.run_job(**kw)
+        return str(cm.exception)
+
+    def test_a_good_answer_is_returned_marked_untrusted_with_its_record(self):
+        got = self.run_job()
+        self.assertIs(got["untrusted"], True)
+        self.assertEqual(got["values"], ANSWER)
+        rec = got["record"]
+        self.assertEqual((rec["model"], rec["registry"], rec["prompt_version"], rec["input_tokens"], rec["output_tokens"]),
+                         ("m1:latest", "local", "v1", 7, 3))
+        self.assertRegex(rec["date"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$")
+
+    def test_the_record_holds_nothing_else(self):
+        self.assertEqual(set(self.run_job()["record"]),
+                         {"model", "registry", "prompt_version", "date", "input_tokens", "output_tokens"})
+
+    def test_missing_counts_stay_missing(self):
+        self.plan(stdout=json.dumps(dict(GOOD, reply=json.dumps(ANSWER), usage={"input_tokens": None, "output_tokens": None})))
+        got = models.run_job(config(), "local", "q", job(), launcher=self.launcher, root=self.root)
+        self.assertIsNone(got["record"]["input_tokens"])
+
+    def test_text_is_cleaned_of_control_and_hidden_characters(self):
+        got = self.run_job(answer=dict(ANSWER, summary="red \x1b[31mtext\x1b[0m\u202e  and\n\n more", topics=["a\u200bb", "c\x00d"]))
+        self.assertNotIn("\x1b", got["values"]["summary"])
+        self.assertNotIn("\u202e", got["values"]["summary"])
+        self.assertNotIn("\n", got["values"]["summary"])
+        self.assertEqual(got["values"]["topics"], ["ab", "cd"])
+
+    def test_a_reply_that_is_not_a_json_object(self):
+        for text in ("", "plain words", "[1]", "null", '"x"', "5", "{", '{"summary": "a", "summary": "b", "topics": [], "score": 1}',
+                     '{"summary": "a", "topics": [], "score": NaN}', "[" * 5000):
+            with self.subTest(text=text[:30]):
+                self.bad(text=text)
+
+    def test_a_missing_key_and_an_unlisted_key(self):
+        self.bad(answer={"summary": "s", "topics": []})
+        self.assertIn("extra", self.bad(answer=dict(ANSWER, extra="x")))
+
+    def test_an_optional_key_may_be_absent_but_is_checked_when_present(self):
+        self.assertNotIn("flag", self.run_job()["values"])
+        self.assertIs(self.run_job(answer=dict(ANSWER, flag=True))["values"]["flag"], True)
+        self.bad(answer=dict(ANSWER, flag="yes"))
+
+    def test_wrong_types(self):
+        for key, value in (("summary", 5), ("summary", None), ("summary", ["x"]), ("topics", "a"), ("topics", [1]), ("topics", None),
+                           ("topics", [["a"]]), ("score", "4"), ("score", 4.5), ("score", True), ("score", None)):
+            with self.subTest(key=key, value=value):
+                self.bad(answer=dict(ANSWER, **{key: value}))
+
+    def test_length_and_range_limits(self):
+        self.run_job(answer=dict(ANSWER, summary="x" * 200))
+        self.assertIn("summary", self.bad(answer=dict(ANSWER, summary="x" * 201)))
+        self.run_job(answer=dict(ANSWER, topics=["a", "b", "c"]))
+        self.bad(answer=dict(ANSWER, topics=["a", "b", "c", "d"]))
+        self.run_job(answer=dict(ANSWER, topics=["y" * 20]))
+        self.bad(answer=dict(ANSWER, topics=["y" * 21]))
+        self.run_job(answer=dict(ANSWER, score=0))
+        self.run_job(answer=dict(ANSWER, score=10))
+        self.bad(answer=dict(ANSWER, score=-1))
+        self.bad(answer=dict(ANSWER, score=11))
+
+    def test_the_length_is_checked_before_cleaning_so_padding_cannot_hide_it(self):
+        self.bad(answer=dict(ANSWER, summary=" " * 300 + "x"))
+
+    def test_text_that_cleans_to_nothing_is_refused(self):
+        for text in ("", "   ", "\u200b\u202e", "\x1b"):
+            with self.subTest(text=text):
+                self.bad(answer=dict(ANSWER, summary=text))
+        self.bad(answer=dict(ANSWER, topics=["\u200b"]))
+
+    def test_an_empty_list_is_allowed(self):
+        self.assertEqual(self.run_job(answer=dict(ANSWER, topics=[]))["values"]["topics"], [])
+
+    def test_a_refusal_comes_with_a_reason_that_holds_no_model_text(self):
+        message = self.bad(answer=dict(ANSWER, summary="\x1b[31m" + "x" * 500))
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("xxxxx", message)
+
+    def test_a_job_is_checked_when_it_is_made(self):
+        for bad in ({"name": "-x"}, {"name": "A"}, {"name": ""}, {"name": "a\n"}, {"prompt_version": "v 1"}, {"prompt_version": ""},
+                    {"prompt_version": "v" * 50}, {"prompt_version": "-v"}, {"prompt_version": "v1\n"}, {"shape": {}}, {"shape": []},
+                    {"shape": {"a b": {"type": "string", "max": 5}}}, {"shape": {"a": {"type": "float", "max": 5}}},
+                    {"shape": {"a": {"type": "string"}}}, {"shape": {"a": {"type": "string", "max": 0}}},
+                    {"shape": {"a": {"type": "string", "max": True}}}, {"shape": {"a": {"type": "strings", "max": 5}}},
+                    {"shape": {"a": {"type": "integer", "low": 5, "high": 1}}}, {"shape": {"a": {"type": "string", "max": 5, "x": 1}}},
+                    {"shape": {"a": "string"}}):
+            with self.subTest(bad=bad), self.assertRaises(KbError):
+                job(**bad)
+
+    def test_the_prompt_version_and_name_are_in_the_record_exactly(self):
+        got = self.run_job(j=job(prompt_version="card.v2-b"))
+        self.assertEqual(got["record"]["prompt_version"], "card.v2-b")
+
+
+class SchemaTest(Base):
+    def setUp(self):
+        super().setUp()
+        self.schemas = os.path.join(self.root, "engine", "kb", "schemas")
+        os.makedirs(self.schemas)
+
+    def write(self, name, content='{"type": "object"}'):
+        path = os.path.join(self.schemas, name)
+        with open(path, "w") as f:
+            f.write(content)
+        return path
+
+    def with_schema(self, name):
+        self.plan(stdout=json.dumps(dict(GOOD, reply=json.dumps(ANSWER))))
+        return models.run_job(config(), "local", "q", job(schema=name), launcher=self.launcher, root=self.root)
+
+    def refused(self, name):
+        if os.path.exists(os.path.join(self.dir, "args.json")):
+            os.remove(os.path.join(self.dir, "args.json"))
+        with self.assertRaises(KbError):
+            self.with_schema(name)
+        self.assertIsNone(self.seen("args.json"))
+
+    def test_the_bridge_is_given_the_path_relative_to_the_project(self):
+        self.write("one.json")
+        self.with_schema("one.json")
+        args = self.seen("args.json")
+        self.assertEqual(args[args.index("--schema") + 1], "engine/kb/schemas/one.json")
+
+    def test_no_schema_means_no_option(self):
+        self.plan(stdout=json.dumps(dict(GOOD, reply=json.dumps(ANSWER))))
+        models.run_job(config(), "local", "q", job(), launcher=self.launcher, root=self.root)
+        self.assertNotIn("--schema", self.seen("args.json"))
+
+    def test_a_file_name_that_is_not_a_plain_json_name(self):
+        for name in ("/etc/passwd", "../x.json", "a/b.json", "x.txt", "x", ".json", "-x.json", "a b.json", "x.json\n", "X.json", "", "x" * 80 + ".json"):
+            with self.subTest(name=name), self.assertRaises(KbError):
+                job(schema=name)
+
+    def test_a_file_that_does_not_exist_or_is_not_a_file(self):
+        self.refused("missing.json")
+        os.mkdir(os.path.join(self.schemas, "dir.json"))
+        self.refused("dir.json")
+
+    def test_a_file_that_is_too_large_or_not_one_json_object(self):
+        self.write("big.json", '{"a": "' + "x" * 70000 + '"}')
+        self.refused("big.json")
+        for i, text in enumerate(["", "[1]", "null", "not json", '{"a": 1, "a": 2}', "{"]):
+            self.write(f"bad{i}.json", text)
+            with self.subTest(text=text):
+                self.refused(f"bad{i}.json")
+
+    def test_a_file_at_the_size_limit_is_allowed(self):
+        body = '{"a": "'
+        text = body + "x" * (models.MAX_SCHEMA - len(body) - 2) + '"}'
+        self.assertEqual(len(text), models.MAX_SCHEMA)
+        self.write("edge.json", text)
+        self.with_schema("edge.json")
+
+    def test_a_link_in_the_path_is_refused(self):
+        target = os.path.join(self.dir, "elsewhere.json")
+        with open(target, "w") as f:
+            f.write('{"type": "object"}')
+        os.symlink(target, os.path.join(self.schemas, "link.json"))
+        with self.assertRaisesRegex(KbError, "link"):
+            self.with_schema("link.json")
+        os.makedirs(os.path.join(self.dir, "real", "kb", "schemas"))
+        with open(os.path.join(self.dir, "real", "kb", "schemas", "one.json"), "w") as f:
+            f.write('{"type": "object"}')
+        os.rename(self.schemas, os.path.join(self.dir, "gone"))
+        os.symlink(os.path.join(self.dir, "real", "kb", "schemas"), self.schemas)
+        with self.assertRaisesRegex(KbError, "link"):
+            self.with_schema("one.json")
+
+    def test_the_schemas_tracked_in_the_engine_pass_the_same_check(self):
+        root = models._project_root()
+        folder = os.path.join(root, *models.SCHEMA_DIR)
+        names = sorted(n for n in os.listdir(folder) if n.endswith(".json"))
+        self.assertIn("model-try.json", names)
+        for name in names:
+            with self.subTest(name=name):
+                self.assertEqual(models._schema_path(root, name), "engine/kb/schemas/" + name)
+
+    def test_no_file_is_written_by_a_call(self):
+        self.write("one.json")
+
+        def tree():
+            return sorted((d, sorted(f)) for d, _, f in os.walk(self.root))
+
+        before = tree()
+        self.with_schema("one.json")
+        self.assertEqual(tree(), before)
+        self.assertFalse(hasattr(models, "tempfile"))  # the module makes no temporary file or folder
+
+
 if __name__ == "__main__":
     unittest.main()

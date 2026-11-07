@@ -8,11 +8,13 @@ endpoint file; the registry holds a server name only."""
 import json
 import os
 import re
+import stat
 import shutil
 import signal
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 
 from . import KbError, textutil
 
@@ -34,6 +36,12 @@ _REQUIRED = ("bridge", "server", "model")
 MAX_MAX_OUTPUT = 200000
 MAX_TIMEOUT = 3600  # the bridge refuses a longer one
 MAX_MODEL = 128
+MAX_SCHEMA = 65536  # the bridge reads a schema file of at most this many bytes
+SCHEMA_DIR = ("engine", "kb", "schemas")  # where a job's schema file is kept, relative to the project root
+_SCHEMA_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\.json")
+_VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
+_FIELD = re.compile(r"[a-z][a-z0-9_]{0,39}")
+_LIMIT = 1_000_000
 
 
 def _count(value, low, high):
@@ -122,8 +130,10 @@ def _prompt_bytes(prompt):
     return data
 
 
-def _argv(launcher, e):
+def _argv(launcher, e, schema=None):
     argv = [launcher, "run", BRIDGE, "ask", "--server", e["server"], "--model", e["model"]]
+    if schema:
+        argv += ["--schema", schema]
     if "max_output" in e:
         argv += ["--max-output", str(e["max_output"])]
     if "thinking" in e:
@@ -229,10 +239,17 @@ def _no_constants(name):
     raise ValueError("not a JSON number")
 
 
+def _loads(text):
+    try:
+        return json.loads(text, object_pairs_hook=_no_repeats, parse_constant=_no_constants)
+    except (ValueError, RecursionError):
+        return None
+
+
 def _document(out):
     try:
-        return json.loads(out.decode("utf-8"), object_pairs_hook=_no_repeats, parse_constant=_no_constants)
-    except (ValueError, RecursionError):
+        return _loads(out.decode("utf-8"))
+    except UnicodeDecodeError:
         return None
 
 
@@ -282,20 +299,170 @@ def _check(code, out, err):
     return {"model": model, "reply": reply, "usage": _usage(doc.get("usage"))}
 
 
-def call(cfg, name, prompt, launcher=None, root=None):
+def _schema_path(root, name):
+    """The path of a job's schema file relative to the project root, once the file has been checked: a plain name in the
+    engine's schema folder, no link anywhere below the root, a regular file of at most MAX_SCHEMA bytes holding one JSON object.
+    The bridge checks the same again when it reads the file."""
+    if not isinstance(name, str) or not _SCHEMA_NAME.fullmatch(name):
+        raise KbError("a schema is named by a plain file name of lower-case letters, digits, _ and - ending in .json")
+    parts = SCHEMA_DIR + (name,)
+    current = root
+    for i, part in enumerate(parts):
+        current = os.path.join(current, part)
+        try:
+            st = os.lstat(current)
+        except OSError:
+            raise KbError(f"the schema file {name} does not exist in the engine's schema folder") from None
+        if stat.S_ISLNK(st.st_mode):
+            raise KbError(f"the schema path has a link in it: {part}")
+        last = i == len(parts) - 1
+        if last and not stat.S_ISREG(st.st_mode) or not last and not stat.S_ISDIR(st.st_mode):
+            raise KbError(f"the schema path is not a {'file' if last else 'folder'}: {part}")
+        if last and st.st_size > MAX_SCHEMA:
+            raise KbError(f"the schema file {name} is larger than {MAX_SCHEMA} bytes")
+    try:
+        fd = os.open(current, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as f:
+            data = f.read(MAX_SCHEMA + 1)
+    except OSError:
+        raise KbError(f"the schema file {name} cannot be read") from None
+    if len(data) > MAX_SCHEMA:
+        raise KbError(f"the schema file {name} is larger than {MAX_SCHEMA} bytes")
+    try:
+        doc = _loads(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        doc = None
+    if not isinstance(doc, dict):
+        raise KbError(f"the schema file {name} does not hold one JSON object")
+    return "/".join(parts)
+
+
+def call(cfg, name, prompt, launcher=None, root=None, schema=None):
     """Send `prompt` to the model listed as `name` and return {"model", "reply", "usage"} as the bridge reported them. The
-    reply is the model's text, untrusted and not yet checked for the shape a job expects."""
+    reply is the model's text, untrusted and not yet checked for the shape a job expects. `schema` is the file name of a
+    schema in the engine's schema folder, which the bridge hands to the server so that it shapes its reply."""
     entries = registry(cfg)
     if cfg.get("models_on") is not True:
         raise KbError("model work is off: set models_on to true in the config to turn it on")
     if not isinstance(name, str) or name not in entries:
         raise KbError(f"the model {textutil.clean(name, 40)!r} is not listed in the config")
     data = _prompt_bytes(prompt)
-    argv = _argv(_launcher(launcher), entries[name])
+    root = root or _project_root()
+    relative = _schema_path(root, schema) if schema is not None else None
+    argv = _argv(_launcher(launcher), entries[name], relative)
     limit = entries[name].get("timeout", DEFAULT_TIMEOUT) + GRACE
-    code, out, err, why = _run(argv, data, root or _project_root(), limit)
+    code, out, err, why = _run(argv, data, root, limit)
     if why == "output":
         raise KbError(f"the bridge printed too much (over {MAX_OUT} bytes); the call was stopped")
     if why == "time":
         raise KbError(f"the call ran past its time limit of {limit} seconds and was stopped")
     return _check(code, out, err)
+
+
+_TYPE_KEYS = {"string": {"type", "max", "optional"}, "strings": {"type", "max_items", "max", "optional"},
+              "integer": {"type", "low", "high", "optional"}, "boolean": {"type", "optional"}}
+_NEEDED = {"string": ("max",), "strings": ("max_items", "max"), "integer": ("low", "high"), "boolean": ()}
+
+
+def _spec(field, spec):
+    if not isinstance(field, str) or not _FIELD.fullmatch(field):
+        raise KbError(f"the shape has a key that is not a plain name: {textutil.clean(field, 40)!r}")
+    if not isinstance(spec, dict) or spec.get("type") not in _TYPE_KEYS:
+        raise KbError(f"the shape of {field} is not one of {', '.join(sorted(_TYPE_KEYS))}")
+    kind = spec["type"]
+    extra = set(spec) - _TYPE_KEYS[kind]
+    if extra:
+        raise KbError(f"the shape of {field} has a key it does not know: {sorted(extra)[0]}")
+    for key in _NEEDED[kind]:
+        if key not in spec:
+            raise KbError(f"the shape of {field} lacks {key}")
+    if "optional" in spec and type(spec["optional"]) is not bool:
+        raise KbError(f"the shape of {field}: optional is true or false")
+    if "max" in spec and not _count(spec["max"], 1, MAX_REPLY):
+        raise KbError(f"the shape of {field}: max is a whole number from 1 to {MAX_REPLY}")
+    if "max_items" in spec and not _count(spec["max_items"], 0, _LIMIT):
+        raise KbError(f"the shape of {field}: max_items is a whole number from 0 to {_LIMIT}")
+    if kind == "integer" and not (_count(spec["low"], -_LIMIT, _LIMIT) and _count(spec["high"], -_LIMIT, _LIMIT)
+                                  and spec["low"] <= spec["high"]):
+        raise KbError(f"the shape of {field}: low and high are whole numbers with low not above high")
+    return dict(spec)
+
+
+class Job:
+    """What a kind of model work expects: a name, the version of its prompt, the shape of the JSON object it asks for, and
+    optionally the file name of a schema in the engine's schema folder. It is checked when it is made."""
+
+    def __init__(self, name, prompt_version, shape, schema=None):
+        if not isinstance(name, str) or not _NAME.fullmatch(name):
+            raise KbError("a job's name is lower-case letters, digits, _ and -, starting with a letter or digit")
+        if not isinstance(prompt_version, str) or not _VERSION.fullmatch(prompt_version):
+            raise KbError("a prompt version is up to 40 letters, digits, . _ and -, starting with a letter or digit")
+        if not isinstance(shape, dict) or not shape:
+            raise KbError("a job's shape is an object with at least one key")
+        if schema is not None and (not isinstance(schema, str) or not _SCHEMA_NAME.fullmatch(schema)):
+            raise KbError("a schema is named by a plain file name ending in .json")
+        self.name = name
+        self.prompt_version = prompt_version
+        self.shape = {field: _spec(field, spec) for field, spec in shape.items()}
+        self.schema = schema
+
+
+def _text(field, value, spec):
+    if not isinstance(value, str):
+        raise KbError(f"the answer's {field} is not text")
+    if len(value) > spec["max"]:
+        raise KbError(f"the answer's {field} is longer than the {spec['max']} characters allowed")
+    kept = textutil.clean(value, spec["max"])
+    if not kept:
+        raise KbError(f"the answer's {field} holds no text")
+    return kept
+
+
+def _value(field, value, spec):
+    kind = spec["type"]
+    if kind == "string":
+        return _text(field, value, spec)
+    if kind == "strings":
+        if not isinstance(value, list):
+            raise KbError(f"the answer's {field} is not a list")
+        if len(value) > spec["max_items"]:
+            raise KbError(f"the answer's {field} has more than the {spec['max_items']} items allowed")
+        return [_text(field, item, spec) for item in value]
+    if kind == "integer":
+        if type(value) is not int or not spec["low"] <= value <= spec["high"]:
+            raise KbError(f"the answer's {field} is not a whole number from {spec['low']} to {spec['high']}")
+        return value
+    if type(value) is not bool:
+        raise KbError(f"the answer's {field} is not true or false")
+    return value
+
+
+def _check_answer(text, shape):
+    """The values of the JSON object in `text`, if it has exactly the shape `shape` asks for. Text is cleaned, a value is refused
+    and not cut when it is too long (checked before cleaning), and a refusal names the key and the kind of fault and quotes no
+    value. The values stay untrusted data."""
+    doc = _loads(text)
+    if not isinstance(doc, dict):
+        raise KbError("the answer is not one JSON object")
+    for key in doc:
+        if key not in shape:
+            raise KbError(f"the answer has a key that was not asked for: {textutil.clean(key, 40)!r}")
+    values = {}
+    for field, spec in shape.items():
+        if field not in doc:
+            if spec.get("optional"):
+                continue
+            raise KbError(f"the answer lacks {field}")
+        values[field] = _value(field, doc[field], spec)
+    return values
+
+
+def run_job(cfg, name, prompt, job, launcher=None, root=None):
+    """Make one call for `job` and return {"untrusted": True, "values": ..., "record": ...}: the checked values, and the record of
+    how they were made (the model the server reported, the registry name, the prompt version, the date and the token counts)."""
+    got = call(cfg, name, prompt, launcher=launcher, root=root, schema=job.schema)
+    values = _check_answer(got["reply"], job.shape)
+    record = {"model": got["model"], "registry": name, "prompt_version": job.prompt_version,
+              "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+              "input_tokens": got["usage"]["input_tokens"], "output_tokens": got["usage"]["output_tokens"]}
+    return {"untrusted": True, "values": values, "record": record}
