@@ -297,7 +297,7 @@ class MakeTest(Base):
         out = self.run_make(conversion(block("text")))
         (record,) = out["records"]
         self.assertEqual((record["task"], record["registry"], record["prompt_version"], record["input_tokens"], record["output_tokens"]),
-                         ("card", "cardm", "v1", 10, 5))
+                         ("card", "cardm", "v2", 10, 5))
         self.assertEqual(record["model"], "m1:latest")
 
     def test_a_longer_book_gets_notes_for_each_piece_and_then_one_card(self):
@@ -409,7 +409,26 @@ class JobTest(unittest.TestCase):
         self.assertEqual({cardmake.CARD_JOB.name, cardmake.NOTES_JOB.name}, set(models.TASKS))
 
     def test_each_job_has_a_prompt_version(self):
-        self.assertEqual((cardmake.CARD_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v1", "v1"))
+        self.assertEqual((cardmake.CARD_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v2", "v2"))
+
+    def test_the_prompts_ask_for_fewer_items_than_the_limits_so_a_small_overshoot_still_passes(self):
+        shape = cardmake.CARD_JOB.shape
+        self.assertEqual(set(cardmake.ASKED), {"useful_for", "topics", "adjacent_topics", "key_ideas", "caveats"})
+        for key, asked in cardmake.ASKED.items():
+            with self.subTest(key=key):
+                self.assertLess(asked, shape[key]["max_items"])
+                self.assertGreaterEqual(asked, shape[key].get("min_items", 0))
+        self.assertLess(cardmake.ASKED_POINTS, cardmake.NOTES_JOB.shape["points"]["max_items"])
+        self.assertGreaterEqual(cardmake.ASKED_POINTS, cardmake.NOTES_JOB.shape["points"]["min_items"])
+
+    def test_the_prompts_state_those_numbers_and_forbid_more(self):
+        prompt = cardmake.card_prompt("T", "O", [("BOOK TEXT", "t")])
+        for key, asked in cardmake.ASKED.items():
+            self.assertRegex(prompt, r'"%s": (up to )?%d ' % (key, asked))
+        self.assertIn("never more", prompt.lower())
+        notes = cardmake.notes_prompt("T", "t", 1, 2)
+        self.assertIn(f"up to {cardmake.ASKED_POINTS} ", notes)
+        self.assertIn("never more", notes.lower())
 
     def test_the_schema_files_agree_with_the_shapes(self):
         kinds = {"string": {"type": "string"}, "strings": {"type": "array", "items": {"type": "string"}},

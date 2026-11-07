@@ -1,6 +1,6 @@
 # The card of a book
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-07
 Candidate: cards#card-stage
 Specs: card
@@ -433,3 +433,58 @@ was skipped gets a card from its metadata, as `card.md` says for a book with no 
 "has a card", so a later `cards` run skips the book until `--again` is given, which is what to use after a failed conversion is
 made good. Not changed: the early check of the card setting refuses a run whose books would all get metadata-only cards; this is
 safe and consistent with the plan's first criterion.
+
+### Increment E — Cards for three real books, and the documents (2026-11-07)
+
+On the owner's word for each step (the settings and entries, the three books, and sending their text to the models) I backed up the
+config (`config.json.bak-20261107-133041`, untracked) and added two registry entries on the owner's existing server, one for a
+bulk-class model with thinking off and one for the model whose neutral descriptions gave the best retrieval in evidence notes 13
+and 14 of `knowledge-base.md`, and set `tasks`: `card-notes` to the first and `card` to the second. The notes ask for a larger,
+held-out sample before the second is fixed for cards; it is a setting and can be changed by editing the config. The owner's model
+that fit neither class was left unused. No name of a model or server is in a tracked file.
+
+The run, one book at a time through `cards --book`:
+- Short page ("Prompt injection - Wikipedia", 16,139 characters, one piece): the first run was refused after 49.6 s (mostly the
+  model loading) because the card model wrote more than the 15 topics allowed, when the prompt said "up to 15". Nothing was filed.
+  I stopped and told the owner, who approved changing the prompts to ask for fewer items than each limit, with a test, and one
+  retry. The retry carded it in 13.3 s: 1 call, 4,106 input and 474 output tokens, not partial.
+- Paper ("Attention Is All You Need", 39,902 characters, three pieces): carded in 55 s, 4 calls. Notes: 4,782 / 145, 6,659 / 121 and
+  405 / 83 input / output tokens; card: 957 / 435. Partial because a PDF converts flat, with no headings.
+- Long paper ("Language Models are Few-Shot Learners", 238,296 characters, 13 pieces): sampled to 12, carded in 105 s, 13 calls (12
+  notes of 4,141 to 10,670 input and 114 to 168 output tokens, and the card with 2,338 input and 521 output tokens). Partial
+  because flat and because 12 of 13 pieces were read, which the card says.
+The settings chose the models: every note went to the first model and every card to the second, as the reports and the records of
+the cards show. I read all three cards with `card-show`: every field present and within its limits, the scan findings carried
+over, the text in English, the markers around the text. The neutral fields still name the book's field (for example the kind of
+model a paper is about); nothing checks that by code, and it is for `cards#card-trial`. I did not judge the cards.
+
+The prompt change, in `engine/kb/cardmake.py` and `engine/tests/test_cardmake.py`, is outside this increment's listed areas and was
+made on the owner's word: prompt version `v2` for both jobs, `ASKED` (useful for 4, topics 10, adjacent topics 6, key ideas 4,
+caveats 3, note points 4) kept below the limits, and the sentence "never more" added. Tests first (they failed, then passed);
+seven deliberate breaks of it were each caught.
+
+Found and not changed: a page that converts to one very large block is cut into pieces of 5,000 characters, a quarter of what
+fits, so such a page makes more calls than its size needs (a 69,502-character page makes 14 pieces; it was not one of the three
+books). It is safe and is recorded in the engine README. Also noted: a refused answer is not kept, so what a model wrote past a
+limit cannot be seen afterwards.
+
+Documents: a new section "Cards" in `engine/README.md`, a correction of its section "Calling a model" (which said nothing chooses
+between models and no stage calls one), and the status, a bullet, the planned list and a row of the plan table in `README.md`.
+
+Verification run: `python3 -m unittest engine.tests.test_card engine.tests.test_cardmake engine.tests.test_models
+engine.tests.test_store engine.tests.test_setup` gave 288 tests, OK, as the plan's whole-plan check asks (the three card test files
+and the model tests, with the store and setup tests because `models.py` and `__main__.py` changed). Not run: any other test file. No
+security review was asked for or run.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: the older section "Calling a model" of the engine README,
+which the new text contradicted; the token counts, the prompt change and the plan's Result entry. Not changed: key ideas are asked
+as exactly four against a range of three to five, so a model that returns two is refused, which the README says (nothing is
+retried).
+
+Plan as a whole: each increment's recorded verification still stands. Completion criteria 1 to 8 are met: the model of each job is
+the config's setting and a missing setting is refused; the card file, its generations, the pieces and the sampling, the metadata-only
+card, the delimited inputs, the two commands, three real books with cards read back, and no name or path of the owner in a tracked
+file. Recorded differences from the approved text, none changed in it: step 6 of increment C still says "or the one the owner names
+for the run" (the command has no such option); and a conversion that failed gets a metadata-only card, which counts as the card of
+the book until `--again`. Left for the owner: whether `card.md` should say that cards are made by a command for now, and whether
+the roadmap should name the choice of a model for each kind of work; both were recorded in the plan and neither was changed.

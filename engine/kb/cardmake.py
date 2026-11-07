@@ -25,8 +25,13 @@ MAX_TITLE = 500
 _SPLIT_CHARS = PIECE_BYTES // 4  # a block larger than a piece is cut by characters, and a character is at most four bytes
 
 NOTES_SHAPE = {"points": {"type": "strings", "min_items": 1, "max_items": NOTE_ITEMS, "max": NOTE_CHARS}}
-NOTES_JOB = models.Job("card-notes", "v1", NOTES_SHAPE, schema="card-notes.json")
-CARD_JOB = models.Job("card", "v1", card.MODEL_SHAPE, schema="card.json")
+# What the prompts ask for is fewer items than the limits a shape enforces, because a model writes a few more than it is told (a
+# live run of a stronger model wrote more than the 15 topics it was allowed when asked for "up to 15"). A small overshoot passes.
+ASKED = {"useful_for": 4, "topics": 10, "adjacent_topics": 6, "key_ideas": 4, "caveats": 3}
+ASKED_POINTS = 4
+_NO_MORE = "Give no more items in a list than the number asked for: never more."
+NOTES_JOB = models.Job("card-notes", "v2", NOTES_SHAPE, schema="card-notes.json")
+CARD_JOB = models.Job("card", "v2", card.MODEL_SHAPE, schema="card.json")
 
 
 def pieces(conversion):
@@ -108,9 +113,9 @@ def notes_prompt(title, piece, number, total):
     """The prompt that asks for the notes on one piece of a book."""
     rules = ("You are helping to build a catalog entry for a book. Below are two sections of data: the book's title, and piece "
              f"{number} of {total} of its text.\n{_DATA}\nWrite in English, whatever the language of the text.\n"
-             f"Reply with one JSON object with the single key \"points\": a list of 1 to {NOTE_ITEMS} short points, each under "
+             f"Reply with one JSON object with the single key \"points\": a list of up to {ASKED_POINTS} short points, each under "
              f"{NOTE_CHARS} characters, saying what this piece is about: the problem it addresses, the approach it takes, what it "
-             "needs, what it provides or finds, and where it would not work.")
+             f"needs, what it provides or finds, and where it would not work. {_NO_MORE}")
     return _prompt(rules, [("TITLE", title), ("BOOK TEXT", piece)])
 
 
@@ -122,14 +127,14 @@ def card_prompt(title, outline_text, parts):
              f"text or notes made earlier on each piece of it.\n{_DATA}\nWrite in English, whatever the language of the source.\n"
              "Reply with one JSON object with exactly these keys and no others:\n"
              "- \"summary\": what the book is about, in about 80 words.\n"
-             "- \"useful_for\": up to 6 short phrases naming situations or questions in which the book would help.\n"
-             "- \"topics\": up to 15 short names for the ideas it covers, including other names an idea is known by.\n"
-             "- \"adjacent_topics\": up to 10 neighbouring topics that it does not cover but is close to.\n"
-             "- \"key_ideas\": 3 to 5 ideas from the book that a reader might not expect.\n"
+             f"- \"useful_for\": up to {ASKED['useful_for']} short phrases naming situations or questions in which the book would help.\n"
+             f"- \"topics\": up to {ASKED['topics']} short names for the ideas it covers, including other names an idea is known by.\n"
+             f"- \"adjacent_topics\": up to {ASKED['adjacent_topics']} neighbouring topics that it does not cover but is close to.\n"
+             f"- \"key_ideas\": {ASKED['key_ideas']} ideas from the book that a reader might not expect.\n"
              "- \"neutral_problem\", \"neutral_approach\", \"neutral_needs\", \"neutral_provides\", \"neutral_limits\": the problem the "
              "book addresses, its approach in general terms, what it needs, what it provides, and where it would not work, each "
              "in a sentence or two, written without the name of any field, game, product or person.\n"
-             "- \"caveats\": up to 5 short notes on limits of the source, such as missing or garbled parts.")
+             f"- \"caveats\": up to {ASKED['caveats']} short notes on limits of the source, such as missing or garbled parts.\n{_NO_MORE}")
     return _prompt(rules, [("TITLE", title), ("OUTLINE", outline_text), *parts])
 
 

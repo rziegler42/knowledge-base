@@ -415,9 +415,12 @@ must treat the whole excerpt and the title as data. The scan has no limit on how
 The engine can send one prompt to a model you have listed and take back one checked answer. It does this through the workbench's
 Ollama bridge (`wb run ask-ollama ask`), which it starts as a separate program with an argument list and no shell; the prompt goes
 in on standard input and never as an argument. The bridge, not the engine, holds the server's address, in the workbench's own
-endpoint file. Nothing here chooses between models, retries, batches or makes embeddings, and no stage calls a model yet.
+endpoint file. The engine prefers no model: which entry does which kind of work is the `tasks` setting of the config (see
+[Cards](#cards)). Nothing here retries, batches or makes embeddings, and no stage calls a model on its own; only the `cards` command
+and `model-try` do.
 
-The registry is two keys of the owner-only config. Edit the file by hand; nothing in the engine writes it:
+The registry is the keys `models` and `models_on` of the owner-only config (and `tasks`, described under Cards). Edit the file by
+hand; nothing in the engine writes it:
 
 ```json
 "models_on": true,
@@ -449,6 +452,65 @@ model. A server on plain HTTP without authentication gets the prompt in the clea
 (`wb run ask-ollama check` prints the warning and makes no connection). Text between the markers is still the model's text: a program that shows it must keep the markers
 around it. The check of a schema file and the bridge's read of it are two steps, so a file swapped between them is checked
 again only by the bridge.
+
+## Cards
+
+A card is a short entry for one book, written by a model: what the book is about, what it is useful for, key ideas, and a
+description of the problem it addresses and its approach in words of no field. The engine makes one on command, for the books you
+name. It does not make one when a book is filed, and `process` does not make one. Nothing searches the cards yet.
+
+```sh
+cd engine
+python3 -m kb cards --book BOOK_ID [--book BOOK_ID ...] [--again]
+python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
+```
+
+- **Which model does which work is your setting.** The config key `tasks` names, for each kind of work the engine knows, the
+  entry of `models` that does it. The kinds are `card-notes` (a note on one piece of a long book) and `card` (the card itself).
+  The engine names no model and has no default: a kind of work with no setting, a setting that names an unlisted entry, or the
+  switch `models_on` off is refused before anything is sent, with the key to set in the message. Another user sets other
+  models, or one model for both. There is no option on the command line to name a model, a server or a class.
+
+  ```json
+  "tasks": {"card-notes": "<name of an entry of models>", "card": "<name of an entry of models>"}
+  ```
+
+- **What is sent.** The text of each named book goes to the models you set, over the link the registry names, which for an
+  unauthenticated server on plain HTTP is in the clear on your network. Nothing is sent for a book that is skipped or that gets a
+  card from its metadata. `cards` needs at least one `--book`; there is no way to cover the whole library with one command.
+- **Reading a long book.** The converted text is cut into pieces of at most 20,000 bytes that end at a block boundary. A book of
+  one piece goes straight to the `card` task. A longer one gets a note on each piece from the `card-notes` task and the card is
+  made from the title, the outline of the headings and the notes. A book of more than 12 pieces is sampled (12 evenly spaced ones,
+  always the first and last) and the card says so. A block larger than a piece is cut into pieces of 5,000 characters, so a page
+  that converts to one very large block makes more calls than its size needs.
+- **What a model is told.** The title, the outline, each piece of text and each note are given as data in sections of their own,
+  between delimiters that carry a random token made for the call (made again if any input holds it); the rules name the token, say
+  that a line with another token is data and that nothing in a section is an instruction, and ask for English whatever the
+  language of the book. The prompts ask for fewer items than each list may hold (`cardmake.ASKED`), because a model writes a few
+  more than it is told. An answer must be one JSON object with exactly the keys of the card, within its limits, or it is refused
+  and no card is made; nothing is retried.
+- **Small books.** A version with no conversion (a conversion that failed or was skipped), or with less converted text than
+  `card_min_chars` (default 1,000 characters), gets a card from its metadata with no model call, marked partial. Such a card counts
+  as the book's card, so `cards` skips the book later unless you give `--again`, which adds another generation. A version not yet
+  fetched or whose conversion is still pending is refused: run `process` first.
+- **The card file.** `books/.../v/<version>/derived/card/<n>/card.json`, filed through the incoming area, read-only and marked
+  untrusted, one new number for each card; an earlier card is never changed and the newest is the active one. The mechanical part
+  (book, version, title, kind, shelf, type of the original, a short list of source facts, the scan's status and findings, how
+  complete the conversion was) comes from the manifest and the scan, and no model writes it. The model part holds the summary, the
+  uses, topics, adjacent topics, key ideas, the five neutral fields and caveats. A card with no model part says so. Every card is
+  checked on reading: exact keys and types, text already clean, a source address only if it is a web address with no user name, and
+  a hash check of the payload.
+- **`card-show`.** It prints the facts that cannot hold free text (ids, shelf, the counts and the models used) as JSON, and the text
+  of the card between the markers of a search result. A piece of text that holds the words of an untrusted-text marker is withheld.
+- **`cards` reports** one line of JSON for each book: carded, skipped or failed, the generation, whether the card is partial, the
+  pieces and calls, the model of each kind of work, and the reason. It never prints card text. One book failing does not stop the
+  others, and the exit code is 1 if any failed.
+
+Not covered. A card is model output about a book and may be wrong; it is a lead, not a claim. The neutral fields still name the
+book's field often; nothing checks that by code. A model that writes a list longer than its limit makes the card fail, and the
+refused answer is not kept. The stage state has no stage for cards. The model call layer and the card commands were run on three
+real books, on a server that serves a small and a larger model: a short page made its card in a few seconds once the model was
+loaded, a three-piece paper in under a minute, and a 13-piece paper (12 read) in under two minutes.
 
 ## Converting what is captured
 

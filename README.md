@@ -7,8 +7,9 @@ they would not otherwise reach.
 > **Status:** experimental, built in small reviewed steps. The engine can capture a web page or an arXiv paper, scan and convert
 > it, search it by keyword and read a passage back, from the command line. Two walk-throughs on real pages and papers found
 > problems, and three plans have fixed them: the first walk-through's fixes, a hardening of the PDF scan, and one rule for titles
-> (see [Where the work stands](#where-the-work-stands)). The workbench package that lets an agent in
-> another project call the library is not built yet, and neither are cards, themes or the program that adds sources by itself.
+> (see [Where the work stands](#where-the-work-stands)). A model can now write a card for a book, by a command. The workbench
+> package that lets an agent in another project call the library is not built yet, and neither are a search of the cards, themes
+> or the program that adds sources by itself.
 
 ## What it does now
 
@@ -27,10 +28,15 @@ they would not otherwise reach.
 
 - **Calls a model you list.** The engine can send one prompt to a model in your config through the workbench's Ollama bridge and
   take back one answer checked against the shape a job expects, marked as untrusted, with a record of the model, prompt version
-  and date. No stage uses it yet (`python3 -m kb models` and `model-try`; see [engine/README.md](engine/README.md)).
+  and date (`python3 -m kb models` and `model-try`; see [engine/README.md](engine/README.md)). Which model does which kind of work
+  is a setting of the config, not a preference of the engine.
+- **Writes cards, on command.** `python3 -m kb cards --book ID` has the models your config names write a card for each named
+  book: a short, plain-English entry of what the book is about and useful for, and a description of its problem and approach in
+  words of no field. A long book is read in pieces. A card is kept in the book's folder as a generation that is never overwritten;
+  `card-show` prints it between the untrusted-text markers. Book text goes to the models you name. Cards cannot be searched yet.
 
-Planned, not built: the thin workbench package that gives an agent `search` and `read` in a project, cards and themes made with a
-local or cloud model, a search across fields, and a scheduled program that adds sources while the owner is away.
+Planned, not built: the thin workbench package that gives an agent `search` and `read` in a project, a search of the cards, themes
+made with a local or cloud model, a search across fields, and a scheduled program that adds sources while the owner is away.
 
 The design and its reasons are in [docs/specs/knowledge-base.md](docs/specs/knowledge-base.md).
 
@@ -69,6 +75,7 @@ An index written by an older version of the engine is refused, and the search sa
 | [Hardening the PDF scan](docs/plans/2026-11-06-scan-hardening.md) | no way to hide an object stream from the scan without saying so: streams behind a predictor are decoded, objects are read forward with strings and comments known, and bytes after a stream's data are reported | completed: all five increments are committed and the four books were scanned again |
 | [Title safety](docs/plans/2026-11-06-title-safety.md) | one rule for a title where it is stored and where it is shown, and a citation line that a title cannot imitate | completed: all four increments are committed and the index was rebuilt |
 | [Model calls](docs/plans/2026-11-07-model-calls.md) | a registry of models in the owner's config, one call through the Ollama bridge, a checked answer with a record of how it was made, and two commands | completed: all three increments are committed and one live call was made |
+| [The card of a book](docs/plans/2026-11-07-card-stage.md) | the model for each kind of work set in the config, the card file kept as generations, reading a book in pieces, the `cards` and `card-show` commands, and cards for three real books | completed: all five increments are committed and cards were made for three books |
 
 Each increment of a plan is one verified, reviewed local commit. A plan needs the owner's approval before anything is built, and
 the plan, not the conversation, is the record of what was done and checked.
