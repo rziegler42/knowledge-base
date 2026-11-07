@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Scope; Increment B steps 1–4; Increment C steps 1–3",
+      "problem": "The plan never requires that every gold-answer book has a current card in the catalog, nor that the report distinguishes a missing/unindexed card from a card-search miss. Increment B lets the owner choose a smaller set of books, while C can then label an uncovered correct book as a failed card retrieval. That would confound card coverage with search quality and undermine the trial's stated comparison.",
+      "severity": "major",
+      "suggestion": "Require cards and a rebuilt catalog for every book named as a correct answer before the run, or report coverage separately and exclude uncovered books from retrieval measures with an explicit reason."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment A steps 3–4 and Completion criterion 2",
+      "problem": "The required metrics are not defined for a question with multiple queries. The plan requires ranks and card-only/text-only/both/neither sets both per query and per question, plus a mean reciprocal rank for a question, but does not state whether question-level results use a union of results, the best rank across queries, an average, or another rule. Different implementations could produce materially different reports from the same corpus.",
+      "severity": "major",
+      "suggestion": "Specify a per-query record and exact aggregation rules for question-level sets, ranks, false positives, recall, and reciprocal-rank calculations; include those rules in the report format and tests."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Increment A steps 5–6; Increment C steps 3–5",
+      "problem": "The report records only the corpus hash and date, not the evaluated card/catalog state. Cards are generational and the catalog can be stale, so a later reader cannot establish which card generations, book versions, or catalog build produced a result and therefore cannot reliably support the reported conclusion about card length or shape.",
+      "severity": "major",
+      "suggestion": "Record an input manifest in the report: library identifier, book/version and card-generation identifiers (including absent-card status), and a catalog/build fingerprint or equivalent card-state hash."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan aligns with the named roadmap candidate and specs at a high level, but key evaluation inputs and aggregation rules are underspecified.",
+  "verdict": "changes_needed"
+}
