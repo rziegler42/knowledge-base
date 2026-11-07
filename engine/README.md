@@ -194,7 +194,8 @@ at start-up. It looks at the stored original and not at what it says: in a PDF f
 actions and XFA forms (also inside compressed streams, and for names written with `#xx` escapes), in a page for script elements,
 event-handler attributes, `javascript:`, `vbscript:` and `data:text/html` addresses, a meta refresh, frames and objects, and text
 hidden by the `hidden` attribute or an inline style. It records counts and fixed sentences as caveats on the version, never text
-from the file. They never stop a book being filed. A scan that cannot run marks the stage failed with the reason.
+from the file. They never stop a book being filed. A count is written up to 1,000,000: a file with more matches gives 1,000,000, which
+means "at least that many", and the reader of the scan's output takes no larger number. A scan that cannot run marks the stage failed with the reason.
 
 **No caveat does not mean the file is safe.** It is a pattern scan and not a PDF reader, and it says only what it found. It reads
 the file forward, object by object (below), takes the whole dictionary of each stream, decodes deflate, ASCII85 and hex filters (also layered),

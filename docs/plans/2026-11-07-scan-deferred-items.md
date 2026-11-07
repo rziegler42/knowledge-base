@@ -292,3 +292,25 @@ the limit of the reader of its output, and in the counts that search and read sh
   `(?![A-Za-z0-9])` lets `/EF_x` or `/EF-x` match, as it does for every other pattern; `/EF` can match by chance in a decoded font or object
   stream at a very low rate (the reviewer's estimate is about 0.05 a megabyte of random binary, less than for `/JS`); a normal attachment
   now counts 2 or 3 (one for each name), which increment E's comparison will show.
+
+### Increment C — Bound the count at one ceiling (done, reviewed and committed)
+
+- **What was done:** `scan_tool.MAX_COUNT = 1_000_000`; `caveat()` writes `min(count, MAX_COUNT)`, and every caveat of the tool (PDF and HTML)
+  goes through it. `scan._read_result` accepts `0 <= count <= MAX_COUNT` (was 10^9); `scan.py` holds its own copy of the number because it
+  must not run the tool's code, and a test holds the two equal. `docs/specs/pipeline.md` and `engine/README.md` each say that a count stops at
+  1,000,000 and means "at least that many". `read.py` and `store.py` still accept stored counts up to 10^9: looser than the scan's gate,
+  which runs first, so nothing was changed there.
+- **Tests:** a writer test (1, ceiling - 1, ceiling, ceiling + 1 and 64.5 million, for every kind) and a reader test (accepts the ceiling,
+  refuses the ceiling + 1 and 10^9) were written first and failed (no `MAX_COUNT`). Four existing tests that expected a count above one
+  million now expect the ceiling (3 and 5 million matches, and the two binary-place cases, now `max(...) == MAX_COUNT`).
+- **Provenance:** run on 2026-11-07 on this machine with Python 3.15.0, at commit 056d770 plus the uncommitted changes of this increment.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_convert_run
+  engine.tests.test_search engine.tests.test_read` (427 tests, OK; the one failure of the first run, a binary-place test that expected
+  more than a million, was the old bound and is fixed) and `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest
+  engine.tests.test_convert.ToolVersionTest` (4, OK); the hash in `HISTORY` is that of the final file. After the review the binary-place
+  assertion was tightened and `PlacesTest` rerun (15, OK); the full run was not repeated for it. **Break-it:** three mutations (ceiling
+  one too high, reader refusing the ceiling, reader back at 10^9) each failed a test. **Not run:** the library comparison (increment E).
+- **Review (independent reviewer, one round):** no blocking finding. Found sound by reading: no code assumes a count above one million or an
+  exact count; every writer goes through `caveat()`; a capped kind cannot hide or lower another kind. Applied: the weak sum in the
+  binary-place test. Left for E: a book scanned with 0.0.7 may hold a count above one million in its stored caveats; those are read by
+  `read.py` and `store.py` (both accept it) and are replaced by the rescan.

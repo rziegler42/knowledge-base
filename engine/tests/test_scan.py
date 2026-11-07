@@ -1610,7 +1610,7 @@ class LimitsTest(unittest.TestCase):
         data = pdf(b"/JS " * 3_000_000)  # 12 MB, three million matches: a list of them would be some 150 MB
         tracemalloc.start()
         try:
-            self.assertEqual(self.scan(data), {"javascript": 3_000_000})
+            self.assertEqual(self.scan(data), {"javascript": scan_tool.MAX_COUNT})  # three million, written as the ceiling
             peak = tracemalloc.get_traced_memory()[1]
         finally:
             tracemalloc.stop()
@@ -1654,7 +1654,18 @@ class LimitsTest(unittest.TestCase):
         found = self.scan(data)
         took = time.monotonic() - started
         self.assertLess(took, 8, f"{took:.1f} s")
-        self.assertEqual(found, {"javascript": 5_000_000})
+        self.assertEqual(found, {"javascript": scan_tool.MAX_COUNT})  # five million matches, written as the ceiling: at least that many
+
+    def test_a_count_is_written_exactly_up_to_the_ceiling_and_as_the_ceiling_past_it(self):
+        ceiling = scan_tool.MAX_COUNT
+        self.assertEqual(ceiling, 1_000_000)
+        for kind in scan_tool.KINDS:
+            for count, written in ((1, 1), (ceiling - 1, ceiling - 1), (ceiling, ceiling), (ceiling + 1, ceiling), (64_500_000, ceiling)):
+                self.assertEqual(scan_tool.caveat(kind, count)["count"], written, (kind, count))
+        counts = dict.fromkeys(scan_tool._PATTERNS, 0)
+        binary = [0]
+        scan_tool._tally_binary(counts, binary, b"\xfe\x01" + b"/JS" * 10)
+        self.assertEqual(binary[0], 10)  # the sums stay exact until they are written
 
     def test_the_bytes_before_a_predictor_are_still_read_when_the_predictor_is_not_undone(self):
         with mock.patch.object(scan_tool, "MAX_PREDICTED_BYTES", 10):
@@ -1920,7 +1931,7 @@ class PlacesTest(unittest.TestCase):
             took = time.monotonic() - started
             self.assertLess(took, 12, f"{label}: {took:.1f} s")
             self.assertEqual(found.get("scan_incomplete"), None, label)
-            self.assertGreater(sum(found.get(k, 0) for k in ("javascript", "pattern_in_binary_data")), 1_000_000, label)
+            self.assertEqual(max(found.get(k, 0) for k in ("javascript", "pattern_in_binary_data")), scan_tool.MAX_COUNT, label)  # one of them at the ceiling
 
 
 class ScanStageTest(ScanCase):
@@ -1984,6 +1995,18 @@ class ScanStageTest(ScanCase):
             self.assertEqual(result["status"], "failed", label)
             self.assertEqual(self.store.read_version(book, version)["caveats"], [], label)
             self.assertEqual(stages.read(self.store, book, version)["stages"]["scanned"]["status"], "failed", label)
+
+    def test_the_reader_takes_a_count_up_to_the_ceiling_of_the_scan_and_no_further(self):
+        self.assertEqual(scan.MAX_COUNT, scan_tool.MAX_COUNT)  # two copies of one number: the reader must not run the tool's code
+        self.assertEqual(scan.MAX_COUNT, 1_000_000)
+        wrapped = lambda count: json.dumps({"format": 1, "kind": "pdf", "caveats": [
+            {"kind": "javascript", "count": count, "detail": scan.KINDS["javascript"]}]})
+        for count, status in ((scan.MAX_COUNT, "done"), (scan.MAX_COUNT + 1, "failed"), (10 ** 9, "failed")):
+            approve([self.fake("bad_scan", wrapped(count))])
+            _b, _v, result = self.scan_bytes("paper.pdf", CLEAN_PDF)
+            self.assertEqual(result["status"], status, count)
+            if status == "done":
+                self.assertEqual(kinds(result["caveats"]), {"javascript": scan.MAX_COUNT})
 
     def test_output_of_the_wrong_shape_or_depth_fails_the_stage_instead_of_crashing_it(self):
         bad = {"a kind that is a list": '{"format": 1, "kind": "pdf", "caveats": [{"kind": ["x"], "count": 1, "detail": "d"}]}',

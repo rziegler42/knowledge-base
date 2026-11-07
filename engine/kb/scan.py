@@ -29,6 +29,9 @@ def _generations(store, book_id, version_id):
     return sorted(int(n) for n in os.listdir(folder) if n.isdigit()) if os.path.isdir(folder) else []
 
 
+MAX_COUNT = 1_000_000  # the largest count the scan tool writes (scan_tool.MAX_COUNT: a test holds the two equal, since this module must not run the tool's code)
+
+
 def _read_result(store, book_id, version_id, name):
     """The caveats in the scan tool's output, checked: it is untrusted data from a tool, so nothing is taken on trust."""
     path = store.payload_dir(book_id, version_id, name)
@@ -47,7 +50,7 @@ def _read_result(store, book_id, version_id, name):
     for c in listed:
         if (not isinstance(c, dict) or set(c) != {"kind", "count", "detail"} or not isinstance(c["kind"], str)
                 or c["kind"] not in KINDS
-                or not isinstance(c["count"], int) or isinstance(c["count"], bool) or not 0 <= c["count"] <= 10**9
+                or not isinstance(c["count"], int) or isinstance(c["count"], bool) or not 0 <= c["count"] <= MAX_COUNT
                 or c["detail"] != KINDS[c["kind"]]):
             raise KbError("the scan output has a caveat that is not one of the known kinds")
         caveats.append({"kind": c["kind"], "count": c["count"], "detail": c["detail"], "tool": TOOL_LABEL})

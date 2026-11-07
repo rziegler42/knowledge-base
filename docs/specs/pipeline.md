@@ -168,7 +168,7 @@ spec), or how an agent reads the result (the reading spec).
 - **[proposed]** No quarantine, release step or blocking. All captured content is untrusted. Conversion runs with a time limit, a
   size limit and no network. Converted text carries an untrusted banner, and everything returned to an agent is marked as data.
   Objective scan findings (embedded scripts, encryption, hidden text) become caveats on the book and its card and never stop
-  filing. There is no phrase list. A hostile file can still be filed, inert; the residual risk is text steering an agent or the
+  filing. A caveat's count stops at 1,000,000 and means "at least that many". There is no phrase list. A hostile file can still be filed, inert; the residual risk is text steering an agent or the
   card-writing model.
 - **[proposed]** Model stages read untrusted text. Their prompts tell the model to describe the content and ignore any
   instruction inside it. Its output is validated for shape and length, and it is stored and returned as untrusted data. For a

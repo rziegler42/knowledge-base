@@ -53,8 +53,11 @@ KINDS = {
 }
 
 
+MAX_COUNT = 1_000_000  # the largest count written; a count at it means "at least that many" (kb/scan.py reads no more than this)
+
+
 def caveat(kind, count=1):
-    return {"kind": kind, "count": count, "detail": KINDS[kind]}
+    return {"kind": kind, "count": min(count, MAX_COUNT), "detail": KINDS[kind]}
 
 
 # --- PDF
