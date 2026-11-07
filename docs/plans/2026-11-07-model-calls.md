@@ -1,6 +1,6 @@
 # Model calls from the engine
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-07
 Candidate: cards#model-calls
 Specs: models
@@ -243,3 +243,41 @@ increment C and the card stage: cleaned text can still contain the words of the 
 values being free of marker text; C's `model-try` does so and has a test for it. Not applied: a check that a job's shape agrees
 with its schema file (the engine's check is the authority and a mismatch shows at the first live call), and the small gap between
 the engine's check of the schema file and the bridge's read, which the bridge checks again.
+
+### Increment C — The two commands, the live call and the documents (2026-11-07)
+
+Added `models` (the registry, the options, the switch and whether the `wb` launcher is found; no call, and no server or model name
+printed) and `model-try <name>` (the prompt from standard input, at most 256 KB of UTF-8, strictly decoded; one call with the job
+`model-try`, whose schema is `engine/kb/schemas/model-try.json`) to `engine/kb/__main__.py`, with `models.status` and
+`models.TRY_JOB`. The answer is printed between the untrusted-text markers of `search.MARKER` and `read.END_MARKER`, and is
+withheld, with a note, when its letters hold the words of a marker (`textutil.title`), which is the point the review of B raised.
+A refusal exits 2 with `refused:` and prints no answer. Documented in a new section of `engine/README.md` and one bullet of
+`README.md`.
+
+Verification run: `python3 -m unittest engine.tests.test_models engine.tests.test_setup` gave 109 tests, OK (9 new, run through the
+real command line with a fake launcher first on the path). Tests were written first and failed because the commands did not
+exist. Seven deliberate breaks were checked: six were caught (marker words not guarded; the answer shown without markers; the
+listing showing the server; the launcher reported as never found; the prompt decoded loosely; the schema not given to the job), and
+one was an equivalent break (an early return of the value the code already returns).
+
+The live call, made on the owner's word after a backup of the config (`config.json.bak-20261107-112003`) and one added entry
+named `local` with `models_on` true, none of it tracked: `printf '<fixed prompt, no book text>' | python3 -m kb model-try local`
+exited 0 and printed the answer `4` between the markers, with a record of the model the server reported (`phi4:latest`), the
+registry name `local`, prompt version `v1`, the date, 26 input tokens and 11 output tokens. It took 30.7 s, nearly all of it the
+server loading and running the model. Starting the bridge alone (`wb run ask-ollama check`, no connection) took 0.14 s, so a
+process per call is cheap beside a model call; batches of embeddings were not measured. The bridge's reply had the shape increment
+A assumed (`contract` 2, `ok`, `vendor`, `model`, `reply`, `usage`), and the schema file was accepted by the bridge. Only one
+live call was made, as the owner approved, so a second call (a warm model) was not timed.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: this Result entry (finding 1), after checking
+the claims of the engine README against the code. Finding 2 asked where the plain-HTTP warning comes from: I had first
+reworded the README to say `wb settings` prints it, which was wrong; the warning is printed by `wb run ask-ollama check`, and the README
+now says so. Not applied: the module docstring of `__main__.py` (it was out of date before this plan), and the order in which
+`model-try` reads standard input before it loads the config (it waits for input on a terminal with no pipe, and reads the prompt
+before it finds the switch off; harmless and not worth a change). A check of the tracked files for the owner's server and model
+names found none added by this plan; the model names that appear in `docs/specs/` are in older evidence notes.
+
+Plan as a whole: each increment's recorded verification still stands (the same two test files, last run after C's code and tests;
+the two README edits came after and change no code). Completion criteria 1 to 6 are met by the tests of A to C, the live call and
+the check of the tracked files. Not run: any test file other than `test_models` and `test_setup`, and any security review (none was
+asked for).

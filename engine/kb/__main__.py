@@ -4,7 +4,7 @@ import json
 import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, config, convert_html, convert_pdf, identity, index,
-               library, process, read, scan, search, stages)
+               library, models, process, read, scan, search, stages, textutil)
 from .store import Store
 
 
@@ -60,8 +60,29 @@ def main(argv=None):
     se = sub.add_parser("search", help="keyword search; every word of the query must match")
     se.add_argument("query")
     se.add_argument("--limit", type=int, default=search.DEFAULT_LIMIT, help=f"at most this many results (1 to {search.MAX_LIMIT})")
+    sub.add_parser("models", help="list the models in the config and whether model work is on; it makes no call and prints no server")
+    mt = sub.add_parser("model-try", help="send the prompt on standard input to one listed model and print its answer, marked as "
+                                          "untrusted, with the record of how it was made")
+    mt.add_argument("name", help="the name of the model in the config")
     args = parser.parse_args(argv)
     try:
+        if args.command == "models":
+            print(json.dumps(models.status(config.load()), indent=1))
+            return 0
+        if args.command == "model-try":
+            raw = sys.stdin.buffer.read(models.MAX_PROMPT + 1)
+            if len(raw) > models.MAX_PROMPT:
+                raise KbError(f"the prompt is too large: the bridge takes {models.MAX_PROMPT} bytes")
+            try:
+                prompt = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise KbError("the prompt is not UTF-8 text") from None
+            out = models.run_job(config.load(), args.name, prompt, models.TRY_JOB)
+            # the answer is the model's text: it is shown between the markers, and withheld if it holds the words of one
+            shown = textutil.title(out["values"]["answer"], 2000) or "[the answer was withheld: it holds the words of an untrusted-text marker]"
+            out["values"]["answer"] = f"{search.MARKER}\n{shown}\n{read.END_MARKER}"
+            print(json.dumps(out, indent=1))
+            return 0
         if args.command == "describe-tool":
             entries = [make() for make in DESCRIBABLE.values()] if args.tool == "all" else DESCRIBABLE[args.tool]()
             print(json.dumps(entries, indent=1))

@@ -407,6 +407,17 @@ class Job:
         self.schema = schema
 
 
+def status(cfg, launcher=None):
+    """The listing of the registry, with whether the launcher is found. It makes no call."""
+    out = listing(cfg)
+    try:
+        _launcher(launcher)
+        out["launcher_found"] = True
+    except KbError:
+        out["launcher_found"] = False
+    return out
+
+
 def _text(field, value, spec):
     if not isinstance(value, str):
         raise KbError(f"the answer's {field} is not text")
@@ -466,3 +477,7 @@ def run_job(cfg, name, prompt, job, launcher=None, root=None):
               "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "input_tokens": got["usage"]["input_tokens"], "output_tokens": got["usage"]["output_tokens"]}
     return {"untrusted": True, "values": values, "record": record}
+
+
+# the job of the `model-try` command: one short answer, with the schema file that goes with it
+TRY_JOB = Job("model-try", "v1", {"answer": {"type": "string", "max": 2000}}, schema="model-try.json")

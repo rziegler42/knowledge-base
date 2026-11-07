@@ -410,6 +410,46 @@ root. Search reads text the tools produced and nothing checks that a passage is 
 must treat the whole excerpt and the title as data. The scan has no limit on how often a version that fails it is tried again
 (each try is bounded by the tool's own limits).
 
+## Calling a model
+
+The engine can send one prompt to a model you have listed and take back one checked answer. It does this through the workbench's
+Ollama bridge (`wb run ask-ollama ask`), which it starts as a separate program with an argument list and no shell; the prompt goes
+in on standard input and never as an argument. The bridge, not the engine, holds the server's address, in the workbench's own
+endpoint file. Nothing here chooses between models, retries, batches or makes embeddings, and no stage calls a model yet.
+
+The registry is two keys of the owner-only config. Edit the file by hand; nothing in the engine writes it:
+
+```json
+"models_on": true,
+"models": {"local": {"bridge": "ask-ollama", "server": "<server name>", "model": "<model name>",
+                     "max_output": 500, "thinking": "off", "timeout": 120}}
+```
+
+- A name is lower-case letters, digits, `_` and `-`. `server` and `model` are the names the bridge's endpoint file knows (a model
+  name may have `/`-joined parts, up to 128 characters). `max_output`, `thinking` (`on` or `off`) and `timeout` (1 to 3600
+  seconds) are optional. Every value is checked against a strict pattern before it reaches the command line, and one wrong entry
+  refuses the whole registry. With `models_on` missing or anything but `true`, model work is off.
+- `python3 -m kb models` lists the names, the options, the switch and whether the `wb` launcher is found. It makes no call and
+  prints no server or model name.
+- `printf '<prompt>' | python3 -m kb model-try <name>` sends the prompt (at most 256 KB of UTF-8) and prints the answer. The answer
+  is the model's text, so it is printed between the untrusted-text markers, with a record of the model the server reported, the
+  registry name, the prompt version, the UTC date and the token counts. If the answer holds the words of a marker it is withheld.
+  `model-try` asks for one JSON object with one text key, using the schema `engine/kb/schemas/model-try.json`.
+- In code, `kb.models.run_job` takes a `Job`: a name, a prompt version, the shape of the JSON object it expects (each key a
+  `string`, `strings`, `integer` or `boolean` with its limits) and optionally a schema file name. An answer is refused unless it
+  is one JSON object with exactly those keys; its text is cleaned of control and hidden characters, and a value that is too long
+  is refused and not cut. A schema is a tracked file in `engine/kb/schemas/`, passed to the bridge by its path relative to the
+  project root; the bridge reads that one file and nothing else, and refuses a path with a link in it.
+- A call that runs past its time limit (the entry's `timeout`, 600 s by default, plus 15 s), or prints more than 2 MB, is killed
+  with whatever it started. A reply must be bridge contract version 2: `contract` the integer 2, `ok` a real boolean, `vendor`
+  `ollama`, a valid model name, non-empty text and both token counts.
+
+Not covered. Starting the bridge costs about a tenth of a second, and a call is dominated by the server loading and running the
+model. A server on plain HTTP without authentication gets the prompt in the clear over your network; the bridge warns of such a server
+(`wb run ask-ollama check` prints the warning and makes no connection). Text between the markers is still the model's text: a program that shows it must keep the markers
+around it. The check of a schema file and the bridge's read of it are two steps, so a file swapped between them is checked
+again only by the bridge.
+
 ## Converting what is captured
 
 A version that has been fetched and scanned (or whose scan failed or was skipped) is converted to text by `kb/convert.py`

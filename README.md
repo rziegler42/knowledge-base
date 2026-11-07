@@ -25,6 +25,10 @@ they would not otherwise reach.
 - **Marks everything from outside as untrusted.** Search results and reads are flagged, their text sits between markers, and
   titles and other fields are cleaned of hidden and control characters. The text is data, never instructions.
 
+- **Calls a model you list.** The engine can send one prompt to a model in your config through the workbench's Ollama bridge and
+  take back one answer checked against the shape a job expects, marked as untrusted, with a record of the model, prompt version
+  and date. No stage uses it yet (`python3 -m kb models` and `model-try`; see [engine/README.md](engine/README.md)).
+
 Planned, not built: the thin workbench package that gives an agent `search` and `read` in a project, cards and themes made with a
 local or cloud model, a search across fields, and a scheduled program that adds sources while the owner is away.
 
@@ -64,6 +68,7 @@ An index written by an older version of the engine is refused, and the search sa
 | [Fixes from the first walk-through](docs/plans/2026-11-06-first-walk-through-fixes.md) | page encoding, page titles, long pages indexed in pieces, large images in a PDF, converting a book again, and applying the fixes to the first four books | completed: all six fixes are committed and applied to the first four books |
 | [Hardening the PDF scan](docs/plans/2026-11-06-scan-hardening.md) | no way to hide an object stream from the scan without saying so: streams behind a predictor are decoded, objects are read forward with strings and comments known, and bytes after a stream's data are reported | completed: all five increments are committed and the four books were scanned again |
 | [Title safety](docs/plans/2026-11-06-title-safety.md) | one rule for a title where it is stored and where it is shown, and a citation line that a title cannot imitate | completed: all four increments are committed and the index was rebuilt |
+| [Model calls](docs/plans/2026-11-07-model-calls.md) | a registry of models in the owner's config, one call through the Ollama bridge, a checked answer with a record of how it was made, and two commands | completed: all three increments are committed and one live call was made |
 
 Each increment of a plan is one verified, reviewed local commit. A plan needs the owner's approval before anything is built, and
 the plan, not the conversation, is the record of what was done and checked.
