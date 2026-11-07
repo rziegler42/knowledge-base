@@ -37,7 +37,10 @@ import os  # noqa: E402
 import pwd  # noqa: E402
 import re  # noqa: E402
 import signal  # noqa: E402
+import stat  # noqa: E402
+import struct  # noqa: E402
 import subprocess  # noqa: E402
+import time  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import shadow_store as store  # noqa: E402  the store beside this file, whose directory is the first on the path
@@ -57,9 +60,22 @@ EXIT_OF = {"reviewed": (0,), "no_rule": (1,), "unreviewable": (1,), "refused": (
 ENGINE_FIELDS = ("rule", "facts_sha256", "rubric_sha256", "bridge", "model", "effort", "format")
 ENVIRONMENT = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"}
 # A command the engine declined because of one of these checks holds a secret or touches a credential-named path, and the redactor
-# below is a list of patterns that cannot tell what the engine's own scan can: nothing of such a command is collected (its verdict
-# row stays, with the redacted reason). Plan `2026-11-04-shadow-hook-security-review-fixes`, increment A.
+# below is a list of patterns that cannot tell what the engine's own scan can: nothing of the text of such a command is collected (its
+# verdict row stays, with the redacted reason). Plan `2026-11-04-shadow-hook-security-review-fixes`, increment A. What is kept of it is
+# a handle, built from a fixed list of fields and from the paths that the project already tracks (plan
+# `2026-11-07-label-declined-secrets`, increment C).
 NO_COLLECT_CHECKS = ("no_secret_lines", "paths_not_credentials")
+HANDLE_COMMAND = "[declined for a secret; the command is not kept]"
+HANDLE_REASON = "declined for a secret; nothing of the command is kept"
+HANDLE_PATH_FACTS = ("paths", "requested_paths", "target_paths")  # the facts of the engine's object that name paths
+MAX_CANDIDATES = 100  # paths considered for a handle; the rest are counted as left out
+MAX_HANDLE_PATHS = 20  # paths kept in a handle
+MAX_PATH = 256
+MAX_WALK = 128  # directories from the root to the command's directory
+MAX_INDEX_BYTES = 32 << 20
+MAX_INDEX_ENTRIES = 200000
+INDEX_SECONDS = 2.0  # the most time the reader spends on one index
+LATE_SECONDS = 24.0  # after this long in the engine the index is not read (the harness stops the hook at 30)
 
 
 def note(err, text):
@@ -279,6 +295,204 @@ def classify(code, out, err, timed_out):
     return "reviewed", verdict, row if isinstance(row, dict) else None, facts if isinstance(facts, dict) else None
 
 
+# -- the handle of a declined secret -----------------------------------------------------------------------------------
+# A command the engine declined for a secret leaves a handle: one collected row built from a fixed list of fields, none of them
+# taken from the command, the diff, the subject, the body, the trailers or the model's reason. Its paths are kept only if the project
+# already tracks them, which is read from the project's git index in this process, as bytes, with no program started: the redactor
+# is not the rule, because it cannot name every shape of secret (`docs/specs/action-review.md`, "Labelling a declined secret").
+
+def plain_path(item):
+    """True for a relative path that is plain printable ASCII of at most MAX_PATH characters, with no empty, ``.`` or ``..`` segment
+    and no leading ``-``: the only shape a handle may carry."""
+    if not isinstance(item, str) or not 1 <= len(item) <= MAX_PATH or item[0] in "/-":
+        return False
+    if not all(" " <= char <= "~" for char in item):
+        return False
+    return all(segment not in ("", ".", "..") for segment in item.split("/"))
+
+
+def candidate_paths(value):
+    """``(candidates, left out)`` from a list of paths: the plain ones, once each and in the order first seen, at most MAX_CANDIDATES;
+    every other entry counts as left out. Anything that is not a list gives no candidate and no count."""
+    if not isinstance(value, list):
+        return [], 0
+    kept, seen, dropped = [], set(), 0
+    for item in value:
+        if len(kept) >= MAX_CANDIDATES or not plain_path(item):
+            dropped += 1
+        elif item not in seen:
+            seen.add(item)
+            kept.append(item)
+    return kept, dropped
+
+
+def open_git_directory(cwd):
+    """A descriptor of the ``.git`` directory of the repository that holds `cwd`, or None. The directory is resolved once with
+    ``realpath``; from the root down every directory is then opened with ``O_NOFOLLOW`` relative to its parent's descriptor, and the
+    walk up looks for ``.git`` the same way, so a name swapped for a link after it was checked is not followed. A ``.git`` that is a
+    file (a worktree or a submodule), a link or anything but a directory gives None, and the walk does not go on above it."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    if not isinstance(cwd, str) or "\0" in cwd or not os.path.isabs(cwd):
+        return None
+    try:
+        parts = [part for part in os.path.realpath(cwd).split(os.sep) if part]
+    except (OSError, ValueError):
+        return None
+    if len(parts) > MAX_WALK:
+        return None
+    opened = []
+    try:
+        try:
+            opened.append(os.open(os.sep, flags))
+            for part in parts:
+                opened.append(os.open(part, flags, dir_fd=opened[-1]))
+        except OSError:
+            return None
+        for level in reversed(opened):
+            try:
+                return os.open(".git", flags, dir_fd=level)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return None
+        return None
+    finally:
+        for descriptor in opened:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def index_bytes(git_directory):
+    """The bytes of ``index`` in the directory with this descriptor, or None. It is opened without following a link and without
+    blocking (a FIFO with no writer would hold the hook), and the opened descriptor, not the name, is checked: a regular file with
+    one link, owned by the current user, of at most MAX_INDEX_BYTES."""
+    descriptor = os.open("index", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=git_directory)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.geteuid() \
+                or not 32 <= info.st_size <= MAX_INDEX_BYTES:
+            return None
+        chunks, total = [], 0
+        while total <= info.st_size:
+            chunk = os.read(descriptor, min(1 << 20, info.st_size + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        return b"".join(chunks) if total == info.st_size else None
+    finally:
+        os.close(descriptor)
+
+
+def parse_index(data, wanted):
+    """The members of `wanted` that the index in `data` names, as a path or as a directory above one, or None on any fault. Versions 2
+    and 3 only (4 compresses names and is not read). The checksum, the size against the entry count and every entry's bounds are
+    checked, the work is bounded by MAX_INDEX_ENTRIES and INDEX_SECONDS, and a name that is not ASCII is skipped, not a fault."""
+    if len(data) < 32 or data[:4] != b"DIRC" or hashlib.sha1(data[:-20]).digest() != data[-20:]:
+        return None
+    version, count = struct.unpack(">II", data[4:12])
+    end = len(data) - 20
+    if version not in (2, 3) or count > MAX_INDEX_ENTRIES or count * 64 > end - 12:
+        return None
+    found, offset, deadline = set(), 12, time.monotonic() + INDEX_SECONDS
+    for number in range(count):
+        if number % 1024 == 0 and time.monotonic() > deadline:
+            return None
+        if offset + 62 > end:
+            return None
+        flags = struct.unpack_from(">H", data, offset + 60)[0]
+        fixed = 62
+        if flags & 0x4000:  # the extended flags of a version 3 entry
+            if version < 3:
+                return None
+            fixed = 64
+        start = offset + fixed
+        if start > end:
+            return None
+        if flags & 0xFFF < 0xFFF:
+            stop = start + (flags & 0xFFF)
+            if stop > end:
+                return None
+        else:
+            stop = data.find(b"\0", start, end)
+            if stop < 0:
+                return None
+        offset += (fixed + stop - start + 8) & ~7
+        if offset > end:
+            return None
+        try:
+            name = data[start:stop].decode("ascii")
+        except UnicodeDecodeError:
+            continue
+        if name in wanted:
+            found.add(name)
+        slash = name.find("/", 0, MAX_PATH + 1)
+        while slash != -1:
+            if name[:slash] in wanted:
+                found.add(name[:slash])
+            slash = name.find("/", slash + 1, MAX_PATH + 1)
+    return found
+
+
+def read_index_names(git_directory, wanted):
+    """The members of `wanted` that the index in the directory with this descriptor tracks, or an empty set on any fault."""
+    try:
+        data = index_bytes(git_directory)
+        found = parse_index(data, wanted) if data is not None else None
+    except (OSError, ValueError, struct.error, OverflowError, MemoryError):
+        return set()
+    return found if found is not None else set()
+
+
+def tracked_among(cwd, wanted):
+    """The members of `wanted` (paths) that the git index of the repository holding `cwd` tracks, as a file or as a directory above one;
+    an empty set when there is no such repository, no index that can be read safely, or nothing asked for."""
+    if not wanted:
+        return set()
+    descriptor = open_git_directory(cwd)
+    if descriptor is None:
+        return set()
+    try:
+        return read_index_names(descriptor, wanted)
+    finally:
+        os.close(descriptor)
+
+
+def handle_facts(facts, cwd):
+    """The inner facts of a handle: ``paths`` (at most MAX_HANDLE_PATHS, each one the project tracks), ``paths_dropped`` (every path
+    that was not kept, for any reason) and, only when it is a boolean, ``confirm``. Nothing else of `facts` is read."""
+    inner = facts.get("facts") if isinstance(facts, dict) else None
+    inner = inner if isinstance(inner, dict) else {}
+    raw = []
+    for name in HANDLE_PATH_FACTS:
+        value = inner.get(name)
+        if isinstance(value, list):
+            raw.extend(value)
+    candidates, dropped = candidate_paths(raw)
+    admitted = tracked_among(cwd, set(candidates)) if candidates and cwd is not None else set()
+    tracked = [path for path in candidates if path in admitted]
+    shown = tracked[:MAX_HANDLE_PATHS]
+    out = {"paths": shown, "paths_dropped": dropped + len(candidates) - len(shown)}
+    if isinstance(inner.get("confirm"), bool):
+        out["confirm"] = inner["confirm"]
+    return out
+
+
+def keep_handle(err, home, stamp, digest, rule, verdict, facts, cwd):
+    """Write the handle of a command declined for a secret. If it cannot be built, only a fixed note is made."""
+    try:
+        inner = handle_facts(facts, cwd)
+    except Exception:  # whatever went wrong, nothing of the facts goes to a file
+        note(err, "the hook could not keep a handle of a command declined for a secret; only the verdict row was written")
+        return
+    write(err, "collected.jsonl", {
+        "id": store.new_id(), "ts": stamp, "rule": rule, "command_sha256": digest, "command": HANDLE_COMMAND,
+        "facts": {"handle": True, "facts": inner}, "verdict": "decline", "failed_checks": list(verdict[1]),
+        "reason": HANDLE_REASON}, home)
+
+
 # -- the rows ---------------------------------------------------------------------------------------------------------
 
 def sha256(text):
@@ -321,15 +535,17 @@ def redacted_text(err, command, verdict, facts):
         return None, None, None
 
 
-def record(err, home, outcome, command, verdict=None, log_row=None, facts=None):
+def record(err, home, outcome, command, verdict=None, log_row=None, facts=None, cwd=None):
     """Write the verdict row for one prompted command and, for a reviewed command with its facts, the collected row. The reason,
-    the command and the facts are stored redacted ("redaction"); the command's hash is of the command as it was."""
+    the command and the facts are stored redacted ("redaction"); the command's hash is of the command as it was. For a command
+    declined for a secret the collected row is a handle instead ("the handle of a declined secret"), built from the facts and from
+    `cwd`, the directory the command ran in."""
     reviewed = outcome == "reviewed"
     digest = sha256(command) if command is not None else None
     rule = log_row.get("rule") if log_row else None
     declined_for_a_secret = bool(verdict) and any(check in NO_COLLECT_CHECKS for check in verdict[1])
     collecting = reviewed and facts is not None and isinstance(rule, str) and not declined_for_a_secret
-    reason, shown, facts = redacted_text(err, command, verdict, facts if collecting else None)
+    reason, shown, kept = redacted_text(err, command, verdict, facts if collecting else None)
     row = {"ts": store.now(), "command_sha256": digest, "outcome": outcome,
            "verdict": verdict[0] if verdict else None, "failed_checks": list(verdict[1]) if verdict else [],
            "reason": reason, "reviewed": reviewed, "no_review_reason": None if reviewed else outcome}
@@ -340,7 +556,9 @@ def record(err, home, outcome, command, verdict=None, log_row=None, facts=None):
     if collecting and shown is not None:
         write(err, "collected.jsonl", {
             "id": store.new_id(), "ts": row["ts"], "rule": rule, "command_sha256": digest, "command": shown,
-            "facts": facts, "verdict": verdict[0], "failed_checks": list(verdict[1]), "reason": reason}, home)
+            "facts": kept, "verdict": verdict[0], "failed_checks": list(verdict[1]), "reason": reason}, home)
+    elif reviewed and declined_for_a_secret and isinstance(rule, str):
+        keep_handle(err, home, row["ts"], digest, rule, verdict, facts, cwd)
 
 
 def run(argv, stdin, err, home):
@@ -353,6 +571,7 @@ def run(argv, stdin, err, home):
         note(err, USAGE)
         return
     kind, command, cwd = read_event(stdin)
+    started = time.monotonic()
     if kind != "ok":
         record(err, home_dir, kind, None)
         return
@@ -370,7 +589,8 @@ def run(argv, stdin, err, home):
         record(err, home_dir, "failed", command)
         return
     outcome, verdict, log_row, facts = classify(code, out, errb, timed_out)
-    record(err, home_dir, outcome, command, verdict, log_row, facts)
+    late = time.monotonic() - started > LATE_SECONDS  # no time is left to read an index: the paths are counted as left out
+    record(err, home_dir, outcome, command, verdict, log_row, facts, cwd=None if late else cwd)
 
 
 def main(argv, stdin, err, home=None):
