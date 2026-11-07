@@ -1,6 +1,6 @@
 # A trial of whether the cards help
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-07
 Candidate: cards#card-trial
 Specs: card, testing
@@ -215,4 +215,31 @@ Reviewer: Codex through the review engine (model gpt-5.6-terra). Round 1 of 3: c
 
 ## Result
 
-Empty until work starts.
+### Increment A — The evaluation command (built; not committed)
+
+- Built `engine/kb/trial.py`, the `trial CORPUS REPORT [--replace]` command, `engine/tests/test_trial.py` (44 tests) and a README
+  section. Tests were written first and failed because the module did not exist. The hand-worked corpus (five questions, four
+  books, one with no card) was worked out on paper first; two of my own hand calculations were wrong where the code was right,
+  and I corrected the tests.
+- Verification as run: `python3 -m unittest engine.tests.test_trial engine.tests.test_catalog engine.tests.test_card
+  engine.tests.test_setup` gave 204 tests, OK; the trial tests also pass with ResourceWarning as an error; `wb run code-work check`
+  found no problems. Not run: any other test file, the command on the owner's library (increment C), any model.
+- Deliberate breaks, each from a green baseline: 19 of the first build (all caught, after re-running one whose text did not match)
+  and 13 of the review fixes, of which 11 were caught at once; a failed write leaving its claimed file behind survived, so a test
+  was added and the break is now caught. One survivor stays: the check in `run` that a catalog row's book and version are the
+  card's own is redundant, because `catalog.search` refuses such a row with the same message; it is kept as a second guard.
+- Review: the `reviewer` agent, round 1, no blocking findings. Applied: F1 the reciprocal rank is one over the best place (not
+  the position in the merged list), now tested and stated in the README; F2 a field word of any length, normalised and case-folded,
+  is matched against all neutral words; F3 the report holds found, noise and per-question hit and reciprocal rank for each query
+  and search; F4 a newest card that cannot be read is an uncovered book with its own reason and no longer blocks the trial with
+  advice that could not fix it; F5 right books the text index does not hold are listed as `text_uncovered`, and inactive books get
+  their own reason; F6 the report folder is resolved from its folder (a link at the report name is replaced, not followed) and the
+  name is claimed with an exclusive create, so a file that appears after the check is not overwritten, and a failed write removes
+  its claim; F7 the catalog and text index hashes are taken before the searches and checked again after (a change refuses the
+  run), and each catalog row is checked against its card; F8 the README states the limits and the stop list.
+- Recorded, not changed: F9, the plan's sentence that uncovered books are "counted in those of the full text" is looser than the
+  code, which counts them only in the full-text recall over all pairs (`text_all_pairs`) and reports the hit rate, reciprocal rank
+  and sets over covered pairs; the README and the module docstring state this. F6's remaining notes (a corpus opened by path after
+  the check, a hard link to a file in the project, no check against the library's own folders) were not applied: the plan's threat
+  model has no outside attacker, and the corpus and report are the owner's files. The rest of the review is in this entry.
+- Next: the owner's word to commit increment A; B needs the owner's choice of books and word to send their text to the models.

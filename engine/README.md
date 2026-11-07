@@ -560,6 +560,54 @@ python3 -m kb card-search 'stopping rule' [--in all|summary|neutral] [--book BOO
   (or is nested too deeply to read), or a row whose citation, date, generation or version flag is not what its card gives, is
   refused with the command to run (`card-index`). Nothing in the catalog is run.
 
+### The trial: do the cards help?
+
+```sh
+python3 -m kb trial CORPUS REPORT [--replace]
+```
+
+`trial` compares what a search of the cards finds with what a search of the full text finds, on questions you choose. You start it;
+it reads the library and the two indexes and nothing else, calls no model, sends nothing anywhere and changes nothing. Both files
+are held **outside the repository**: it refuses a corpus or a report path inside the project's folder (links followed), because
+questions from your own projects must not be committed. It reports numbers and never decides.
+
+- **The corpus** is a JSON file you write: `{"format": 1, "questions": [{"id": "q1", "text": "...", "queries": ["short plain words", ...],
+  "right": ["<book id>", ...]}], "field_words": ["optional", ...]}`. A question has 1 to 10 queries, and 1 to 50 right books, named by
+  you. The queries are plain words, as an agent would write them (a search of the cards needs every word to match, as spelled), and
+  both searches get the same queries. Write the queries before the first run and do not change them after seeing results; a change is
+  a new corpus file, and the report records the file's sha256.
+- **The searches.** Each query is run four ways: the cards (all fields), the summary side of the cards, the neutral side, and the
+  full text (the first 50 blocks, taken to books in the order of their first appearance; for a common word the limit is reached and the
+  books are a lower bound, which the report says for each query).
+- **The rules of the numbers.** A book's *place* in one search of one query is counted from 1 by its first appearance. For a question
+  the books found are the union over its queries; a book's place is the smallest it has in any query, and books of the same place are
+  ordered by book id. A right book is *found* if any query found it. The unit is a (question, right book) pair. A right book with no
+  card is *uncovered* and is left out of the card measures and of the comparison (it counts only in the full-text recall over all
+  pairs), so a missing card is never read as a search that missed. *Recall* is the share of covered pairs found; *cards-only,
+  text-only, both, neither* count covered pairs, "cards" meaning the search of all fields; the *hit rate* is the share of questions
+  with a covered right book in which some right book was found; a question's *reciprocal rank* is one over the place of its best
+  right book (zero if none), and the mean is over the same questions; *noise* is the number of distinct books found that are not
+  right. Every number is given with its count. The *place* is the best place a book has in any query, not its position in the merged
+  list: a book at place 2 in one query is at place 2 even if three other books are at place 1 elsewhere. The report also holds, for
+  each query, the right books it found with their places and its noise, and for each question and search its hit and reciprocal rank.
+  The full-text search is scored on all right books, the card searches on the covered ones. Limits: 200 questions, a corpus of 1 MB,
+  question text of 1,000 characters, 500 field words; the card search returns at most 50 cards a query.
+- **The cards.** For each card the number of words of each field and in all, and the *leaked* words: words of four or more letters of
+  its title and topics that its neutral fields repeat, less a short list of common words, plus every word of `field_words` (of any
+  length, matched without regard to case) that they repeat; and the share of cards that leak. This is a rough measure of whether
+  the neutral description keeps the book's field out; it is a word list, not a judgment.
+- **Uncovered books.** A right book left out of the card measures is listed with its reason: `no card`, `card cannot be read` (its
+  newest card fails its checks, which `card-index` also leaves out) or `book is not active`. Right books that the text index does not
+  hold are listed apart as `text_uncovered`, since the full-text search could not find them; `index` is not checked for freshness
+  beyond its presence, and `trial` refuses if the catalog or the text index changes while it runs.
+- **The report** (JSON, mode 600, never over a file that exists unless `--replace`) holds the queries and the books each search found
+  in order, the numbers above, the uncovered books, the corpus hash and the date, and an **input manifest**: the library, each card's
+  book, version, generation and hash, and the sha256 of the catalog file and of the text index, so that a later reader knows which cards
+  gave the result. `trial` refuses a catalog that is not the one the cards make (a card made after the last `card-index`) and a
+  missing text index. It prints the numbers and the corpus hash, not the questions.
+- **What it cannot show.** A small library and a few questions make a finding for you to weigh, not a measure of how well the library
+  serves your real use.
+
 Not covered. A card is model output about a book and may be wrong; it is a lead, not a claim. The neutral fields still name the
 book's field often; nothing checks that by code. A model that writes a list longer than its limit makes the card fail; nothing is
 retried. The stage state has no stage for cards. The model call layer and the card commands were run on three

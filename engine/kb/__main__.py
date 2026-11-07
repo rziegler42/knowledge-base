@@ -4,7 +4,7 @@ import json
 import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
-               convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil)
+               convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from .store import Store
 
 
@@ -80,8 +80,17 @@ def main(argv=None):
     cx.add_argument("--in", dest="within", choices=list(catalog.SIDES), default="all",
                     help="where to look: all, summary (the card in the words of its source) or neutral (the five neutral fields)")
     cx.add_argument("--limit", type=int, default=catalog.DEFAULT_LIMIT, help=f"at most this many results (1 to {catalog.MAX_LIMIT})")
+    tr = sub.add_parser("trial", help="run a corpus of questions against the library and write a report of what the search of the cards and "
+                                       "the search of the text find; both files are held outside the repository; no model is called "
+                                       "and nothing in the library changes")
+    tr.add_argument("corpus", help="the corpus file (JSON): questions, queries and the books that answer them")
+    tr.add_argument("report", help="the report file to write")
+    tr.add_argument("--replace", action="store_true", help="replace a report that exists")
     args = parser.parse_args(argv)
     try:
+        if args.command == "trial":
+            print(json.dumps(trial.run(Store.open(write=False), args.corpus, args.report, replace=args.replace), indent=1))
+            return 0
         if args.command == "card-index":
             counts = catalog.rebuild(Store.open())
             print(json.dumps(counts))
