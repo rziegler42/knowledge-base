@@ -7,6 +7,7 @@ import unittest
 import zlib
 from unittest import mock
 
+from engine.tests import bench_pdf
 from engine.tests.test_capture_url import Site
 from engine.tests.test_convert_run import PROBE, SandboxCase, approve
 
@@ -476,9 +477,11 @@ class PdfScanTest(ScanCase):
             _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG, extra=b"/Filter /FlateDecode " + extra)))
             self.assertEqual(kinds(got["caveats"]), {"large_image_streams": 1}, extra)
 
-    def test_a_large_image_must_say_it_is_an_xobject_and_nothing_else(self):
+    def test_a_large_image_may_leave_out_its_type_but_one_it_gives_must_be_xobject_and_nothing_else(self):
         self.approve_scan()
-        for label, typed in {"no type": b"", "a form": b"/Type /Form ", "an object stream": b"/Type /ObjStm ",
+        _b, _v, untyped = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG, typed=b"")))  # the format makes the type of an image optional
+        self.assertEqual(kinds(untyped["caveats"]), {"large_image_streams": 1})
+        for label, typed in {"a form": b"/Type /Form ", "an object stream": b"/Type /ObjStm ",
                              "two types": b"/Type /XObject /Type /ObjStm ", "a nested type": b"/Type /XObject /X << /Type /ObjStm >> ",
                              "a type with the wrong case": b"/Type /xobject "}.items():
             _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(b"\0" * BIG, typed=typed)))
@@ -511,20 +514,6 @@ class PdfScanTest(ScanCase):
         for pixels in (b"\x01\x02", b"H\x00", b"\x08\x08", b"x\x00"):  # not a header (the method is not 8, or the check value is wrong)
             _b, _v, plain = self.scan_bytes("paper.pdf", pdf(image(pixels + b"\0" * BIG)))
             self.assertEqual(kinds(plain["caveats"]), {"large_image_streams": 1}, pixels)
-
-    def test_large_images_that_use_up_the_scans_total_budget_are_still_reported_as_incomplete(self):
-        self.approve_scan()
-        eleven = b"".join(image(b"\0" * BIG) for _ in range(11))  # ten fill the twenty million bytes the scan decodes in all
-        _b, _v, result = self.scan_bytes("paper.pdf", pdf(eleven))
-        self.assertEqual(kinds(result["caveats"]), {"large_image_streams": 10, "scan_incomplete": 1})
-
-    def test_an_image_cut_short_by_what_was_left_of_the_budget_is_not_called_a_large_image(self):
-        self.approve_scan()
-        filler = b"".join(flate(b"\0" * 1_900_000) for _ in range(10))  # nineteen million bytes, each read in full
-        _b, _v, plain = self.scan_bytes("paper.pdf", pdf(filler))
-        self.assertEqual(plain["caveats"], [])
-        _b, _v, result = self.scan_bytes("paper.pdf", pdf(filler + image(b"\0" * BIG)))  # a million bytes were left, not two
-        self.assertEqual(kinds(result["caveats"]), {"scan_incomplete": 1})
 
     def test_the_scan_stage_accepts_the_new_kind_with_its_sentence_and_nothing_else(self):
         wrapped = lambda caveats: json.dumps({"format": 1, "kind": "pdf", "caveats": caveats})
@@ -559,12 +548,12 @@ class PdfScanTest(ScanCase):
             self.assertLess(time.monotonic() - started, 30, label)
             self.assertEqual(result["status"], "done", f"{label}: {result}")
 
-    def test_a_pdf_with_thousands_of_streams_is_cut_off_and_reported_as_incomplete(self):
+    def test_a_pdf_with_thousands_of_streams_is_read_in_full_and_the_limit_on_their_number_is_in_limitstest(self):
         self.approve_scan()
         body = b"".join(b"%d 0 obj\n<< /Filter /FlateDecode >>\nstream\n" % (10 + k) + zlib.compress(b"x") + b"\nendstream\nendobj\n" for k in range(2500))
         _b, _v, result = self.scan_bytes("paper.pdf", pdf(body))
         self.assertEqual(result["status"], "done")
-        self.assertIn("scan_incomplete", kinds(result["caveats"]))
+        self.assertEqual(kinds(result["caveats"]), {})
 
 
 class HtmlScanTest(ScanCase):
@@ -835,7 +824,7 @@ class PredictorScanTest(ScanCase):
         _b, _v, got = self.scan_bytes("paper.pdf", pdf(picture + xref))
         self.assertEqual(got["caveats"], [])
 
-    def test_twenty_figures_with_predictors_and_fifteen_hundred_small_streams_give_no_caveat_and_twenty_five_hundred_reach_the_limit(self):
+    def test_twenty_figures_with_predictors_and_fifteen_hundred_or_twenty_five_hundred_small_streams_give_no_caveat(self):
         self.approve_scan()
         figure = zlib.compress(png_filter(bytes(3000) * 316, 3000, bpp=3, types=(2, 4)))  # about 950,000 bytes decoded
         figures = b"".join(stream_object(b"/Type /XObject /Subtype /Image /Width 1000 /Height 316 /ColorSpace /DeviceRGB "
@@ -850,7 +839,7 @@ class PredictorScanTest(ScanCase):
         _b, _v, fifteen = self.scan_bytes("paper.pdf", many(1500))
         self.assertEqual(fifteen["caveats"], [])
         _b, _v, twentyfive = self.scan_bytes("paper.pdf", many(2500))
-        self.assertIn("scan_incomplete", kinds(twentyfive["caveats"]))
+        self.assertEqual(twentyfive["caveats"], [])  # the limit on their number is 500,000 now; LimitsTest tests it with a small one
 
     def test_a_decoy_set_of_parameters_in_a_string_cannot_make_the_scan_garble_what_the_viewer_reads_as_it_is(self):
         self.approve_scan()
@@ -1412,6 +1401,222 @@ class ReaderTest(unittest.TestCase):
         for path in sorted(glob.glob(os.path.join(here, "*.pdf"))):
             with open(path, "rb") as f:
                 self.assertEqual(self.found(f.read()), {}, os.path.basename(path))
+
+
+class LimitsTest(unittest.TestCase):
+    """The scan's limits on work: how much it decodes in all, how many streams, and what it keeps while it works. They are tested in
+    this process, with the constants patched where a test needs a small limit (the scan stage runs the tool in a sandbox)."""
+
+    def scan(self, data):
+        return kinds(scan_tool.scan_pdf(data))
+
+    def test_the_limits_are_the_numbers_the_owner_confirmed(self):
+        self.assertEqual((scan_tool.MAX_TOTAL_OUT, scan_tool.MAX_STREAMS, scan_tool.MAX_STREAM_OUT), (2_500_000_000, 500_000, 2_000_000))
+
+    def test_a_hundred_large_images_are_a_hundred_large_images_and_nothing_else(self):
+        found = self.scan(pdf(b"".join(image(b"\0" * BIG) for _ in range(100))))  # 200 million bytes decoded at the 2 MB window
+        self.assertEqual(found, {"large_image_streams": 100})
+
+    def test_what_the_scan_decodes_is_not_kept_while_it_works(self):
+        import tracemalloc
+        data = pdf(b"".join(image(b"\0" * BIG) for _ in range(60)))  # 120 million bytes decoded, one piece at a time
+        tracemalloc.start()
+        try:
+            self.assertEqual(self.scan(data), {"large_image_streams": 60})
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 40_000_000, peak)  # a piece, its unescaped copy and the file; keeping the pieces would be over 120 million
+
+    def test_work_past_the_limit_is_an_incomplete_scan_whatever_brought_it_there(self):
+        with mock.patch.object(scan_tool, "MAX_TOTAL_OUT", 10_000_000):
+            six = pdf(b"".join(image(b"\0" * BIG) for _ in range(6)))
+            self.assertEqual(self.scan(six), {"large_image_streams": 5, "scan_incomplete": 1})
+            five = pdf(b"".join(image(b"\0" * BIG) for _ in range(5)))
+            self.assertEqual(self.scan(five), {"large_image_streams": 5})  # exactly the limit is not past it
+            mixed = pdf(b"".join(flate(b"\0" * 1_900_000) for _ in range(5)) + image(b"\0" * BIG))  # a million bytes left, not two
+            self.assertEqual(self.scan(mixed), {"scan_incomplete": 1})
+            expanding = pdf(bench_pdf.expanding_streams(300_000)[len(b"%PDF-1.4\n"):])  # about 150 streams that each expand to 2 MB
+            self.assertEqual(self.scan(expanding), {"scan_incomplete": 1})
+
+    def test_a_file_with_thousands_of_small_streams_is_not_incomplete_and_one_past_the_stream_limit_is(self):
+        many = lambda n: pdf(b"".join(b"%d 0 obj\n<< /Filter /FlateDecode >>\nstream\n" % (10 + k) + zlib.compress(b"x") + b"\nendstream\nendobj\n"
+                                      for k in range(n)))
+        self.assertEqual(self.scan(many(10_000)), {})
+        with mock.patch.object(scan_tool, "MAX_STREAMS", 100):
+            self.assertEqual(self.scan(many(100)), {})
+            self.assertEqual(self.scan(many(101)), {"scan_incomplete": 1})
+
+    def test_an_image_with_no_type_is_an_image_and_one_with_a_type_other_than_xobject_or_a_container_key_is_not(self):
+        late = b"\0" * BIG
+        self.assertEqual(self.scan(pdf(image(late, typed=b""))), {"large_image_streams": 1})
+        self.assertEqual(self.scan(pdf(image(late, typed=b"/Type /XObject "))), {"large_image_streams": 1})
+        for label, typed, keys in (("a form", b"/Type /Form ", b""), ("an object stream", b"/Type /ObjStm ", b""), ("two types", b"/Type /XObject /Type /ObjStm ", b""),
+                                   ("a wrong case", b"/Type /xobject ", b""), ("no type but the keys of an object stream", b"", b"/N 1 /First 10 "),
+                                   ("no type but the keys of a cross-reference stream", b"", b"/W [1 2 1] /Size 5 "),
+                                   ("no type, keys written with escapes", b"", b"/#4E 1 /Fir#73t 10 ")):
+            found = self.scan(pdf(image(late, typed=typed, extra=b"/Filter /FlateDecode " + keys)))
+            self.assertEqual(found, {"scan_incomplete": 1}, label)
+
+    def test_a_script_in_the_first_part_of_an_image_with_no_type_is_found_and_the_count_is_the_same_as_for_one_with_a_type(self):
+        script = b"/S /JavaScript /JS (app.alert(1)) "
+        for typed in (b"", b"/Type /XObject "):
+            found = self.scan(pdf(image(script + b"\0" * BIG, typed=typed)))
+            self.assertEqual(found, {"javascript": 2, "large_image_streams": 1}, typed)
+
+    def paeth_figures(self, n):
+        figure = zlib.compress(png_filter(bytes(3000) * 1000, 3000, bpp=3, types=(4,)))  # 3 MB decoded, 1000 rows, every row Paeth
+        d = (b"/Type /XObject /Subtype /Image /Width 1000 /Height 1000 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+             b"/DecodeParms << /Predictor 15 /Colors 3 /Columns 1000 >>")
+        return pdf(b"".join(stream_object(d, figure, 10 + k) for k in range(n)))
+
+    def test_the_bytes_a_predictor_is_undone_over_are_a_bound_of_their_own_because_that_work_is_slow(self):
+        self.assertEqual(scan_tool.MAX_PREDICTED_BYTES, 20_000_000)  # the work limit alone would allow 2,500 MB of it, a few minutes
+        with mock.patch.object(scan_tool, "MAX_PREDICTED_BYTES", 5_000_000):
+            self.assertEqual(self.scan(self.paeth_figures(2)), {"large_image_streams": 2})
+            # 6 MB are over 5 MB: the third figure's predictor is not undone, what was decoded before it is read, and it is reported as
+            # a picture of which only the first part was checked (not as an incomplete scan: honest pictures with PNG predictors are common)
+            self.assertEqual(self.scan(self.paeth_figures(3)), {"large_image_streams": 3})
+        parms = {"predictor": 12, "colors": 1, "bpc": 8, "columns": 4}
+        volume = [10]
+        scan_tool._undo_predictor(b"\x01abcd", parms, None, volume)
+        self.assertEqual(volume, [5])  # five bytes charged
+        with self.assertRaises(scan_tool._Unreadable):
+            scan_tool._undo_predictor(b"\x01abcd" * 2, parms, None, volume)
+
+    def test_many_figures_with_a_slow_predictor_cost_a_bounded_time_and_are_reported(self):
+        started = time.monotonic()
+        found = self.scan(self.paeth_figures(40))  # 80 million bytes to undo at 0.15 s a megabyte, were it not bounded: over 12 s
+        took = time.monotonic() - started
+        self.assertLess(took, 8, f"{took:.1f} s")
+        self.assertEqual(found, {"large_image_streams": 40})
+
+    def test_figures_with_a_predictor_past_the_bytes_the_scan_undoes_are_pictures_and_not_an_incomplete_scan(self):
+        figure = zlib.compress(png_filter(bytes(3000) * 316, 3000, bpp=3, types=(0, 1, 2)))  # about 950,000 bytes decoded, cheap rows
+        d = (b"/Type /XObject /Subtype /Image /Width 1000 /Height 316 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+             b"/DecodeParms << /Predictor 15 /Colors 3 /Columns 1000 >>")
+        found = self.scan(pdf(b"".join(stream_object(d, figure, 10 + k) for k in range(25))))  # 23.7 million bytes, 20 million are undone
+        self.assertNotIn("scan_incomplete", found)
+        self.assertGreater(found.get("large_image_streams", 0), 0)
+        # and an object stream behind the same predictor, past the budget, is still reported as incomplete: it is not a picture
+        with mock.patch.object(scan_tool, "MAX_PREDICTED_BYTES", 10):
+            body = stream_object(b"/Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns 8 >>",
+                                 zlib.compress(png_filter(b"abcdefgh" * 4, 8, types=(0,))))
+            self.assertEqual(self.scan(pdf(body)), {"scan_incomplete": 1})
+
+    def test_the_rows_budget_is_spent_the_same_way_a_picture_is_a_picture_and_an_object_stream_is_incomplete(self):
+        with mock.patch.object(scan_tool, "MAX_PREDICTED_ROWS", 1500):  # 667 rows of 3-byte pixels (a 2 MB window) cost 2001 passes
+            self.assertEqual(self.scan(self.paeth_figures(1)), {"large_image_streams": 1})
+            body = stream_object(b"/Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /DecodeParms << /Predictor 15 /Colors 3 /Columns 1000 >>",
+                                 zlib.compress(png_filter(bytes(3000) * 1000, 3000, bpp=3, types=(4,))))
+            self.assertEqual(self.scan(pdf(body)), {"scan_incomplete": 1})
+
+    def test_the_input_of_every_layer_after_the_first_is_charged_because_it_is_decoded_though_it_may_give_nothing(self):
+        # layer one turns 5 KB into two million bytes of empty deflate blocks, layer two reads them and returns nothing (0.1 s a stream)
+        two = bench_pdf.nested_empty_blocks(10)
+        with mock.patch.object(scan_tool, "MAX_TOTAL_OUT", 100_000_000):  # a stream is charged 20 units for each of 1.9 million bytes
+            self.assertEqual(self.scan(two), {"scan_incomplete": 1})
+            one = bench_pdf.nested_empty_blocks(2)
+            self.assertEqual(self.scan(one), {})  # two of them fit
+        self.assertEqual(self.scan(bench_pdf.nested_empty_blocks(2)), {})
+        self.assertEqual(scan_tool.LAYER_UNITS, 20)
+
+    def test_a_layer_is_charged_once_a_deflate_has_come_before_it_and_not_before(self):
+        # only a deflate can turn a small blob into a large input: text filters first (ASCII85, hex) are bounded by the blob itself
+        script = b"1 0 " + SCRIPT
+        a85 = base64.a85encode(zlib.compress(script)) + b"~>"
+        cost = lambda blob, names: (lambda layers: (scan_tool._decode_chain(blob, names, 2_000_000, layers=layers), layers[0])[1])([0])
+        self.assertEqual(cost(a85, [b"ASCII85Decode", b"FlateDecode"]), 0)  # the common old chain: the flate reads what the blob decoded to
+        self.assertEqual(cost(a85.hex().encode() + b">", [b"ASCIIHexDecode", b"ASCII85Decode", b"FlateDecode"]), 0)
+        twice = zlib.compress(zlib.compress(script))
+        self.assertEqual(cost(twice, [b"FlateDecode", b"FlateDecode"]), 20 * len(zlib.compress(script)))
+        text = base64.a85encode(zlib.compress(script)) + b"~>"
+        after = zlib.compress(text)  # a flate, then ASCII85, then flate: the middle layer's input and the last one's are both charged
+        self.assertEqual(cost(after, [b"FlateDecode", b"ASCII85Decode", b"FlateDecode"]), 20 * len(text) + 20 * len(zlib.compress(script)))
+        self.assertEqual(cost(zlib.compress(script), [b"FlateDecode"]), 0)  # one layer: the blob is bounded by the file
+
+    def test_seven_hundred_two_layer_streams_in_four_megabytes_are_stopped_in_time_and_reported(self):
+        data = bench_pdf.nested_empty_blocks(700)  # 72 seconds when the layers were not charged
+        started = time.monotonic()
+        found = self.scan(data)
+        took = time.monotonic() - started
+        self.assertLess(took, 20, f"{took:.1f} s")
+        self.assertEqual(found, {"scan_incomplete": 1})
+
+    def test_a_scan_that_has_run_longer_than_its_deadline_stops_between_streams_and_says_so(self):
+        self.assertEqual(scan_tool.MAX_SECONDS, 25)
+        many = pdf(b"".join(b"%d 0 obj\n<< /Filter /FlateDecode >>\nstream\n" % (10 + k) + zlib.compress(b"x") + b"\nendstream\nendobj\n" for k in range(50)))
+        self.assertEqual(self.scan(many), {})
+        with mock.patch.object(scan_tool, "MAX_SECONDS", -1):  # already past it when the first stream is reached
+            self.assertEqual(self.scan(many), {"scan_incomplete": 1})
+            self.assertEqual(self.scan(CLEAN_PDF), {})  # a file with no stream has nothing to stop
+
+    def test_a_chain_of_many_filters_is_refused_because_each_layer_costs_and_only_the_last_is_charged(self):
+        self.assertEqual(scan_tool.MAX_FILTERS, 8)
+        script = SCRIPT * 2
+        layers = script
+        for _ in range(8):
+            layers = zlib.compress(layers)
+        eight = pdf(stream_object(b"/Type /ObjStm /N 1 /First 4 /Filter [" + b" /Fl" * 8 + b" ]", layers))
+        self.assertGreater(self.scan(eight).get("javascript", 0), 0)  # eight layers are read through
+        layers = zlib.compress(layers)
+        nine = pdf(stream_object(b"/Type /ObjStm /N 1 /First 4 /Filter [" + b" /Fl" * 9 + b" ]", layers))
+        self.assertEqual(self.scan(nine), {"scan_incomplete": 1})  # nine are not decoded at all
+        thousands = pdf(stream_object(b"/Type /ObjStm /N 1 /First 4 /Filter [" + b" /Fl" * 4000 + b" ]", layers))
+        self.assertEqual(self.scan(thousands), {"scan_incomplete": 1})
+
+    def test_the_matches_in_a_piece_are_counted_without_being_kept(self):
+        import tracemalloc
+        data = pdf(b"/JS " * 3_000_000)  # 12 MB, three million matches: a list of them would be some 150 MB
+        tracemalloc.start()
+        try:
+            self.assertEqual(self.scan(data), {"javascript": 3_000_000})
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertLess(peak, 60_000_000, peak)
+
+    def test_work_is_counted_in_bytes_and_more_for_the_bytes_that_are_slow_to_read(self):
+        self.assertEqual(scan_tool._work(b"abc"), 3)
+        self.assertEqual(scan_tool._work(b"#41"), 3 + 135)  # an escape is unescaped one at a time (and may spell a slash)
+        self.assertEqual(scan_tool._work(b"/JS"), 3 + 35)  # every pattern begins with a slash and each match is collected
+        self.assertEqual(scan_tool._work(b""), 0)
+
+    def test_streams_of_escapes_cost_a_bounded_time_because_the_work_limit_counts_them_heavily(self):
+        dense = zlib.compress(b"#41" * 666_666)  # 2 MB that is all escapes, about 0.17 s to read
+        data = pdf(b"".join(b"%d 0 obj\n<< /Filter /FlateDecode >>\nstream\n" % (10 + k) + dense + b"\nendstream\nendobj\n" for k in range(60)))
+        started = time.monotonic()
+        found = self.scan(data)
+        took = time.monotonic() - started
+        self.assertLess(took, 15, f"{took:.1f} s")  # without the weight: 60 x 0.17 s, and a hostile file could have a thousand
+        self.assertEqual(found, {"scan_incomplete": 1})  # 36 of them fill the 2,500 million units
+
+    def test_streams_made_of_matches_cost_a_bounded_time_and_every_match_is_counted(self):
+        dense = zlib.compress(b"/JS " * 500_000)  # 2 MB, a match in every four bytes
+        data = pdf(b"".join(b"%d 0 obj\n<< /Filter /FlateDecode >>\nstream\n" % (10 + k) + dense + b"\nendstream\nendobj\n" for k in range(10)))
+        started = time.monotonic()
+        found = self.scan(data)
+        took = time.monotonic() - started
+        self.assertLess(took, 8, f"{took:.1f} s")
+        self.assertEqual(found, {"javascript": 5_000_000})
+
+    def test_the_bytes_before_a_predictor_are_still_read_when_the_predictor_is_not_undone(self):
+        with mock.patch.object(scan_tool, "MAX_PREDICTED_BYTES", 10):
+            script = b"/S /JavaScript /JS (app.alert(1)) "
+            data = zlib.compress(png_filter(script + bytes(100), len(script) + 100, types=(0,)))
+            body = stream_object(b"/Type /ObjStm /N 1 /First 4 /Filter /FlateDecode /DecodeParms << /Predictor 12 /Columns %d >>" % (len(script) + 100), data)
+            found = self.scan(pdf(body))
+            self.assertEqual(found.get("scan_incomplete"), 1)  # not undone: said so
+            self.assertEqual(found.get("javascript"), 2)  # and what was decoded before the predictor is read
+
+    def test_a_hundred_thousand_tiny_streams_cost_in_proportion_to_their_number(self):
+        data = bench_pdf.tiny_streams(15_000_000, seed=2)  # about 80,000 streams
+        started = time.monotonic()
+        self.scan(data)
+        took = time.monotonic() - started
+        self.assertLess(took, 10, f"{took:.1f} s")
+        # not asserted: whether it is incomplete. The generator's streams hold random bytes, and about one in sixteen thousand begins
+        # like another zlib stream, which the scan reports as compressed again inside (a rule older than the limits)
 
 
 class ScanStageTest(ScanCase):

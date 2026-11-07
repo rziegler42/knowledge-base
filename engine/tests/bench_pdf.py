@@ -12,6 +12,13 @@ benchmarks of the plan 2026-11-06-scan-false-alarms, so that a timing can be rep
         A PDF of about `total` bytes of plain `/Filter /FlateDecode` streams, each the zlib compression, at level 6, of `zeros` zero
         bytes (about a thousandfold expansion), as many as fill `total`.
 
+    nested_empty_blocks(count, nbytes=1_900_000)
+        A PDF of `count` streams, each `/Filter [/FlateDecode /FlateDecode]`: the outer layer is a few kilobytes that inflate to about
+        `nbytes` of a valid zlib stream made of nothing but empty dynamic blocks (11 bytes each, the end-of-block symbol and nothing
+        else), and the inner layer reads them and returns no bytes. Reading them costs about 60 ns a byte, so a stream costs about 0.1 s
+        at the default size while its output is nothing: the shape of a filter chain whose middle layer is not charged. Found by the
+        security review of increment B of 2026-11-06-scan-false-alarms.
+
     tiny_streams(total, seed=1, size=100)
         A PDF of about `total` bytes of plain `/Filter /FlateDecode` streams, each the zlib compression, at level 6, of `size` seeded
         bytes (one `random.Random(seed)` for the whole file), as many as fill `total`: the most streams that fit.
@@ -92,5 +99,60 @@ def tiny_streams(total, seed=1, size=100):
         parts.append(obj)
         used += len(obj)
         number += 1
+    parts.append(TRAILER)
+    return b"".join(parts)
+
+
+class _Bits:
+    """Bits written least significant first, as deflate wants them."""
+
+    def __init__(self):
+        self.value = 0
+        self.length = 0
+
+    def put(self, value, nbits):
+        self.value |= value << self.length
+        self.length += nbits
+
+    def huffman(self, code, nbits):  # a Huffman code is written most significant bit first
+        for i in range(nbits - 1, -1, -1):
+            self.put((code >> i) & 1, 1)
+
+    def to_bytes(self):
+        return self.value.to_bytes((self.length + 7) // 8, "little")
+
+
+def _empty_dynamic_block(bits, final):
+    """A dynamic Huffman block with no data: its tables, then the end-of-block symbol."""
+    bits.put(1 if final else 0, 1)
+    bits.put(2, 2)  # a dynamic block
+    bits.put(0, 5)  # 257 literal/length codes
+    bits.put(0, 5)  # 1 distance code
+    bits.put(14, 4)  # 18 code length codes
+    for symbol in (16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1):
+        bits.put(1 if symbol in (18, 1) else 0, 3)
+    bits.huffman(1, 1)
+    bits.put(127, 7)  # 138 zero lengths
+    bits.huffman(1, 1)
+    bits.put(107, 7)  # 118 zero lengths
+    bits.huffman(0, 1)  # the end-of-block symbol has length 1
+    bits.huffman(0, 1)  # the one distance code has length 1
+    bits.huffman(0, 1)  # the end-of-block symbol itself
+
+
+def nested_empty_blocks(count, nbytes=1_900_000):
+    if not (isinstance(count, int) and isinstance(nbytes, int)) or count < 1 or nbytes < 1000:
+        raise ValueError("at least one stream, and at least 1,000 bytes in the middle layer")
+    four = _Bits()
+    for _ in range(4):
+        _empty_dynamic_block(four, False)
+    last = _Bits()
+    _empty_dynamic_block(last, True)
+    # a zlib header, the blocks, a final empty block, and the Adler-32 of nothing (1)
+    middle = b"\x78\x9c" + four.to_bytes() * (nbytes // 45) + last.to_bytes() + b"\x00\x00\x00\x01"
+    outer = zlib.compress(middle, LEVEL)
+    parts = [HEADER]
+    for number in range(1, count + 1):
+        parts.append(_object(number, b"<< /Filter [/FlateDecode /FlateDecode] /Length %d >>" % len(outer), outer))
     parts.append(TRAILER)
     return b"".join(parts)

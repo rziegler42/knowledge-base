@@ -53,7 +53,9 @@ spec), or how an agent reads the result (the reading spec).
   *found* (a candidate and its identity), *fetched* (the original in the incoming area), *scanned* (the objective checks),
   *converted* (text, structure and caveats), *carded* (the first model stage), *indexed*, *themed* (extraction and neutral
   descriptions, then their indexes) and, if the weave is built, *threaded*. Keyword indexing happens right after converted, so the
-  book is searchable by keyword; vector indexing happens after carded, so it is searchable by meaning.
+  book is searchable by keyword; vector indexing happens after carded, so it is searchable by meaning. The scan is bounded in time, not
+  in what a file may hold: it decodes at most 2 MB of a stream, 500,000 streams and a stated amount of work in all (a figure-heavy paper
+  stays well under), and a file past a limit is reported as not read to the end, never as clean.
 - **[proposed]** A stage of a version is pending, done, failed or skipped, the words of `book.md`. A stage that has failed after
   its bounded retries and is set aside with its reason is parked, and the word means only that.
 - **[proposed]** Each stage has a named input, a named output and a version of its own code and prompt. A change to a stage's

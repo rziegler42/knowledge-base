@@ -210,12 +210,27 @@ two million bytes of it are scanned like any stream. Only when deflate is the on
 it was left undone, when the dictionary names a filter once (a second `/Filter` might be the real list), and when what comes out
 does not begin like deflate data of any window size, and when its bytes do not hold the word `stream` (an honest compressed image
 never does; a file that hides a stream marker in a string, so that the scan takes the bytes of two streams for one, does). An
-object stream or a cross-reference stream cannot pass as an image, by carrying the words or by forging its type, and an image
-that names no `/Type` is still `scan_incomplete`. **What this leaves:** a script placed after the
+object stream or a cross-reference stream cannot pass as an image, by carrying the words or by forging its type; an image may leave out
+its `/Type` (the format makes it optional), and one that gives a type other than `/XObject` is not an image. **What this leaves:** a script placed after the
 first two million bytes of a stream that only claims to be an image (an XObject with `/Subtype /Image`) is reported as a large
 image and not as a script, which is why the caveat says that code after the first part would not be found. A damaged image, one
 in a filter the scan does not read, one with other filters after deflate, one that is compressed again inside, and images beyond
-the twenty million bytes the scan decodes in all (some ten figures of this size), are still `scan_incomplete`. **Predictors.** A stream is
+the limit on the work the scan does on what it decodes (see below), are still `scan_incomplete`. **Limits.** The scan decodes at most 2,000,000 bytes of one stream, 500,000 streams and 2,500 million units of work on what it
+decodes in all, reads through at most 8 filters on one stream (each layer is a decode, and only the last one's output is charged: a
+longer chain is `scan_incomplete`), and undoes a predictor over at most 20 million bytes in a file (that work is slow Python: 0.15 s a
+megabyte with Paeth rows). Every filter that comes after a deflate costs 20 units for each byte it reads, because its output may be nothing (a
+layer of two million bytes of empty deflate blocks takes 0.1 s and gives no bytes; ASCII85 or hex first, as in old files, is not
+charged: it is bounded by the stream), and the scan stops between streams after 25
+seconds, as `scan_incomplete` (the sandbox ends it at 60). A unit is a byte, a `#` costs 135 units more and a `/` 35 more: a piece of nothing but escapes takes thirty
+times as long to unescape as ordinary text, and one that is all matches ten times as long to collect, so the limit holds the time to
+some ten seconds whatever the content (the worst of the pieces measured took 3.8 ns a unit; a 50 MB file of escapes, of matches, of
+Paeth-predicted figures, of large images, of tiny streams and of expanding streams was measured at 12 s at most and 180 MB at most). A
+file past the limit on streams or work is `scan_incomplete`. When the predictor budget is spent, a picture is not an incomplete scan
+(pictures with PNG predictors are common): what was decoded before the predictor is read, and the picture is counted in
+`large_image_streams`, of which only the first part was checked; a stream that is not a picture (an object stream behind a
+predictor) is `scan_incomplete`. What each piece matches is counted as the matches come and the piece is dropped, so memory does not
+grow with the number of figures or of matches.
+**Predictors.** A stream is
 decoded whatever its dictionary says it is, and its predictor is undone before it is read: the PNG predictors (10 to 15; each row
 says its own filter, so the number does not matter) and the TIFF predictor (2, at 8 bits), with the colours, bits and columns in the
 parameters (the defaults where they are not given). A real viewer reads an object stream through a predictor, so a dictionary that
@@ -232,8 +247,8 @@ into the brackets would see a structure no viewer sees. A comment (`%`) in the p
 runs into letters or a hash is not a number; and a list of filters that holds anything but names (a comment, a string, an array, a
 number, an escaped bracket) is `scan_incomplete` too, because the list read ends at the first bracket the text shows, which any of
 those can put before the real end. A dictionary with more than one `/Filter` key is `scan_incomplete` too: the text is read without knowing strings, so a decoy
-in a string could say an image codec, which the scan does not look into, ahead of the real filter. A picture with a predictor now counts against the scan's budget of 2,000 streams and twenty
-million decoded bytes, as any stream does (a test builds twenty figures of 950,000 bytes and 1,500 small ones that give no caveat).
+in a string could say an image codec, which the scan does not look into, ahead of the real filter. A picture with a predictor counts against the scan's limits on streams, work and bytes undone, as any stream does (a test builds twenty
+figures of 950,000 bytes and 1,500 and 2,500 small ones that give no caveat).
 **How it finds a stream.** The scan reads the file forward. In the space between objects it looks for an `N G obj` header (and for
 `trailer`); from a header it reads the object's value with a reader that knows literal strings (nesting, escapes, octal), hex
 strings, comments, names, arrays and dictionaries, takes the exact text of the dictionary, and, if the word `stream` and a line end

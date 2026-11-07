@@ -378,4 +378,125 @@ owner approves it again.
 - **Confirmed by the owner (2026-11-06):** the limits of **2,500 MB** decoded in all and **500,000 streams** decoded, the 2 MB window
   unchanged, and the shape of a use as above, for increments B and C. The question of binary-place matches without the shape of a use
   stays open for the checkpoint of C (the plan's text keeps them as the weaker `pattern_in_binary_data`).
-- **Done in A:** all of its steps; the commit adds the generator, its test and this record.
+- **Done in A:** all of its steps; the commit adds the generator, its test and this record. Committed as
+  a1e41448195adc90aac2459a8ee9e0be18515c9f (not pushed).
+
+### Increment B — The limits that ordinary files pass, and the image rule (implemented, reviewed and security-reviewed; not committed)
+
+- **Done** in `engine/kb/scan_tool.py` (label 0.0.6, `approvals.SCAN_VERSION`, with its history line): `MAX_STREAMS` 500,000 (was 2,000);
+  `MAX_TOTAL_OUT` 2,500,000,000 (was 20,000,000), now a limit on work in the units of `_work`; each decoded piece is counted
+  (`_tally`, match by match) and dropped, so memory does not grow with the number of streams or of matches; `_is_image` no longer needs
+  a `/Type` (a `/Type` that is not `/XObject` anywhere, or any container key, still makes it not an image); README and
+  `docs/specs/pipeline.md` describe the limits.
+- **Changes beyond the numbers the owner confirmed (for the owner to confirm):** measuring B showed that the old total of 20 MB had
+  hidden how slow some work is, and that the confirmed 2,500 MB, priced at 3 ms a megabyte, was true of ordinary content only.
+  (1) **The work limit is in units, not bytes:** a byte is a unit, a `#` adds 135 and a `/` adds 35 (an escape costs about 260 to 400
+  ns to unescape and a slash about 100 ns to match against seven patterns; a piece of escapes took 90 ms a megabyte and one of matches
+  25 ms against 3 for text, so a hostile file could have used 2,500 MB for some four minutes). The worst piece tried (`#2FJS`
+  repeated) took 3.8 ns a unit, so the limit is under ten seconds. The `raws` (bytes before a predictor) are charged too.
+  (2) **A budget for the bytes a predictor is undone over, 20 million in a file** (`MAX_PREDICTED_BYTES`): a Paeth-predicted figure
+  costs 0.32 s for a 2 MB window, and a hostile 50 MB file of them would have taken some five minutes; the old 20 MB total had been the
+  only bound. (3) **At most 8 filters on one stream** (`MAX_FILTERS`): each layer is a decode and only the last output is charged; a
+  longer chain is `scan_incomplete`. (4) **A spent predictor budget on a picture is not an incomplete scan:** the data before the
+  predictor is read and the picture is counted in `large_image_streams` (only its first part was checked); an object stream behind
+  a predictor, past the budget, is still `scan_incomplete`. Without (4) about twenty-one PNG-predicted figures would have made a paper
+  `scan_incomplete`, the false alarm B is for (the reviewer found this).
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_convert_run
+  engine.tests.test_bench_pdf`: 238 tests, OK; `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest
+  engine.tests.test_convert.ToolVersionTest engine.tests.test_search.CommandLineTest`: 14 tests, OK. The new tests (`LimitsTest`, 18
+  tests, in this process with the constants patched where a small limit is needed) failed first. Break-it: fourteen mutations (the
+  stream limit, the work limit, the cap, each kind of piece counted or not, the image rule twice, the predictor budgets, the picture
+  rule, the filter chain, the match list, the escape weight): all caught, after two survivors got tests. Five older tests that encoded the
+  old limits were moved into `LimitsTest` or changed (eleven images filling the old budget, 2,500 streams, a missing type meaning not an image).
+- **Comparison with the committed scan (0.0.5)** on the nine papers and the sixty PDFs: 67 identical, 2 different. GPT-3 loses its
+  `scan_incomplete` and reports its 83 large images (`javascript 1`, from the chance match, is still there); CLIP goes from
+  `scan_incomplete` to **`javascript 24`** (pixels that spell the pattern: increment C is for this, and B is not put in the config
+  without C). Attention and PaLM are unchanged.
+- **The 50 MB benchmarks** (`/usr/bin/time -l`, `python3 -I -S engine/kb/scan_tool.py`, the generator's files with the sha256 of A, and
+  three hostile files built for B: `hostile_predictor` 50,000,100 bytes sha256 `751435315e6fd858c3bef8dd2103fcffc91b60c825e56eb439906e91ae808f5a`
+  (16,000 Paeth-predicted 3 MB figures), `hostile_escapes` 50,001,793 bytes `a0917d8adba8e482718dc49217041b9cd63120d8995b3476bc4919ad5b81b127`
+  (`#41` repeated in each 2 MB), `hostile_matches` 50,000,556 bytes `d834f69e510197c073ca0411dec5186f7f6bd24291ac0a3688375c9b3678851a`
+  (`/JS ` repeated in each 2 MB)):
+
+  | File | Time | Peak memory | Caveats |
+  |---|---|---|---|
+  | `images_10` | 0.4 s | 195 MB | `large_image_streams 10`, chance `javascript` |
+  | `images_100` | 1.1 s | 186 MB | `large_image_streams 100`, chance `javascript` |
+  | `images_1000` | 7.5 s | 181 MB | `large_image_streams 996`, `scan_incomplete` (see below) |
+  | `expanding` | 9.3 s | 79 MB | `scan_incomplete` (the work limit) |
+  | `tiny` | 3.6 s | 177 MB | `scan_incomplete` (see below) |
+  | `hostile_predictor` | 12.0 s | 80 MB | `large_image_streams 1240`, `scan_incomplete` (the work limit) |
+  | `hostile_escapes` | 5.4 s | 147 MB | `scan_incomplete` (the work limit) |
+  | `hostile_matches` | 9.0 s | 77 MB | `javascript 64,500,000`, `scan_incomplete` (the work limit) |
+
+  All are inside the 20 seconds and 600 MB of completion criterion 3; memory is 195 MB at 10 images and 181 MB at 1,000 (no growth).
+- **Findings, not changed (for the owner):** (a) The `scan_incomplete` of `images_1000` and `tiny` comes from an older rule, not from a
+  limit: a decoded stream that begins like another zlib stream is "compressed again inside" (4 of the 1,000 generated images, whose
+  noise starts at random, about 0.2%; the same rule fires on random bytes that begin `x\\x9c` and similar). The work for all 1,000
+  images is 2.02 billion units, under the limit. Real images rarely begin that way and none of the nine papers does, but a paper with
+  hundreds of images has a small chance of it. (b) A match count can be 64 million on a hostile file; `scan._read_result` accepts up
+  to 10^9. (c) The file scan itself (unescaping the whole file) is not charged: a 50 MB file of escapes takes about 4 s and its memory
+  is the older Low note of the earlier plan.
+- **Review (independent reviewer, one round):** two blocking findings, both reproduced or measured and fixed: (1) the predictor-bytes
+  budget made ten PNG-predicted large images use it up and the rest `scan_incomplete`, which is the false alarm B removes (fixed by the
+  spent-budget rule above; tests with twenty-five predicted figures and with an object stream); (2) the filters of a chain were not
+  charged and their number was not limited (fixed by `MAX_FILTERS`; the measured cost of 1,000 nested layers of 1.5 MB is 0.15 s, so
+  thousands of layers across a 50 MB file could have taken minutes). Applied from the not blocking findings: the match list that kept
+  millions of matches (counted as they come now), the escape weight (135, not 100, as an escape may spell a slash), the README claims.
+  Measured and found sound: the speed of ASCII85 and hex decoding (2 ms a megabyte of text), the regexes on adversarial pieces (all
+  slashes, `/J`, `/JavaScrip`, `#2F`, `#g`, `/#41`: at most 3.8 ns a unit), the image rule without a `/Type`, and that counting
+  piece by piece equals the old counts (the old code matched each piece separately as well).
+- **Confirmed by the owner (2026-11-06):** the four changes beyond the confirmed numbers (the work limit in units, the budget of 20
+  million bytes for undoing a predictor, at most 8 filters on a stream, and a spent predictor budget on a picture counted as a large
+  image), and a security review of B.
+- **Security review (owner said yes; independent, on a copy, Python 3.15.0 and zlib 1.2.12):** one High, one Medium, three Low.
+  Tested: about 4.4 million fuzzed or structured PDFs (all stream types, predictors, ASCII85 and hex chains, container keys, odd
+  tokens) with no exception; 36 near-miss, match, escape and slash pieces (`/JavaScrip`, `/EmbeddedFil`, `/RichMedi`, `#2FJS `,
+  `#2F#4A#53 ` and others) all at 0.5 to 3.2 ns a unit, so the weights of 135 and 35 hold; the predictor undo for Sub, Up, Average and
+  Paeth rows at width 1,000, tiny rows, 64-byte pixels, TIFF with 3 and 32 colours and rows of 4,000,000 bytes, 0.01 to 0.87 s a 2 MB
+  stream and bounded to about 5 s by the two budgets; flat images over 2 MB (zeros, 0xff, a gradient) are large images; 48 MB of
+  ASCII85 `z` (1.05 s) and of hex (0.5 s); the reader on 48 MB of `0 0 0 …` (3.8 s) and of near-miss names (3.2 s); the image rule
+  without `/Type` against an object stream or a cross-reference stream dressed as an image with every combination of `/N /First /W
+  /Size /Index`, escaped keys, `/Type/XObject`, keys in a comment, and with the predictor budget spent: all `scan_incomplete`; a
+  `/Type [/XObject]`, `/Type 5 0 R` or `/Type (x)` with no container keys past the window is a large image (a viewer cannot read it as
+  a container); nine filters, `/Fl#61teDecode` in an array, `/Crypt`, an indirect `/Filter`, a longer `/DP` array and a comment in the
+  filter list: all `scan_incomplete`; every `continue` and `break` that skips a stream sets `incomplete` (read). **High, fixed:** the
+  layers of a filter chain after the first were not charged, so `[/FlateDecode /FlateDecode]` with a first layer that inflates 5.6 KB
+  into 1.9 MB of empty deflate blocks and a second that reads them and returns nothing cost 0.1 s a stream and was charged none:
+  reproduced (0.103 s a stream, no caveat; 700 of them in a 4 MB file took 72 s, past the sandbox's 60, with `caveats: []`, and a
+  50 MB file about 900 s). Fixed twice over: every filter after the first is charged 20 units for each byte it reads
+  (`LAYER_UNITS`, so about sixty such streams fill the limit and the file is `scan_incomplete` in about 7 s: the 51 MB file of 9,000 of
+  them is stopped in 7.0 s with 76 MB), and the scan stops between streams after 30 seconds (`MAX_SECONDS`) and says so, as a backstop
+  for any slow content the weights miss (this also covers the Low note that a corrupt stream is charged nothing: about 24,000 of them
+  in 50 MB cost about 14 s). Tests that failed first, a generator for the construction (`bench_pdf.nested_empty_blocks`), and a
+  break-it run (five mutations; four caught; the fifth, a deadline that stops without setting `incomplete`, is equivalent: an unread
+  stream with a `/Filter` is also reported by the check for filters outside the streams read). **Medium, not changed (a documented
+  deferral of the plan):** peak memory of 1.2 to 1.9 GB on 50 MB files: `re.sub` with a function keeps 30 to 90 bytes for each `#xx`
+  escape, and it happens on the whole file (the older Low note: stored deflate blocks of `#41`, a file of `#2FJS `, 3,000 dictionaries
+  of `#41`) and on a decoded ASCII85 or hex piece, which is not cut at 2 MB (one stream decoding to 39 MB of `#41` gave 1.22 GB).
+  The macOS sandbox has no memory limit, so the effect is swap or a killed scan (a failed scan stage, not a clean caveat), never
+  silence. The fix is to unescape and count in bounded chunks and to cut ASCII85 and hex output at the window; the plan puts it out
+  of scope (Non-goals, Deferred work), and it is recommended as a small plan of its own. **Low, not changed:** a `/FileAttachment`
+  with `/FS << /EF 5 0 R >>` and no `/EmbeddedFile` text gives no caveat (older than B); counts of 8 million or more (a hostile file
+  can make 64 million).
+- **Second look at the fix (the same reviewer, a fresh copy):** it could not break it. The 700-stream file (3.99 MB) takes 6.9 s and
+  the 8,739-stream file (49.8 MB) 7.0 s with 75 MB, both `scan_incomplete`. It measured the real cost of a layer's input in
+  nanoseconds a byte (dynamic empty blocks 54, fixed 6.8, stored 1.2) against the 60 charged (20 units of about 3 ns), a margin of
+  10 to 20%, and a machine with a unit under 2.7 ns would let such streams through the charge but not the deadline. Two Lows, both
+  taken: (1) *over-charge:* a Flate fed by ASCII85 or hex was charged though its input is bounded by the stream, so about 900
+  ASCII85+Flate pictures would have been `scan_incomplete`; the charge now applies only to a layer that comes after a deflate (a
+  rule that charges `[Fl A85 Fl]` at both later layers and `[A85 Fl]` at none; tests, and three mutations caught); (2) *time not
+  covered by the deadline:* it is checked between streams, and the worst file the reviewer could build is about 30 s plus 6 s (a
+  last stream) plus 8 s (the whole-file unescape and count) plus 3 s (the check for filters outside streams), about 47 s, under the
+  sandbox's 60 but over the 20 of the target; the deadline is now 25 s (about 42 s for that worst file). Not changed: 24,353 streams
+  whose first layer inflates 1.99 MB and then fails take 13.4 s and 183 MB, charged nothing (the first layer reads only the blob);
+  under 20 s and stopped by the deadline anyway.
+- **Verification after the fixes:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_convert_run
+  engine.tests.test_bench_pdf`: 245 tests, OK; `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest
+  engine.tests.test_convert.ToolVersionTest engine.tests.test_search.CommandLineTest`: 14 tests, OK. The 50 MB benchmarks again with
+  the final scan: `hostile_nested` (9,000 two-layer streams, 51,253,934 bytes, sha256
+  `84ffbe8b5ca6a0c788a3a20233022d885fc772cd418497f45fc363ef3d5f3026`) 7.0 s, 76 MB, `scan_incomplete`; `hostile_predictor` 11.8 s, 86 MB;
+  `hostile_escapes` 5.0 s, 152 MB; `hostile_matches` 8.6 s, 77 MB; `images_100` 1.1 s, 180 MB; `images_1000` 7.8 s, 180 MB; `expanding`
+  8.9 s, 77 MB; `tiny` 3.5 s, 205 MB: all inside the 20 seconds and 600 MB of completion criterion 3.
+- **Not done:** the commit; increment C, without which B is not put in the config.
+- **Left for the owner:** the word to commit B, and whether to open the small plan for the memory of escapes.

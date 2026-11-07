@@ -19,14 +19,19 @@ import json
 import os
 import re
 import sys
+import time
 import zlib
 from html.parser import HTMLParser
 
-MAX_STREAMS = 2000
-MAX_STREAM_OUT = 2_000_000
-MAX_TOTAL_OUT = 20_000_000
+MAX_STREAMS = 500_000        # the most streams it decodes in a file (about 8 microseconds each when they are tiny)
+MAX_STREAM_OUT = 2_000_000   # the most it takes from one stream: what makes an image "large"
+MAX_TOTAL_OUT = 2_500_000_000  # the most work it does on what it decodes, in all (about 3 ns a unit, see _work): a bound on time, not on memory
 MAX_ROW = 4_000_000          # the longest row of predicted data it undoes
 MAX_PREDICTED_ROWS = 2_000_000  # the most passes over rows of predicted data it undoes in a file: a row costs the same however short
+MAX_SECONDS = 25                # the scan stops between streams after this long (the sandbox kills it at 60): a backstop for work the weights miss
+LAYER_UNITS = 20                # what each byte read by a filter after a deflate costs, in units of _work: such a layer's output may be nothing
+MAX_FILTERS = 8                 # the most filters it reads through on one stream: each layer is a decode, and only the last one's output is charged
+MAX_PREDICTED_BYTES = 20_000_000  # the most bytes it undoes a predictor over in a file: that work is slow Python (0.15 s a megabyte with Paeth rows)
 KINDS = {
     "malformed": "The file does not look like the kind of file it is named as.",
     "encrypted": "The PDF is encrypted, so most of what it holds cannot be checked.",
@@ -115,18 +120,24 @@ _CONTAINER_KEYS = re.compile(rb"/(?:N|First|Extends|W|Size|Index)(?![A-Za-z0-9])
 
 def _is_image(dictionary):
     """Whether a stream dictionary may be treated as a picture: none of the keys of an object stream or a cross-reference stream (a
-    viewer reads objects, and so the actions in them, out of those), a /Subtype /Image, and a /Type that is /XObject wherever it is
-    given and given at least once. The scan does not parse dictionaries, so the words may sit in a string or a nested dictionary,
-    and a dictionary can say what it likes; what it cannot do is leave out the keys a viewer needs to use it as a container."""
+    viewer reads objects, and so the actions in them, out of those), a /Subtype /Image, and no /Type but /XObject (the format makes
+    the /Type of an image optional, and real images leave it out). The scan does not parse dictionaries, so the words may sit in a
+    string or a nested dictionary, and a dictionary can say what it likes; what it cannot do is leave out the keys a viewer needs
+    to use it as a container."""
     if _CONTAINER_KEYS.search(dictionary):
         return False  # the claim can be forged; these keys cannot be left out of a stream a viewer reads objects from
-    types = _TYPE.findall(dictionary)
-    return bool(types) and all(t == b"XObject" for t in types) and bool(_IMAGE.search(dictionary))
+    return all(t == b"XObject" for t in _TYPE.findall(dictionary)) and bool(_IMAGE.search(dictionary))
 
 
 class _Unreadable(Exception):
     """Parameters or predicted data that the scan cannot read with certainty. It is never guessed at: the stream is reported as
     not fully read, and what could be decoded before the predictor is still scanned."""
+
+
+class _Spent(_Unreadable):
+    """The data could be read, but the scan has already undone as much predicted data in this file as it does (the work is slow).
+    For a picture this is not an incomplete scan: what was decoded before the predictor is read, and it is reported as a picture
+    of which only the first part was checked."""
 
 
 _WS = rb"[ \t\r\n\x00\x0c]"
@@ -223,11 +234,12 @@ def _paeth(a, b, c):
     return a if pa <= pb and pa <= pc else (b if pb <= pc else c)
 
 
-def _undo_predictor(data, parms, rows=None):
+def _undo_predictor(data, parms, rows=None, volume=None):
     """The data of a stream with its predictor undone: PNG (predictors 10 to 15, whatever the number, each row says its filter)
     and TIFF (2, at 8 bits). Rows and the bytes in them are taken as they come; a last row that is cut short is undone as far as
     it goes. Anything else (another predictor, bits or colours that make no sense, a row type that is no PNG filter, a row longer
-    than MAX_ROW) is refused with _Unreadable. `rows` is a one-item list, the rows left to undo in the file."""
+    than MAX_ROW) is refused with _Unreadable. `rows` is a one-item list, the rows left to undo in the file, and `volume` one, the
+    bytes left to undo in it."""
     predictor = parms["predictor"]
     if predictor == 1:
         return data
@@ -239,12 +251,16 @@ def _undo_predictor(data, parms, rows=None):
     rowbytes = (colors * bpc * columns + 7) // 8
     if rowbytes > MAX_ROW:
         raise _Unreadable("a row too long to undo")
+    if volume is not None:
+        volume[0] -= len(data)  # the work is in the bytes, and the limit on all that is decoded is far above what this can do in time
+        if volume[0] < 0:
+            raise _Spent("more predicted data than the scan undoes")
     bpp = colors if predictor == 2 else max(1, (colors * bpc + 7) // 8)
     count = -(-len(data) // (rowbytes + (predictor != 2)))
     if rows is not None:
         rows[0] -= count * bpp  # a row costs a pass over it for each byte of a pixel, whatever its length
         if rows[0] < 0:
-            raise _Unreadable("more rows of predicted data than the scan undoes")
+            raise _Spent("more rows of predicted data than the scan undoes")
     out = bytearray()
     if predictor == 2:
         if bpc != 8:
@@ -281,19 +297,29 @@ def _undo_predictor(data, parms, rows=None):
     return bytes(out)
 
 
-def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None):
+def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None, volume=None, layers=None):
     """Undo a list of text and deflate filters, in order, and the predictor of a deflate step that has one. (bytes, "ok") or (what
-    it had, "bad", "limit" or "unreadable": the predictor could not be undone, and the bytes are those before it). `raws`, if
-    given, gets the bytes from before each predictor that was undone."""
+    it had, "bad", "limit", "spent" or "unreadable": the predictor could not be undone, and the bytes are those before it; "spent":
+    the scan has undone all the predicted data it does in a file). `raws`, if
+    given, gets the bytes from before each predictor that was undone. `layers`, if given, is a one-item list that gets the cost of
+    every layer after a deflate: only the last output is charged by the caller, and a layer that reads two million bytes of empty
+    deflate blocks gives none, at 60 nanoseconds a byte."""
     data = blob
-    for i, name in enumerate(names):
+    deflated = False  # whether a deflate has come before: only that can turn a small blob into a large input (a text filter's output
+    for i, name in enumerate(names):  # is bounded by the blob), so only a layer after one is charged
+        if deflated and layers is not None:
+            layers[0] += LAYER_UNITS * len(data)
+        if name in _FLATE_NAMES:
+            deflated = True
         if name in _FLATE_NAMES:
             data, state = _inflate(data, limit)
             if state == "bad":
                 return data, state
             if parms and parms[i] and parms[i]["predictor"] > 1:
                 try:
-                    undone = _undo_predictor(data, parms[i], rows)
+                    undone = _undo_predictor(data, parms[i], rows, volume)
+                except _Spent:
+                    return data, ("limit" if state == "limit" else "spent")
                 except _Unreadable:
                     return data, "unreadable"
                 if raws is not None:
@@ -575,15 +601,34 @@ def _filter_outside(data, covered):
     return False
 
 
+def _work(piece):
+    """What reading a decoded piece costs, in units of about three nanoseconds: a unit for each byte, and more for the bytes that make
+    the reading slow. Ordinary content costs its length; a piece of nothing but escapes (#41) takes thirty times as long to unescape,
+    and one that is all matches takes ten times as long to collect, which a hostile file can use to make the limit on the bytes alone
+    allow minutes. The costs were measured on the worst pieces tried (a hash 260 to 400 ns, since an escape may spell a slash; a
+    slash 100 ns), and none took more than 3.8 ns a unit, so the limit is under ten seconds."""
+    return len(piece) + 135 * piece.count(b"#") + 35 * piece.count(b"/")
+
+
+def _tally(counts, haystack):
+    """Add to `counts` the matches of each pattern in one piece of text."""
+    for kind, pattern in _PATTERNS.items():
+        counts[kind] += sum(1 for _ in re.finditer(pattern, haystack))  # counted as they come: three million matches are not a list
+
+
 def scan_pdf(data):
     caveats, incomplete, large_images = [], False, 0
     if b"%PDF-" not in data[:1024]:
         caveats.append(caveat("malformed"))
-    plain = _unescape_names(data)
-    haystacks = [plain]  # the file as it is, which covers every stream that is not compressed
-    total, decoded, covered, rows_left = 0, 0, [], [MAX_PREDICTED_ROWS]
+    counts = dict.fromkeys(_PATTERNS, 0)  # what each pattern matched, in every piece: a decoded piece is counted and dropped
+    _tally(counts, _unescape_names(data))  # the file as it is, which covers every stream that is not compressed
+    total, decoded, covered, rows_left, bytes_left = 0, 0, [], [MAX_PREDICTED_ROWS], [MAX_PREDICTED_BYTES]
     reader = {"incomplete": False, "steps": MAX_READ_STEPS, "objects": 0, "unfinished": 0}  # what the forward reader keeps
+    started = time.monotonic()
     for found in _streams(data, reader):
+        if time.monotonic() - started > MAX_SECONDS:
+            incomplete = True  # out of time: the rest of the streams are not read, and it says so
+            break
         located, blob = found
         if located is None:
             incomplete = True  # a stream whose dictionary could not be read, so what filter it uses is unknown
@@ -602,6 +647,9 @@ def scan_pdf(data):
             incomplete = True
             continue
         names = _NAME.findall(value.group(1)) if value else []
+        if len(names) > MAX_FILTERS:
+            incomplete = True  # a chain this long is no honest file's, and each layer is a decode that is not charged
+            continue
         if _FILTER_KEY.search(dictionary) and not names:
             incomplete = True  # a filter written in a way this scan does not read
         elif not names or all(n in _IMAGE_FILTERS for n in names):
@@ -617,30 +665,33 @@ def scan_pdf(data):
                 incomplete = True
                 break
             cap = min(MAX_STREAM_OUT, MAX_TOTAL_OUT - total)
-            raws = []
-            out, state = _decode_chain(blob, names, cap, parms, rows_left, raws)
-            total += len(out)
+            raws, layers = [], [0]
+            out, state = _decode_chain(blob, names, cap, parms, rows_left, raws, bytes_left, layers)
+            total += _work(out) + sum(_work(raw) for raw in raws) + layers[0]
             only_deflate_last = (names[-1] in _FLATE_NAMES and sum(n in _FLATE_NAMES for n in names) == 1
                                  and len(_FILTER_KEY.findall(dictionary)) == 1)  # one filter key: a second might be the real list
-            if (state == "limit" and cap == MAX_STREAM_OUT and only_deflate_last and not _deflate_header(out)
-                    and _is_image(dictionary) and b"stream" not in blob):  # a stream marker in its bytes: structure was swallowed
-                # a picture too big to read to the end: its first part was read, and it is reported as that. Only when the deflate
-                # step that ran out is the last of the filters: the chain stops there, and anything after it was not undone
+            picture = (only_deflate_last and not _deflate_header(out) and _is_image(dictionary)
+                       and b"stream" not in blob)  # a stream marker in its bytes: structure was swallowed
+            if picture and ((state == "limit" and cap == MAX_STREAM_OUT) or state == "spent"):
+                # a picture too big to read to the end, or whose predictor the scan has no more work for: its first part was read, and
+                # it is reported as that. Only when the deflate step that ran out is the last of the filters: the chain stops there,
+                # and anything after it was not undone
                 large_images += 1
             elif state != "ok" or out[:2] in _ZLIB_MAGIC:  # damaged, cut short, or compressed again inside
                 incomplete = True
             if out:
-                haystacks.append(_unescape_names(out))
+                _tally(counts, _unescape_names(out))
             # a dictionary is read as text, so a decoy /DecodeParms in a string would make the scan undo a predictor that the viewer
             # never applies, and garble what it reads: the bytes from before the predictor are read as well
-            haystacks.extend(_unescape_names(raw) for raw in raws if raw)
+            for raw in raws:
+                if raw:
+                    _tally(counts, _unescape_names(raw))
         else:
             incomplete = True  # a filter this scan does not decode (LZW, run-length, crypt, or one it has not heard of)
     incomplete = incomplete or reader["incomplete"]  # what the reader could not account for
     if not incomplete and _filter_outside(data, covered):
         incomplete = True  # a filter is declared somewhere that is not the dictionary of a stream the scan read
-    for kind, pattern in _PATTERNS.items():
-        count = sum(len(re.findall(pattern, h)) for h in haystacks)
+    for kind, count in counts.items():
         if count:
             caveats.append(caveat(kind, count))
     if large_images:

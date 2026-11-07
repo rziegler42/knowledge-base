@@ -69,6 +69,30 @@ class ExpandingStreamsTest(unittest.TestCase):
                 bench_pdf.expanding_streams(bad)
 
 
+class NestedEmptyBlocksTest(unittest.TestCase):
+    def test_the_same_arguments_give_the_same_bytes(self):
+        a = bench_pdf.nested_empty_blocks(3)
+        self.assertEqual(hashlib.sha256(a).digest(), hashlib.sha256(bench_pdf.nested_empty_blocks(3)).digest())
+
+    def test_each_stream_is_two_deflate_layers_a_small_blob_that_becomes_empty_blocks_that_become_nothing(self):
+        data = bench_pdf.nested_empty_blocks(4, nbytes=200_000)
+        found, reader = streams(data)
+        self.assertEqual((len(found), reader["incomplete"]), (4, False))
+        for located, blob in found:
+            self.assertLess(len(blob), 2000)
+            self.assertIn(b"[/FlateDecode /FlateDecode]", located[2])
+            middle = zlib.decompressobj().decompress(blob, 10_000_000)
+            self.assertGreater(len(middle), 150_000)  # the empty blocks
+            d = zlib.decompressobj()
+            self.assertEqual(d.decompress(middle, 10_000_000), b"")
+            self.assertTrue(d.eof)  # a whole, valid stream that holds nothing
+
+    def test_the_arguments_are_checked(self):
+        for bad in ((0,), (-1,), (1, 100), (1, 0)):
+            with self.assertRaises(ValueError):
+                bench_pdf.nested_empty_blocks(*bad)
+
+
 class TinyStreamsTest(unittest.TestCase):
     def test_the_same_arguments_give_the_same_bytes_and_another_seed_gives_other_bytes(self):
         a = bench_pdf.tiny_streams(200_000, seed=3)
