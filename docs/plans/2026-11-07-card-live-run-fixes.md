@@ -1,0 +1,155 @@
+# Two fixes from the first live run of cards
+
+Status: Proposed
+Created: 2026-11-07
+Candidate: none (no new roadmap work; these are two findings of the live run of 2026-11-07-card-stage, recorded in its Result)
+Specs: card
+
+## Goal
+
+Two things the first live run of `cards` on three real books showed are put right. A card is no longer marked partial only because
+its conversion has no headings, which every PDF lacks, so the mark means something again. And when a model's answer is refused
+for its shape, the answer is kept aside where the owner can read it, so a failure can be diagnosed and not guessed at.
+
+## Scope
+
+- Increment A: the conversion having no structure (`flat`) stops being a reason for a card to be partial. The card still records
+  the structure. A conversion that is partial, a missing conversion, a sampled book and a card with no model part still make a
+  card partial.
+- Increment B: when `models.run_job` receives an answer and refuses it for its shape, it raises a refusal that carries the answer
+  and the record of the call; the card maker keeps that answer aside in a file and raises a typed refusal that carries the name of
+  the file, which `run` recognises, so that the failed report of the book has a `kept` field with the file name (every report has
+  the field, empty when nothing was kept). Nothing else is kept aside.
+- The documents say both.
+
+## Non-goals
+
+- Making the three cards that exist again. A card is never changed; the three keep their partial mark, and a new card needs
+  `cards --again` and new model calls, which this plan does not make.
+- Retrying a refused answer, trimming a list that is too long, or loosening any limit.
+- Keeping aside an answer for any failure other than a refused shape (a failed call has no answer to keep).
+- Viewing, listing or pruning the files kept aside. The owner reads them as files; nothing deletes them.
+- The other findings of the live run (a large block cut into small pieces; whether the neutral fields name the field).
+
+## Assumptions and constraints
+
+- A card whose conversion is flat is a normal card for a PDF: the converter gives no headings, the text is whole, and the card
+  describes the whole work. The reasons that remain are the ones that say the card describes less of the work.
+- `validate` accepts a partial card with reasons and a card that is not partial with none, so the three cards already filed stay
+  valid, and so does a card made after this change.
+- A model's answer is untrusted data. The file that holds it is written with its text escaped to ASCII (`json.dumps` default), so
+  a control or escape character in it cannot reach a terminal when the owner reads the file with `cat`; it is bounded in size (the
+  bridge already limits a reply to 256 KB). It is written with descriptors and not by path: the index root is opened without
+  following a link, the folder `refused` is made or opened relative to it without following a link, the folder must be a
+  directory owned by the user with no access for others (otherwise nothing is written), and the file is created relative to that
+  folder, exclusively, without following a link, with mode 600. A name that exists is never overwritten: the name carries a random
+  suffix, and a clash is met with a new suffix, a few times, before giving up.
+- The place is the index root of the library, in a folder `refused`. That root holds what can be rebuilt, so a file there is an aid
+  and not a record; the folder is the owner's to delete. The owner's index root is a personal path and appears in no tracked
+  file. The spec says only that such output is "kept aside for inspection" and does not give a place (`theme.md`, "Size and kind").
+- A bound stops the folder growing without end: no more than 200 files are kept, and past that nothing is kept and the report says
+  so, since the program deletes nothing.
+- Tests use the fake launcher of `engine/tests/test_cardmake.py`; no step makes a live model call.
+
+## Completion criteria
+
+1. A card whose only possible reason was a flat conversion is not partial and records its structure as `flat`; a partial
+   conversion, no conversion, a sampled book and a card with no model part still make a card partial.
+2. A refused answer is kept in a file in the index root with the book, version, job, registry name, model, prompt version, date,
+   the reason and the answer, escaped, bounded, mode 600, in a folder that is not a link and that no other user can enter; two
+   refusals with the same metadata keep two files; the failed report that `run` returns for the book names the file in its `kept`
+   field; and no file is kept for a failed call, a missing setting, a success or a skip.
+3. No path or name of the owner appears in a tracked file.
+
+## Increments
+
+### Increment A — A flat conversion no longer makes a card partial
+
+**Outcome:** the mark `partial` on a card means that the card describes less of the work than the book holds, and not that a PDF has no
+headings.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/card.py` (the reasons in `_conversion`), `engine/tests/test_card.py`, `engine/README.md` and
+`README.md` where they describe the partial mark.
+**Steps:**
+1. Write the tests first, changing the test that says a flat conversion is partial to say that it is not, and that the structure
+   is still recorded as flat: they fail. Keep the tests that a partial conversion, a missing conversion, extra reasons and a card
+   with no model part are partial.
+2. Remove the flat reason from `_conversion`. The structure stays in the conversion summary of the card, and `card-show` still
+   prints it.
+3. Say in `engine/README.md` which reasons make a card partial.
+4. Run the tests and see them pass.
+**Verification:** `python3 -m unittest engine.tests.test_card engine.tests.test_cardmake`. The second file runs the commands that
+read and print the mark.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-07-card-live-run-fixes#A`.
+
+### Increment B — Keep a refused answer aside
+
+**Outcome:** when a model's answer is refused for its shape, the owner can read what it wrote.
+**Dependencies:** none (A and B do not touch the same code).
+**Affected areas:** `engine/kb/models.py` (a refusal that carries the answer), a new module `engine/kb/refused.py`,
+`engine/kb/cardmake.py` (keep it aside, a typed refusal that carries the file name, and the `kept` field of the report), their tests (`engine/tests/test_models.py`,
+`engine/tests/test_refused.py`, `engine/tests/test_cardmake.py`), `engine/README.md` and `README.md`.
+**Steps:**
+1. Write the tests first; they fail. In `test_models`, a refused shape raises a refusal that is a `KbError` and carries the answer
+   and the record, and a failed call or a bridge refusal carries none. In `test_refused`, the file: its name from checked ids, a
+   job name, a time and a random suffix; its content; ASCII escaping of a control character; the size bound; mode 600 in a folder
+   of mode 700; a `refused` that is a link, a file, or a directory that others can enter is refused and nothing is written; an index
+   root that is a link is refused; a name that exists is never overwritten, and two refusals with the same metadata and a forced
+   clash of the suffix keep two files; the limit of 200 files. In `test_cardmake`, through `run`: a book whose answer is refused
+   leaves one file and its failed report has the `kept` name, nothing is filed as a card, every other report has `kept` empty, a
+   write that fails leaves the refusal reported with a note, and the other kinds of failure and a success leave no file.
+2. In `models.py`, make `run_job` raise that refusal when the shape check fails, with the answer text and the record of the call.
+3. Write `refused.keep(index_root, ...)` with descriptors: open the index root without following a link, make or open `refused`
+   relative to it without following a link, check that it is a directory owned by the user with no access for others, count its
+   files, create the file relative to it with `O_EXCL`, no-follow and mode 600 under a name with a random suffix (a new suffix on a
+   clash, a few times), and return the file name; stop at the limit of 200 and say that nothing was kept.
+4. In `make_for_version`, catch that refusal around the model part, keep the answer aside with the book, version and job, and
+   raise a typed refusal (a `KbError`) that carries the file name, or a note that the answer could not be kept, so that the card is
+   not made. In `run`, recognise that refusal and put the name in the `kept` field of the failed report; every report gets the
+   field, empty by default. A failure to write the file must not hide the refusal.
+5. Say in `engine/README.md` where the files are, what they hold and that nothing deletes them.
+6. Run the tests and see them pass.
+**Verification:** `python3 -m unittest engine.tests.test_models engine.tests.test_refused engine.tests.test_cardmake`. The model
+tests are included because `models.py` changes.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-07-card-live-run-fixes#B`.
+
+## Verification for the plan as a whole
+
+Each increment's recorded verification still stands unless a later increment changed its inputs. After B, rerun
+`python3 -m unittest engine.tests.test_card engine.tests.test_cardmake engine.tests.test_models engine.tests.test_refused
+engine.tests.test_setup` once; the setup tests are included because the commands print the report that B extends. The wider engine
+suite is not named: the plan changes no stage, no index and no conversion. A wider run is the owner's to ask for.
+
+## Risks and sensitive actions
+
+- **A file of untrusted model text is written to disk.** It is escaped to ASCII, written with mode 600, never through a link and
+  never over an existing file, bounded in size and number, and in a folder the owner can delete. Nothing reads it back into the
+  engine, so its content steers nothing.
+- **It sits in the index root,** a personal path that is never committed. The report names the file and not the folder.
+- **A card that no longer says "partial" for a flat conversion** could hide that an agent should treat the structure as poor. The
+  card still records the structure as `flat`, and `card-show` prints it.
+- **No live call is made by this plan.**
+
+## Review record
+
+Reviewer: Codex through the review engine (model gpt-5.6-terra). Round 1 of 3: changes needed, three findings, all applied.
+
+- R1-F1, applied: the file name could not reach the failed report, because `run` builds a new failed report from only the text of
+  an exception. Increment B now raises a typed refusal that carries the name (or a note that the answer could not be kept), `run`
+  recognises it and fills a `kept` field that every report has, and the tests check the report `run` returns.
+- R1-F2, applied: a name built from the book, version, job and time can repeat, and an exclusive create would then lose the new
+  answer. The name now has a random suffix, a clash is met with a new suffix a few times, and a test forces a clash.
+- R1-F3, applied: checking that the folder is not a link and then creating a file by path leaves a gap, and the plan had promised
+  that no link is followed. The file is now written with descriptors: no-follow opens of the index root and of `refused`, a check
+  that it is a directory owned by the user that others cannot enter, and an exclusive no-follow create relative to it, with tests
+  for a link, a file, an open directory and a link as the index root.
+
+## Deferred work
+
+- Viewing or listing the files kept aside, and removing old ones.
+- Making the cards of the three books again, and a trial of whether the cards help (`cards#card-trial`).
+- A large block cut into pieces of 5,000 characters, and a check of the neutral fields for the book's field.
+
+## Result
+
+Empty until work starts.
