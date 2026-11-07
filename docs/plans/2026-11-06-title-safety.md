@@ -1,6 +1,6 @@
 # Title safety: one rule for a title, where it is stored and where it is shown
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-06
 Candidate: none (no roadmap exists; this is finding 4 of the security review of increment B of 2026-11-06-first-walk-through-fixes, deferred there for the owner)
 Specs: book, reading
