@@ -242,4 +242,20 @@ Reviewer: Codex through the review engine (model gpt-5.6-terra). Round 1 of 3: c
   and sets over covered pairs; the README and the module docstring state this. F6's remaining notes (a corpus opened by path after
   the check, a hard link to a file in the project, no check against the library's own folders) were not applied: the plan's threat
   model has no outside attacker, and the corpus and report are the owner's files. The rest of the review is in this entry.
-- Next: the owner's word to commit increment A; B needs the owner's choice of books and word to send their text to the models.
+- Committed as `61874f4`.
+
+### Increment B — Cards for the books of the trial (run; not committed)
+
+- The owner chose the 12 books with real text: the 3 already carded and 9 more (Simulated annealing, Hamming's talk, the sqlite3
+  documentation, Quantenmechanik, Neural Machine Translation, ResNet, BERT, ViT, VGG), and said to send their text to the models
+  in the config. Left out: the three short or thin pages (Quotes to Scrape, Hacker News, Hello world) and the three long
+  documents (CLIP, PaLM, RFC 9110), so a right book among those would be uncovered.
+- Run: `cards --book` once per book, one after another, with the two models the config names for the two tasks. All nine were
+  carded at generation 1, none failed, none refused (no refused-answers folder exists). Pieces and calls: 2/3, 3/4, 4/5, 4/5, 4/5,
+  3/4, 4/5, 5/6 and 12/13, 50 calls in all. Only the first run was timed (31 seconds for a two-piece page); the others were not.
+- The Hamming card is marked partial: the talk has 14 pieces and 12 are sampled, the cap. The other eight are not partial.
+- `card-index` then built the catalog: 18 books, 12 versions, 12 cards, 0 failed. `card-search annealing` found the annealing
+  card with its citation; no other search was tried. Cards were not read for quality here; that is increment C.
+- Verification as run: the runs above, read as written; `python3 -m unittest engine.tests.test_cardmake engine.tests.test_catalog`
+  gave 159 tests, OK. Not run: any other test file.
+- No code changed. The commit holds this entry only.
