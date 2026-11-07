@@ -64,6 +64,25 @@ proposed. A bridge to local models (`ask-ollama`) is installed in the workbench,
   by meaning or to themes. Out, building either of them.
 - Trigger: card-catalog is done and the owner asks for a plan.
 
+### card-grounding: Make every item on a card traceable to the book
+
+- ID: card-grounding
+- Outcome: the owner knows how accurate the cards are, and the cards are more accurate. A card's key ideas and topics grow or
+  shrink with what the book holds. Each claim taken from the book carries a short verbatim quote, and a check confirms that the
+  quote occurs in the piece it names; an item with no verified quote is dropped or marked as inferred, and a card with fewer
+  than the minimum is marked thin, not padded. Each item is marked stated, inferred or unverified, and a search result shows
+  the mark. The accuracy of the current cards and of the new ones is measured on a sample of items that the owner labels as
+  supported, unsupported or inference. Time and calls are spent on accuracy.
+- Dependencies: card-trial (its result says what the cards get wrong), card-stage.
+- Boundary: in, higher ceilings in the merge call, a quote per claim and a mechanical check of it, the three marks, the owner's
+  labelled sample and the accuracy measure, a fix to the prompt's wording (the right word for the kind of source, no mention of
+  the pipeline's notes), and a second trial on harder questions and more books. Also in, if the labelled sample shows it pays: a
+  second model, named in the owner's config, that checks one more round when a list is full or an item's support is weak
+  (tested against the owner's labels before it is trusted), agreement across two runs of the note stage, and a test of whether
+  covering every piece of a long book improves accuracy before the sample cap is raised. Out, search by meaning, themes, cloud
+  models, and rewriting existing cards (a new card is a new generation).
+- Trigger: the trial's result is recorded and the owner asks for a plan.
+
 ## Deferred work
 
 - Search by meaning and the embedding model: cards are stored so that vectors can be added later without rewriting any card.
