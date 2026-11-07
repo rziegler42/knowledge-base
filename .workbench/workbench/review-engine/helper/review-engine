@@ -63,7 +63,7 @@ CHECK_TIMEOUT = 15
 KEY_BYTES = 32
 NAMESPACE = ".workbench/workbench/review-engine"
 STORE_NAME = "review-engine"
-USAGE = ("usage: review-engine status|init|convergence|review-plan|review-spec|review-roadmap|review-adr|reset|archive "
+USAGE = ("usage: review-engine status|init|convergence|record-paths|review-plan|review-spec|review-roadmap|review-adr|reset|archive "
          "<document> [--digest <digest>, for reset and archive], "
          "decide|amend <document> <finding> applied|rejected [--reason <text>] [--digest <digest>, for amend], "
          "extend <document> <1 to 5> [--digest <digest>], preview followed by one of these without its digest "
@@ -1367,6 +1367,33 @@ def convergence(root, project_id, argument, out):
                       "review": document.key, "closed": state["closed"] is not None})
 
 
+def record_paths(root, project_id, argument, out):
+    """The project-relative files of the review of `argument` that a commit holds (`docs/specs/review-engine.md`, "The
+    commands"): `state.json`, `ledger.md` and `schema.json`, then the file of each round the state names, each only where it
+    is a regular file read without following a link. The list comes from the state, never from the directory, so a stray
+    file in it is not named. A seal that does not hold does not stop the listing, since it only names files; a review that
+    is not there, or a state that cannot be used, is refused. Nothing is written."""
+    document = resolve(root, argument)
+    loaded = load(root, Guarded(project_id), document)
+    if loaded is None:
+        raise Refused("there is no review of %s (init makes one)" % shown(document.path))
+    if loaded.state is None:
+        raise Refused("the review of %s is %s (%s) and names no files" % (
+            shown(document.path), standing(loaded), loaded.reason))
+    folder = "%s/%s" % (NAMESPACE, document.key)
+    names = ["state.json", "ledger.md", "schema.json"] + [entry["file"] for entry in loaded.state["rounds"]]
+    paths = []
+    with safefs.Root(root, "project root") as tree:
+        for name in names:
+            try:
+                present = tree.read_if_present("%s/%s" % (folder, name), MAX_STATE) is not None
+            except safefs.SafeFsError:
+                present = False
+            if present:
+                paths.append("%s/%s" % (folder, name))
+    return emit(out, {"document": document.path, "paths": paths})
+
+
 def emit(out, found):
     out.write(json.dumps(found, sort_keys=True) + "\n")
     return 0
@@ -1381,7 +1408,7 @@ def fits_arguments(argv):
         return len(argv) == 4 or (len(argv) == 6 and argv[4] == "--reason")
     if command == "extend":
         return len(argv) == 3
-    return (command in ("status", "init", "convergence", "reset", "archive") or command in ROUND_COMMANDS) \
+    return (command in ("status", "init", "convergence", "record-paths", "reset", "archive") or command in ROUND_COMMANDS) \
         and len(argv) == 2
 
 
@@ -1407,6 +1434,8 @@ def run(argv, cwd, out):
         return run_round(root, project_id, ROUND_COMMANDS[command], argv[1], out)
     if command == "convergence":
         return convergence(root, project_id, argv[1], out)
+    if command == "record-paths":
+        return record_paths(root, project_id, argv[1], out)
     if command == "preview":
         return preview(root, project_id, argv, out)
     if command == "extend":

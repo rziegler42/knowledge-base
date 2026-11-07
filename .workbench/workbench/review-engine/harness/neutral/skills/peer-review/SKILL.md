@@ -23,6 +23,11 @@ document.
    A finding is decided once. A finding that is meaningful and undecided blocks the next round.
 6. Ask for another round only after you have decided the findings of the last. A review stops at its bound
    of rounds; report what remains open and let the owner say what happens next.
+7. A review of a plan is kept in files of the project, and the commit that completes or closes the plan must hold them.
+   After your last `decide`, and again just before that commit, run `wb run review-engine record-paths <document>`. It
+   prints the files of the review and changes nothing. When you commit, name every path it prints in the commit that
+   completes or closes the plan, one file at a time: a directory is not accepted. A file of the review that changed after
+   the commit that holds it is a change to commit.
 
 Rules:
 

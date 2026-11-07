@@ -71,6 +71,9 @@ HANDLE_PATH_FACTS = ("paths", "requested_paths", "target_paths")  # the facts of
 MAX_CANDIDATES = 100  # paths considered for a handle; the rest are counted as left out
 MAX_HANDLE_PATHS = 20  # paths kept in a handle
 MAX_PATH = 256
+# The only characters a handle's path may have: none that a shell reads as syntax in an argument, and no space. `=` is left out
+# because a word that starts with it expands in zsh (`=ls`). Plan `2026-11-07-handle-paths-are-shell-safe`, increment B.
+SAFE_PATH = re.compile(r"[A-Za-z0-9._/+@%,-]+")
 MAX_WALK = 128  # directories from the root to the command's directory
 MAX_INDEX_BYTES = 32 << 20
 MAX_INDEX_ENTRIES = 200000
@@ -302,11 +305,12 @@ def classify(code, out, err, timed_out):
 # is not the rule, because it cannot name every shape of secret (`docs/specs/action-review.md`, "Labelling a declined secret").
 
 def plain_path(item):
-    """True for a relative path that is plain printable ASCII of at most MAX_PATH characters, with no empty, ``.`` or ``..`` segment
-    and no leading ``-``: the only shape a handle may carry."""
+    """True for a relative path of at most MAX_PATH characters, all of them in SAFE_PATH, with no empty, ``.`` or ``..`` segment and no
+    leading ``-``: the only shape a handle may carry. A name with any other character (a space, ``;``, ``$``, a quote, ``=`` ...) is
+    left out and counted, so a file name chosen by a hostile repository cannot be shown for the owner to paste into a shell."""
     if not isinstance(item, str) or not 1 <= len(item) <= MAX_PATH or item[0] in "/-":
         return False
-    if not all(" " <= char <= "~" for char in item):
+    if SAFE_PATH.fullmatch(item) is None:
         return False
     return all(segment not in ("", ".", "..") for segment in item.split("/"))
 

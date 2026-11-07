@@ -31,6 +31,7 @@
         "archive",
         "prune",
         "convergence",
+        "record-paths",
         "preview"
       ],
       "owner": [
