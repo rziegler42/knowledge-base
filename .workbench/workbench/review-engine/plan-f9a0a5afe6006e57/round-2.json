@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-07-card-grounding.md: Increment A, steps 4; Increment E, steps 4-5",
+      "problem": "`card-agreement` is specified to refuse files with different item sets, but the model labels the full `items.json` and the owner labels only the `calibration.json` subset. The required agreement run therefore refuses instead of producing the calibration comparison.",
+      "severity": "major",
+      "suggestion": "Specify a model-labelled calibration file (or a subset operation that preserves the same IDs) and run `card-agreement` on that file and the owner-labelled calibration file."
+    },
+    {
+      "id": "R2-F2",
+      "location": "docs/plans/2026-11-07-card-grounding.md: Increment A, steps 3 and 5; Increment E, step 4",
+      "problem": "The plan never defines the operational distinction between `supported`, `unsupported`, and `inference`. It only says the eventual labeller receives rules, leaving the measurement, tests, and model prompt non-reproducible.",
+      "severity": "major",
+      "suggestion": "Define the three label rules, including how to treat support absent from the supplied passages and claims partly supported by a passage; put the same rubric in the command documentation, tests, and labeller instructions."
+    },
+    {
+      "id": "R2-F3",
+      "location": "docs/plans/2026-11-07-card-grounding.md: Completion criterion 4; Increment C, step 1",
+      "problem": "The plan retains unverified key ideas when dropping them would take the card below three, effectively padding it to the floor. This drifts from the named roadmap candidate, which requires a card below its minimum to be marked thin, not padded.",
+      "severity": "major",
+      "suggestion": "Drop every unsupported/unverified key idea, then mark the card thin whenever the remaining verified or properly inferred ideas are below the minimum."
+    },
+    {
+      "id": "R2-F4",
+      "location": "docs/plans/2026-11-07-card-grounding.md: Increment C, steps 1 and 4",
+      "problem": "The plan keeps unverified caveats and limits, while the roadmap candidate says each caveat and limit is supported by a verified quote and an item without one is dropped or marked inferred. Keeping it as `unverified` does not meet that boundary.",
+      "severity": "major",
+      "suggestion": "Either drop or mark unsupported caveats and limits as inferred under a defined rule, or obtain an owner-approved change to the roadmap candidate that explicitly permits retained unverified caveats and limits."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan still has an unexecutable calibration comparison, lacks a reproducible labelling rubric, and drifts from the candidate’s rules for unsupported items.",
+  "verdict": "changes_needed"
+}

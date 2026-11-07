@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "docs/plans/2026-11-07-card-grounding.md:125-132",
+      "problem": "The rubric says the calibration subset measures how often support is missed because it lies outside the retrieved passages. Both labellers receive only the same passages and must label such items unsupported, so their agreement cannot detect or measure this retrieval error. This leaves the accuracy comparison confounded by passage retrieval quality.",
+      "severity": "major",
+      "suggestion": "Add a blind full-text support check for the calibration subset and report retrieval misses separately, or remove the claim that calibration measures this bias and explicitly limit the result to support within retrieved passages."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "One measurement gap remains: calibration with identical excerpts cannot measure support missed outside those excerpts.",
+  "verdict": "changes_needed"
+}
