@@ -1,0 +1,73 @@
+{
+  "name": "mempalace",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Search the owner's MemPalace for earlier decisions and lessons; the owner builds it.",
+  "provides": [
+    "memory-recall"
+  ],
+  "helpers": [
+    "mempalace"
+  ],
+  "ships": [
+    "helper/mempalace",
+    "helper/mempalace-notes"
+  ],
+  "fills": [
+    {
+      "slot": "slot:policy",
+      "source": "files/blocks/policy.md"
+    }
+  ],
+  "commands": {
+    "mempalace": {
+      "helper": "helper/mempalace",
+      "runtime": "python",
+      "kit": 1,
+      "arguments": [
+        "status",
+        "search",
+        "mine",
+        "sync",
+        "preview"
+      ],
+      "owner": [
+        "mine",
+        "sync"
+      ],
+      "levels": {
+        "mine": [
+          "ask"
+        ],
+        "sync": [
+          "ask"
+        ]
+      },
+      "preview": "preview"
+    },
+    "mempalace-notes": {
+      "helper": "helper/mempalace-notes",
+      "runtime": "python",
+      "kit": 1,
+      "arguments": [
+        "wings",
+        "list",
+        "read",
+        "save",
+        "drop",
+        "merge",
+        "review",
+        "keep"
+      ],
+      "owner": [
+        "keep"
+      ],
+      "levels": {
+        "keep": [
+          "ask"
+        ]
+      },
+      "preview": "review"
+    }
+  }
+}
