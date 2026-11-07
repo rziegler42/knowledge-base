@@ -156,6 +156,34 @@ class PdfScanTest(ScanCase):
         _b, _v, result = self.scan_bytes("paper.pdf", pdf(b"<< /JSON 1 /Encryption 2 /Launcher 3 /EmbeddedFileX 4 >>"))
         self.assertEqual(result["caveats"], [])
 
+    def test_a_file_attachment_without_embedded_file_text_is_an_embedded_file(self):
+        self.approve_scan()
+        cases = {
+            "annotation with a file specification": (b"<< /Subtype /FileAttachment /FS << /EF << /F 5 0 R >> >> >>", {"embedded_files": 2}),
+            "annotation alone": (b"<< /Subtype /FileAttachment /Contents (x) >>", {"embedded_files": 1}),
+            "file specification alone": (b"<< /Type /Filespec /EF << /F 5 0 R >> >>", {"embedded_files": 1}),
+            "escaped name": (b"<< /Subtype /File#41ttachment >>", {"embedded_files": 1}),
+            "escaped key": (b"<< /Type /Filespec /E#46 5 0 R >>", {"embedded_files": 1}),
+            "with the older spelling too": (b"<< /Subtype /FileAttachment >> << /Type /EmbeddedFile >>", {"embedded_files": 2}),
+        }
+        for label, (body, expected) in cases.items():
+            _b, _v, result = self.scan_bytes("paper.pdf", pdf(body))
+            self.assertEqual(kinds(result["caveats"]), expected, label)
+
+    def test_the_new_names_follow_the_rule_of_the_binary_places(self):
+        self.approve_scan()
+        bare = b"\x01\x02\xfe" * 20 + b"/EF" + b"\xfe\x01" * 20 + b"/FileAttachment" + b"\xfe\x02" * 20  # no shape of a use
+        shaped = b"some text here, then /EF (x) and /FileAttachment (y) in the data"
+        for label, payload, expected in (("bare", bare, {"pattern_in_binary_data": 2}), ("shaped", shaped, {"embedded_files": 2})):
+            _b, _v, result = self.scan_bytes("paper.pdf", pdf(image(payload, extra=b"", compress=False)))
+            self.assertEqual(kinds(result["caveats"]), expected, label)
+
+    def test_names_that_only_start_like_an_attachment_are_not_findings(self):
+        self.approve_scan()
+        for body in (b"<< /FileAttachments 1 /FileAttachmen 2 /EFX 3 /Ef 4 /E#20F 5 /EF2 6 /EFF 7 >>", b"<< /E F 5 0 R >>"):
+            _b, _v, result = self.scan_bytes("paper.pdf", pdf(body))
+            self.assertEqual(result["caveats"], [], body)
+
     def test_a_compression_bomb_is_cut_off_quickly_and_reported_as_incomplete(self):
         self.approve_scan()
         started = time.monotonic()

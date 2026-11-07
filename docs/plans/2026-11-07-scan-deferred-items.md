@@ -270,5 +270,25 @@ the limit of the reader of its output, and in the counts that search and read sh
   implementation (recorded above, the plan text unchanged because editing it needs a new approval); the test is of output equality (above);
   `a85decode` and `fromhex` still build the whole decode before the cut, so their transient memory is a few times the input (it is inside
   the measurement of `esc_a85_41`); bookkeeping (this record).
-- **Security review (step 6):** recommended against (the unescaped bytes equal those of the whole-text substitution, so no count can differ,
+- **Security review (step 6), kept in place:** recommended against (the unescaped bytes equal those of the whole-text substitution, so no count can differ,
   and the review found no new exposure); the owner said to commit and go on, so none was run. The plan asks again at the end of D.
+
+### Increment B — Count a file attachment (done, reviewed and committed)
+
+- **What was done:** the `embedded_files` pattern is `/(?:EmbeddedFiles?|FileAttachment|EF)(?![A-Za-z0-9])`. Three tests in `PdfScanTest`: the
+  attachment cases (an annotation with a file specification, 2; the annotation alone, 1; a file specification alone, 1; escaped name and key,
+  1 each; with the older spelling too, 2), the near misses (`/FileAttachments`, `/FileAttachmen`, `/EFX`, `/Ef`, `/E#20F`, `/EF2`, `/EFF`,
+  `/E F`: none), and the binary places (a bare `/EF` and `/FileAttachment` in an unfiltered picture give `pattern_in_binary_data` 2; shaped
+  ones give `embedded_files` 2). The first two failed before the change (no caveat on the attachment); the third was added after the review
+  and passes by construction, as every pattern goes through the same shape check. The label stays `0.0.8` (never approved or released); the
+  hash in `HISTORY` is that of the final file. `docs/specs/pipeline.md` and `engine/README.md` say "embedded files" and name no pattern, so no
+  wording changed.
+- **Provenance:** run on 2026-11-07 on this machine with Python 3.15.0, at commit bbb6e0e plus the uncommitted changes of this increment.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_convert_run` (257 tests
+  before the picture test was added; OK) and `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest
+  engine.tests.test_convert.ToolVersionTest` (4, OK). **Break-it:** three mutations (without `EF`, without `FileAttachment`, without the name
+  boundary) each failed a test. **Not run:** the library comparison (increment E); the rest of the engine suite.
+- **Review (independent reviewer, one round):** no blocking finding. Applied: the missing picture test. Recorded, not changed: the name boundary
+  `(?![A-Za-z0-9])` lets `/EF_x` or `/EF-x` match, as it does for every other pattern; `/EF` can match by chance in a decoded font or object
+  stream at a very low rate (the reviewer's estimate is about 0.05 a megabyte of random binary, less than for `/JS`); a normal attachment
+  now counts 2 or 3 (one for each name), which increment E's comparison will show.

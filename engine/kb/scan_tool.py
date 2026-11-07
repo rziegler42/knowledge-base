@@ -607,7 +607,7 @@ def _streams(data, state):
 _PATTERNS = {
     "encrypted": rb"/Encrypt(?![A-Za-z0-9])",
     "javascript": rb"/(?:JavaScript|JS)(?![A-Za-z0-9])",
-    "embedded_files": rb"/EmbeddedFiles?(?![A-Za-z0-9])",
+    "embedded_files": rb"/(?:EmbeddedFiles?|FileAttachment|EF)(?![A-Za-z0-9])",  # a file attachment annotation or file specification needs no /EmbeddedFile text
     "launch_action": rb"/Launch(?![A-Za-z0-9])",
     "xfa_forms": rb"/XFA(?![A-Za-z0-9])",
     "external_actions": rb"/(?:SubmitForm|GoToR|GoToE|ImportData)(?![A-Za-z0-9])",
