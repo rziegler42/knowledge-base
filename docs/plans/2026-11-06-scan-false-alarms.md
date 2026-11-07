@@ -1,6 +1,6 @@
 # Scan false alarms: ordinary figure-heavy PDFs should not say "scripts" or "incomplete"
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-06
 Candidate: none (a finding of the second walk-through: the scan reported false alarms on three of nine real arXiv papers; a correction that follows from a finding)
 Specs: pipeline
@@ -622,6 +622,27 @@ owner approves it again.
   hidden-text counts), and Bahdanau, ResNet, BERT, ViT and VGG (none). Nothing says `scan_incomplete` that
   did not before. None of the three papers shows `javascript`, `launch_action` or `scan_incomplete` now, which is what criterion 1
   allows; each still carries the weaker `pattern_in_binary_data` (the plan's choice, see C).
-- **Not done:** the commit of this record; the plan's Completed status; a push.
-- **Left for the owner:** the word to commit D, then whether to mark the plan completed, then whether to push (five commits ahead of
-  the remote, six with this one).
+- **Criterion 3 again, on the committed scan** (4b08323; `/usr/bin/time -l python3 -I -S engine/kb/scan_tool.py`, the generated files of
+  increment A and B's hostile files, run on 2026-11-07). These replace the memory figures recorded under B, which were taken before
+  C added the joined and padded copies of the binary spans (peak about 140 MB higher on the image files):
+
+  | File | Time | Peak memory |
+  |---|---|---|
+  | `images_10` | 0.46 s | 337 MB |
+  | `images_100` | 1.11 s | 313 MB |
+  | `images_1000` | 8.0 s | 318 to 324 MB (two runs) |
+  | `expanding` | 8.9 s | 181 MB |
+  | `tiny` | 3.8 s | 331 MB |
+  | `hostile_predictor` | 11.9 s | 205 MB |
+  | `hostile_escapes` | 5.1 s | 203 MB |
+  | `hostile_nested` | 7.0 s | 179 MB |
+
+  All are inside the 20 seconds and 600 MB of criterion 3, and memory does not grow from 10 to 1,000 images. The memory of hostile
+  pictures and raw spans (about 270 MB) and of escapes (1.2 to 2.13 GB, deferred) are in the Results of C and B.
+- **Completion:** criterion 1 (the table above and the places recorded in A and C), 2 (the tests of B for a hundred large images and ten
+  thousand small streams; the generated `tiny` file's `scan_incomplete` is the older zlib-magic rule, recorded under B), 3 (the table
+  above), 4 (262 scan tests and the break-it runs of B and C), 5 (C's tests and the security review of C, with the limit recorded
+  there) and 6 (the comparison above) have recorded evidence; the status is `Completed` on the owner's word.
+- **Not done:** a push; the small plan for the memory of escapes.
+- **Left for the owner:** whether to push (six commits ahead of the remote, seven with this one), and whether to open the plan for the
+  memory of escapes.
