@@ -280,4 +280,50 @@ is left for the owner: read the plan, and say whether to approve it or to ask fo
   existing read test expects the citation to start with `untitled.`, which increment C changes.
 - **Not run:** the other test modules (the changed modules are `textutil`, `index`, `search` and `read`; their tests were run); a
   security review (the plan asks at A and C only).
-- **Left for the owner:** the word to commit B.
+- **Committed** as 2c373219c44f1411434095736060647c63cbc403 (not pushed).
+
+### Increment C — The citation line cannot be imitated by a title (implemented, reviewed and security-reviewed; not committed)
+
+- **Done:** `read._citation` shows `"<title>". <address>. Retrieved <date>. sha256 <digest>`: the title between ASCII quotation marks, each
+  quotation mark in it turned into an apostrophe (one character for one, after the cut to 200), and `"untitled"` for a book with no title.
+  The address also has a quotation mark written `%22` and a space `%20` (see the review below). The README and `docs/specs/reading.md`
+  describe the format.
+- **Statement of the criterion:** completion criterion 4 says the title runs "from its first `"` to its last `". `". The code guarantees
+  the stronger and simpler form, which the tests and the README use: the title ends at the **next** quotation mark, whatever it says.
+  The two forms agree unless an address holds `". `, which the address encoding now prevents. The plan text is unchanged (it is approved).
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_read engine.tests.test_search`: 167 tests, OK
+  (the plan named `test_read`; `test_search` was run as well). The new tests failed first: titles built to look like the fields after
+  them (plain, with a closing quotation mark, with several, with typographic marks, ending in a full stop, a backslash or a quotation
+  mark) must end at the next quotation mark and leave exactly the engine's fields; a missing title is `"untitled"`; an address with a
+  quotation mark, a space or both cannot plant a second `Retrieved` and `sha256`. Break-it: eight mutations (the quote replacement
+  removed, only the first changed, a space instead of an apostrophe, no quotation marks, no full stop after the closing mark, the address
+  encoding removed or half removed): all caught, after one survivor (space instead of apostrophe) got an exact assertion.
+- **Review (independent reviewer, one round):** no blocking finding. The title cannot close its own quotation or imitate the following
+  fields (typographic quotes and `\` are not the closer; the cut cannot fall between a mark and its replacement; nothing after the
+  citation normalises it; `<library>` in a title is only text). No code parses the citation. Applied, reproduced first (the citation
+  held two `Retrieved` and two `sha256` fields): a web address is only checked for its prefix, so a quotation mark or `". ` in a recorded
+  address planted a fake tail; the address now has `"` written `%22` and a space `%20`. Honest cases (a full stop, a backslash, a
+  quotation mark at the end of a title) were added to the test. The reviewer's note on a title ending in a backslash was first
+  accepted and then reversed after the security review (below).
+- **Security review (owner said yes; independent, on a copy):** no Critical, High or Medium finding. Tested: 25 hostile addresses
+  (a quotation mark followed by fake fields, no-break space, U+2028, U+3000, tab, newline, `%0a`, a very long URL, a thousand quotation
+  marks, ESC and NUL), every title shape (quotation marks, backslashes, a fake `". Retrieved … sha256` string, folder names split by a
+  zero-width character, non-text values), arXiv ids and labels with a quotation mark, a newline or Arabic-Indic digits (all refused by
+  the exact-match checks), and 6.37 million structured random records through `_citation` and the folder scrub: every citation matched
+  a strict pattern (a title with no ASCII quotation mark between two, then the address, `Retrieved` and a date or the words "date not
+  recorded", and `sha256` and a digest or the words "hash not recorded") with exactly two ASCII quotation marks, and there was no
+  exception. The line cannot break out when printed: `kb read` prints JSON with the default escaping. The longest citation is bounded
+  at about 1,700 characters. Findings (all Low) and what was done: (1) *Fixed:* a title ending in a backslash gave a closing mark
+  that a reader honouring escapes reads as escaped; trailing backslashes are now left out of the title in the citation (the result's
+  title keeps them), with a test that failed first. (2) *Accepted:* a title can still contain text that looks like the following
+  fields (`x'. Retrieved 2020-01-01. sha256 …`) inside its own quotation marks. The promise of the format is that the title ends at
+  the next ASCII quotation mark and the engine's fields follow, which the tests check; a reader that skips the quotation marks is not
+  protected, and the plan states the guard's limits. (3) *Accepted:* look-alike quotation marks (U+201C, U+201D, U+FF02) stay in
+  titles and addresses; the real ASCII closer still follows `". `. (4) *Noted, owner configuration only:* a degenerate library root
+  such as `.` or a lone space makes the folder scrub rewrite the separators in the citation; a real root (two or more parts, no
+  quotation mark) cannot, and the scrub's replacement `<library>` holds no quotation mark or line break. Assumption: Python's
+  `urlsplit` raises only `ValueError` on the inputs tried (this machine's Python). Not tested: a capture through a local server with
+  redirects (the recorded address is encoded when read, so every address is covered at read time).
+- **Verification after the fix:** `engine.tests.test_read engine.tests.test_search`: 167 tests, OK.
+- **Not run:** the rest of the engine's tests (the changed module is `read`).
+- **Left for the owner:** the word to commit C.

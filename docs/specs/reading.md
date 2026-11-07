@@ -108,8 +108,10 @@ cover, or the module declaration's exact form, which is designed in the module's
 - **[proposed]** A result holds: the title, the shelf (only if the token may see it), a short summary, why it matched (which query,
   which variant and level, and the score), the date its book was added, whether it is flagged near-scope or partial, its caveats
   (including a retraction or withdrawal flag), the source's quality hints (citation count, venue, peer review) with the date they were
-  read, a statement of how complete its source was, and a citation line made of the source URL, the retrieval date and the content
-  hash.
+  read, a statement of how complete its source was, and a citation line made of the title, the source URL, the retrieval date and the content
+  hash. The title is shown between quotation marks that it cannot close (a quotation mark in it becomes an apostrophe), so the fields
+  after it are always the engine's own and a title cannot imitate them; a quotation mark or a space in the address is written as `%22` or
+  `%20` for the same reason.
 - **[proposed]** A result also says which pipeline stages its book has finished (for example, a card but no themes yet), so the agent
   and the owner can tell a thin result from a book that is still being processed (`pipeline.md`, "Real-time latency").
 - **[agreed]** Quality hints and a retraction flag are shown to the agent and never remove a result. By default they do not change

@@ -70,12 +70,15 @@ def _address(store, value):
         userinfo = "@" in urlsplit(text).netloc
     except ValueError:
         return "non-web address"
-    return "non-web address" if userinfo else text  # an address with a user name in it is not shown
+    if userinfo:
+        return "non-web address"  # an address with a user name in it is not shown
+    return text.replace('"', "%22").replace(" ", "%20")  # a quotation mark or a space could end the address and start fields of its own
 
 
 def _citation(store, root, version):
     source = version.get("source") or {}
     title = textutil.title(_scrub_roots(store, str(root.get("title") or "")), 200) or "untitled"
+    title = title.replace('"', "'").rstrip("\\")  # shown between quotation marks that it cannot close, or escape with a last backslash
     if isinstance(source.get("arxiv_id"), str) and _ARXIV_ID.fullmatch(source["arxiv_id"]):
         label = source.get("label") if isinstance(source.get("label"), str) and _LABEL.fullmatch(source["label"]) else ""
         where = f"arXiv:{source['arxiv_id']}{label}"
@@ -90,7 +93,7 @@ def _citation(store, root, version):
     retrieved = source.get("retrieved")
     date = retrieved[:10] if isinstance(retrieved, str) and _DATE.fullmatch(retrieved[:10]) else "date not recorded"
     digest = source.get("sha256") if isinstance(source.get("sha256"), str) and _SHA.fullmatch(source["sha256"]) else None
-    return f"{title}. {where or 'no source address recorded'}. Retrieved {date}. sha256 {digest or 'hash not recorded'}"
+    return f'"{title}". {where or "no source address recorded"}. Retrieved {date}. sha256 {digest or "hash not recorded"}'
 
 
 def _caveats(store, version):
