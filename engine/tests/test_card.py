@@ -125,12 +125,43 @@ class MechanicalTest(CardCase):
         self.assertFalse(out["partial"])
         self.assertEqual(out["partial_reasons"], [])
 
-    def test_a_flat_conversion_is_partial_and_says_why(self):
+    def test_a_flat_conversion_alone_does_not_make_a_card_partial_but_the_structure_is_recorded(self):
         book, version = self.book()
         self.converted(book, version, quality="flat")
         out = card.mechanical(self.store, book, version)
+        self.assertFalse(out["partial"])
+        self.assertEqual(out["partial_reasons"], [])
+        self.assertEqual(out["conversion"], {"in_use": True, "structure": "flat", "partial": False, "reasons": []})
+        made = self.good(book, version)
+        self.assertFalse(made["partial"])
+        self.assertIn("conversion: flat", card.render(made))
+
+    def test_a_flat_conversion_that_is_also_partial_is_partial_for_that_reason_only(self):
+        book, version = self.book()
+        self.converted(book, version, quality="flat", partial=True, reasons=["the extractors disagree"])
+        out = card.mechanical(self.store, book, version)
         self.assertTrue(out["partial"])
-        self.assertTrue(any("flat" in r for r in out["partial_reasons"]))
+        self.assertEqual(out["partial_reasons"], ["the conversion is partial: the extractors disagree"])
+
+    def test_a_card_made_before_with_the_old_flat_reason_is_still_valid_and_readable(self):
+        book, version = self.book()
+        self.converted(book, version, quality="flat")
+        old = self.good(book, version)
+        old["partial"], old["partial_reasons"] = True, ["the conversion has no structure (flat)"]
+        card.validate(old)
+        card.file(self.store, old)
+        number, got = card.read(self.store, book, version)
+        self.assertEqual((number, got["partial"], got["partial_reasons"]), (1, True, ["the conversion has no structure (flat)"]))
+
+    def test_a_flat_book_that_is_sampled_or_has_no_model_part_is_still_partial(self):
+        book, version = self.book()
+        self.converted(book, version, quality="flat")
+        sampled = self.good(book, version, reasons=["read 12 of 40 pieces"])
+        self.assertEqual(sampled["partial_reasons"], ["read 12 of 40 pieces"])
+        bare = card.make(self.store, book, version)
+        self.assertTrue(bare["partial"])
+        self.assertEqual(len(bare["partial_reasons"]), 1)
+        self.assertIn("metadata", bare["partial_reasons"][0])
 
     def test_a_partial_conversion_carries_its_reasons(self):
         book, version = self.book()

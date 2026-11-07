@@ -1,6 +1,6 @@
 # Two fixes from the first live run of cards
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-07
 Candidate: none (no new roadmap work; these are two findings of the live run of 2026-11-07-card-stage, recorded in its Result)
 Specs: card
@@ -152,4 +152,21 @@ Reviewer: Codex through the review engine (model gpt-5.6-terra). Round 1 of 3: c
 
 ## Result
 
-Empty until work starts.
+### Increment A — A flat conversion no longer makes a card partial (2026-11-07)
+
+Removed the reason "the conversion has no structure (flat)" from `_conversion` in `engine/kb/card.py`, with a comment saying why.
+The card still records the structure (`flat`) in its conversion summary and `card-show` prints it. A partial conversion (with its
+reasons), a missing conversion, a sampled book, a book below the cutoff and a card with no model part are still partial, and a flat
+conversion that is also partial is partial for that reason only. `validate` is unchanged, so the three cards already filed, which
+carry the old reason, stay valid and read back (a test files and reads one). `engine/README.md` has a new bullet in the Cards section
+listing when a card is marked partial. The root `README.md` is in the plan's list for this increment but its only mention of
+"partial" is about web pages, so it is unchanged.
+
+Verification run: `python3 -m unittest engine.tests.test_card engine.tests.test_cardmake` gave 129 tests, OK. The changed and added
+tests were written first and three failed before the change. Five deliberate breaks were each caught (a flat conversion partial
+again; a partial conversion not partial; the partial reasons dropped; a missing conversion not partial; the structure not
+recorded). Not run: any other test file, and any live call. The three existing cards were not made again.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. It found no other text in the repository that says a flat
+conversion makes a card partial, and nothing else in the engine that reads the flat reason (the search, read and index code read the
+conversion's own partial check, not the card). Nothing applied beyond the above.

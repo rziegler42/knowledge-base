@@ -500,6 +500,11 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   uses, topics, adjacent topics, key ideas, the five neutral fields and caveats. A card with no model part says so. Every card is
   checked on reading: exact keys and types, text already clean, a source address only if it is a web address with no user name, and
   a hash check of the payload.
+- **When a card is marked partial.** The mark means the card describes less of the work than the book holds, and its reasons are
+  listed with it: there is no conversion of the text, the conversion is partial (the extractors disagree, or the text was cut), a
+  long book was sampled, the converted text is below the cutoff, or the card has no model part. A conversion with no headings
+  (`flat`, which every PDF is) is not a reason: the card records the structure as `flat` and `card-show` prints it, and an agent
+  can weigh it. Cards made before 2026-11-07 for a flat PDF carry the older reason and stay as they were made.
 - **`card-show`.** It prints the facts that cannot hold free text (ids, shelf, the counts and the models used) as JSON, and the text
   of the card between the markers of a search result. A piece of text that holds the words of an untrusted-text marker is withheld.
 - **`cards` reports** one line of JSON for each book: carded, skipped or failed, the generation, whether the card is partial, the

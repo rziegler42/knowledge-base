@@ -105,8 +105,8 @@ def _conversion(store, version):
     why = []
     if partial:
         why += [textutil.clean(f"the conversion is partial: {r}", 500) for r in reasons] or ["the conversion is partial"]
-    if quality == "flat":
-        why.append("the conversion has no structure (flat)")
+    # a conversion with no headings (flat) is not a reason: every PDF is flat, and the card still describes the whole work; the
+    # structure is recorded in the card and shown, and an agent can weigh it
     return {"in_use": True, "structure": quality, "partial": partial, "reasons": reasons}, why
 
 
