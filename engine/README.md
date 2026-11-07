@@ -200,7 +200,7 @@ means "at least that many", and the reader of the scan's output takes no larger 
 **No caveat does not mean the file is safe.** It is a pattern scan and not a PDF reader, and it says only what it found. It reads
 the file forward, object by object (below), takes the whole dictionary of each stream, decodes deflate, ASCII85 and hex filters (also layered),
 and reports `scan_incomplete` for anything it could not read: a filter it does not decode (LZW, run-length, crypt), a predictor
-it does not undo or parameters it cannot read with certainty (below), deflate data that is damaged, cut short or compressed again inside, a filter
+it does not undo or parameters it cannot read with certainty (below), deflate data that is damaged, cut short or compressed again inside (what comes out begins like a zlib stream of any window size and a trial decode of its first 16 bytes does not fail: random pixels or a font that only begin like a header are not that), a filter
 declared that it did not tie to a stream it read, or a file or page larger than its limits. A deflate image stream that says it
 is an image (its dictionary holds `/Subtype /Image`, and `/Type /XObject` wherever a type is given and at least once, and none of
 the keys that an object stream or a cross-reference stream cannot be read without: `/N`, `/First`, `/Extends`, `/W`, `/Size`,

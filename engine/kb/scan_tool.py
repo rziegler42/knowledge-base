@@ -389,13 +389,35 @@ def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None, volume=N
     return data, "ok"
 
 
-_ZLIB_MAGIC = (b"x\x9c", b"x\x01", b"x\xda", b"x^")
-
-
 def _deflate_header(data):
     """Whether data begins like zlib data of any window size: a method of 8 and a check value that makes the two bytes a multiple
     of 31. More than the four common headers, and a few more things that are not: it errs on the side of calling it deflate."""
     return len(data) >= 2 and data[0] & 0x0F == 8 and (data[0] << 8 | data[1]) % 31 == 0
+
+
+_TRIAL_INPUT = 4096  # what the trial below is given: a block header and the first symbols need a few hundred bytes at most
+TRIAL_UNITS = 40     # work units for each byte of input given to the trial: the worst shape measured (empty dynamic blocks) takes 54 ns a
+                     # byte, 18 units; twice that is charged, since a unit is 2.9 ns here and another zlib or machine may differ
+_TRIAL_OUTPUT = 16   # and the most it decodes: random bytes after a valid header get through the first byte about one time in 25, and
+                     # through sixteen about one time in 300 (measured on 800 such starts: 36 and 3)
+
+
+def _compressed_again(data, room):
+    """(whether, used) for data that begins like a zlib stream: whether it is compressed again inside, and the bytes of output the
+    trial cost, to be charged. Random bytes that happen to begin with a valid header fail within a few bytes (a block type that does
+    not exist, a stored block whose length does not check, a code that is not a code, a distance too far back), so a decode that fails
+    before it has given _TRIAL_OUTPUT bytes is chance and is not compressed again. Anything else is: a decode that gives that many, one
+    that stops for want of input, and one that fails later. The trial never decodes more than `room`, what is left of the file's
+    allowance, and when that is none nothing is tried, and the data is not guessed at."""
+    if room <= 0:
+        return True, 0
+    try:
+        got = zlib.decompressobj().decompress(data[:_TRIAL_INPUT], min(_TRIAL_OUTPUT, room))
+    except zlib.error:
+        return False, 0
+    return True, len(got)
+
+
 MAX_DICT = 16384          # the longest stream dictionary the scan reads
 MAX_DEPTH = 100           # the deepest nesting of brackets in one object it reads
 MAX_OBJECTS = 1_000_000   # the most objects it reads in a file: each costs about the same
@@ -738,14 +760,18 @@ def scan_pdf(data):
             total += _work(out, picture_shaped) + sum(_work(raw, picture_shaped) for raw in raws) + layers[0]
             only_deflate_last = (names[-1] in _FLATE_NAMES and sum(n in _FLATE_NAMES for n in names) == 1
                                  and len(_FILTER_KEY.findall(dictionary)) == 1)  # one filter key: a second might be the real list
-            picture = (only_deflate_last and not _deflate_header(out) and _is_image(dictionary)
+            again = False  # whether what came out is a zlib stream: it begins like one and the trial does not call that chance
+            if _deflate_header(out):
+                again, used = _compressed_again(out, MAX_TOTAL_OUT - total)
+                total += used + TRIAL_UNITS * min(len(out), _TRIAL_INPUT)  # the input is read, not only the output kept
+            picture = (only_deflate_last and not again and _is_image(dictionary)
                        and b"stream" not in blob)  # a stream marker in its bytes: structure was swallowed
             if picture and ((state == "limit" and cap == MAX_STREAM_OUT) or state == "spent"):
                 # a picture too big to read to the end, or whose predictor the scan has no more work for: its first part was read, and
                 # it is reported as that. Only when the deflate step that ran out is the last of the filters: the chain stops there,
                 # and anything after it was not undone
                 large_images += 1
-            elif state != "ok" or out[:2] in _ZLIB_MAGIC:  # damaged, cut short, or compressed again inside
+            elif state != "ok" or again:  # damaged, cut short, or compressed again inside
                 incomplete = True
             if picture_shaped or state in ("ok", "limit", "spent"):
                 spans.append((start, start + len(blob)))  # compressed bytes that were decoded, or a picture's: not text to a viewer

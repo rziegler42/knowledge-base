@@ -314,3 +314,68 @@ the limit of the reader of its output, and in the counts that search and read sh
   exact count; every writer goes through `caveat()`; a capped kind cannot hide or lower another kind. Applied: the weak sum in the
   binary-place test. Left for E: a book scanned with 0.0.7 may hold a count above one million in its stored caveats; those are read by
   `read.py` and `store.py` (both accept it) and are replaced by the rescan.
+
+### Increment D — Do not call a chance zlib header "compressed again" (done, reviewed, security reviewed and committed)
+
+- **What was done:** `_ZLIB_MAGIC` (four fixed headers) is gone. In `scan_pdf` a flag `again` is true when the decoded bytes begin with any valid
+  zlib header (`_deflate_header`) and `_compressed_again` does not call the start chance. The trial gives zlib the first 4,096 bytes and asks
+  for at most `min(16, room)` bytes, where `room` is what is left of `MAX_TOTAL_OUT` after the first decode was charged; if zlib raises within
+  those bytes the start is chance. A trial that gives its bytes, stops for want of input, or has no room (`room <= 0`: nothing is tried) is
+  "again". The flag is used in the two places the old rules were: the picture test (was `not _deflate_header(out)`, so a large image that
+  only begins like a header is a large image) and `elif state != "ok" or again` (was `out[:2] in _ZLIB_MAGIC`). The bytes read and tallied do
+  not depend on it, only which caveat is raised. `engine/README.md` has one sentence on the rule.
+- **Differences from the plan text (for the owner):** (1) the plan says the start is chance if zlib "raises before it has produced any
+  output"; the trial uses 16 bytes, because of 800 random 100-byte inputs with a valid header 36 got through the first byte and 3 through
+  sixteen. A real inner stream that fails inside its first 16 output bytes (or asks for a preset dictionary, which zlib refuses at once)
+  is called chance. (2) Two older tests encoded the old rule and were rewritten: a large image of a header plus zeros is now a large image
+  (`large_image_streams`), and the incomplete cases use a real inner zlib stream of each window size (9 to 15 bits).
+- **Provenance:** run on 2026-11-07 on this machine with Python 3.15.0 and zlib 1.2.12, at commit d7191fe plus the uncommitted changes of
+  this increment.
+- **Tests:** `ChanceHeaderTest` (five tests: the trial itself, a large image that only begins like a header, other content that does,
+  content compressed again inside for each window size whole, damaged at the end and cut short, and the room) failed before the change and
+  pass. The ten headers of the tests include one that asks for a preset dictionary.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_bench_pdf` (222 tests, OK;
+  after the last two edits, a dictionary header in the tests and a blank line, only `ChanceHeaderTest` was rerun, 5 OK) and
+  `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest engine.tests.test_convert.ToolVersionTest` (4, OK); the hash in
+  `HISTORY` is that of the final file. **Break-it:** five mutations (an error counted as "again"; no byte counted as chance; a room of zero
+  allowed; four fixed headers only; the trial ignoring the room) each failed a test. The charge of the trial (`total += used`, at most 16
+  units) is not tested and is equivalent for any real file. **Not run:** the rest of the engine suite; the library comparison (E).
+- **Measurements:** `images_1000` went from 996 large images plus `scan_incomplete` (and `pattern_in_binary_data` 3) to 1,000 large images
+  with no `scan_incomplete` (`pattern_in_binary_data` 13: the `/EF` of B matching in the noise, also 4 to 8 on `images_100`). The generated
+  `tiny` file (about 330,000 random streams of 100 bytes) still ends `scan_incomplete`: 6 of 525 trials answered "again" (the old rule would
+  give about 22, from 27 in 400,000 random starts); with a trial of one byte the rate was 36 in 400,000, higher than before, which is why
+  the trial is 16 bytes. Times and memory are those of the earlier table (`images_1000` 7.9 s / 326 MB, `tiny` 3.8 s / 329 MB,
+  `hostile_predictor` 11.1 s / 204 MB, `expanding` 8.1 s / 182 MB, `hostile_nested` 7.0 s / 180 MB, `hostile_escapes` 5.0 s / 208 MB).
+- **Review (independent reviewer, one round):** no blocking finding. It found the `again` flag cannot hide content (only which caveat
+  appears changes), `room` correct, no test wrongly encoding the new rule, and nothing else relying on `_ZLIB_MAGIC`. It named one
+  exposure for the owner's security question: an inner stream built to fail inside its first 16 bytes is called chance, and a lenient
+  decoder (one that keeps the output before an error, ignores a bad check value or resynchronises) could read more of it than zlib; no
+  viewer decodes a second layer when one filter is listed, and what is hidden before the failure is under 16 bytes. Applied: a header with a
+  preset dictionary in the tests, and the blank lines before `MAX_DICT`.
+- **Security review (owner said yes; independent, on a copy, Python 3.15.0 and zlib 1.2.12; no real PDF reader was available, so every claim
+  about lenient decoders is a model):** no way found to hide content from a strict zlib reader; two Low findings. **Low 2, fixed:** the
+  trial was charged its output (none for empty blocks) while it reads up to 4 KB of input: 20,000 tiny streams of empty blocks took 4.8 s
+  against 0.56 s under the old rule (about 212 microseconds a trial, 15 times what was charged). It now costs `TRIAL_UNITS` (20) units for
+  each input byte, so about 29,000 such streams fill the allowance, about 7 s; a test written first failed (fifty streams with a start that
+  is chance did not exhaust a small allowance) and passes; hash of `HISTORY` renewed; `test_scan` and `test_bench_pdf` rerun (223, OK) and
+  `ToolVersionTest` (4, OK). The fix has no second look yet. **Low 1, waits for the owner:** an inner stream that zlib rejects inside its
+  first 16 output bytes is now called chance for every header, where the old rule called it "again" for the four common headers
+  (`78 01`, `78 5E`, `78 9C`, `78 DA`). Reachable only through a reader that decodes a second layer although one filter is listed (a
+  dictionary the scan reads differently than the reader does, or a reader that guesses) and is more lenient than zlib (a bad stored length
+  check, an invalid distance, a preset dictionary ignored, a resynchronisation); none is known. The new rule also closes the old gap that
+  any other header (`68`, `28` and so on) was clean even when the inner stream was real. The smallest correction is a floor: the four common
+  headers stay "again" whatever the trial says. It would keep about 27 of 36 chance survivors per 400,000 random starts (the old plain-stream
+  rate), would still remove the false alarm of large images (any other header), and contradicts the plan's criterion 5 for `x\x9c`
+  followed by bytes that do not decode, so it needs the owner's approval of an edited plan. Also noted by the reviewer, unchanged and older:
+  a preset dictionary or a window above 15 bits is not flagged.
+- **Owner's decision on Low 1:** accept as a recorded limit (the owner said to go with the recommendation); the plan text is unchanged.
+- **Second look at the fix of Low 2 (independent security reviewer, on a copy):** no bypass. Measured through the real `scan_pdf` and
+  `/usr/bin/time -l python3 -I -B`: the hostile file of 80-byte streams (each 78 9C plus 4,096 bytes of empty dynamic blocks) takes 4.8 s at
+  3 MB, and 7.2 to 7.4 s from 10 MB to 50 MB (peak 37 to 184 MB, `scan_incomplete`), stopped by the allowance after about 29,000 trials, as
+  predicted; with the charge off the same 60,000-stream file took 14.9 s. The worst cost of one trial over the shapes tried (empty dynamic
+  blocks, large and deep code tables, fixed blocks, stored blocks, long matches, random bytes) is 54 ns for each input byte against a charge
+  of 20 units (about 60 ns), a margin of about 10%; a unit measured 2.9 ns against the 3 ns assumed. The charge cannot be skipped (one call
+  site, applied to `total`, never negative; a refused trial is "again"). **Low, applied:** `TRIAL_UNITS` is 40 (twice the worst shape
+  measured), for margin against another zlib or machine; the trial test and `HISTORY` were renewed, and `ChanceHeaderTest` rerun (6, OK).
+  Not tested: another zlib (zlib-ng) or machine; an exhaustive search for the costliest deflate stream.
+- **Left for the owner:** nothing for D.

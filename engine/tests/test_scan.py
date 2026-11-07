@@ -413,7 +413,7 @@ class PdfScanTest(ScanCase):
 
     def test_a_large_image_whose_data_is_compressed_again_inside_is_still_an_incomplete_scan(self):
         self.approve_scan()
-        _b, _v, result = self.scan_bytes("paper.pdf", pdf(image(b"x\x9c" + b"\0" * BIG)))  # what comes out begins like deflate data
+        _b, _v, result = self.scan_bytes("paper.pdf", pdf(image(zlib.compress(b"\0" * BIG))))  # what comes out is a deflate stream
         self.assertEqual(kinds(result["caveats"]), {"scan_incomplete": 1})
 
     def test_a_large_image_in_a_chain_where_deflate_is_not_the_last_filter_is_still_an_incomplete_scan(self):
@@ -534,11 +534,17 @@ class PdfScanTest(ScanCase):
             _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(payload, extra=extra, compress=False)))
             self.assertEqual(kinds(got["caveats"]), {"large_image_streams": 1}, label)
 
-    def test_a_large_image_whose_decoded_data_begins_with_any_deflate_header_is_still_an_incomplete_scan(self):
+    def test_a_large_image_whose_decoded_data_is_a_deflate_stream_of_any_window_size_is_still_an_incomplete_scan(self):
         self.approve_scan()
-        for header in (b"x\x9c", b"x\x01", b"x\xda", b"x^", b"H\x89", b"X\x85", b"8\x8d", b"h\xde", b"(\x15"):
-            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(header + b"\0" * BIG)))
-            self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1}, header)
+        seen = set()
+        for wbits in range(9, 16):
+            packer = zlib.compressobj(6, zlib.DEFLATED, wbits)
+            inner = packer.compress(b"\0" * BIG) + packer.flush()
+            seen.add(inner[:1])
+            self.assertTrue(scan_tool._deflate_header(inner), wbits)
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(inner)))
+            self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1}, wbits)
+        self.assertGreater(len(seen), 3)  # (the headers do differ: the window size is in the first byte)
         for pixels in (b"\x01\x02", b"H\x00", b"\x08\x08", b"x\x00"):  # not a header (the method is not 8, or the check value is wrong)
             _b, _v, plain = self.scan_bytes("paper.pdf", pdf(image(pixels + b"\0" * BIG)))
             self.assertEqual(kinds(plain["caveats"]), {"large_image_streams": 1}, pixels)
@@ -1932,6 +1938,80 @@ class PlacesTest(unittest.TestCase):
             self.assertLess(took, 12, f"{label}: {took:.1f} s")
             self.assertEqual(found.get("scan_incomplete"), None, label)
             self.assertEqual(max(found.get(k, 0) for k in ("javascript", "pattern_in_binary_data")), scan_tool.MAX_COUNT, label)  # one of them at the ceiling
+
+
+class ChanceHeaderTest(ScanCase):
+    """Decoded data that begins like a zlib header is "compressed again inside" only when it decodes: a start that is chance (random
+    pixels, a font) is not, and a trial that cannot be made is not guessed at."""
+    HEADERS = (b"x\x9c", b"x\x01", b"x\xda", b"x^", b"H\x89", b"X\x85", b"8\x8d", b"h\xde", b"(\x15",
+               b"x\xbb")  # (the last asks for a preset dictionary, which zlib refuses at once: chance, like the rest)
+
+    def test_the_trial_says_chance_only_when_decoding_fails_before_the_first_bytes(self):
+        again = scan_tool._compressed_again
+        real = zlib.compress(b"hello world " * 2000)
+        self.assertEqual(scan_tool._TRIAL_OUTPUT, 16)
+        self.assertEqual(again(real, 100), (True, 16))
+        self.assertEqual(again(real, 3), (True, 3))  # never more than the room
+        self.assertEqual(again(real, 1), (True, 1))
+        cut = again(real[:30], 100)
+        self.assertEqual(cut[0], True)  # cut short is not an error
+        self.assertLess(0, cut[1])
+        self.assertLessEqual(cut[1], 16)
+        self.assertEqual(again(real[:2], 100), (True, 0))  # nothing to decode yet is not an error
+        damaged = real[:-8] + b"\xff" * 8  # the first bytes are fine, the damage is at the end
+        self.assertEqual(again(damaged, 100), (True, 16))
+        for header in self.HEADERS:
+            self.assertEqual(again(header + b"\0" * 5000, 100), (False, 0), header)  # stored block with no length: an error at once
+            self.assertEqual(again(header + b"\xff" * 5000, 100), (False, 0), header)  # a block type that does not exist
+        self.assertEqual(again(real, 0), (True, 0))  # no allowance is left to try with: not guessed at
+        self.assertEqual(again(real, -5), (True, 0))
+        self.assertEqual(again(header + b"\0" * 5000, 0), (True, 0))
+
+    def test_a_large_image_that_only_begins_like_a_header_is_a_large_image(self):
+        self.approve_scan()
+        for header in self.HEADERS:
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(image(header + b"\0" * BIG)))
+            self.assertEqual(kinds(got["caveats"]), {"large_image_streams": 1}, header)
+
+    def test_other_content_that_only_begins_like_a_header_is_not_incomplete(self):
+        self.approve_scan()
+        for header in self.HEADERS:
+            _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(b"/Filter /FlateDecode", zlib.compress(header + b"\0" * 100))))
+            self.assertEqual(got["caveats"], [], header)
+
+    def test_content_that_is_compressed_again_inside_is_incomplete_for_any_window_size_and_even_when_damaged_later(self):
+        self.approve_scan()
+        text = b"hello world " * 2000
+        for wbits in range(9, 16):
+            packer = zlib.compressobj(6, zlib.DEFLATED, wbits)
+            inner = packer.compress(text) + packer.flush()
+            for label, blob in (("whole", inner), ("damaged at the end", inner[:-6] + b"\xff" * 6), ("cut short", inner[:40])):
+                _b, _v, got = self.scan_bytes("paper.pdf", pdf(stream_object(b"/Filter /FlateDecode", zlib.compress(blob))))
+                self.assertEqual(kinds(got["caveats"]), {"scan_incomplete": 1}, (wbits, label))
+
+    def test_the_trial_is_made_only_inside_what_is_left_of_the_files_allowance(self):
+        content = b"x\x9c" + b"/" * 5  # a start that is chance; the five slashes cost 35 units each, 182 in all
+        data = pdf(stream_object(b"/Filter /FlateDecode", zlib.compress(content)))
+        self.assertEqual(self.scan(data), {})
+        with mock.patch.object(scan_tool, "MAX_TOTAL_OUT", 150):  # the decode itself fits; nothing is left to try with
+            self.assertEqual(self.scan(data), {"scan_incomplete": 1})
+        calls = []
+        original = scan_tool._compressed_again
+        with mock.patch.object(scan_tool, "_compressed_again", side_effect=lambda d, room: (calls.append(room), original(d, room))[1]):
+            self.assertEqual(self.scan(data), {})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0], scan_tool.MAX_TOTAL_OUT - scan_tool._work(content))  # the room is what the first decode left
+
+    def test_the_trial_costs_work_in_proportion_to_the_bytes_it_is_given(self):
+        # found by the security review: a trial on 4 KB of empty blocks costs about 210 microseconds, and the charge was its output (none)
+        def streams(content, count=50):
+            return pdf(b"".join(stream_object(b"/Filter /FlateDecode", zlib.compress(content), 10 + k) for k in range(count)))
+        with mock.patch.object(scan_tool, "MAX_TOTAL_OUT", 30_000):  # fifty streams of 102 bytes cost about 5,100 without a trial
+            self.assertEqual(self.scan(streams(b"\0" * 102)), {})
+            self.assertEqual(self.scan(streams(b"x\x9c" + b"\0" * 100)), {"scan_incomplete": 1})  # with one: 50 times about 2,100 more
+
+    def scan(self, data):
+        return kinds(scan_tool.scan_pdf(data))
 
 
 class ScanStageTest(ScanCase):
