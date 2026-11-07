@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "Increment B — Steps 1–3; Completion criterion 1",
+      "problem": "The plan promises that search itself uses the shared title rule, but its implementation steps only apply the rule during indexing and reading. Current search returns the indexed title verbatim. The proposed tests rebuild the index first, so they cannot detect the missing search check; an existing index can still return marker-bearing titles until rebuilt.",
+      "severity": "major",
+      "suggestion": "Explicitly add the shared title check to search result construction and test a marker-bearing title already present in the index without rebuilding it. Clarify separately that folder removal at indexing requires a rebuild."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "One implementation gap remains: the promised search-time title check has no implementation step or direct test.",
+  "verdict": "changes_needed"
+}

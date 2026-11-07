@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Scope; Increments A–C",
+      "problem": "The scope promises that the README and both named specs will state the title rule, but no increment affects `docs/specs/book.md`; only Increment C names `docs/specs/reading.md` and `engine/README.md`. The plan therefore cannot meet its own documentation scope or update the Book spec for the rule enforced at storage.",
+      "severity": "major",
+      "suggestion": "Add `docs/specs/book.md` to Increment A (or a dedicated documentation increment), specify the stored-title rule there, and include it in affected areas and verification."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment D — Steps 2–3; Risks and sensitive actions",
+      "problem": "The proposed `python3 -m kb index` command rebuilds the entire active-library index, not just the four walk-through books. The plan repeatedly scopes the owner-authorized action and risk to four books, so it could rebuild additional books added before Increment D without that scope being disclosed.",
+      "severity": "major",
+      "suggestion": "Add a preflight that establishes the active library contains exactly those four books, or revise the owner checkpoint, scope, risk, and recorded result to explicitly authorize and report a whole-library rebuild."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has two material scope gaps: it omits a promised spec update and understates the reach of its owner-library index rebuild.",
+  "verdict": "changes_needed"
+}

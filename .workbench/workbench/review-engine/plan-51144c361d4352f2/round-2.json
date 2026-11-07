@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-06-first-walk-through-fixes.md:201",
+      "problem": "Increment F runs `index` after resetting conversion/index stages but before `process` creates the new conversions. That indexes the old active conversions and marks `indexed` done; `process` can then skip indexing the new generations. The immediate search/index result can remain stale, contrary to the stated outcome and completion criterion that the index follows the reconversion.",
+      "severity": "major",
+      "suggestion": "Run `process` before `index`, or omit the explicit `index` because `process` indexes the pending new conversions; verify the index references the new conversion generations."
+    },
+    {
+      "id": "R2-F2",
+      "location": "docs/plans/2026-11-06-first-walk-through-fixes.md:201",
+      "problem": "`reconvert --scan` with no `--book` selector resets every active book, while this increment is scoped to the four walk-through books. If the owner's library contains other active books, it unnecessarily resets and reprocesses them.",
+      "severity": "major",
+      "suggestion": "Name the four intended book IDs with `--book` (or explicitly establish and verify that those are the only active books before running the command)."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "Two execution-order/scope defects remain in Increment F; the earlier findings are addressed.",
+  "verdict": "changes_needed"
+}

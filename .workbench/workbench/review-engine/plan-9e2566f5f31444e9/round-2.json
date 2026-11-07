@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Increment A — Affected areas and Steps 1–3",
+      "problem": "The plan does not change `capture_arxiv.py`, even though its metadata parser writes the arXiv title directly into each version's `source` record before `Store.create_book`/`set_metadata` copy a sanitized value to the root file. Thus an arXiv title containing marker words remains stored unchecked in `version.json`, contradicting the stated goal and the first identified hole.",
+      "severity": "major",
+      "suggestion": "Include `engine/kb/capture_arxiv.py` and its tests in Increment A; apply the shared title rule when constructing the arXiv source metadata (while preserving the intended empty-title behavior), and verify the version source record as well as the root metadata."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan now covers the previously identified documentation and whole-index scope issues, but still leaves the original unchecked arXiv title stored in version metadata.",
+  "verdict": "changes_needed"
+}

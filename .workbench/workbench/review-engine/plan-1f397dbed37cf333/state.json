@@ -1,0 +1,100 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-06T17:56:59Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "Checked: the scan keeps its limit of 2000 decoded streams, so a test for 3000 small streams could not pass. The test now uses 1500 streams, which report nothing, and 2500, which reach the existing limit, and the plan says the limit is kept."
+    }
+  ],
+  "format": 1,
+  "generation": 5,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-06-scan-hardening.md",
+  "rounds": [
+    {
+      "at": "2026-11-06T17:53:40Z",
+      "bridge": "ask-codex",
+      "document_sha256": "d058ebe4775334ef8c3fe27aa74f172f31d6a3aeb33efe0dd0cf42ad8387f404",
+      "file": "round-1.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "09e3c5af890d9e25c07e2b2f896b487ae1bacd9f59b3e9139fc800394101c53b",
+      "usage": {
+        "input_tokens": 179943,
+        "output_tokens": 2217,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    },
+    {
+      "at": "2026-11-06T17:56:48Z",
+      "bridge": "ask-codex",
+      "document_sha256": "143646f4971f9f023d4c6dc1c6384d167a2612692a5349bcdc28d6342646586d",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "7859b54580476d6e077b1a77b729ac17d9e3b99fbcc11f6bb6573ca1ad4fd71f",
+      "usage": {
+        "input_tokens": 294804,
+        "output_tokens": 4400,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-06T17:57:26Z",
+      "bridge": "ask-codex",
+      "document_sha256": "e43451eda1e2e9cc25b2a36e17e202addcb800fcfe5e260104ea7174ea8dce78",
+      "file": "round-3.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 3,
+      "profile": "second-opinion",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "f99a4391cda6933b714485240a80425ef2805dd626399853d1a045eb0bc019d0",
+      "usage": {
+        "input_tokens": 116530,
+        "output_tokens": 401,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "224afecef60234e53530e34b17006431f7cf2759b4e73d978e1a3c3e278e1230",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

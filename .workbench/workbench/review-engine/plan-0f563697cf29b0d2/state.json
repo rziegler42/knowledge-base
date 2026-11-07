@@ -1,0 +1,158 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-07T01:07:23Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The budget text said both that large images stop counting and that a total cap stays; the plan now states one model of three bounds (per stream limit, one piece of memory, a cumulative work limit that large images do count toward) and the owner decides at the end of A whether a reduced window for image shaped streams is needed."
+    },
+    {
+      "at": "2026-11-07T01:07:23Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "With only the first increment of the two the paper still gets one javascript caveat; the goal and criterion 1 now give the exact caveat set after B alone and after B and C, and the last comparison uses the set for the increment done last."
+    },
+    {
+      "at": "2026-11-07T01:07:23Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F3",
+      "reason": "Criterion 3 now names the method (time -l for peak memory and the wall clock, the scan run as the sandbox runs it), generated 50 MB files at 10, 100 and 1000 images with the total size held constant, and numeric limits of 20 seconds and 600 MB with at most 10 percent growth."
+    },
+    {
+      "at": "2026-11-07T01:09:23Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "The benchmark inputs would have come from an untracked script; increment A now writes a tracked seeded generator with its own test, fixes the shapes and sizes of both kinds of file, records its arguments seed library versions and file digests, and increment B uses that same generator."
+    }
+  ],
+  "format": 1,
+  "generation": 10,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-06-scan-false-alarms.md",
+  "rounds": [
+    {
+      "at": "2026-11-07T01:06:27Z",
+      "bridge": "ask-codex",
+      "document_sha256": "48e90100734ea363c2bf8b220ac6ab1bfbe119f35720ff469e38bc128df506bd",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F3",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "6b3941dba3b9bf6611c988906020a0b54dd6466838b4f3d443fc569a78610fb8",
+      "usage": {
+        "input_tokens": 166776,
+        "output_tokens": 2658,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-07T01:08:44Z",
+      "bridge": "ask-codex",
+      "document_sha256": "c2e4803cfc885ee6a987d3cdc999ecfc1004ae940b53a411bd22258f5ad386ff",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "0212078f935b2c87ce1193b6eac7c3765b88414d2e68492b827a2670bdfcf5ce",
+      "usage": {
+        "input_tokens": 216696,
+        "output_tokens": 2628,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-07T01:09:41Z",
+      "bridge": "ask-codex",
+      "document_sha256": "4690e96a7560c76ed9311f448ba33dd185ec5783d0b928b85b177e71199229ff",
+      "file": "round-3.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 3,
+      "profile": "second-opinion",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "d0d36ff0158689c6132aae8d46fb78efdde2c24a55eced17ae5126afbbacc662",
+      "usage": {
+        "input_tokens": 72189,
+        "output_tokens": 231,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    },
+    {
+      "at": "2026-11-07T01:38:19Z",
+      "bridge": "ask-codex",
+      "document_sha256": "6a41c517ae29f644bf1776e0541d1bf731aba6e2c8d7c5ade4c1b852eaf7acc0",
+      "file": "round-4.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 4,
+      "profile": "second-opinion",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "24dec8340971ea42483b2294180fe557451e51e3b915275113d7705b47166fb6",
+      "usage": {
+        "input_tokens": 164583,
+        "output_tokens": 507,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "97f4166ed66a1fdf73722d64ea975d476ae3596ce9c553980105620062675574",
+  "window": {
+    "bound": 4,
+    "first": 1
+  }
+}

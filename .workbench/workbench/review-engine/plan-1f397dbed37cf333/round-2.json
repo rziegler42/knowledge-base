@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Increment B, Steps 1–2 (lines 125–131)",
+      "problem": "The required test says a PDF with 3,000 small predictor streams must have no `scan_incomplete`, but the scan's stated existing bound is 2,000 decoded streams. The increment neither changes nor justifies changing that bound, so the specified test cannot pass under the plan's own bounded-scan design.",
+      "severity": "major",
+      "suggestion": "Either make the 3,000-stream case expect `scan_incomplete` as the stream-limit test, or explicitly raise/redesign the stream bound, state its resource implications, update the completion criteria/README, and add performance coverage for the new bound."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan has one unsatisfiable predictor-stream test requirement; otherwise no spec or candidate drift found.",
+  "verdict": "changes_needed"
+}

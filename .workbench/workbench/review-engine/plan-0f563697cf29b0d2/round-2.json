@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-06-scan-false-alarms.md:81-86, 109-112, 125-130",
+      "problem": "The performance acceptance inputs are still not reproducible. The plan names only 50 MB generated files and broad properties; it does not define or retain a generator, payload/compression layout, byte-accounting rule, stream ordering, or seed. Increment A uses an untracked throwaway script, so its chosen work limit and the reported timings cannot be independently rerun against the same files.",
+      "severity": "major",
+      "suggestion": "Define a deterministic, tracked fixture generator (or commit generated fixtures where practical), including exact PDF stream/filter shapes, payload generation and seed, compression settings, ordering, and whether 50 MB means source-file or decoded size. Have A record its invocation and digest, and have B's tests and benchmarks use that same generator."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan aligns with its named pipeline spec and resolves the prior findings, but its central performance benchmark lacks reproducible test inputs.",
+  "verdict": "changes_needed"
+}
