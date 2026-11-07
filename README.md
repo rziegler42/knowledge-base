@@ -79,6 +79,7 @@ An index written by an older version of the engine is refused, and the search sa
 | [Model calls](docs/plans/2026-11-07-model-calls.md) | a registry of models in the owner's config, one call through the Ollama bridge, a checked answer with a record of how it was made, and two commands | completed: all three increments are committed and one live call was made |
 | [The card of a book](docs/plans/2026-11-07-card-stage.md) | the model for each kind of work set in the config, the card file kept as generations, reading a book in pieces, the `cards` and `card-show` commands, and cards for three real books | completed: all five increments are committed and cards were made for three books |
 | [Two fixes from the first live run of cards](docs/plans/2026-11-07-card-live-run-fixes.md) | a flat conversion no longer makes a card partial, and a model answer refused for its shape is kept aside in a file | completed: both increments are committed |
+| [Searching the cards by keyword](docs/plans/2026-11-07-card-catalog.md) | a catalog of the cards built from the book folders, a keyword search of it with a summary side, a neutral side and a named book, and the `card-index` and `card-search` commands | completed: all three increments are committed and the three real cards were indexed and searched |
 
 Each increment of a plan is one verified, reviewed local commit. A plan needs the owner's approval before anything is built, and
 the plan, not the conversation, is the record of what was done and checked.

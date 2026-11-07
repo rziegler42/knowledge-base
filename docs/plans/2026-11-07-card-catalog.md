@@ -1,6 +1,6 @@
 # Searching the cards by keyword
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-07
 Candidate: cards#card-catalog
 Specs: card
@@ -255,3 +255,76 @@ matched and the excerpt now follow the side that was searched and come from the 
 gives a refusal and not a traceback; and the README no longer calls the citation a fact without free text (it holds the title and the
 address, cleaned, outside the markers). Recorded, not changed: `card.validate` accepts a quotation mark or a space in an address,
 which `mechanical` never produces; tightening it would change `card.py`, outside this plan, so the catalog escapes it instead.
+
+### Increment C — The catalog on the cards that exist (2026-11-07)
+
+On the owner's word I ran `python3 -m kb card-index` on the library. It read the cards from the bulk root and wrote `cards.sqlite`
+(72 KB, mode 600) to the index root, in 0.11 s: 18 books, 0 not active, 3 versions with a card, 3 cards, 0 failed. No model was called
+and nothing was sent anywhere. The full-text index (`search.sqlite`) was not touched. The commands were run for real as well as
+through a scratch script: `card-search` printed a result with the card between the markers, an empty search printed `[]`, and a side
+that does not exist was refused with exit code 2.
+
+What the searches found (the three cards are "Prompt injection - Wikipedia", "Attention Is All You Need" and "Language Models are
+Few-Shot Learners"; the full-text `search` was run for the same words as a look, not a trial):
+- A word that is in a card finds that card: `injection`, `guardrails`, `jailbreak`, `prompt leaking` find the first; `attention`,
+  `transformer`, `parallelization`, `quadratic` the second; `few shot`, `scaling`, `contamination`, `fine tuning` the third. A
+  word in no card (`zzzzqqq`) and a topic no card is about (`stopping rule`) give nothing, and so does the full text.
+- The sides work: `layered defenses` with `--in neutral` finds the first card (in its neutral approach) and with `--in summary`
+  finds nothing; `benchmarks without extensive fine tuning` with `--in neutral` finds the third (in three neutral fields); the
+  cards are told apart by the fields that matched. A named book finds only its own card.
+- On one word the card found a paper that the full text did not list: `quadratic` finds "Attention Is All You Need" through the
+  neutral limit "quadratic attention cost". The full-text search for `quadratic` was run with a limit of 50 blocks and returned
+  only three (two in the image-transformer paper, one in the BERT paper), so the limit did not hide the Attention paper: none of its
+  blocks holds that word. I did not look at how the paper words the cost. One word shows nothing general; whether the cards find
+  what the text does not is for `cards#card-trial`. `parallelization` goes the other way: the full text finds the Attention paper
+  (one block) and another paper (two), and the card finds the Attention paper through its neutral problem.
+- The full text finds far more, because only three books have cards. The counts below are of blocks, with a limit of 50, and for the
+  common words the 50 were reached (the blocks counted add up to 50), so the books named are a lower bound: `security` finds the
+  first card, and the full text also finds the HTTP specification; `training` finds all three cards and `model` two, while the full
+  text finds at least seven books for the first and five for the second. The catalog is not a replacement for the full text and was
+  not meant to be.
+- Order, where a query found more than one card: `training` gave the Attention paper, the prompt-injection page, the few-shot paper;
+  `model` gave the few-shot paper and then the prompt-injection page. Every other query found one card or none.
+
+Things the run showed, for the trial and later work (not judged here, not changed):
+- **No stemming.** `long range dependencies` with `--in neutral` finds nothing, because the card says "long-range dependency
+  learning" (singular). Words match as spelled, apart from case and accents.
+- **Scores say little on three cards.** A word in every card (`training`, `model`) scores about 0 for each (rounded to two places,
+  all showed 0.0; I did not look at whether they tie exactly), because the table's measure gives a word that is everywhere almost
+  no weight, so the order is set by differences that mean nothing, and by the book id only on an exact tie. With many cards this
+  will matter less; with a few it makes the order of common words arbitrary.
+- **The excerpt is the title when the title matches.** For `injection` the first matched field is the title, so the excerpt is the
+  title and says little. The card text beside it shows the match.
+- **Nothing tells the reader how old the catalog is.** A card made after the last `card-index` is not found.
+
+Verification run: `python3 -m unittest engine.tests.test_catalog engine.tests.test_card engine.tests.test_cardmake
+engine.tests.test_search engine.tests.test_setup` gave 355 tests, OK, as the plan's whole-plan check asks (the full-text search tests
+show that search is as it was; the setup tests because `__main__.py` changed). Not run: any other test file, and no security review
+was asked for or run.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. It found overclaims in my first write-up of this entry and I
+corrected them: the claim about how the Attention paper words the cost was a guess, and is now said to be unchecked; the full-text
+counts are of blocks with a limit of 50, which was reached for the common words, so the book counts are lower bounds; the scores
+were shown rounded to 0.0 and I had not checked whether they tie, so the order is "set by differences that mean nothing"; the
+orders of the two multi-hit queries are now recorded (step 2); and the criteria that are met only with a recorded difference from
+their wording (3 and 7) are named as such. It confirmed that the four things the run showed are true of the code.
+
+Plan as a whole: each increment's recorded verification still stands. Completion criteria 1, 2, 4, 5 and 6 are met, and the tests
+that show them are these (all in `engine/tests/test_catalog.py`): criterion 1, the rebuild gives the same catalog again and after the
+file is deleted, and a book that is not active or a card that fails is left out and counted; criterion 2, every word must match,
+a word in any field is found, the sides and the book filter narrow as described, and a query with an operator, a quote, a column name
+or SQL is only words (`test_a_query_is_words_and_never_syntax`); criterion 4, a foreign or damaged catalog is refused with the
+command to run, a second writer waits and then gives up, and a failure leaves the old catalog; criterion 5, the commands run through
+the real command line; criterion 6, the run above. Two criteria are met only with a recorded difference from their wording, and the
+owner may want to accept or change them:
+- Criterion 3 says the citation line is equal to what a read gives. It is, for a web page, and for an arXiv paper once the PDF
+  address is taken from the read's line; it also differs when a card dropped a non-web address (a read says `non-web address`) and
+  when an address is between 300 and 500 characters (the card keeps 300). These are recorded in the Result of increment A, and
+  the plan's own wording was not changed, as that needs a new approval.
+- Criterion 7 says no name or path of the owner appears in a tracked file. This work added none (the plan, the code and the documents
+  were searched). The owner's name already appears in `LICENSE` and in the decision record of 2026-11-04 (with a handle and a
+  repository address), as the author and the licence holder, and those were not touched.
+
+Left for the owner or later work: `cards` does not refresh the catalog; the things the run showed (no stemming, scores near zero on
+a few cards, the title as the excerpt, no age of the catalog); and the trial of whether the cards help (`cards#card-trial`), the
+next candidate of the roadmap.
