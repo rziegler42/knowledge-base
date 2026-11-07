@@ -1,6 +1,6 @@
 # Close the four deferred items of the PDF scan
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-07
 Candidate: none (no roadmap exists; these are the findings that 2026-11-06-scan-false-alarms recorded and left for the owner)
 Specs: pipeline
@@ -379,3 +379,52 @@ the limit of the reader of its output, and in the counts that search and read sh
   measured), for margin against another zlib or machine; the trial test and `HISTORY` were renewed, and `ChanceHeaderTest` rerun (6, OK).
   Not tested: another zlib (zlib-ng) or machine; an exhaustive search for the costliest deflate stream.
 - **Left for the owner:** nothing for D.
+
+### Increment E — Rescan the library and approve the label (done and committed; the plan is Completed)
+
+- **Provenance:** run on 2026-11-07 on this machine with Python 3.15.0, at commit e67078f (`kb-scan 0.0.8`, hash of `scan_tool.py`
+  `f455e163624b83077aa7979cede9a4b196443fade095b0e433d19717e88b9878`), over the 18 books of the owner's library (9 PDFs, 9 pages).
+- **What was done:** the caveats of every book were snapshotted; a dry run of the change of the approved label was shown to the owner, and on
+  the owner's yes the helper replaced `kb-scan 0.0.7` by `kb-scan 0.0.8` in the approved tools (the other three entries unchanged; the helper
+  made a backup of the configuration, mode 600, beside it; the configuration is not tracked and was not committed). `reconvert --scan --book`
+  was run for all 18 books and `process` brought every stage back (scanned, converted, indexed: 54 stages, all done). The caveats were
+  snapshotted again and compared.
+- **Comparison:** 17 books are unchanged: the 9 pages (`script_elements`, `javascript_urls`, `hidden_text`, `event_handlers` as before), and
+  the PDFs Attention (`large_image_streams` 3), GPT-3 (`pattern_in_binary_data` 1, `large_image_streams` 83), CLIP (`pattern_in_binary_data`
+  24), PaLM (`pattern_in_binary_data` 1, `large_image_streams` 4), Bahdanau, ResNet, BERT and VGG (none). **One book differs:** ViT (An Image
+  is Worth 16x16 Words) had no caveat and now has `pattern_in_binary_data` 1. The cause was found by running the scan of the commit before B
+  (no caveat) and the current one (one) on the stored original and printing the match: a `/EF` followed by `=` inside a decoded image piece
+  of 267,032 bytes (`89/77+77+;<1:` before it), a binary place with no shape of a use. It is increment B's `/EF` matching in pixel data, the
+  case the review of B described, and it is counted as the weak caveat, not as `embedded_files`. C and D explain no difference: no count in either
+  snapshot is near 1,000,000 (the largest is 83), and no other book changed. No book has an `embedded_files` caveat in either snapshot.
+- **Tools:** `python3 -m kb tools` shows `kb-scan 0.0.8`, `kb-html-std 0.0.2`, `trafilatura 2.3.1-kb1` and `pdftotext 26.10.0-kb1` all `ok`.
+- **Final measurements of the finished scan** (the scan run as `python3 -I -B engine/kb/scan_tool.py` under `/usr/bin/time -l`, on the files
+  of increment A and of the earlier plans; the escape files need no figure for 0.0.7 beyond A's table):
+
+  | File | Time | Peak memory | Caveats |
+  |---|---|---|---|
+  | `esc_text_41` | 4.3 s | 175 MB | none |
+  | `esc_text_js` | 3.5 s | 228 MB | `javascript` 1,000,000 (the ceiling) |
+  | `esc_image_js` | 4.8 s | 300 MB | `javascript` 1,000,000 (the ceiling) |
+  | `esc_a85_41` | 0.5 s | 272 MB | `scan_incomplete` |
+  | `images_10` | 0.4 s | 335 MB | `large_image_streams` 10, `pattern_in_binary_data` 9 |
+  | `images_100` | 1.1 s | 307 MB | `large_image_streams` 100, `pattern_in_binary_data` 8 |
+  | `images_1000` | 7.7 s | 330 MB | `large_image_streams` 1000, `pattern_in_binary_data` 13 |
+  | `expanding` | 8.1 s | 182 MB | `scan_incomplete` |
+  | `tiny` | 3.8 s | 329 MB | `scan_incomplete` |
+  | `hostile_predictor` | 11.1 s | 209 MB | `large_image_streams` 1240, `scan_incomplete` |
+  | `hostile_escapes` | 5.0 s | 209 MB | `scan_incomplete` |
+  | `hostile_nested` | 7.0 s | 180 MB | `scan_incomplete` |
+
+  The 0.0.7 figures were 337, 313 and 318 to 324 MB for `images_10`, `images_100` and `images_1000`, 181 MB for `expanding`, 331 MB
+  for `tiny`, 205 MB, 203 MB and 179 MB for the three hostile files: no file rose by more than 3%, and all are inside 600 MB and 20 s.
+- **Completion criteria (evidence above and in A to D):** (1) memory and time of the four escape files and the earlier benchmarks: A, and the
+  table here; (2) the unescape equals the whole-text substitution on random `#`-dense inputs at four piece sizes, every cut position of an
+  escape: A (stated as the plan's chunked count in A's differences); (3) the attachment annotation raises `embedded_files`, near misses and
+  picture data follow the rule: B; (4) the ceiling of 1,000,000 in the writer and the reader, held equal by a test: C; (5) random starts
+  (4 of the 1,000 images) no longer raise `scan_incomplete`, a real inner stream of any window size still does, the trial stays inside the
+  allowance: D, with `tiny` still `scan_incomplete` (a chance start gets through 16 bytes about 3 times in 400,000, against 27 before);
+  (6) this comparison, with the one difference explained, and `kb tools` all `ok`; (7) the spec (`pipeline.md`) and `engine/README.md`
+  were updated in C and D (B and A name no pattern or number there).
+- **Not done:** a push; the rest of the engine suite was never run; a wider check of another zlib or machine.
+- **Left for the owner:** the word to push.
