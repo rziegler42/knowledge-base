@@ -397,3 +397,39 @@ English, a card prompt of twelve notes can pass the window of a small model; the
 made, so nothing is filed. Left for the owner: step 6 of this increment still says "or the one the owner names for the run", which
 the review of the plan removed from the commands; the code has no such option, and correcting the sentence in an approved plan needs
 a new approval.
+
+### Increment D — Making a card for a version, and the two commands (2026-11-07)
+
+Added to `engine/kb/cardmake.py`: `min_chars` (the `card_min_chars` setting, a whole number of characters, default 1,000),
+`make_for_version` (the join) and `run` (the join for each named book). For a version the join skips a book that is not active,
+refuses a version that is not fetched or whose conversion is still pending (and says to run `process`), skips a version that has a
+card unless asked again (then a new generation is filed and the earlier one is untouched), and makes the card: from the metadata
+alone, with no model call, when there is no conversion or its text is below the cutoff, and otherwise through `make_model_part`
+with the models the `tasks` setting names. `run` refuses an unknown book before any work, and a book that fails (any exception, as
+`process` treats a version) is reported as failed with its version and reason while the others go on. Added to `engine/kb/card.py`:
+`render`, the text of a card for a reader, in which every piece of text from a book, its source or a model goes through one rule: it
+is cleaned, and withheld if its letters hold the words of an untrusted-text marker (a list is withheld item by item, and as a whole
+if the words are split across its items); and a record date must now be an ISO date. Added to `engine/kb/__main__.py`: `cards --book
+ID` (repeatable and required, so no run covers the library by itself; `--again`; no model, server or class is an argument; model work
+and the card setting are checked before any book is touched; one line of JSON for each book with no card text; exit 1 if a book
+failed) and `card-show BOOK_ID` (`--version`, `--generation`; the facts that cannot hold free text outside, the rendered text of the
+card between the markers of `search.MARKER` and `read.END_MARKER` inside).
+
+Verification run: `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_setup` gave 154 tests,
+OK. Tests were written first and failed because the commands and functions did not exist; they run the commands through the real
+command line against a real temporary library with converted books, and a fake launcher in place of the model. Twenty-six deliberate
+breaks were each caught (the date rule, the withholding, what is rendered, the cutoff, the skip and `--again` rules, the refusal of
+a book not fetched, not converted, not active or unknown, a failure stopping the other books, a boolean as a cutoff, the current
+version, the early check of the card setting, the `--again` option, the markers of `card-show`, its generation, the exit code, the
+split-words rule, the catch of any exception, the version in a failed report). Three broke at first through gaps in my tests (the
+partial reasons not asserted, the not-fetched refusal passing through the not-converted one) and were fixed; one break text of mine
+was meaningless and is not counted. Not run: any live call (the next increment makes it), and any other test file.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: words of a marker split across the items of a list are
+now withheld as a line; `run` catches any exception for a book, as `process` does, and a failed report names the version; a test
+for a generation of 0 or -1. The reading of the plan's "refuse a version with an unfinished conversion step" that the owner may
+want to change: a version whose conversion is pending or whose book is not fetched is refused, and one whose conversion failed or
+was skipped gets a card from its metadata, as `card.md` says for a book with no conversion. The cost is that such a card counts as
+"has a card", so a later `cards` run skips the book until `--again` is given, which is what to use after a failed conversion is
+made good. Not changed: the early check of the card setting refuses a run whose books would all get metadata-only cards; this is
+safe and consistent with the plan's first criterion.

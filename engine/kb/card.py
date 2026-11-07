@@ -144,7 +144,7 @@ def _record(r):
     ok = (isinstance(r, dict) and set(r) == set(_RECORD) and isinstance(r["task"], str) and models._NAME.fullmatch(r["task"])
           and isinstance(r["registry"], str) and models._NAME.fullmatch(r["registry"]) and models._valid_model(r["model"])
           and isinstance(r["prompt_version"], str) and models._VERSION.fullmatch(r["prompt_version"])
-          and isinstance(r["date"], str) and 0 < len(r["date"]) <= 40 and textutil.clean(r["date"], 40) == r["date"]
+          and isinstance(r["date"], str) and _ISO.fullmatch(r["date"]) is not None
           and all(r[k] is None or _count(r[k], 10 ** 12) for k in ("input_tokens", "output_tokens")))
     if not ok:
         raise KbError("a record of how the card was made is not in the expected form")
@@ -241,6 +241,67 @@ def validate(card):
     for r in made["records"]:
         _record(r)
     return card
+
+
+WITHHELD = "[withheld: this text holds the words of an untrusted-text marker]"
+
+
+def _shown(value):
+    """Text of a card as it is shown: cleaned, and withheld if its letters hold the words of an untrusted-text marker (the rule that
+    blanks such a title), so that it cannot imitate the end of the section it is shown in."""
+    value = str(value)
+    if not value:
+        return ""
+    return textutil.title(value, len(value)) or WITHHELD
+
+
+def _shown_list(items):
+    """A list of texts as one line. Each item is withheld on its own if it holds the words of a marker; and if the items hold them
+    only together (one item ends with 'untrusted' and the next begins with 'text'), the whole line is withheld."""
+    shown = [_shown(x) for x in items]
+    joined = "; ".join(items)
+    if WITHHELD not in shown and joined and not textutil.title(joined, len(joined)):
+        return WITHHELD
+    return "; ".join(shown)
+
+
+def render(card):
+    """The text of a card for a reader, one fact to a line. Every piece of text that came from a book, its source or a model goes
+    through `_shown`; the caller puts the whole between the untrusted-text markers."""
+    lines = []
+
+    def add(label, value):
+        shown = _shown(value)
+        if shown:
+            lines.append(f"{label}: {shown}")
+
+    add("title", card["title"])
+    add("kind", card["kind"])
+    add("type of the original", card["primary_type"] or "")
+    for key, value in card["source"].items():
+        add(f"source {key}", value)
+    for c in card["scan"]["caveats"]:
+        add("scan finding", f"{c['kind']} (found {c['count']} times): {c['detail']} [{c['tool']}]")
+    add("conversion", card["conversion"]["structure"] or "none")
+    for reason in card["conversion"]["reasons"]:
+        add("conversion note", reason)
+    for reason in card["partial_reasons"]:
+        add("partial because", reason)
+    model = card["model"]
+    if model is None:
+        lines.append("model part: none (the card was built from the metadata alone, with no model part)")
+        return "\n".join(lines)
+    add("summary", model["summary"])
+    for key, label in (("useful_for", "useful for"), ("topics", "topics"), ("adjacent_topics", "adjacent topics")):
+        if model[key]:
+            lines.append(f"{label}: " + _shown_list(model[key]))
+    for number, idea in enumerate(model["key_ideas"], start=1):
+        add(f"key idea {number}", idea)
+    for key in ("problem", "approach", "needs", "provides", "limits"):
+        add(f"neutral {key}", model[f"neutral_{key}"])
+    for note in model["caveats"]:
+        add("caveat", note)
+    return "\n".join(lines)
 
 
 def generations(store, book_id, version_id):

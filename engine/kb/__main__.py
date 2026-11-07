@@ -3,8 +3,8 @@ import argparse
 import json
 import sys
 
-from . import (KbError, __version__, approvals, capture_arxiv, capture_url, config, convert_html, convert_pdf, identity, index,
-               library, models, process, read, scan, search, stages, textutil)
+from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, config, convert_html, convert_pdf,
+               identity, index, library, models, process, read, scan, search, stages, textutil)
 from .store import Store
 
 
@@ -64,8 +64,37 @@ def main(argv=None):
     mt = sub.add_parser("model-try", help="send the prompt on standard input to one listed model and print its answer, marked as "
                                           "untrusted, with the record of how it was made")
     mt.add_argument("name", help="the name of the model in the config")
+    cs = sub.add_parser("cards", help="make the card of each named book with the models the tasks setting of the config names; "
+                                      "book text goes to those models; no model, server or address is an argument")
+    cs.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", required=True,
+                    help="a book to make a card for (repeat for more; there is no way to cover the whole library)")
+    cs.add_argument("--again", action="store_true", help="make another card for a book that has one, as a new generation")
+    sw = sub.add_parser("card-show", help="the card of a book, with its text between the untrusted-text markers")
+    sw.add_argument("book_id")
+    sw.add_argument("--version", help="the version (default: the book's current version)")
+    sw.add_argument("--generation", type=int, help="the card to show (default: the newest)")
     args = parser.parse_args(argv)
     try:
+        if args.command == "cards":
+            cfg = config.load()
+            models.choose(cfg, "card")  # model work on and a model set for the card task, before any book is touched
+            reports = cardmake.run(Store.open(), cfg, args.books, again=args.again)
+            for report in reports:
+                print(json.dumps(report))
+            failed = [r for r in reports if r["status"] == "failed"]
+            if failed:
+                print(f"{len(failed)} book could not be carded", file=sys.stderr)
+            return 1 if failed else 0
+        if args.command == "card-show":
+            store = Store.open(write=False)
+            version_id = args.version or store.read_book(args.book_id).get("current_version")
+            if not version_id:
+                raise KbError("the book has no version")
+            number, shown = card.read(store, args.book_id, version_id, generation=args.generation)
+            print(json.dumps({"untrusted": True, "book_id": shown["book_id"], "version_id": shown["version_id"], "generation": number,
+                              "shelf": shown["shelf"], "partial": shown["partial"], "scan_status": shown["scan"]["status"],
+                              "made": shown["made"], "text": f"{search.MARKER}\n{card.render(shown)}\n{read.END_MARKER}"}, indent=1))
+            return 0
         if args.command == "models":
             print(json.dumps(models.status(config.load()), indent=1))
             return 0

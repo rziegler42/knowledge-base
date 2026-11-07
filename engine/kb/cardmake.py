@@ -13,7 +13,7 @@ reads; the checks that follow are on its answer: it must have the shape the job 
 This module files nothing: it returns the model part, the records of how it was made and the reasons the card is partial."""
 import secrets
 
-from . import KbError, card, models, textutil
+from . import KbError, card, convert, models, stages, textutil
 
 PIECE_BYTES = 20_000     # a piece of the book, in bytes: with the rules and the other sections it fits a window of about 32 KB
 MAX_PIECES = 12
@@ -159,3 +159,76 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None):
             parts.append((f"NOTES {number}", "\n".join(f"- {p}" for p in points)))
     values = ask(card_model, card_prompt(title, outline(conversion), parts), CARD_JOB)
     return {"model": values, "records": records, "pieces": len(read), "calls": len(records), "reasons": [why] if why else []}
+
+
+DEFAULT_MIN_CHARS = 1000  # a book with less converted text than this gets a card from its metadata alone (`card.md`: the cutoff is a setting)
+MAX_MIN_CHARS = 10 ** 9
+
+
+def min_chars(cfg):
+    """The cutoff of the config (`card_min_chars`, a whole number of characters), or the default when it is not set."""
+    value = cfg.get("card_min_chars", DEFAULT_MIN_CHARS)
+    if type(value) is not int or not 0 <= value <= MAX_MIN_CHARS:
+        raise KbError(f"card_min_chars in the config is a whole number of characters from 0 to {MAX_MIN_CHARS}")
+    return value
+
+
+def _report(book_id, version_id, status, reason="", generation=None, made=None):
+    used = []
+    for r in (made or {}).get("made", {}).get("records", []):
+        item = {"task": r["task"], "registry": r["registry"], "model": r["model"]}
+        if item not in used:
+            used.append(item)
+    return {"book_id": book_id, "version_id": version_id, "status": status, "generation": generation,
+            "partial": made["partial"] if made else None, "pieces": made["made"]["pieces"] if made else 0,
+            "calls": made["made"]["calls"] if made else 0, "models": used, "reason": reason}
+
+
+def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
+    """Make and file the card of one version (the current one, if none is named) and return a report of what was done. A book that
+    is not active, or that has a card and `again` is not set, is skipped. A version that is not yet fetched or converted, a missing
+    setting, a failed call or an answer of the wrong shape is a refusal (a KbError), and nothing is filed. A version with no
+    conversion, or with less converted text than the cutoff, gets a card built from its metadata with no model call."""
+    book = store.read_book(book_id)
+    if book.get("state") != "active":
+        return _report(book_id, book.get("current_version"), "skipped", "the book is not active")
+    version_id = version_id or book.get("current_version")
+    if not version_id:
+        raise KbError("the book has no version")
+    state = stages.read(store, book_id, version_id)["stages"]
+    if state["fetched"]["status"] != "done":
+        raise KbError("the version has not been fetched yet, so there is nothing to make a card from")
+    if state["converted"]["status"] == "pending":
+        raise KbError("the version has not been converted yet: run `python3 -m kb process` first")
+    existing = card.generations(store, book_id, version_id)
+    if existing and not again:
+        return _report(book_id, version_id, "skipped", f"the version already has a card (generation {existing[-1]}); "
+                       "ask again to make another", generation=existing[-1])
+    cutoff = min_chars(cfg)
+    loaded = convert.load_in_use(store, book_id, version_id) if state["converted"]["status"] == "done" else None
+    if loaded is None:
+        made = card.make(store, book_id, version_id)
+    elif len(loaded[1].text) < cutoff:
+        made = card.make(store, book_id, version_id, reasons=[
+            f"the converted text is shorter than the cutoff of {cutoff} characters, so the card is built from the metadata"])
+    else:
+        title = card.mechanical(store, book_id, version_id)["title"]
+        part = make_model_part(cfg, loaded[1], title, launcher=launcher, root=root)
+        made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
+                         calls=part["calls"], reasons=part["reasons"])
+    number = card.file(store, made)
+    return _report(book_id, version_id, "carded", generation=number, made=made)
+
+
+def run(store, cfg, book_ids, again=False, launcher=None, root=None):
+    """`make_for_version` for each book named, in order. A book that is not there is a refusal before any work is done. A book that
+    fails is reported as failed with the reason, and the others go on."""
+    versions = {book_id: store.read_book(book_id).get("current_version") for book_id in book_ids}
+    reports = []
+    for book_id in book_ids:
+        try:
+            reports.append(make_for_version(store, cfg, book_id, again=again, launcher=launcher, root=root))
+        except Exception as e:  # whatever one book's data does to the program, the other books go on (as `process` does)
+            reason = str(e) if isinstance(e, KbError) else f"{type(e).__name__}: {e}"
+            reports.append(_report(book_id, versions[book_id], "failed", textutil.clean(reason, 300)))
+    return reports
