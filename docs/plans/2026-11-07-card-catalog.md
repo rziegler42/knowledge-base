@@ -1,6 +1,6 @@
 # Searching the cards by keyword
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-07
 Candidate: cards#card-catalog
 Specs: card
@@ -186,4 +186,38 @@ Reviewer: Codex through the review engine (model gpt-5.6-terra). Round 1 of 3: c
 
 ## Result
 
-Empty until work starts.
+### Increment A — The catalog file and its rebuild (2026-11-07)
+
+Added `engine/kb/catalog.py`. The catalog is `cards.sqlite` in the index root, apart from the full-text index, which it neither reads
+nor changes. A table `cards` has a row for the newest card of each version of each active book (book, version, generation, whether
+the version is the book's current one, the date added, the citation line, and the whole card as JSON), and a full-text table
+`cards_fts` has one column for each text field (title, summary, uses, topics, adjacent topics, key ideas, the five neutral fields,
+caveats), its rowid the id of the row in `cards`; a card with no model part has only its title. `rebuild(store)` guards the library,
+takes the lock `cards.lock` (no-follow, mode 600, waiting for another writer), builds `cards.sqlite.new`, reads each card through
+`card.read` (hashes checked, card validated), leaves out and counts a book that is not active (`inactive`) and a book or a card that
+cannot be read (`failed`), checks the library again, makes the file private (mode 600), removes the old file's journals and renames the
+new file into place; any failure leaves the old catalog as it was and no half-built file. `connect` refuses a file of another format
+number, with missing or different tables or columns, whose full-text table is not an FTS5 table, or that holds a trigger or a view, each
+with the command to run. `citation_of` builds the citation line from the card's own source facts in the form a read gives.
+
+Verification run: `python3 -m unittest engine.tests.test_catalog engine.tests.test_card engine.tests.test_store` gave 125 tests, OK
+(35 new in `test_catalog`, which also pass with a resource warning treated as an error). Tests were written first and failed because
+the module did not exist. Twenty-one deliberate breaks were each caught (a book with no card counted as failed; an inactive book
+included or not counted; an older card read; every version current; a failing card stopping the build; two columns swapped; an
+empty citation; the old journal staying; the library not checked again; the lock following a link; another format, other columns or a
+plain table for the full-text table accepted; a trigger or view accepted; a half-built file staying; accents mattering; a card with no
+model part losing its title; the build not atomic; the date added not checked; the file not private). A test caught a real bug while
+I wrote it: after a database error the half-built `.new` file stayed behind; cleanup now runs in a `finally`. Not run: any other test
+file, and the catalog on the owner's library (increment C).
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: the plan said the citation line is "otherwise the same" as a
+read's apart from the arXiv PDF address, and that is too strong; it also differs when a card dropped a non-web address (a read says
+`non-web address`, the card has none, and when a web address was asked for the card shows that one), and when an address is between
+300 and 500 characters (the card keeps 300). The docstring says so and three tests pin these cases; the plan's own text is not
+changed. The date added, which comes from the book file and not from the checked card, is now stored only if it has the shape of a
+date, since increment B shows it outside the markers; the check of a foreign file also looks at the columns and at the full-text
+table; the file is private; and tests were added for the join of the two tables, a book that cannot be read, a library that is not
+there at the start, and the other states that keep a book out. Noted for B: `connect` wraps database errors only while opening, so the
+search must wrap errors of its own queries in a refusal that says to run `card-index`; and an operating-system error that is not a
+refusal propagates, as in the full-text index, and is reported by the command. Not changed: `versions` and `cards` in the counts are
+always equal for now.
