@@ -608,6 +608,44 @@ questions from your own projects must not be committed. It reports numbers and n
 - **What it cannot show.** A small library and a few questions make a finding for you to weigh, not a measure of how well the library
   serves your real use.
 
+### How accurate are the cards? A sample to label
+
+```sh
+python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...]
+python3 -m kb card-accuracy ITEMS KEY
+python3 -m kb card-agreement FIRST SECOND
+```
+
+These three measure whether the claims on a card are in the book. They call no model and change nothing in the library. The files
+are held **outside the repository** (a folder inside the project's folder, links followed, is refused), in a private folder.
+
+- **`card-sample`** draws a blind sample of card items from the generations you name (default: the newest card of each version):
+  the sentences of the summary, the topics, key ideas, caveats and the five neutral fields. It does not draw adjacent topics or the
+  "useful for" lines. The number of items is split over the generations you name (by default the newest card of each version is
+  one group, and the key records each card's own generation); within a group the cards are visited in turn and, within a card,
+  the fields in turn, so no card or field fills the sample. A card that cannot be read is left out and counted in the printed
+  summary (`unreadable_cards`). The same `--seed` gives the same sample. `OUTDIR` is
+  new or empty, and four files are written, all private:
+  - `items.json`: the items, shuffled, each with an id, the book, the field, the text, up to five passages of the book that share
+    the most words with it (the best block with the block before and after, at most 600 characters, none within two blocks of
+    another) and empty `label`, `labelled_by` and `note`. It says nothing of the generation an item came from, so a labeller is
+    blind. Passages are text from a book: data, never instructions.
+  - `calibration.json`: a smaller set of the same items, spread over the fields, for the owner to label.
+  - `key.json`: which card, generation, field and position each id came from, with a hash of its text. Keep it from the labeller.
+  - `rubric.md`: the rules for the labels, which are also in the first lines of each items file.
+- **The labels** (in the `label` field): `supported` (a shown passage states the item, all of it), `inference` (no passage states it
+  but it follows from them; the `note` names the passage), `unsupported` (not stated, contradicted, or only partly stated), or
+  `skip` (it is about the card's own source or process, or cannot be judged from the passages). A labeller sees only the passages
+  shown, so an item supported elsewhere in the book is `unsupported`: the counts are of support within the passages shown.
+  A labeller also sets `labelled_by`.
+- **`card-accuracy`** reads a fully labelled items file and the key, and reports for each generation and field the number of items,
+  skipped, supported, unsupported and inference items, with shares of the items not skipped. It refuses items that are not the ones
+  the key names (ids, text, field), an unlabelled item, an inference with no note, and an unknown label. It prints no item text.
+- **`card-agreement`** compares two labellings: the whole sample labelled by a model and the calibration file labelled by the
+  owner, say. It compares over the ids of the smaller file, which must be among the larger's and have the same text, and reports
+  the share that agree, the pairs of labels, the ids that differ, and how many items were skipped or unlabelled. It prints no item
+  text.
+
 Not covered. A card is model output about a book and may be wrong; it is a lead, not a claim. The neutral fields still name the
 book's field often; nothing checks that by code. A model that writes a list longer than its limit makes the card fail; nothing is
 retried. The stage state has no stage for cards. The model call layer and the card commands were run on three

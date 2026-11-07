@@ -1,6 +1,6 @@
 # Making the cards accurate
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-07
 Candidate: cards#card-grounding
 Specs: card
@@ -315,4 +315,34 @@ the last finding has not been reviewed again.
 
 ## Result
 
-Empty until work starts.
+### Increment A — Measuring the accuracy of the cards (built; not committed)
+
+- Built `engine/kb/cardsample.py` (the commands `card-sample`, `card-accuracy` and `card-agreement`), `engine/kb/paths.py` (the
+  rule that a file is held outside the repository, which `trial` now uses from there), `engine/tests/test_cardsample.py` (41 tests)
+  and a README section. The tests were written first and failed because the module did not exist. No model is called and nothing
+  in the library changes. The commands have not been used on the owner's library; that is increment E.
+- Verification as run: `python3 -m unittest engine.tests.test_cardsample engine.tests.test_trial engine.tests.test_card` gave
+  140 tests, OK (also with ResourceWarning as an error); `wb run code-work check` found no problems. Not run: any other test file.
+- Deliberate breaks, each from a green baseline: 27 of the first build (24 caught at once; two test gaps, the spread of the
+  calibration subset and the case of an unreadable book that the draw happened not to pick, were strengthened and are now caught;
+  the third survivor was one of three layers of the project-path rule and removing all three is caught) and 23 of the build after
+  the review (22 caught). The survivor is a guard against deep nesting in the JSON readers, which this Python refuses by itself,
+  so the guard is redundant here and is kept.
+- A break that removed every layer of the project-path rule made a folder of test data in the project during the run; I looked
+  at it (four sample files of the fake test library), removed it, and the working tree held only the intended changes.
+- Review: the `reviewer` agent, round 1. One blocking finding, applied: a passage could run past 600 characters when the best
+  block was 597 to 599 characters (the room for its neighbours went negative and the slice took nearly the whole next block, up to
+  about 100,000 characters, which `card-accuracy` would then have refused); I confirmed it with a direct call (5,599 characters),
+  clamped the room at zero, and added a test over lengths 590 to 605. Other findings applied: a failed write now removes only the
+  files this call wrote and leaves a file of someone else in the folder; the default (the newest card of each version) is one group,
+  so books whose newest card has a different generation no longer split the quota or make the sample refuse; cards that cannot be
+  read are counted in the printed summary (`unreadable_cards`); the readers refuse a pipe, a number out of range and over-long
+  numbers with a refusal and not a traceback, and read at most the size limit.
+- Not applied, with reasons: a note for a partly stated `unsupported` item is not enforced (the rubric asks, but it cannot be
+  checked mechanically); `position` in the key means the index in the card's own list for topics, key ideas and caveats and the
+  index of the sentence for the summary, which is only descriptive; `passages` and `title` in a labelled file are not compared with
+  the key, since the labeller changing them alters no number and the check on text, field and book already holds.
+- For increment E: the wording of an item can reveal its generation to a labeller (the new prompt will not say "notes", for
+  example), which no code here can prevent. Increment E should say so in its result, and the printed summary of `card-sample`
+  shows counts by generation to the operator and is not to be passed to the labeller.
+- Next: the owner's word to commit increment A.

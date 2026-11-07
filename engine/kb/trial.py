@@ -27,7 +27,7 @@ import unicodedata
 from contextlib import closing
 from datetime import datetime, timezone
 
-from . import KbError, card, catalog, config, ids, index, models, search, textutil
+from . import KbError, card, catalog, config, ids, index, models, paths, search, textutil
 
 FORMAT = 1
 MAX_CORPUS_BYTES = 1_000_000
@@ -43,20 +43,6 @@ _QUESTION_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _WORD = re.compile(r"\w+")
 _STOP = frozenset("with from that this have using used based what when where which into about than their these those there been were "
                   "they them then also such other more most only over under between through while each both some many much very".split())
-
-
-def _inside_project(path):
-    real = os.path.realpath(path)
-    root = os.path.realpath(models._project_root())
-    return real == root or real.startswith(root + os.sep)
-
-
-def _outside(path, what):
-    """Refuse a path that is, or lies under, the project's own folder (links followed): the trial's files are held outside the repository."""
-    if not isinstance(path, str) or not path:
-        raise KbError(f"{what} must be a path")
-    if _inside_project(path):
-        raise KbError(f"{what} is inside the project's own folder; the files of a trial are held outside the repository")
 
 
 def _question(raw, seen):
@@ -93,7 +79,7 @@ def _question(raw, seen):
 def load_corpus(path):
     """`(corpus, sha256)` of the corpus file at `path`, checked. The file must be a regular file outside the project, small, one JSON
     object with no repeated key, and in the expected form."""
-    _outside(path, "the corpus file")
+    paths.require_outside(path, "the corpus file")
     try:
         st = os.stat(path)
     except OSError:
@@ -125,11 +111,11 @@ def load_corpus(path):
 
 
 def _report_path(path, replace):
-    _outside(path, "the report file")
+    paths.require_outside(path, "the report file")
     parent = os.path.realpath(os.path.dirname(os.path.abspath(path)))
     if not os.path.isdir(parent):
         raise KbError("the folder for the report is not there")
-    if _inside_project(parent):
+    if paths.inside_project(parent):
         raise KbError("the report file is inside the project's own folder; the files of a trial are held outside the repository")
     final = os.path.join(parent, os.path.basename(path))
     if os.path.lexists(final) and not replace:

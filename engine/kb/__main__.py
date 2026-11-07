@@ -5,6 +5,7 @@ import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
+from . import cardsample
 from .store import Store
 
 
@@ -86,8 +87,32 @@ def main(argv=None):
     tr.add_argument("corpus", help="the corpus file (JSON): questions, queries and the books that answer them")
     tr.add_argument("report", help="the report file to write")
     tr.add_argument("--replace", action="store_true", help="replace a report that exists")
+    cs = sub.add_parser("card-sample", help="draw a blind sample of card items, with passages of the book, to be labelled; the files are held "
+                                            "outside the repository; no model is called and nothing in the library changes")
+    cs.add_argument("outdir", help="the folder to write the sample in (new or empty)")
+    cs.add_argument("--items", type=int, default=80, help="the number of items (default 80)")
+    cs.add_argument("--calibration", type=int, default=15, help="the number of items in the calibration subset (default 15)")
+    cs.add_argument("--seed", type=int, default=None, help="the seed (default: a random one, recorded in the key)")
+    cs.add_argument("--generation", type=int, action="append", help="a card generation to draw from; repeat for several "
+                                                                    "(default: the newest card of each version)")
+    ca = sub.add_parser("card-accuracy", help="count the labels of a sample by generation and field")
+    ca.add_argument("items", help="the labelled items file")
+    ca.add_argument("key", help="the key file of the sample")
+    cg = sub.add_parser("card-agreement", help="compare two labellings of the same items")
+    cg.add_argument("first")
+    cg.add_argument("second")
     args = parser.parse_args(argv)
     try:
+        if args.command == "card-sample":
+            print(json.dumps(cardsample.sample(Store.open(write=False), args.outdir, items=args.items, calibration=args.calibration,
+                                               seed=args.seed, generations=args.generation), indent=1))
+            return 0
+        if args.command == "card-accuracy":
+            print(json.dumps(cardsample.accuracy(args.items, args.key), indent=1))
+            return 0
+        if args.command == "card-agreement":
+            print(json.dumps(cardsample.agreement(args.first, args.second), indent=1))
+            return 0
         if args.command == "trial":
             print(json.dumps(trial.run(Store.open(write=False), args.corpus, args.report, replace=args.replace), indent=1))
             return 0
