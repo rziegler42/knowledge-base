@@ -13,7 +13,7 @@ reads; the checks that follow are on its answer: it must have the shape the job 
 This module files nothing: it returns the model part, the records of how it was made and the reasons the card is partial."""
 import secrets
 
-from . import KbError, card, convert, models, stages, textutil
+from . import KbError, card, convert, models, refused, stages, textutil
 
 PIECE_BYTES = 20_000     # a piece of the book, in bytes: with the rules and the other sections it fits a window of about 32 KB
 MAX_PIECES = 12
@@ -178,7 +178,27 @@ def min_chars(cfg):
     return value
 
 
-def _report(book_id, version_id, status, reason="", generation=None, made=None):
+class CardRefused(KbError):
+    """A model's answer was refused for its shape and no card was made. `kept` is the name of the file in which the answer was kept
+    aside (None if it could not be kept) and `note` says why not."""
+
+    def __init__(self, message, kept, note):
+        super().__init__(message)
+        self.kept, self.note = kept, note
+
+
+def _keep_aside(store, refusal, book_id, version_id):
+    """The answer that was refused, kept aside in the index root. A failure to keep it does not hide the refusal."""
+    kept, note = None, ""
+    try:
+        kept = refused.keep(store.cfg["index_root"], book_id=book_id, version_id=version_id, job=refusal.job, record=refusal.record,
+                            reason=str(refusal), answer=refusal.reply)
+    except (KbError, OSError) as e:
+        note = "the answer could not be kept: " + textutil.clean(str(e), 200)
+    return CardRefused(str(refusal), kept, note)
+
+
+def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None):
     used = []
     for r in (made or {}).get("made", {}).get("records", []):
         item = {"task": r["task"], "registry": r["registry"], "model": r["model"]}
@@ -186,7 +206,7 @@ def _report(book_id, version_id, status, reason="", generation=None, made=None):
             used.append(item)
     return {"book_id": book_id, "version_id": version_id, "status": status, "generation": generation,
             "partial": made["partial"] if made else None, "pieces": made["made"]["pieces"] if made else 0,
-            "calls": made["made"]["calls"] if made else 0, "models": used, "reason": reason}
+            "calls": made["made"]["calls"] if made else 0, "models": used, "reason": reason, "kept": kept}
 
 
 def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
@@ -218,7 +238,10 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
             f"the converted text is shorter than the cutoff of {cutoff} characters, so the card is built from the metadata"])
     else:
         title = card.mechanical(store, book_id, version_id)["title"]
-        part = make_model_part(cfg, loaded[1], title, launcher=launcher, root=root)
+        try:
+            part = make_model_part(cfg, loaded[1], title, launcher=launcher, root=root)
+        except models.AnswerRefused as refusal:
+            raise _keep_aside(store, refusal, book_id, version_id) from None
         made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
                          calls=part["calls"], reasons=part["reasons"])
     number = card.file(store, made)
@@ -233,6 +256,9 @@ def run(store, cfg, book_ids, again=False, launcher=None, root=None):
     for book_id in book_ids:
         try:
             reports.append(make_for_version(store, cfg, book_id, again=again, launcher=launcher, root=root))
+        except CardRefused as e:  # the answer was kept aside (or the note says why not); the report names the file
+            reason = textutil.clean(str(e) + (f" ({e.note})" if e.note else ""), 400)
+            reports.append(_report(book_id, versions[book_id], "failed", reason, kept=e.kept))
         except Exception as e:  # whatever one book's data does to the program, the other books go on (as `process` does)
             reason = str(e) if isinstance(e, KbError) else f"{type(e).__name__}: {e}"
             reports.append(_report(book_id, versions[book_id], "failed", textutil.clean(reason, 300)))

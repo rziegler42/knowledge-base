@@ -508,12 +508,24 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 - **`card-show`.** It prints the facts that cannot hold free text (ids, shelf, the counts and the models used) as JSON, and the text
   of the card between the markers of a search result. A piece of text that holds the words of an untrusted-text marker is withheld.
 - **`cards` reports** one line of JSON for each book: carded, skipped or failed, the generation, whether the card is partial, the
-  pieces and calls, the model of each kind of work, and the reason. It never prints card text. One book failing does not stop the
-  others, and the exit code is 1 if any failed.
+  pieces and calls, the model of each kind of work, the reason, and `kept` (see below). It never prints card text. One book failing
+  does not stop the others, and the exit code is 1 if any failed.
+- **A refused answer is kept aside.** When a model answers and the answer is refused for its shape (a list longer than its limit, a
+  missing key, text that is not JSON), no card is made, and the answer is written to a file in the folder `refused` of the index
+  root, so you can read what the model wrote. The failed report names the file in `kept` (the name, not the folder). The file is
+  JSON with the book, version, job, the model entry and prompt version, the date, the reason and the answer; everything outside
+  ASCII is escaped, so a control or escape character in the answer cannot reach your terminal when you read the file with `cat`; and
+  an answer is cut at 256 K characters. It is written with mode 600 in a folder with mode 700, never over a file that exists, and
+  without following a link at the last step of the path to the index root and to `refused` (the library's roots are checked for
+  links when it is set up). The folder must be yours with no access for group or others in its mode bits; an access list that macOS
+  can add is not looked at. A file that cannot be written whole (the disk is full) is removed. At most 200 files are kept and
+  nothing deletes them; delete them as you like. If the answer cannot be kept (the folder is a link, others can enter it, it is
+  full, the write failed), the report says so in its reason and the refusal stands. Only a refused shape keeps an answer: a failed
+  call, a missing setting or a skipped book keeps nothing.
 
 Not covered. A card is model output about a book and may be wrong; it is a lead, not a claim. The neutral fields still name the
-book's field often; nothing checks that by code. A model that writes a list longer than its limit makes the card fail, and the
-refused answer is not kept. The stage state has no stage for cards. The model call layer and the card commands were run on three
+book's field often; nothing checks that by code. A model that writes a list longer than its limit makes the card fail; nothing is
+retried. The stage state has no stage for cards. The model call layer and the card commands were run on three
 real books, on a server that serves a small and a larger model: a short page made its card in a few seconds once the model was
 loaded, a three-piece paper in under a minute, and a 13-piece paper (12 read) in under two minutes.
 

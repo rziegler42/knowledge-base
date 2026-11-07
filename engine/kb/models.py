@@ -508,14 +508,27 @@ def _check_answer(text, shape):
     return values
 
 
+class AnswerRefused(KbError):
+    """A model answered and the answer was refused for its shape. The refusal carries the answer (`reply`, untrusted text), the
+    record of the call (`record`) and the name of the job (`job`), so that a caller can keep the answer aside for the owner to read.
+    A call that failed, or a reply that was not of the bridge's form, has no answer and raises a plain `KbError`."""
+
+    def __init__(self, message, reply, record, job):
+        super().__init__(message)
+        self.reply, self.record, self.job = reply, record, job
+
+
 def run_job(cfg, name, prompt, job, launcher=None, root=None):
     """Make one call for `job` and return {"untrusted": True, "values": ..., "record": ...}: the checked values, and the record of
     how they were made (the model the server reported, the registry name, the prompt version, the date and the token counts)."""
     got = call(cfg, name, prompt, launcher=launcher, root=root, schema=job.schema)
-    values = _check_answer(got["reply"], job.shape)
     record = {"model": got["model"], "registry": name, "prompt_version": job.prompt_version,
               "date": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "input_tokens": got["usage"]["input_tokens"], "output_tokens": got["usage"]["output_tokens"]}
+    try:
+        values = _check_answer(got["reply"], job.shape)
+    except KbError as e:
+        raise AnswerRefused(str(e), got["reply"], record, job.name) from None
     return {"untrusted": True, "values": values, "record": record}
 
 

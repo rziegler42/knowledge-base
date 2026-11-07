@@ -490,6 +490,46 @@ class JobTest(Base):
             with self.subTest(bad=bad), self.assertRaises(KbError):
                 job(**bad)
 
+    def test_a_refused_shape_raises_a_refusal_that_carries_the_answer_and_the_record(self):
+        wrong = json.dumps({"summary": 5, "topics": [], "score": 1})
+        self.plan(stdout=json.dumps(dict(GOOD, reply=wrong)))
+        with self.assertRaises(models.AnswerRefused) as cm:
+            models.run_job(config(), "local", "q", job(), launcher=self.launcher, root=self.root)
+        refusal = cm.exception
+        self.assertIsInstance(refusal, KbError)
+        self.assertEqual(refusal.reply, wrong)
+        self.assertEqual(refusal.job, "card-try")
+        self.assertEqual(refusal.record["registry"], "local")
+        self.assertEqual(refusal.record["prompt_version"], "v1")
+        self.assertEqual((refusal.record["input_tokens"], refusal.record["output_tokens"]), (7, 3))
+        self.assertEqual(set(refusal.record), {"model", "registry", "prompt_version", "date", "input_tokens", "output_tokens"})
+        self.assertIn("summary", str(refusal))
+
+    def test_text_that_is_not_json_is_a_refused_answer_too(self):
+        self.plan(stdout=json.dumps(dict(GOOD, reply="no json here \x1b[0m")))
+        with self.assertRaises(models.AnswerRefused) as cm:
+            models.run_job(config(), "local", "q", job(), launcher=self.launcher, root=self.root)
+        self.assertEqual(cm.exception.reply, "no json here \x1b[0m")
+
+    def test_a_failure_with_no_answer_is_not_a_refused_answer(self):
+        cases = {"the bridge could not answer": json.dumps({"contract": 2, "ok": False, "vendor": "ollama", "error": "unreachable"}),
+                 "a reply of another contract": json.dumps(dict(GOOD, contract=1)), "text that is not json": "not json"}
+        for label, stdout in cases.items():
+            self.plan(stdout=stdout, exit=1 if "could not" in label else 0)
+            with self.subTest(label), self.assertRaises(KbError) as cm:
+                models.run_job(config(), "local", "q", job(), launcher=self.launcher, root=self.root)
+            self.assertNotIsInstance(cm.exception, models.AnswerRefused)
+        with self.assertRaises(KbError) as cm:
+            models.run_job(config(), "local", "", job(), launcher=self.launcher, root=self.root)
+        self.assertNotIsInstance(cm.exception, models.AnswerRefused)
+        cfg = config(models_on=False)
+        with self.assertRaises(KbError) as cm:
+            models.run_job(cfg, "local", "q", job(), launcher=self.launcher, root=self.root)
+        self.assertNotIsInstance(cm.exception, models.AnswerRefused)
+
+    def test_a_good_answer_raises_nothing(self):
+        self.assertIs(self.run_job()["untrusted"], True)
+
     def test_a_list_can_have_a_minimum_number_of_items(self):
         shape = {"k": {"type": "strings", "min_items": 2, "max_items": 3, "max": 10}}
         for items, ok in ((["a"], False), ([], False), (["a", "b"], True), (["a", "b", "c"], True), (["a"] * 4, False)):

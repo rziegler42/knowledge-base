@@ -1,6 +1,6 @@
 # Two fixes from the first live run of cards
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-07
 Candidate: none (no new roadmap work; these are two findings of the live run of 2026-11-07-card-stage, recorded in its Result)
 Specs: card
@@ -170,3 +170,46 @@ recorded). Not run: any other test file, and any live call. The three existing c
 Review: the `reviewer` agent, one exchange, no blocking findings. It found no other text in the repository that says a flat
 conversion makes a card partial, and nothing else in the engine that reads the flat reason (the search, read and index code read the
 conversion's own partial check, not the card). Nothing applied beyond the above.
+
+### Increment B — Keep a refused answer aside (2026-11-07)
+
+`engine/kb/models.py`: `run_job` raises `AnswerRefused` (a `KbError`) when it received an answer and the shape check refused it; the
+refusal carries the answer (`reply`), the record of the call and the job name. A failed call, a reply that is not of the bridge's
+form, a prompt that is refused before sending, a missing setting and the switch off still raise a plain `KbError` with no answer.
+New `engine/kb/refused.py`: `keep` writes the answer to a file in the folder `refused` of the index root and returns the file's
+name. It is written with descriptors: the index root is opened without following a link, `refused` is made or opened relative to it
+without following a link, it must be a directory owned by the user with no access for group or others in its mode bits, the files
+are counted (at 200 nothing more is kept and nothing is deleted), and the file is created relative to it, exclusively, without
+following a link, with mode 600 and a random suffix in its name (a new suffix, up to five times, on a clash). The file is JSON with
+the book, version, job, model entry, prompt version, date, token counts, the cleaned reason and the answer (cut at 262,144
+characters, `answer_cut` says so), every character outside ASCII escaped. A file that cannot be written whole is removed. The ids,
+the version and the job in the name and the record are checked; nothing reads a file back. `engine/kb/cardmake.py`:
+`make_for_version` catches the refusal around the model part, keeps the answer aside and raises `CardRefused`, which carries the
+file name or a note that it could not be kept; `run` recognises it and puts the name in the `kept` field of the failed report, and
+every report has the field (empty by default). The report names the file and not the folder. `engine/README.md` says where the
+files are and what they hold, and its sentence that a refused answer is not kept is corrected. The root `README.md` has the plan's
+row and a clause about the refused answer.
+
+Verification run: `python3 -m unittest engine.tests.test_card engine.tests.test_cardmake engine.tests.test_models
+engine.tests.test_refused engine.tests.test_setup` gave 290 tests, OK (the new tests also pass with a resource warning treated as an
+error). Tests were written first and failed because the module did not exist. Nineteen deliberate breaks were each caught (a
+refused shape being a plain error; the index root or the folder followed through a link; a folder others can enter used; the file
+limit not enforced; an existing file overwritten; a clash giving up at once; the file not private; the answer not escaped, not
+bounded; the reason not cleaned; the version not checked; a refused answer not kept; the report not naming the file; a failed write
+hiding the refusal; the note missing from the reason; a half-written file left behind; a failed write not an error of the engine;
+a descriptor leaking when the stream cannot be made). Not run: any other test file, and any live call: this plan makes none, so the
+three real cards and the refusal seen in the live run were not repeated. No security review was asked for or run.
+
+Review: the `reviewer` agent, one exchange, no blocking findings, and no gap between a check and its use in the write. Applied: a
+write that fails (a full disk) used to leave an empty or half-written file that counted toward the limit and was not mentioned; it
+is now removed and the failure is reported, and a descriptor cannot leak when the stream cannot be made (tests first, and the
+second needed a new test after a break survived); the docstring and the README no longer say more than the code checks. Recorded
+limits, not changed: no-follow covers the last step of the path to the index root and to `refused` (the library's roots are checked
+for links when it is set up, which is why a link higher up is not looked for here), and the folder check reads the mode bits, so an
+access list that macOS can add is not seen. Two refusals within one second keep two files (the suffix); the count of files is a
+check outside the create, so two runs at once could pass 200 by a little.
+
+Plan as a whole: each increment's recorded verification still stands. Completion criteria 1 to 3 are met: a flat conversion alone
+no longer makes a card partial and the structure is still recorded; a refused answer is kept with its metadata, escaped, bounded and
+private, the report names the file, and nothing is kept for any other failure; and no name or path of the owner is in a tracked
+file. The three cards made in the live run were not made again and keep their old reason.

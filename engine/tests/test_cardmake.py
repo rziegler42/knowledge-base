@@ -666,6 +666,116 @@ class JoinTest(LibraryCase):
         self.assertEqual(self.calls(), [])
 
 
+class RefusedAnswerTest(LibraryCase):
+    """An answer that a model gave and the engine refused for its shape is kept aside, and the report names the file."""
+
+    def kept_files(self):
+        folder = os.path.join(self.index, "refused")
+        return sorted(os.listdir(folder)) if os.path.isdir(folder) else []
+
+    def read_kept(self, name):
+        with open(os.path.join(self.index, "refused", name), "rb") as f:
+            return json.loads(f.read())
+
+    def too_many_topics(self):
+        return reply(dict(CARD, topics=[f"topic {i}" for i in range(20)]))
+
+    def test_a_refused_card_answer_is_kept_and_the_failed_report_names_the_file(self):
+        book, version = self.converted_book()
+        self.script(self.too_many_topics())
+        (report,) = self.run_cards(book)
+        self.assertEqual((report["status"], report["generation"]), ("failed", None))
+        self.assertIn("topics", report["reason"])
+        self.assertEqual(self.kept_files(), [report["kept"]])
+        doc = self.read_kept(report["kept"])
+        self.assertEqual((doc["book_id"], doc["version_id"], doc["job"], doc["registry"], doc["prompt_version"]),
+                         (book, version, "card", "cardm", "v2"))
+        self.assertEqual(json.loads(doc["answer"])["topics"][19], "topic 19")
+        self.assertIn("topics", doc["reason"])
+        self.assertEqual(card.generations(self.store, book, version), [])
+
+    def test_a_refused_note_is_kept_too_and_names_its_job(self):
+        book, _ = self.converted_book(blocks=[block(f"piece {i} " + "word " * 3000) for i in range(2)])
+        self.script(reply({"points": []}))
+        (report,) = self.run_cards(book)
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(self.read_kept(report["kept"])["job"], "card-notes")
+        self.assertEqual(self.read_kept(report["kept"])["registry"], "notes")
+
+    def test_text_that_is_not_json_is_kept_escaped(self):
+        book, _ = self.converted_book()
+        self.script(reply_text("I cannot do that \x1b[31m sorry"))
+        (report,) = self.run_cards(book)
+        with open(os.path.join(self.index, "refused", report["kept"]), "rb") as f:
+            raw = f.read()
+        self.assertNotIn(b"\x1b", raw)
+        self.assertIn("I cannot do that", self.read_kept(report["kept"])["answer"])
+
+    def test_two_refusals_keep_two_files(self):
+        book, _ = self.converted_book()
+        self.script(self.too_many_topics())
+        first, = self.run_cards(book)
+        second, = self.run_cards(book)
+        self.assertNotEqual(first["kept"], second["kept"])
+        self.assertEqual(len(self.kept_files()), 2)
+
+    def test_every_other_report_has_kept_empty_and_leaves_no_file(self):
+        carded, _ = self.converted_book(title="Carded")
+        (ok,) = self.run_cards(carded)
+        (skipped,) = self.run_cards(carded)
+        failed, _ = self.converted_book(title="Call fails")
+        self.script(failure())
+        (call_failed,) = self.run_cards(failed)
+        unconverted, _ = self.converted_book(title="Not converted", state="pending")
+        (refused_early,) = self.run_cards(unconverted)
+        for report in (ok, skipped, call_failed, refused_early):
+            self.assertIn("kept", report)
+            self.assertIsNone(report["kept"], report)
+        self.assertEqual(self.kept_files(), [])
+
+    def test_a_missing_setting_keeps_nothing(self):
+        book, _ = self.converted_book()
+        self.set_config(tasks={"card-notes": "notes"})
+        (report,) = self.run_cards(book)
+        self.assertEqual(report["status"], "failed")
+        self.assertIsNone(report["kept"])
+        self.assertEqual(self.kept_files(), [])
+
+    def test_a_write_that_fails_does_not_hide_the_refusal(self):
+        book, _ = self.converted_book()
+        with open(os.path.join(self.index, "refused"), "w") as f:  # a file where the folder should be
+            f.write("in the way")
+        self.script(self.too_many_topics())
+        (report,) = self.run_cards(book)
+        self.assertEqual(report["status"], "failed")
+        self.assertIsNone(report["kept"])
+        self.assertIn("topics", report["reason"])
+        self.assertIn("could not be kept", report["reason"])
+
+    def test_a_refusal_in_one_book_does_not_stop_the_next(self):
+        first, _ = self.converted_book(title="First")
+        second, second_version = self.converted_book(title="Second")
+        self.script(self.too_many_topics(), reply(CARD))
+        one, two = self.run_cards(first, second)
+        self.assertEqual((one["status"], two["status"]), ("failed", "carded"))
+        self.assertIsNotNone(one["kept"])
+        self.assertIsNone(two["kept"])
+        self.assertEqual(card.generations(self.store, second, second_version), [1])
+
+    def test_the_report_does_not_contain_the_folder(self):
+        book, _ = self.converted_book()
+        self.script(self.too_many_topics())
+        (report,) = self.run_cards(book)
+        self.assertNotIn(self.index, json.dumps(report))
+        self.assertNotIn("/", report["kept"])
+
+
+def reply_text(text):
+    return {"stdout": json.dumps({"contract": 2, "ok": True, "vendor": "ollama", "model": "m1:latest", "reply": text,
+                                  "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": None,
+                                            "cached_input_tokens": None, "reasoning_output_tokens": None}})}
+
+
 class CommandTest(LibraryCase):
     def kb(self, *args, path=True):
         env = dict(os.environ, KB_CONFIG_DIR=self.cfg, PATH=(self.fake + os.pathsep + os.environ["PATH"]) if path else "/nonexistent")
@@ -711,6 +821,18 @@ class CommandTest(LibraryCase):
                 self.assertEqual(r.returncode, 2, r.stderr)
                 self.assertIn("refused:", r.stderr)
         self.assertEqual(self.calls(), [])
+
+    def test_cards_prints_the_name_of_the_file_that_keeps_a_refused_answer(self):
+        book, _ = self.converted_book()
+        self.script(reply(dict(CARD, topics=[f"t{i}" for i in range(20)])))
+        r = self.kb("cards", "--book", book)
+        self.assertEqual(r.returncode, 1)
+        report = json.loads(r.stdout)
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(os.path.isfile(os.path.join(self.index, "refused", report["kept"])))
+        ok, _ = self.converted_book(title="Fine")
+        self.script(reply(CARD))
+        self.assertIsNone(json.loads(self.kb("cards", "--book", ok).stdout)["kept"])
 
     def test_cards_exits_one_when_a_book_failed(self):
         book, _ = self.converted_book()

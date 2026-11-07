@@ -33,7 +33,8 @@ they would not otherwise reach.
 - **Writes cards, on command.** `python3 -m kb cards --book ID` has the models your config names write a card for each named
   book: a short, plain-English entry of what the book is about and useful for, and a description of its problem and approach in
   words of no field. A long book is read in pieces. A card is kept in the book's folder as a generation that is never overwritten;
-  `card-show` prints it between the untrusted-text markers. Book text goes to the models you name. Cards cannot be searched yet.
+  `card-show` prints it between the untrusted-text markers. Book text goes to the models you name. If a model's answer is refused
+  for its shape, no card is made and the answer is kept in a file for you to read. Cards cannot be searched yet.
 
 Planned, not built: the thin workbench package that gives an agent `search` and `read` in a project, a search of the cards, themes
 made with a local or cloud model, a search across fields, and a scheduled program that adds sources while the owner is away.
@@ -76,6 +77,7 @@ An index written by an older version of the engine is refused, and the search sa
 | [Title safety](docs/plans/2026-11-06-title-safety.md) | one rule for a title where it is stored and where it is shown, and a citation line that a title cannot imitate | completed: all four increments are committed and the index was rebuilt |
 | [Model calls](docs/plans/2026-11-07-model-calls.md) | a registry of models in the owner's config, one call through the Ollama bridge, a checked answer with a record of how it was made, and two commands | completed: all three increments are committed and one live call was made |
 | [The card of a book](docs/plans/2026-11-07-card-stage.md) | the model for each kind of work set in the config, the card file kept as generations, reading a book in pieces, the `cards` and `card-show` commands, and cards for three real books | completed: all five increments are committed and cards were made for three books |
+| [Two fixes from the first live run of cards](docs/plans/2026-11-07-card-live-run-fixes.md) | a flat conversion no longer makes a card partial, and a model answer refused for its shape is kept aside in a file | completed: both increments are committed |
 
 Each increment of a plan is one verified, reviewed local commit. A plan needs the owner's approval before anything is built, and
 the plan, not the conversation, is the record of what was done and checked.
