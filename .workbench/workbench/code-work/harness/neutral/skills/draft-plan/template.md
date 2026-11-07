@@ -2,7 +2,7 @@
 
 Status: Proposed
 Created: YYYY-MM-DD
-Candidate: <roadmap>#<id>
+Candidate: <roadmap>#<id>, or none (a one-line reason)
 Specs: <spec>, <spec>
 
 ## Goal
