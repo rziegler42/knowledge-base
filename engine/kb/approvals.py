@@ -197,7 +197,7 @@ def describe(name, version, command, reads, formats, timeout=30, max_output=1_00
                            "max_output": max_output})
 
 
-SCAN_VERSION = "0.0.7"  # the scan tool's own label: raised, with a line in the history of ToolVersionTest, whenever scan_tool.py changes
+SCAN_VERSION = "0.0.8"  # the scan tool's own label: raised, with a line in the history of ToolVersionTest, whenever scan_tool.py changes
 
 
 def builtin_scan_entry():

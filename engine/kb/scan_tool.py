@@ -71,9 +71,36 @@ def _unescape_regular(data):
     return re.sub(rb"#([0-9A-Fa-f]{2})", one, data)
 
 
+_ESCAPE = re.compile(rb"#([0-9A-Fa-f]{2})")
+_CHUNK = 1 << 20  # the size of the pieces _unescape_names works in (at least 4)
+
+
+def _byte(m):
+    return bytes([int(m.group(1), 16)])
+
+
 def _unescape_names(data):
-    """In a PDF name, #xx stands for the byte xx, so /J#61vaScript is /JavaScript."""
-    return re.sub(rb"#([0-9A-Fa-f]{2})", lambda m: bytes([int(m.group(1), 16)]), data)
+    """In a PDF name, #xx stands for the byte xx, so /J#61vaScript is /JavaScript.
+
+    A substitution with a function keeps a bytes object for each escape until it is done (30 to 90 bytes each: 1.2 to 2 GB for a
+    file of 50 MB of them), so a long text is done in pieces of _CHUNK bytes and the results joined. A piece is cut before a `#`
+    within its last two bytes, if there is one, so no escape is split: a `#` is the start of an escape or a failed try whatever lies
+    before it (the two bytes of an escape are hex digits, never a `#`), so the pieces give what the whole would."""
+    if b"#" not in data:
+        return data  # no copy of text that has no escape
+    if len(data) <= _CHUNK:
+        return _ESCAPE.sub(_byte, data)
+    view, parts, i = memoryview(data), [], 0
+    while i < len(data):
+        end = i + _CHUNK
+        if end < len(data):
+            cut = data.rfind(b"#", end - 2, end)
+            if cut != -1:
+                end = cut
+        piece, found = _ESCAPE.subn(_byte, view[i:end])
+        parts.append(piece if found else view[i:end])  # a piece with no escape is kept as a view, not as a copy
+        i = end
+    return b"".join(parts)
 
 
 _BLANK = b" \t\r\n\x00\x0c"  # the white space of a PDF; a writer may put some between the end of a stream's data and endstream
@@ -341,6 +368,8 @@ def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None, volume=N
                 data = base64.a85decode(text, ignorechars=b" \t\n\r\v\f\x00")
             except (ValueError, TypeError):
                 return b"", "bad"
+            if len(data) > limit:
+                return data[:limit], "limit"  # cut at the window as a deflate output is: what is read after it is a piece of 2 MB at most
         else:  # ASCIIHexDecode: pairs of hex digits up to >, an odd last digit standing for that digit and a zero
             if b">" not in data:
                 return b"", "bad"  # no end mark: the scan may have cut the stream where a viewer, reading by /Length, read on
@@ -352,6 +381,8 @@ def _decode_chain(blob, names, limit, parms=None, rows=None, raws=None, volume=N
                 data = bytes.fromhex((text + b"0" if len(text) % 2 else text).decode("ascii"))
             except (ValueError, UnicodeDecodeError):
                 return b"", "bad"
+            if len(data) > limit:
+                return data[:limit], "limit"
     return data, "ok"
 
 

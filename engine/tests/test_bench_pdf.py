@@ -121,5 +121,47 @@ class TinyStreamsTest(unittest.TestCase):
                 bench_pdf.tiny_streams(*bad)
 
 
+class EscapeFilesTest(unittest.TestCase):
+    def test_the_same_arguments_give_the_same_bytes(self):
+        for make, args in ((bench_pdf.escape_text, (100_000, b"#41")), (bench_pdf.escape_image, (20_000, b"#2FJS ")),
+                           (bench_pdf.ascii85_escapes, (30_000, b"#41"))):
+            a = make(*args)
+            self.assertEqual(hashlib.sha256(a).digest(), hashlib.sha256(make(*args)).digest())
+            self.assertNotEqual(a, make(args[0] + 1_000, args[1]))
+
+    def test_escape_text_is_the_stated_size_and_is_one_unfiltered_stream_of_the_unit(self):
+        data = bench_pdf.escape_text(200_000, b"#2FJS ")
+        self.assertLess(abs(len(data) - 200_000), 200)
+        found, reader = streams(data)
+        self.assertFalse(reader["incomplete"])
+        self.assertEqual(len(found), 1)
+        self.assertGreater(found[0][1].count(b"#2FJS "), 30_000)
+
+    def test_escape_image_is_one_unfiltered_picture_of_repeats(self):
+        data = bench_pdf.escape_image(10_000, b"#2FJS ")
+        found, reader = streams(data)
+        self.assertFalse(reader["incomplete"])
+        self.assertEqual(len(found), 1)
+        self.assertTrue(scan_tool._is_image(found[0][0][2]))
+        self.assertEqual(found[0][1].rstrip(b"\n"), b"#2FJS " * 10_000)  # the reader keeps the line end before endstream
+
+    def test_ascii85_escapes_decode_to_the_stated_number_of_bytes_of_the_unit(self):
+        data = bench_pdf.ascii85_escapes(30_000, b"#41")
+        found, reader = streams(data)
+        self.assertFalse(reader["incomplete"])
+        self.assertEqual(len(found), 1)
+        self.assertIn(b"ASCII85Decode", found[0][0][2])
+        out, state = scan_tool._decode_chain(found[0][1], [b"ASCII85Decode"], 10_000_000)
+        self.assertEqual(state, "ok")
+        self.assertEqual(out, b"#41" * 30_000)
+
+    def test_the_arguments_are_checked(self):
+        for make, bad in ((bench_pdf.escape_text, (5, b"#41")), (bench_pdf.escape_text, (100_000, b"")),
+                          (bench_pdf.escape_image, (0, b"#41")), (bench_pdf.ascii85_escapes, (30_000, b"")),
+                          (bench_pdf.ascii85_escapes, (0, b"#41"))):
+            with self.assertRaises(ValueError):
+                make(*bad)
+
+
 if __name__ == "__main__":
     unittest.main()

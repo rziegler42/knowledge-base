@@ -1804,7 +1804,8 @@ class ToolVersionTest(unittest.TestCase):
                          ("0.0.4", "719d99ef7335685a70615167a2452d0e961e8ce85a08d7cb3bfbbd6deee8d381"),
                          ("0.0.5", "a4e64c88326aa6948158ca044df6fd866c113d7a2ad9f3680a5bb1db43c83664"),
                          ("0.0.6", "d513b5281250bed7a4c667103b0b6a58a3c616ceea804b5d789062a93e1d218f"),
-                         ("0.0.7", "4e6053061955afe0fc67ec9bbb351e140fe8b7f33fe12fde376bd8ac846ef14d")],
+                         ("0.0.7", "4e6053061955afe0fc67ec9bbb351e140fe8b7f33fe12fde376bd8ac846ef14d"),
+                         ("0.0.8", "8fc3c3f5fd73ad45da333e583d6673a39510af9eaf171f60008c8293b211ebb6")],
         "extract_std.py": [("0.0.2", "803c21453f3eaf923f745cf51d760c4edaf4104153fadce6f693f37b6cbc35ff")],
         "extract_traf.py": [("2.3.1-kb1", "98ee329c2cb94b2b207648c655b55938eb824179283177f0593119df2bfb1774")],
     }

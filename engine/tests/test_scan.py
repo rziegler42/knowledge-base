@@ -1689,6 +1689,62 @@ class BinaryTallyTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.0)  # the first definition took more than 2.5 s here
 
 
+class UnescapeChunksTest(unittest.TestCase):
+    """_unescape_names works in pieces so that the list a substitution keeps for each escape is the size of a piece, not of the file.
+    A piece is cut only before a `#`, which starts a match or fails to, whatever is before it, so the result is that of the whole."""
+
+    @staticmethod
+    def whole(data):
+        import re
+        return re.sub(rb"#([0-9A-Fa-f]{2})", lambda m: bytes([int(m.group(1), 16)]), data)
+
+    def test_the_result_is_that_of_the_whole_for_every_piece_size_on_random_bytes(self):
+        rng = random.Random(11)
+        words = [b"#", b"#4", b"#41", b"#2F", b"#2FJS ", b"#zz", b"##", b"#1", b"4", b"1", b"F", b"/JS", b" ", b"\xff", b"a", b"G"]
+        for _ in range(1500):
+            data = b"".join(rng.choice(words) for _ in range(rng.randint(0, 60)))
+            for size in (4, 5, 7, 16):
+                with mock.patch.object(scan_tool, "_CHUNK", size):
+                    self.assertEqual(scan_tool._unescape_names(data), self.whole(data), (size, data))
+
+    def test_an_escape_is_not_cut_wherever_the_piece_ends(self):
+        for size in (4, 5, 6, 7, 8):
+            for before in range(0, 12):
+                data = b"a" * before + b"#2FJS" + b"b" * 9 + b"#41#42#4#4G#"
+                with mock.patch.object(scan_tool, "_CHUNK", size):
+                    self.assertEqual(scan_tool._unescape_names(data), self.whole(data), (size, before))
+
+    def test_a_long_run_of_marks_and_a_data_without_any_are_handled(self):
+        with mock.patch.object(scan_tool, "_CHUNK", 4):
+            for data in (b"#" * 50, b"#4" * 50, b"#41" * 50, b"plain text with no mark at all", b""):
+                self.assertEqual(scan_tool._unescape_names(data), self.whole(data), data)
+
+    def test_the_memory_held_is_that_of_a_piece_not_of_a_million_escapes(self):
+        import tracemalloc
+        data = b"#41" * 3_000_000
+        tracemalloc.start()
+        try:
+            out = scan_tool._unescape_names(data)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(out, b"A" * 3_000_000)
+        self.assertLess(peak, 60_000_000)  # a piece of 1 MB holds about 35 MB; the substitution over the whole kept about 270 MB here
+
+    def test_ascii85_and_hex_output_is_cut_at_the_limit_like_a_deflate_output(self):
+        text = b"#41" * 400_000  # 1.2 MB
+        for name, blob in ((b"ASCII85Decode", base64.a85encode(text) + b"~>"), (b"ASCIIHexDecode", text.hex().encode() + b">")):
+            out, state = scan_tool._decode_chain(blob, [name], 100_000)
+            self.assertEqual((len(out), state), (100_000, "limit"), name)
+            self.assertEqual(out, text[:100_000], name)
+            out, state = scan_tool._decode_chain(blob, [name], 2_000_000)
+            self.assertEqual((out, state), (text, "ok"), name)
+            out, state = scan_tool._decode_chain(blob, [name], len(text))
+            self.assertEqual((out, state), (text, "ok"), name)  # exactly the limit is not past it
+            out, state = scan_tool._decode_chain(blob, [name], len(text) - 1)
+            self.assertEqual((out, state), (text[:-1], "limit"), name)  # and one byte past it is
+
+
 class PlacesTest(unittest.TestCase):
     """Where a match sits decides its name. Binary places: the raw and decoded bytes of image-shaped streams, the raw bytes of image
     codecs, and the raw bytes of any stream the scan decoded. Everything else is a text place. A match in a text place, or in a binary

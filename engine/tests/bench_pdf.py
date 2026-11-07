@@ -22,7 +22,18 @@ benchmarks of the plan 2026-11-06-scan-false-alarms, so that a timing can be rep
     tiny_streams(total, seed=1, size=100)
         A PDF of about `total` bytes of plain `/Filter /FlateDecode` streams, each the zlib compression, at level 6, of `size` seeded
         bytes (one `random.Random(seed)` for the whole file), as many as fill `total`: the most streams that fit.
+
+    escape_text(total, unit)
+        A PDF of about `total` bytes of one unfiltered stream (no image, no filter) that holds `unit` over and over, for example
+        `#41` or `#2FJS `: a file of name escapes, read by the scan as the text of the file. Plan 2026-11-07-scan-deferred-items.
+
+    escape_image(repeats, unit)
+        A PDF of one unfiltered image whose data is `unit` repeated `repeats` times: the escapes sit in a binary place.
+
+    ascii85_escapes(repeats, unit)
+        A PDF of one `/Filter /ASCII85Decode` stream that decodes to `unit` repeated `repeats` times (39 MB of `#41` is 13 million).
 """
+import base64
 import random
 import zlib
 
@@ -101,6 +112,38 @@ def tiny_streams(total, seed=1, size=100):
         number += 1
     parts.append(TRAILER)
     return b"".join(parts)
+
+
+def _check_unit(unit):
+    if not isinstance(unit, bytes) or not unit:
+        raise ValueError("the unit must be some bytes")
+
+
+def escape_text(total, unit):
+    _check_unit(unit)
+    if not isinstance(total, int) or total < MIN_TOTAL:
+        raise ValueError("the size must be at least 10,000 bytes")
+    room = total - len(HEADER) - len(TRAILER) - len(_object(1, b"<< /Length 00000000 >>", b""))
+    data = unit * (room // len(unit))
+    return HEADER + _object(1, b"<< /Length %08d >>" % len(data), data) + TRAILER
+
+
+def escape_image(repeats, unit):
+    _check_unit(unit)
+    if not isinstance(repeats, int) or repeats < 1:
+        raise ValueError("at least one repeat")
+    data = unit * repeats
+    dictionary = b"<< /Type /XObject /Subtype /Image /BitsPerComponent 8 /ColorSpace /DeviceGray /Height 1 /Length %d /Width %d >>" % (
+        len(data), len(data))
+    return HEADER + _object(1, dictionary, data) + TRAILER
+
+
+def ascii85_escapes(repeats, unit):
+    _check_unit(unit)
+    if not isinstance(repeats, int) or repeats < 1:
+        raise ValueError("at least one repeat")
+    data = base64.a85encode(unit * repeats) + b"~>"
+    return HEADER + _object(1, b"<< /Filter /ASCII85Decode /Length %d >>" % len(data), data) + TRAILER
 
 
 class _Bits:

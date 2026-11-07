@@ -220,4 +220,55 @@ the limit of the reader of its output, and in the counts that search and read sh
 
 ## Result
 
-Empty until work starts.
+### Increment A — Unescape and count in bounded chunks (done, reviewed and committed)
+
+- **What was done:** `_unescape_names` works in pieces of `_CHUNK` (1 MB) and joins the results; a piece is cut before a `#` within its last
+  two bytes, so no escape is split, and a piece with no escape is kept as a view, not a copy. The output of ASCII85 and ASCIIHex is cut at
+  the window and reported as `limit`. The label is `kb-scan 0.0.8`. The generator has three new files (`escape_text`, `escape_image`,
+  `ascii85_escapes`) with tests.
+- **Differences from the plan text (for the owner):** (1) the plan says the scan "counts in bounded chunks" with overlapping pieces. The
+  scan unescapes in chunks and then counts the whole unescaped text with the unchanged tally. No match, escape or context is ever split, so
+  overlap and counting by start are not needed, and every count equals that of the whole by construction. The memory held is the input, the
+  unescaped output and one piece's substitution list, so it grows with the file (about a byte per byte), not with the number of escapes; the
+  measured results meet criterion 1. (2) Criterion 2 is tested as equality of the unescaped bytes with those of the whole-text
+  substitution (1,500 random `#`-dense inputs, piece sizes 4, 5, 7 and 16, plus every cut position of an escape), not as 3,000 counts.
+  (3) An ASCII85 or hex stream that decodes to more than 2 MB is now `scan_incomplete`, as a deflate stream is; the 39 MB file had no
+  caveat before.
+- **Provenance:** run on 2026-11-07 on this machine with Python 3.15.0 and zlib 1.2.12, at commit 88d45ed plus the uncommitted changes of
+  this increment; `python3 -I -B engine/kb/scan_tool.py` under `/usr/bin/time -l`.
+- **Files (sha256, this zlib build):** `esc_text_41` 49,999,999 bytes `18233d14b62e7f65d55a7629d18541e8aecac232bff727bf574c8232cb109948`
+  (`escape_text(50_000_000, b"#41")`); `esc_text_js` 49,999,999 `ac97e608afe3b41bea98e01871eb12b2141a115c90aa24aed73b28f911b56e20`
+  (`escape_text(50_000_000, b"#2FJS ")`); `esc_image_js` 48,000,198 `708a31ae71111bd214b134087a519fca287acd7c6332af01e36f8b40e07ae672`
+  (`escape_image(8_000_000, b"#2FJS ")`); `esc_a85_41` 48,750,122 `c3b1fa06d7171ffe33329e40653333c8cc10b61c88d267e6d397ae0f82dbb463`
+  (`ascii85_escapes(13_000_000, b"#41")`, 39 MB decoded).
+- **Measurements (time / peak memory), before (0.0.7) and after:**
+
+  | File | Before | After |
+  |---|---|---|
+  | `esc_text_41` | 5.0 s / 1.55 GB | 4.3 s / 173 MB |
+  | `esc_text_js` | 4.4 s / 1.85 GB | 3.6 s / 230 MB |
+  | `esc_image_js` | 5.6 s / 1.80 GB | 4.9 s / 299 MB |
+  | `esc_a85_41` | 4.2 s / 1.40 GB | 0.5 s / 272 MB (now `scan_incomplete`) |
+  | `images_10` | 0.46 s / 337 MB | 0.43 s / 335 MB |
+  | `images_100` | 1.11 s / 313 MB | 1.12 s / 292 MB |
+  | `images_1000` | 8.0 s / 318 to 324 MB | 7.9 s / 296 MB |
+  | `expanding` | 8.9 s / 181 MB | 8.1 s / 181 MB |
+  | `tiny` | 3.8 s / 331 MB | 3.8 s / 330 MB |
+  | `hostile_predictor` | 11.9 s / 205 MB | 11.1 s / 204 MB |
+  | `hostile_escapes` | 5.1 s / 203 MB | 4.9 s / 208 MB |
+  | `hostile_nested` | 7.0 s / 179 MB | 7.1 s / 180 MB |
+
+  The counts of the four new files are those of 0.0.7 (`javascript` 8,333,317 and 8,000,000 for the two with scripts; none for the
+  others) except the added `scan_incomplete`. Two first attempts raised memory on files with no escapes (+54%) and on the nested file
+  (+27%), from copying the pieces; keeping a piece with no escape as a view removed it, and the table is of the final file.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_bench_pdf` (212 tests,
+  OK) and `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest engine.tests.test_convert.ToolVersionTest` (4, OK); the hash
+  in `HISTORY` is that of the final file. **Break-it:** three mutations of the new code (a window of one byte, no cut rule, the ASCII85 limit
+  off by one) each failed a test; the third survived at first, so a test of the limit plus one was added. **Not run:** the rest of the
+  engine suite; the security review (below).
+- **Review (independent reviewer, one round):** no blocking finding. Not blocking, all applied or recorded here: the plan wording against the
+  implementation (recorded above, the plan text unchanged because editing it needs a new approval); the test is of output equality (above);
+  `a85decode` and `fromhex` still build the whole decode before the cut, so their transient memory is a few times the input (it is inside
+  the measurement of `esc_a85_41`); bookkeeping (this record).
+- **Security review (step 6):** recommended against (the unescaped bytes equal those of the whole-text substitution, so no count can differ,
+  and the review found no new exposure); the owner said to commit and go on, so none was run. The plan asks again at the end of D.
