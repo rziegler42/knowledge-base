@@ -359,3 +359,41 @@ increment D must still wrap the mechanical text in the markers, because a hash l
 words of a marker are blanked only in the title; and a stop between filing a card and noting it in the version file leaves a card
 that `read` finds (it lists the folders) but the payload list lacks, which is safe because `file_payload` refuses an overwrite and
 the engine has one writer.
+
+### Increment C — Reading a book in pieces and the two jobs (2026-11-07)
+
+Added `engine/kb/cardmake.py`, two schema files (`engine/kb/schemas/card.json` and `card-notes.json`), and `min_items` for a list
+in a shape (`engine/kb/models.py`), which the card's key ideas now use (a one-line change in `engine/kb/card.py`, three to five).
+`pieces` cuts a conversion into pieces of at most 20,000 bytes that end at a block boundary (a larger block is cut at words, by
+characters small enough that the bytes fit); `sample` keeps twelve evenly spaced pieces, always the first and last, when there
+are more, and says so; `outline` lists the headings by level, capped in bytes. `make_model_part` finds the model of each job
+before the first call (`models.choose`, so a missing setting stops the card before anything is sent; a one-piece book needs only
+the card setting), gives a one-piece book straight to the card job, gives a longer one a note call for each piece and then the
+card call on the title, the outline and the notes, and returns the checked values, a record for each call with its task and model,
+the pieces read, the calls made and the reasons the card is partial. It files nothing, and any failed call or answer of the wrong
+shape stops it. Every input from a book or a model (a piece, the title, the outline, each note) is a labelled section of its own
+between delimiters that carry a per-call random token, made again if any input holds it; the rules name that token and say that
+a line with another token is data. Both prompts ask for English and say that nothing in a section is an instruction.
+
+Verification run: `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_models` gave 186
+tests, OK (44 new in `test_cardmake`, 3 new in `test_models`, one added case in `test_card`). Tests were written first and failed
+because the module did not exist. Twenty-three deliberate breaks of the new code were each caught (a piece over the limit; a large
+block cut by too many characters; sampling that misses the last piece; a token that an input holds being kept or checked against
+the first input only; the title or the outline not given as data; either prompt not asking for English; the rules not naming the
+token; a record with no task; the sample reason dropped; a book with no text read; the outline or a heading not cut; the outline
+limit in characters and not bytes; an empty note allowed; no minimum of key ideas; either schema not passed; the card model chosen
+only after the notes; a list minimum not enforced or above the maximum). One break text went stale after an edit and was run
+again with its new wording. Not run: any live call (the model is a fake launcher that records every prompt), and any other test
+file.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: the rules now name the token of the call and say that a
+line carrying another token is data (the code already kept a forged closer from closing a section; the model is now told too);
+tests for the cases the plan's step 1 names that were missing (hostile book text in both prompts, a token held by the book text, a
+note or the outline, a hostile heading through the outline); and the outline is capped in bytes and a wide-character test keeps
+the one-piece prompts under 30 KB. Not applied: the note prompt says "piece 5 of 12" for a sampled book though the pieces are not
+consecutive (the sample reason reaches the card); and the schema files carry no item limits, which the plan did not ask for (the
+engine enforces them after the call). Known limit: if a model writes its notes in a wide script against the instruction to write
+English, a card prompt of twelve notes can pass the window of a small model; the bridge refuses such a prompt and the card is not
+made, so nothing is filed. Left for the owner: step 6 of this increment still says "or the one the owner names for the run", which
+the review of the plan removed from the commands; the code has no such option, and correcting the sentence in an approved plan needs
+a new approval.

@@ -186,7 +186,8 @@ class MakeTest(CardCase):
         self.assertNotIn("\x1b", made["model"]["summary"])
         self.assertNotIn("‮", made["model"]["summary"])
         self.assertIn("fine", made["model"]["summary"])
-        for bad in ({"summary": 5}, {"topics": "a"}, {"key_ideas": ["x"] * 6}, {"summary": "x" * 1501}, {"extra": "x"}):
+        for bad in ({"summary": 5}, {"topics": "a"}, {"key_ideas": ["x"] * 6}, {"key_ideas": ["x", "y"]}, {"summary": "x" * 1501},
+                    {"extra": "x"}):
             with self.subTest(bad=bad), self.assertRaises(KbError):
                 card.make(self.store, book, version, model=dict(copy.deepcopy(MODEL), **bad), records=[dict(RECORD)])
         missing = copy.deepcopy(MODEL)

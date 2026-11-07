@@ -490,6 +490,30 @@ class JobTest(Base):
             with self.subTest(bad=bad), self.assertRaises(KbError):
                 job(**bad)
 
+    def test_a_list_can_have_a_minimum_number_of_items(self):
+        shape = {"k": {"type": "strings", "min_items": 2, "max_items": 3, "max": 10}}
+        for items, ok in ((["a"], False), ([], False), (["a", "b"], True), (["a", "b", "c"], True), (["a"] * 4, False)):
+            with self.subTest(items=items):
+                if ok:
+                    self.assertEqual(self.run_job(answer={"k": items}, j=job(shape=shape))["values"]["k"], items)
+                else:
+                    with self.assertRaises(KbError):
+                        self.run_job(answer={"k": items}, j=job(shape=shape))
+
+    def test_a_list_with_no_minimum_may_be_empty(self):
+        shape = {"k": {"type": "strings", "max_items": 3, "max": 10}}
+        self.assertEqual(self.run_job(answer={"k": []}, j=job(shape=shape))["values"]["k"], [])
+
+    def test_the_minimum_is_checked_when_the_job_is_made(self):
+        base = {"type": "strings", "max_items": 3, "max": 10}
+        for bad in (-1, True, "2", 1.5, 4, None):
+            with self.subTest(min_items=bad), self.assertRaises(KbError):
+                job(shape={"k": dict(base, min_items=bad)})
+        with self.assertRaises(KbError):
+            job(shape={"k": {"type": "string", "max": 10, "min_items": 1}})  # only a list has items
+        job(shape={"k": dict(base, min_items=0)})
+        job(shape={"k": dict(base, min_items=3)})
+
     def test_the_prompt_version_and_name_are_in_the_record_exactly(self):
         got = self.run_job(j=job(prompt_version="card.v2-b"))
         self.assertEqual(got["record"]["prompt_version"], "card.v2-b")

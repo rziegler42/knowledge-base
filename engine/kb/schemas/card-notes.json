@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "points": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["points"],
+  "additionalProperties": false
+}

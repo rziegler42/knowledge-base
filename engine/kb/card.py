@@ -40,7 +40,7 @@ MODEL_SHAPE = {
     "useful_for": {"type": "strings", "max_items": 6, "max": 240},
     "topics": {"type": "strings", "max_items": 15, "max": 60},
     "adjacent_topics": {"type": "strings", "max_items": 10, "max": 60},
-    "key_ideas": {"type": "strings", "max_items": 5, "max": 300},
+    "key_ideas": {"type": "strings", "min_items": 3, "max_items": 5, "max": 300},
     "neutral_problem": {"type": "string", "max": 500},
     "neutral_approach": {"type": "string", "max": 500},
     "neutral_needs": {"type": "string", "max": 500},

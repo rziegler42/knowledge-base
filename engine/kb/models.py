@@ -395,7 +395,7 @@ def call(cfg, name, prompt, launcher=None, root=None, schema=None):
     return _check(code, out, err)
 
 
-_TYPE_KEYS = {"string": {"type", "max", "optional"}, "strings": {"type", "max_items", "max", "optional"},
+_TYPE_KEYS = {"string": {"type", "max", "optional"}, "strings": {"type", "min_items", "max_items", "max", "optional"},
               "integer": {"type", "low", "high", "optional"}, "boolean": {"type", "optional"}}
 _NEEDED = {"string": ("max",), "strings": ("max_items", "max"), "integer": ("low", "high"), "boolean": ()}
 
@@ -418,6 +418,8 @@ def _spec(field, spec):
         raise KbError(f"the shape of {field}: max is a whole number from 1 to {MAX_REPLY}")
     if "max_items" in spec and not _count(spec["max_items"], 0, _LIMIT):
         raise KbError(f"the shape of {field}: max_items is a whole number from 0 to {_LIMIT}")
+    if "min_items" in spec and not _count(spec["min_items"], 0, spec["max_items"]):
+        raise KbError(f"the shape of {field}: min_items is a whole number from 0 to max_items")
     if kind == "integer" and not (_count(spec["low"], -_LIMIT, _LIMIT) and _count(spec["high"], -_LIMIT, _LIMIT)
                                   and spec["low"] <= spec["high"]):
         raise KbError(f"the shape of {field}: low and high are whole numbers with low not above high")
@@ -474,6 +476,8 @@ def _value(field, value, spec):
             raise KbError(f"the answer's {field} is not a list")
         if len(value) > spec["max_items"]:
             raise KbError(f"the answer's {field} has more than the {spec['max_items']} items allowed")
+        if len(value) < spec.get("min_items", 0):
+            raise KbError(f"the answer's {field} has fewer than the {spec['min_items']} items required")
         return [_text(field, item, spec) for item in value]
     if kind == "integer":
         if type(value) is not int or not spec["low"] <= value <= spec["high"]:
