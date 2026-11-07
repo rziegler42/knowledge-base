@@ -11,7 +11,8 @@ example `first-release.md`. There may be several roadmaps.
 
 A scope is a body of work with its own finish line: one the owner can call finished, or pause, without
 that deciding anything about other scopes. New work that shares the finish line of the roadmap it
-would join is added to it as a candidate; otherwise a new roadmap is proposed to the owner, with its
+would join becomes a candidate of that roadmap, once the owner has seen it and said to write it;
+otherwise a new roadmap is proposed to the owner, with its
 scope and its finish line, and written once the owner accepts or renames it. An agent never adds to the
 nearest roadmap because it is nearest. A candidate is bounded new
 work that advances the finish line of its roadmap; work too small to need roadmap direction is a plan
@@ -37,12 +38,17 @@ A roadmap keeps no implementation file lists, detailed acceptance criteria or ex
 commands; they belong in the plan written when a candidate is promoted.
 
 Completion is never written into a roadmap. The file changes only when direction changes,
-and changing direction needs the owner.
+and changing direction needs the owner. Any change to a roadmap other than correcting a typo is a
+change of direction: adding, dropping or rewording a candidate, changing a roadmap's purpose, scope
+or status, or creating, retiring or replacing a roadmap. It is the `change-direction` checkpoint,
+which always stops for the owner. The agent checks that the candidate shares the finish line of the
+roadmap it would join, shows the owner the candidate it would add, and writes it only on the owner's
+word; the owner's request to add a candidate is that word.
 
 ## Retiring a roadmap
 
 Retire a roadmap by setting its status to `Archived`, as a plan is archived by status. Never
 move or rename the file: a candidate is cited as `<roadmap>#<id>`, so the name stays. Keep
-one roadmap that is not archived for each scope, each with its own finish line, and update it in place; a replacement takes a
+one roadmap that is not archived for each scope, each with its own finish line, and update it in place on the owner's word; a replacement takes a
 new name, and the old one is archived when it is written. Retiring or replacing a roadmap
 changes direction, so it needs the owner.

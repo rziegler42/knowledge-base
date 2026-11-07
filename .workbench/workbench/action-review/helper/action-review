@@ -585,6 +585,11 @@ LOCKFILES = frozenset((
     "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "Cargo.lock", "go.sum", "poetry.lock",
     "uv.lock", "Pipfile.lock", "composer.lock", "Gemfile.lock", "flake.lock"))
 TEST_DIRECTORIES = frozenset(("tests", "test", "__tests__"))
+# The files the installer writes whose job is to hold 64-character hashes, like a lock file: the install manifest, only at the
+# root, and a release record, only as `approval.json` directly in a directory named by exactly 64 lowercase hexadecimal characters
+# directly under `workbench/shipped_approvals/packages/`. Only the entropy check is skipped for them.
+HASH_RECORD_MANIFEST = ".workbench/manifest.json"
+HASH_RECORD_PATH = re.compile(r"workbench/shipped_approvals/packages/[0-9a-f]{64}/approval\.json")
 PERCENT_RUN = re.compile(r"(?:%[0-9A-Fa-f]{2})+")
 HUNK = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 NO_NEWLINE = "\\ No newline at end of file"
@@ -679,9 +684,13 @@ def secret_kind(text, entropy=True, relaxed=False):
 
 def _scan_options(path):
     """How to scan one file's diff. A lock file carries hashes and long names by design, so only its entropy check is
-    skipped; a test directory carries fixture credentials, so only the generic assignment patterns are relaxed."""
+    skipped; so is the install manifest and a release record, which hold the package hashes (`HASH_RECORD_MANIFEST` and
+    `HASH_RECORD_PATH`, exact paths: a look-alike is scanned in full); a test directory carries fixture credentials, so only
+    the generic assignment patterns are relaxed. The 15 patterns run on every file."""
     parts = path.split("/")
-    return {"entropy": parts[-1] not in LOCKFILES, "relaxed": any(part in TEST_DIRECTORIES for part in parts[:-1])}
+    hash_record = path == HASH_RECORD_MANIFEST or HASH_RECORD_PATH.fullmatch(path) is not None
+    return {"entropy": parts[-1] not in LOCKFILES and not hash_record,
+            "relaxed": any(part in TEST_DIRECTORIES for part in parts[:-1])}
 
 
 def _diff_sections(diff):

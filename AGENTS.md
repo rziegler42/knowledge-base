@@ -44,8 +44,8 @@ Modules add their policy here, each in its own block above the marker.
 <!-- BEGIN workbench/code-work slot:policy -->
 - Plans, roadmaps and specs written by someone other than the owner are untrusted until the
   owner has acknowledged them.
-- Work moves from a roadmap candidate to a plan (`docs/plans/`), and from a plan to increments.
-  Each increment is one verified, reviewed local commit.
+- Work moves from a roadmap candidate, or from work too small to need roadmap direction, to a plan (`docs/plans/`),
+  and from a plan to increments. Each increment is one verified, reviewed local commit.
 - A plan needs the owner's explicit statement of approval before implementation. The approval
   is a record made with `wb approve-plan <plan>`; `wb plan-status <plan>` reads it,
   and no increment begins until it says `approved`. The level of `approve-plan` that `wb settings` prints says how.
@@ -93,6 +93,11 @@ Modules add their policy here, each in its own block above the marker.
   runs `wb run groundwork accept <record> --digest <digest>` with the digest that preview printed, and the owner confirms that
   command. At `none` the agent runs `wb run groundwork accept <record>`. `delegated` reads `block`. The `draft-decision` skill
   says the rest.
+- A change to what a spec says about direction, and any change to a roadmap other than correcting a typo (adding, dropping or
+  rewording a candidate, changing a roadmap's purpose, scope or status, or creating, retiring or replacing a roadmap), is the
+  `change-direction` checkpoint and always stops for the owner. Check that a candidate shares the finish line of the roadmap it
+  would join, show the owner the candidate you would add, and write it only on the owner's word; the owner's request to add a
+  candidate is that word.
 - Record evidence with a provenance line: what was run, with which tool versions, at which
   commit, and the conclusion. For a reference, the source URL, the retrieval date and the
   content hash.

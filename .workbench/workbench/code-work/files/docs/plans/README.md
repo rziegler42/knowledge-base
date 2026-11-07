@@ -1,7 +1,7 @@
 # Plans
 
 A plan describes one bounded piece of work as ordered increments. It is how a roadmap
-candidate becomes a verified, reviewed, committed result.
+candidate, or work too small to need one, becomes a verified, reviewed, committed result.
 
 ## Names and location
 
@@ -85,7 +85,7 @@ comment that is never closed has no region and cannot be approved.
 
 Classify new findings before editing the plan: add a step when the outcome is unchanged; add
 an increment for a separately reviewable outcome or prerequisite; update assumptions or risks
-when no work is added; record out-of-scope work as deferred or in a roadmap.
+when no work is added; record out-of-scope work as deferred, or propose it to the owner as a roadmap candidate.
 
 ## Checkpoints and caps
 
@@ -94,6 +94,9 @@ branch, submitting a remote job, fetching its output, changing a spec's or roadm
 accepting a decision, and acknowledging changes made by someone else (two tiers). Every checkpoint
 stops by default. `wb settings` prints the level of each, and a level the owner has set to something
 other than `block` lets the agent go on in the way that level says.
+
+Changing a roadmap's direction is any change to a roadmap other than correcting a typo, such as adding a candidate, and
+it always stops, whatever level is set. The agent shows the owner the candidate it would add and writes it on the owner's word; the owner's request to add a candidate is that word.
 
 Three caps bound a run: review rounds (default 3, at most 5), retries of the same failure
 (default 1, at most 2) and exchanges with a reviewer (default 6, at most 12). A second identical
