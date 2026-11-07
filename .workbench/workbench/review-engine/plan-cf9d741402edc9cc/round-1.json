@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Increment A, steps 2–3; completion criterion 3",
+      "problem": "The required citation equality cannot be implemented from the card data the plan says will be used. `card.read` returns a card whose `source` omits `address_pdf`, while `read._citation` includes that address for arXiv sources when present. Existing arXiv captures retain `address_pdf`, so catalog citations would differ from reads for those books; the plan also declares `card.py` read-only.",
+      "severity": "blocker",
+      "suggestion": "Plan to preserve and validate the safe PDF address in cards (and update `card.py` accordingly), or explicitly revise the citation contract and its test so it does not require equality with `read._citation`."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Scope, Increment B steps 2–4",
+      "problem": "The roadmap candidate requires a result to give the card, but the planned result contains metadata, matched fields, and one excerpt only. It neither returns the card's summary/model fields nor provides a catalog-backed way to obtain them while the bulk root is unavailable.",
+      "severity": "major",
+      "suggestion": "Specify a bounded, untrusted rendering or structured representation of the complete stored card in each result (with marker-safe handling), and add acceptance tests for it."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has an unimplementable citation-equality requirement and omits the candidate's requirement that results give the card.",
+  "verdict": "changes_needed"
+}
