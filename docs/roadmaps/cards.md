@@ -64,23 +64,25 @@ proposed. A bridge to local models (`ask-ollama`) is installed in the workbench,
   by meaning or to themes. Out, building either of them.
 - Trigger: card-catalog is done and the owner asks for a plan.
 
-### card-grounding: Make every item on a card traceable to the book
+### card-grounding: Make the claims on a card traceable to the book
 
 - ID: card-grounding
 - Outcome: the owner knows how accurate the cards are, and the cards are more accurate. A card's key ideas and topics grow or
-  shrink with what the book holds. Each claim taken from the book carries a short verbatim quote, and a check confirms that the
-  quote occurs in the piece it names; an item with no verified quote is dropped or marked as inferred, and a card with fewer
-  than the minimum is marked thin, not padded. Each item is marked stated, inferred or unverified, and a search result shows
-  the mark. The accuracy of the current cards and of the new ones is measured on a sample of items that the owner labels as
-  supported, unsupported or inference. Time and calls are spent on accuracy.
+  shrink with what the book holds. Each key idea, topic, caveat and limit on a card is supported by a short verbatim quote, and a
+  check confirms that the quote occurs in the piece it names; an item with no verified quote is kept only if the model says it is an inference, and is
+  otherwise dropped, and a card with fewer than the minimum is marked thin, not padded. Each item kept is marked stated or
+  inferred, and a search result shows the mark. The accuracy of the current cards and of the new ones, summary and neutral fields included, is
+  measured on a sample of items that a strong model labels as supported, unsupported or inference, checked against a small subset
+  that the owner labels. Time and calls are spent on accuracy.
 - Dependencies: card-trial (its result says what the cards get wrong), card-stage.
-- Boundary: in, higher ceilings in the merge call, a quote per claim and a mechanical check of it, the three marks, the owner's
-  labelled sample and the accuracy measure, a fix to the prompt's wording (the right word for the kind of source, no mention of
-  the pipeline's notes), and a second trial on harder questions and more books. Also in, if the labelled sample shows it pays: a
-  second model, named in the owner's config, that checks one more round when a list is full or an item's support is weak
-  (tested against the owner's labels before it is trusted), agreement across two runs of the note stage, and a test of whether
-  covering every piece of a long book improves accuracy before the sample cap is raised. Out, search by meaning, themes, cloud
-  models, and rewriting existing cards (a new card is a new generation).
+- Boundary: in, higher ceilings in the merge call, a quote per claim and a mechanical check of it, the three marks, the labelled
+  sample, the owner's calibration subset and the accuracy measure, a fix to the prompt's wording (the right word for the kind of
+  source, no mention of the pipeline's notes), and a cloud model to label the sample. Also in, if the labelled sample shows it
+  pays: a second model, named in the owner's config, that checks one more round when a list is full or an item's support is weak
+  (tested against the labels before it is trusted), agreement across two runs of the note stage, grounding of the summary and the
+  other neutral fields, and a test of whether covering every piece of a long book improves accuracy before the sample cap is
+  raised. Out, search by meaning, themes, a cloud model as a card writer or checker, a second trial on harder questions and more
+  books (see Deferred work), and rewriting existing cards (a new card is a new generation).
 - Trigger: the trial's result is recorded and the owner asks for a plan.
 
 ## Deferred work
@@ -88,6 +90,8 @@ proposed. A bridge to local models (`ask-ollama`) is installed in the workbench,
 - Search by meaning and the embedding model: cards are stored so that vectors can be added later without rewriting any card.
 - Themes, the weave and theme-level search: the card spec puts them after the card, and the trial decides whether they are worth
   their cost.
+- A second trial on harder questions and more books, once the cards are more accurate, to see whether more accurate cards find
+  more than the first trial's easy questions could show.
 - Shelf filing and reshelving by card: they score a book against a shelf's scope using its card, so they follow this roadmap.
 - Choosing between models, escalation to a cloud model, quotas and per-shelf budgets.
 - Visibility of cards to a guest, and the security work that goes with it, until the owner knows the system works.

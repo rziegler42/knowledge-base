@@ -22,7 +22,11 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 
 ## Non-goals
 
-- **[agreed]** Verifying claims. A card is a lead to follow, not a claim to rely on.
+- **[agreed]** Verifying that claims are true. A card is a lead to follow, not a claim to rely on.
+- **[proposed]** What the engine does check: that a key idea, topic, caveat or limit is supported by a verbatim quote that occurs
+  in the piece of the book it names. An item with no verified quote is kept only if the model says it is an inference, and is
+  otherwise dropped; each item kept is marked stated or inferred. A verified quote shows that a claim is in the book, not that
+  the claim is right, so the card stays a lead.
 - **[proposed]** Replacing the book or the theme. A card helps choose a book. A theme finds a passage inside one.
 - **[proposed]** Browsing by hand. The owner does not expect to browse cards, so the card is written for an agent to search and
   not for a person to read at leisure.
