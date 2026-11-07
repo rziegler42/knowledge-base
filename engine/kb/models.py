@@ -1,8 +1,9 @@
 """Calls to a model through the workbench's Ollama bridge.
 
-The owner lists models in the config (`models`, named entries) and switches model work on (`models_on`). A call starts
-`wb run ask-ollama ask` as a separate program, with an argument list and no shell, sends the prompt on standard input and
-reads one JSON object back. Nothing here chooses between models, retries or batches. What comes back is model output: it is
+The owner lists models in the config (`models`, named entries), switches model work on (`models_on`) and says which entry does
+each kind of work the engine knows (`tasks`). A call starts `wb run ask-ollama ask` as a separate program, with an argument
+list and no shell, sends the prompt on standard input and reads one JSON object back. The engine prefers no model: `choose`
+returns only the entry the setting names. Nothing here retries or batches. What comes back is model output: it is
 untrusted data, and this module only checks that it has the bridge's shape. The server's address is in the workbench's own
 endpoint file; the registry holds a server name only."""
 import json
@@ -76,9 +77,29 @@ def _entry(name, e):
     return dict(e)
 
 
+TASKS = ("card-notes", "card")  # the kinds of model work the engine knows; the engine attaches no model to any of them
+
+
+def _settings(cfg, entries):
+    """The `tasks` setting of the config: for each kind of work the engine knows, the name of the listed entry that does it. A kind
+    of work the engine does not know, or an entry that is not listed, is refused."""
+    tasks = cfg.get("tasks", {})
+    if not isinstance(tasks, dict):
+        raise KbError("the config key tasks is not an object")
+    out = {}
+    for task, name in tasks.items():
+        if task not in TASKS:
+            raise KbError(f"the config sets a model for {textutil.clean(task, 40)!r}, which is not a kind of work the engine knows "
+                          f"({', '.join(TASKS)})")
+        if not isinstance(name, str) or name not in entries:
+            raise KbError(f"tasks.{task} in the config does not name a listed model")
+        out[task] = name
+    return out
+
+
 def registry(cfg):
-    """The checked entries of the config, by name. One wrong entry refuses the whole registry, so a call never runs on a guess
-    about which entry was meant."""
+    """The checked entries of the config, by name. One wrong entry or one wrong task setting refuses the whole registry, so a call
+    never runs on a guess about which entry was meant."""
     listed = cfg.get("models", {})
     if not isinstance(listed, dict):
         raise KbError("the config key models is not an object")
@@ -87,12 +108,27 @@ def registry(cfg):
         if not isinstance(name, str) or not _NAME.fullmatch(name):
             raise KbError(f"the config names a model {textutil.clean(name, 40)!r}, which is not a name")
         out[name] = _entry(name, e)
+    _settings(cfg, out)
     return out
 
 
+def choose(cfg, task):
+    """`(entry name, reason)` for a kind of work: the entry that the user's `tasks` setting names for it. The engine prefers no
+    model and never guesses one, even when only one is listed."""
+    entries = registry(cfg)
+    if cfg.get("models_on") is not True:
+        raise KbError("model work is off: set models_on to true in the config to turn it on")
+    if not isinstance(task, str) or task not in TASKS:
+        raise KbError(f"{textutil.clean(task, 40)!r} is not a kind of work the engine knows ({', '.join(TASKS)})")
+    settings = _settings(cfg, entries)
+    if task not in settings:
+        raise KbError(f"no model is set for the task {task}: set tasks.{task} in the config to the name of a listed model")
+    return settings[task], f"set for {task} in the config"
+
+
 def listing(cfg):
-    """What the registry holds, for the owner to read: the switch and each entry's name and options. No server name, no model
-    identifier and no address is listed, and nothing is called."""
+    """What the registry holds, for the owner to read: the switch, each entry's name and options, and the entry set for each kind
+    of work. No server name, no model identifier and no address is listed, and nothing is called."""
     entries = registry(cfg)
     rows = []
     for name in sorted(entries):
@@ -102,7 +138,7 @@ def listing(cfg):
             if key in e:
                 row[key] = e[key]
         rows.append(row)
-    return {"on": cfg.get("models_on") is True, "models": rows}
+    return {"on": cfg.get("models_on") is True, "models": rows, "tasks": dict(sorted(_settings(cfg, entries).items()))}
 
 
 def _project_root():

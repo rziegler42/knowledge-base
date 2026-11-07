@@ -1,6 +1,6 @@
 # The card of a book
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-07
 Candidate: cards#card-stage
 Specs: card
@@ -297,4 +297,23 @@ rejected on the owner's instruction and left for the owner.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The model for each kind of work, set in the config (2026-11-07)
+
+Added to `engine/kb/models.py`: `TASKS` (the kinds of work the engine knows, `card-notes` and `card`, with no model attached to
+either), `_settings` (checks the `tasks` object of the config: an unknown kind of work, a value that is not a name, or a name that
+is not listed is refused), `choose` (the entry the setting names and a reason, `set for <task> in the config`; the switch must be
+on; a task with no setting is refused with the task and the key to set, even when only one model is listed) and a `tasks` entry
+of the listing (kind of work and entry name only). `registry` now checks the setting too, so a wrong setting refuses the whole
+registry, and a call by name as well. The engine never picks a model on its own.
+
+Verification run: `python3 -m unittest engine.tests.test_models engine.tests.test_setup` gave 124 tests, OK (94 in
+`test_models`, 15 of them new: 13 in `TaskTest` and 2 command tests). Tests were written first and failed because the setting did not
+exist. Seven deliberate breaks of the new code were each caught (the engine guessing the only listed model; a bad setting not
+refusing the registry; an unknown kind of work accepted; a setting naming an unlisted entry; `choose` ignoring the switch; the
+reason not saying where the setting came from; the listing leaving the settings out). Not run: any other test file, and any live
+call, which this increment does not make.
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: the module docstring said nothing here chooses between
+models, which `choose` made untrue; it now says what the module does. Noted, not changed: `choose` reports a wrong setting before
+it reports the switch off, which follows from refusing the whole registry. The owner's config was not touched; the `tasks`
+settings for the owner's models are written in increment E, on the owner's word.

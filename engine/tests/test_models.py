@@ -590,6 +590,98 @@ class SchemaTest(Base):
         self.assertFalse(hasattr(models, "tempfile"))  # the module makes no temporary file or folder
 
 
+def with_tasks(tasks, **entries):
+    cfg = config(**entries) if entries else config(local=entry(), other=entry(server="srv2", model="m2"))
+    cfg["tasks"] = tasks
+    return cfg
+
+
+class TaskTest(Base):
+    """The model for each kind of work is the user's setting; the engine prefers none."""
+
+    def test_the_setting_names_the_model_and_the_reason_says_where_it_came_from(self):
+        name, reason = models.choose(with_tasks({"card": "other"}), "card")
+        self.assertEqual(name, "other")
+        self.assertIn("card", reason)
+        self.assertIn("config", reason)
+
+    def test_each_kind_of_work_has_its_own_model(self):
+        cfg = with_tasks({"card-notes": "local", "card": "other"})
+        self.assertEqual(models.choose(cfg, "card-notes")[0], "local")
+        self.assertEqual(models.choose(cfg, "card")[0], "other")
+
+    def test_the_kinds_of_work_are_named_in_the_engine_with_no_model(self):
+        self.assertEqual(set(models.TASKS), {"card-notes", "card"})
+
+    def test_a_kind_of_work_with_no_setting_is_refused_with_the_key_to_set_even_if_one_model_is_listed(self):
+        for cfg in (config(), with_tasks({}), with_tasks({"card-notes": "local"}, local=entry())):
+            with self.subTest(tasks=cfg.get("tasks")):
+                with self.assertRaises(KbError) as cm:
+                    models.choose(cfg, "card")
+                self.assertIn("card", str(cm.exception))
+                self.assertIn("tasks.card", str(cm.exception))
+
+    def test_a_kind_of_work_the_engine_does_not_know(self):
+        for task in ("themes", "", "-x", "card\n", None, 5):
+            with self.subTest(task=task), self.assertRaises(KbError):
+                models.choose(with_tasks({"card": "local"}), task)
+
+    def test_the_switch_must_be_on(self):
+        for on in (False, "yes", 1, None):
+            cfg = with_tasks({"card": "local"})
+            cfg["models_on"] = on
+            with self.subTest(on=on), self.assertRaises(KbError) as cm:
+                models.choose(cfg, "card")
+            self.assertIn("off", str(cm.exception))
+        cfg = with_tasks({"card": "local"})
+        del cfg["models_on"]
+        with self.assertRaises(KbError):
+            models.choose(cfg, "card")
+
+    def test_a_wrong_setting_refuses_the_whole_registry_so_a_typo_is_found_at_once(self):
+        wrong = [{"themes": "local"}, {"card": "nope"}, {"card": ""}, {"card": 5}, {"card": None}, {"card": ["local"]},
+                 {"card": "-x"}, {"card": "local\n"}, {"card": "Local"}, {"card ": "local"}, {"-x": "local"}, {5: "local"}]
+        for tasks in wrong:
+            with self.subTest(tasks=tasks):
+                cfg = with_tasks(tasks)
+                if 5 in tasks:  # a JSON key is always text
+                    cfg["tasks"] = {"5": "local"}
+                with self.assertRaises(KbError):
+                    models.registry(cfg)
+                with self.assertRaises(KbError):
+                    models.choose(cfg, "card")
+                with self.assertRaises(KbError):
+                    models.listing(cfg)
+                self.assertIsNone(self.seen("args.json"))
+
+    def test_the_setting_must_be_an_object(self):
+        for tasks in ([], "card", None, 5, [["card", "local"]]):
+            with self.subTest(tasks=tasks), self.assertRaises(KbError):
+                models.registry(with_tasks(tasks))
+
+    def test_a_wrong_setting_stops_a_call_by_name_too(self):
+        with self.assertRaises(KbError):
+            models.call(with_tasks({"card": "nope"}), "local", "q", launcher=self.launcher, root=self.root)
+        self.assertIsNone(self.seen("args.json"))
+
+    def test_a_call_by_name_works_as_before_with_settings_present(self):
+        got = models.call(with_tasks({"card": "other"}), "local", "q", launcher=self.launcher, root=self.root)
+        self.assertEqual(got["reply"], "hello")
+
+    def test_the_listing_shows_the_settings_by_kind_and_entry_name_only(self):
+        cfg = with_tasks({"card": "other", "card-notes": "local"}, local=entry(server="srv-secret", model="model-secret"),
+                         other=entry(server="srv2-secret", model="model2-secret"))
+        listed = models.listing(cfg)
+        self.assertEqual(listed["tasks"], {"card": "other", "card-notes": "local"})
+        self.assertNotIn("secret", json.dumps(listed))
+
+    def test_no_settings_lists_none(self):
+        self.assertEqual(models.listing(config())["tasks"], {})
+
+    def test_a_setting_is_not_added_to_the_registry_entries(self):
+        self.assertEqual(sorted(models.registry(with_tasks({"card": "local"}))), ["local", "other"])
+
+
 class CommandTest(Base):
     """The two commands, run as the owner runs them, with the fake launcher first on the path."""
 
@@ -627,6 +719,24 @@ class CommandTest(Base):
         self.assertNotIn(self.SECRET_SERVER, r.stdout + r.stderr)
         self.assertNotIn(self.SECRET_MODEL, r.stdout + r.stderr)
         self.assertIsNone(self.seen("args.json"))
+
+    def test_models_lists_the_settings_by_kind_of_work_and_entry_name(self):
+        cfg = config(local=entry(server=self.SECRET_SERVER, model=self.SECRET_MODEL))
+        cfg["tasks"] = {"card": "local"}
+        self.write_config(cfg)
+        r = self.kb("models")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["tasks"], {"card": "local"})
+        self.assertNotIn(self.SECRET_SERVER, r.stdout)
+        self.assertNotIn(self.SECRET_MODEL, r.stdout)
+
+    def test_models_refuses_a_wrong_setting(self):
+        cfg = config()
+        cfg["tasks"] = {"card": "nope"}
+        self.write_config(cfg)
+        r = self.kb("models")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("refused:", r.stderr)
 
     def test_models_says_when_the_switch_is_off_or_the_launcher_is_missing(self):
         self.write_config(config(models_on=False))
