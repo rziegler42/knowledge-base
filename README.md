@@ -5,8 +5,9 @@ search while they brainstorm and write specs, decisions, roadmaps and plans, to 
 they would not otherwise reach.
 
 > **Status:** experimental, built in small reviewed steps. The engine can capture a web page or an arXiv paper, scan and convert
-> it, search it by keyword and read a passage back, from the command line. A first walk-through on real pages found problems,
-> and a second plan fixes them (see [Where the work stands](#where-the-work-stands)). The workbench package that lets an agent in
+> it, search it by keyword and read a passage back, from the command line. Two walk-throughs on real pages and papers found
+> problems, and three plans have fixed them: the first walk-through's fixes, a hardening of the PDF scan, and one rule for titles
+> (see [Where the work stands](#where-the-work-stands)). The workbench package that lets an agent in
 > another project call the library is not built yet, and neither are cards, themes or the program that adds sources by itself.
 
 ## What it does now
@@ -59,8 +60,10 @@ An index written by an older version of the engine is refused, and the search sa
 
 | Plan | What it covers | State |
 |---|---|---|
-| [First slice](docs/plans/2026-11-05-first-slice-capture-search-read.md) | setup, the book store, capture, scan, conversion, search and read, then the workbench package and a live walk-through | everything up to read by locator is built; the workbench package is deferred; the walk-through has had its first batch (three web pages and a paper) |
-| [Fixes from the first walk-through](docs/plans/2026-11-06-first-walk-through-fixes.md) | page encoding, page titles, long pages indexed in pieces, large images in a PDF, converting a book again, and applying the fixes to the first four books | in progress: the first three fixes (encoding, titles, long pages in pieces) are committed |
+| [First slice](docs/plans/2026-11-05-first-slice-capture-search-read.md) | setup, the book store, capture, scan, conversion, search and read, then the workbench package and a live walk-through | everything up to read by locator is built; the workbench package is deferred; the walk-through has had two batches (nine web pages and three papers in all) |
+| [Fixes from the first walk-through](docs/plans/2026-11-06-first-walk-through-fixes.md) | page encoding, page titles, long pages indexed in pieces, large images in a PDF, converting a book again, and applying the fixes to the first four books | completed: all six fixes are committed and applied to the first four books |
+| [Hardening the PDF scan](docs/plans/2026-11-06-scan-hardening.md) | no way to hide an object stream from the scan without saying so: streams behind a predictor are decoded, objects are read forward with strings and comments known, and bytes after a stream's data are reported | completed: all five increments are committed and the four books were scanned again |
+| [Title safety](docs/plans/2026-11-06-title-safety.md) | one rule for a title where it is stored and where it is shown, and a citation line that a title cannot imitate | completed: all four increments are committed and the index was rebuilt |
 
 Each increment of a plan is one verified, reviewed local commit. A plan needs the owner's approval before anything is built, and
 the plan, not the conversation, is the record of what was done and checked.

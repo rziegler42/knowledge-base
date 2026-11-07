@@ -18,7 +18,9 @@ candidate becomes a verified, reviewed, committed result.
 A plan has, in order:
 
 1. A title, a `Status:` line and a `Created:` date, which is the date in the file name.
-2. `Candidate: <roadmap>#<id>`, or `Candidate: none` with a one-line reason. Exactly one.
+2. `Candidate: <roadmap>#<id>` for bounded new work that advances the finish line of a roadmap, or
+   `Candidate: none` with a one-line reason for work too small to need roadmap direction, such as
+   a correction that follows from a finding. Exactly one.
 3. `Specs:` naming zero or more specs the plan implements or changes.
 4. Goal, scope, non-goals, and assumptions and constraints.
 5. Completion criteria for the whole plan.
@@ -62,10 +64,16 @@ before changing it to `Approved` or beginning implementation. Use `In Progress` 
 implementation is underway. Editing anything other than the status line, the review record
 and the result after approval needs a new approval.
 
-Approval is a record, not a status. The owner makes it with `wb approve-plan <plan>`, which
-shows the hash of the plan's hashed region and records it when the owner types the start of it
-back; `wb plan-status <plan>` reads it and prints `approved`, `changed since approval` or
-`not approved`. The record names the approver by their git identity, `Name <email>`, and says how
+Approval is a record, not a status. `wb approve-plan <plan>` makes it, and `wb plan-status <plan>`
+reads it and prints `approved`, `changed since approval` or `not approved`. How the record is made
+depends on the level of `approve-plan` that `wb settings` prints. At `block`, the default, the owner
+runs the command at a terminal, which shows the hash of the plan's hashed region and records it when
+the owner types the start of it back. At `ask` the agent runs `wb plan-status <plan> --digest`, shows
+the owner what it prints, then runs `wb approve-plan <plan> --digest <digest>` with the digest that
+preview printed, and the owner confirms that command. At `none` the agent runs
+`wb approve-plan <plan>`. At `delegated` the installer records it after a converged review, as the
+`delegate-approval` skill says. The agent goes on at `ask` or `none` only once the owner has said to
+approve the plan. The record names the approver by their git identity, `Name <email>`, and says how
 the run was authorized (at a terminal, at a prompt, delegated or with no gate). Do not begin an
 increment of a plan that is not `approved`. The `Status:` line is informational and never an approval.
 
