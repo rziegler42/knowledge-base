@@ -326,4 +326,29 @@ is left for the owner: read the plan, and say whether to approve it or to ask fo
   redirects (the recorded address is encoded when read, so every address is covered at read time).
 - **Verification after the fix:** `engine.tests.test_read engine.tests.test_search`: 167 tests, OK.
 - **Not run:** the rest of the engine's tests (the changed module is `read`).
-- **Left for the owner:** the word to commit C.
+- **Committed** as c5b3a07278e359535f4f4f083452ccd1911c96b6 (not pushed).
+
+### Increment D — Index the four books again and record what the titles show (done; not committed)
+
+- **Preflight:** the library holds exactly four books (all active): the Paul Graham essay, the Wikipedia article, the script-built page
+  and the arXiv paper; `python3 -m kb tools` showed every tool `ok`. The owner's word to run it was given ("start d") after the steps
+  were described.
+- **Before (search and read, with `snap_titles.py` in the session scratch folder, which prints the title a search result shows and the
+  title and citation a read shows):** each book's search title and read title are the same text, and a read already shows the new quoted
+  citation, because the citation is built when a passage is read and not stored: `"Richard Hamming: You and Your Research".
+  https://paulgraham.com/hamming.html. Retrieved 2026-11-06. sha256 60c2d062…`; `"Simulated annealing - Wikipedia".
+  https://en.wikipedia.org/wiki/Simulated_annealing. …`; `"Quotes to Scrape". https://quotes.toscrape.com/js/. …`; `"Attention Is
+  All You Need". arXiv:1706.03762v7, https://arxiv.org/pdf/1706.03762v7. …` (the full hashes are in the version records).
+- **Run:** `python3 -m kb index` rebuilt the whole index (the command takes no book): 4 books, 4 versions, 399 blocks, 436 rows, 0
+  skipped, 0 failed. Nothing in the library itself changed.
+- **After:** the record is identical to the one before (titles and citations of all four books), every citation is in the quoted form,
+  and no title or citation holds a marker word or a library path; `python3 -m kb tools`: all four `ok`. So no title in the owner's
+  library carried a marker word or a folder, as the plan's risk section assumed, and the index rebuild changed no title text.
+- **README:** the sentence the plan asks for is already in the README from increment B (a folder in a title indexed before the rule leaves a
+  search result after `python3 -m kb index`; a marker title is empty in a result without a rebuild), so the README is unchanged here.
+- **Whole-plan verification:** after C, `engine.tests.test_read` and `engine.tests.test_search` were rerun together (167 tests, OK).
+  `engine.tests.test_textutil`, `engine.tests.test_store`, `engine.tests.test_capture_arxiv` and `engine.tests.test_convert` were not
+  rerun after B and C because neither changed `store`, `capture_arxiv` or `convert`; B added `textutil.scrub_roots`, and
+  `test_textutil` was rerun in B (193 tests with search and read, OK).
+- **Not run:** live walk-through J and the workbench package increment (both deferred); the wider engine suite (no specific risk).
+- **Left for the owner:** the word to commit D, whether to set the plan Completed, and whether to push.
