@@ -1,6 +1,6 @@
 # A trial of whether the cards help
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-07
 Candidate: cards#card-trial
 Specs: card, testing
@@ -261,11 +261,10 @@ Reviewer: Codex through the review engine (model gpt-5.6-terra). Round 1 of 3: c
 - No code changed. The commit holds this entry only.
 - Committed as `8db655f`.
 
-### Increment C — The questions, the run and the decision (run; not finished)
+### Increment C — The questions, the run and the decision (done)
 
-Done: steps 1 to 3 and the numbers of step 5. **Not done:** step 4 (reading cards with the owner), the rest of step 5 (what the
-owner found on reading, the length and shape that worked) and step 6 (the recommendation and the owner's decision). This entry
-is therefore a partial result, and the plan is not complete.
+Steps 1 to 3 and the numbers of step 5 were recorded first (commit `dc5554b`); the card reading, the rest of step 5 and the
+decision of step 6 follow the numbers below.
 
 - **The corpus.** Fifteen questions over the 12 carded books, with two short plain-word queries each and 17 (question, right book)
   pairs in all. I drafted twelve of them from my knowledge of the books, without reading any card, and the owner added three
@@ -304,7 +303,43 @@ is therefore a partial result, and the plan is not complete.
 - Provenance: the `trial` command of `engine/kb/trial.py` at commit `8db655f` (increment A committed as `61874f4`), run once on
   the corpus with hash `fa7e0e4a…1961`; the numbers above are copied from its summary and from the per-question places in the
   report, and are not recomputed elsewhere.
-- Verification as run: the trial run above, read as written. Not yet run for C: `python3 -m unittest engine.tests.test_trial`
-  once more, and the whole-plan verification.
-- Next: with the owner, read a few cards (one found well, one not found, one with a leak), then the recommendation and the
-  owner's decision (search by meaning, themes, both, or neither for now).
+- **Reading the cards (step 4).** Four cards were read with the owner: one the search found well (a pretraining paper), one that
+  every search missed on a question (the annealing page, on stopping criteria), one with the most repeated words (a translation
+  paper, 18) and one that ranked poorly (the prompt-injection page, third on the cards where the text put it first). I read and
+  described them; the owner answered by chat. The owner's answers: the summaries are "almost too literal, but not quite"; the
+  "useful for" lines are fine; on the size limits, the owner asked whether limits should scale, and then preferred deciding
+  dynamically from the content while the card is made, and a second model to weigh in on whether to continue; and said they would
+  spend time on preparing an accurate card over fast cards with padding. The poor rank of the injection page was caused by my
+  queries (one found nothing in either search, the other was too broad), not by the card.
+- **What I found in the cards.** The facts a paper or page states are well captured. Unsupported material appears in the limits,
+  caveats and adjacent topics (for example a need for model internals, a limit on low-resource languages, a caveat about
+  real-time deployment, none of which I could find in the sources), and some caveats mention the card's own "notes". Card size
+  barely follows book length: 223 to 337 words for books of 16,000 to 238,000 characters. A read-only check of the items of the 12
+  cards against each book's own text (a scratch script, not kept) found that word overlap is a weak detector of unsupported items:
+  items I judged unsupported mostly passed it, and it mainly caught caveats about the card's own notes. The length and shape that
+  worked: a summary of 34 to 79 words, three to four key ideas and the neutral fields as they are; nothing here shows a longer
+  card would find more.
+- **Recommendation.** Neither search by meaning nor themes for now. The trial found no keyword failure that meaning would fix, it
+  cannot show whether one exists (the questions were easy and the library small), and the measured problems are in the accuracy
+  of the cards, which meaning-based search would only spread. First make the cards accurate (the candidate below), then run a
+  second trial on harder questions and more books.
+- **The owner's decision.** The owner replied "Go with your recommendations" to a message that recommended exactly this and
+  listed the follow-up work. I take that as: neither search by meaning nor themes for now, and the card-grounding candidate with
+  the accuracy measures below. The owner did not state the decision in other words; if I took it wrongly, it is the owner's to
+  correct.
+- **Follow-up.** The candidate `cards#card-grounding` was added to the cards roadmap on the owner's word. My recommendations for
+  it, to be shown to the owner as a revised candidate before the roadmap changes: ask each claim in the notes for a short verbatim
+  quote that a check confirms occurs in the piece; measure the accuracy of the current cards on a sample of items the owner labels
+  as supported, unsupported or inference, and test any model check against those labels before trusting it; mark each item as
+  stated, inferred or unverified; fix the wording in the prompt (the right word for the kind of source, no mention of "notes");
+  keep a second model's check and two-run agreement for later; and test whether covering every piece of a long book improves
+  accuracy before raising the sample cap.
+- Provenance of the card readings: `card-show` on four cards of the library at commit `dc5554b`, and a read-only scratch script
+  that read the 12 cards and each book's converted text; nothing was written. The numbers are as printed.
+- Limits of the whole trial: 12 carded books of 18, 15 questions drafted from the books with labels I chose, four questions about
+  one book, and a few cards read. It shows the cards do not do worse than the text on easy questions; it does not show that they
+  help in real use.
+- Verification as run: the trial run above, read as written; `python3 -m unittest engine.tests.test_trial engine.tests.test_catalog
+  engine.tests.test_card engine.tests.test_cardmake engine.tests.test_setup` gave 288 tests, OK (the whole-plan verification, which
+  includes `engine.tests.test_trial` again). Not run: any other test file. No code changed in this increment.
+- Evidence: this Result, to be committed with the trailer `Plan: 2026-11-07-card-trial#C`.
