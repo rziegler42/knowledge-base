@@ -317,3 +317,45 @@ Review: the `reviewer` agent, one exchange, no blocking findings. Applied: the m
 models, which `choose` made untrue; it now says what the module does. Noted, not changed: `choose` reports a wrong setting before
 it reports the switch off, which follows from refusing the whole registry. The owner's config was not touched; the `tasks`
 settings for the owner's models are written in increment E, on the owner's word.
+
+### Increment B — The card file and its storage (2026-11-07)
+
+Step 1, the read of the payload code: the version file's payload list is read in one place outside the store (`convert` reads
+`payloads["original"]`); `set_version_conversions` writes only the conversion records; the conversion and the scan list only
+`derived/<their own tool>`; nothing walks all of `derived/`; `stages.reconcile` and `store.adopt_payload` act only on a name the
+caller passes; the payload name rule already allows `derived/card/<n>`. A second kind of derived payload breaks none of it. A latent
+point: the store's tool-name rule would accept a conversion tool named `card`, and nothing can produce one today (the tools are a
+fixed list).
+
+Added `engine/kb/card.py`. `mechanical` builds the part that no model writes: the book, version, title (under the title rule,
+and cleaned of the library folders twice), kind, shelf, the type of the primary file, the source record, the scan status and
+caveats, and the conversion's structure with the reasons the card is partial (no conversion, a partial conversion with its
+reasons, a flat one). The source record keeps only six named keys, each under its own rule: an address only if it is a web
+address with no user name (the rule `read._address` already uses), an arXiv id, a label and a hash only in their forms, and a
+retrieval date only as a date. `make` adds the model part (checked and cleaned by the model-call layer against the fields of
+`card.md`), the records of how it was made, the counts and further reasons, and refuses a card that is not valid; with no model
+part the card is built from the metadata and marked partial. `file` files the next `derived/card/<n>` through `store.file_payload`,
+untrusted and read-only; `read` returns the newest or a named generation after the hash check, with exactly the card file in the
+payload, the size checked first, and the card belonging to the book and version asked for. `validate` is the gate for both: exact
+keys and types, text from a book or its source already in its clean form (the title also under the rule that blanks the words of
+an untrusted-text marker), and a partial card with its reasons.
+
+Verification run: `python3 -m unittest engine.tests.test_card engine.tests.test_store` gave 80 tests, OK (45 new in
+`test_card`, 35 in `test_store`). Tests were written first and failed because the module did not exist. Twenty-one deliberate breaks
+were checked; twenty were caught. Two breaks survived on the first pass and were fixed: my test of an extra file in the payload
+refused for the wrong reason (a card for another book), and nothing tested that the library folders are taken out of the scan
+text. One break still survives and is equivalent: the key allowlist is enforced both where the source is read and in the shape
+check, so removing either changes nothing. Not run: any test file besides these two, and any live call (no model is involved).
+
+Review: the `reviewer` agent, one exchange, no blocking findings, and it agreed with the step 1 reading. Applied: a source address
+now follows the citation rule (finding 1), the title is cleaned of the library folders after cleaning as well as before (finding
+2; the store already cleans a title when it is written, so this guards a title written some other way), and `validate` now
+requires the text of a card to be clean, so a card read back cannot carry control characters or marker words that a card made
+would have lost (finding 3); the tests for the three branches the reviewer found untested were added (format on reading, a link
+for a generation folder, a card over the size limit, a hostile title). I also found, by tracing the clean-text rule, that a
+conversion reason of 500 characters plus its prefix would have made a valid card fail its own check; it is cut, with a test.
+Noted for later increments: the shape of the key ideas has no minimum yet, which increment C adds (`min_items`); `card-show` in
+increment D must still wrap the mechanical text in the markers, because a hash list sits in the same folder as the card and the
+words of a marker are blanked only in the title; and a stop between filing a card and noting it in the version file leaves a card
+that `read` finds (it lists the folders) but the payload list lacks, which is safe because `file_payload` refuses an overwrite and
+the engine has one writer.
