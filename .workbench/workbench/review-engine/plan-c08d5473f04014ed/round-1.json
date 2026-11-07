@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "docs/plans/2026-11-07-model-calls.md: Assumptions and constraints; Increment A, step 5",
+      "problem": "The stated success contract contains `ok`, `model`, `reply`, and `usage`, but does not define a contract-version field. Step 5 nevertheless requires refusing any contract version other than 2. The plan therefore does not say what field to validate or how a conforming bridge response can pass.",
+      "severity": "major",
+      "suggestion": "State the exact versioned bridge response/request contract, including the top-level version field and its required type/value, or remove version validation if version 2 is conveyed out of band."
+    },
+    {
+      "id": "R1-F2",
+      "location": "docs/plans/2026-11-07-model-calls.md: Non-goals; Increment B, step 3",
+      "problem": "The plan says the Ollama bridge reads no files, consistent with `models.md`'s agreed bridge behavior, but then requires writing a schema file and passing its path to the bridge. That design requires the bridge to read a file and drifts from the named spec's no-file-access property.",
+      "severity": "major",
+      "suggestion": "Use a bridge interface that receives the schema without reading a file (and document its exact encoding), or revise the plan and applicable spec with an explicit, bounded schema-file capability and its security constraints."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has two material contract/design inconsistencies that need resolution before implementation.",
+  "verdict": "changes_needed"
+}
