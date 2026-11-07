@@ -1,0 +1,43 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Scope; Assumptions and constraints; Increment A",
+      "problem": "The plan adds per-task model selection and a `--model NAME` per-run override, even though the `cards#card-stage` candidate explicitly places “choosing between models” outside its boundary. The plan acknowledges this expansion but supplies no accepted direction that supersedes the roadmap.",
+      "severity": "major",
+      "suggestion": "Remove task routing and the override from this plan, or update the roadmap/candidate through the required direction change before relying on this plan."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Non-goals; Increment D, step 2",
+      "problem": "The plan explicitly excludes `process` making cards and requires an owner command, but the `card` spec's agreed behavior says a card is made when a book is filed. This leaves the agreed automatic filing behavior unimplemented without recording a superseding decision.",
+      "severity": "major",
+      "suggestion": "Either include the filing/process integration or amend the governing spec/decision to establish the staged manual-card behavior."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Scope; Increment C, steps 5–6; Completion criterion 5",
+      "problem": "The delimiter safeguard is specified only for a piece of book text. The card job also receives source-derived title and outline, plus untrusted model-written notes, but the plan does not require those inputs to be separately delimited and labeled as data. Thus the claimed guarantee that book text never reaches a model outside unforgeable delimiters is not planned for every card-job input.",
+      "severity": "major",
+      "suggestion": "Specify prompt construction for every untrusted/source-derived card-job input, with per-call unforgeable delimiters and tests covering hostile titles, headings, and note text."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Scope; Increment C; Increment D",
+      "problem": "The plan omits two agreed card behaviors in `docs/specs/card.md`: cards must be written in English regardless of source language, and short/pointer-only items below a configurable cutoff receive metadata-only partial cards. A one-piece converted item instead always receives a model card, and no cutoff or language requirement is planned.",
+      "severity": "major",
+      "suggestion": "Add the language and configurable small-item/pointer-only paths, with acceptance tests; alternatively record an approved spec change that defers them."
+    },
+    {
+      "id": "R1-F5",
+      "location": "Increment D, step 3",
+      "problem": "`--model NAME` makes a registry entry selectable through a command-line argument. The referenced models specification says the registry and its entries are owner-only configuration and are never an argument; this also bypasses the plan's stated task-setting-only selection model.",
+      "severity": "major",
+      "suggestion": "Remove the command-line entry override, or obtain and record a governing-spec change that permits this limited override and defines its authorization and audit behavior."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has material scope and behavior drift from its roadmap candidate and governing card/model specifications, plus an incomplete prompt-boundary safeguard.",
+  "verdict": "changes_needed"
+}
