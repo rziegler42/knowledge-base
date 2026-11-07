@@ -8,8 +8,8 @@ they would not otherwise reach.
 > it, search it by keyword and read a passage back, from the command line. Two walk-throughs on real pages and papers found
 > problems, and three plans have fixed them: the first walk-through's fixes, a hardening of the PDF scan, and one rule for titles
 > (see [Where the work stands](#where-the-work-stands)). A model can now write a card for a book, by a command. The workbench
-> package that lets an agent in another project call the library is not built yet, and neither are a search of the cards, themes
-> or the program that adds sources by itself.
+> package that lets an agent in another project call the library is not built yet, and neither are themes or the program that
+> adds sources by itself. The cards can be searched by keyword.
 
 ## What it does now
 
@@ -34,9 +34,10 @@ they would not otherwise reach.
   book: a short, plain-English entry of what the book is about and useful for, and a description of its problem and approach in
   words of no field. A long book is read in pieces. A card is kept in the book's folder as a generation that is never overwritten;
   `card-show` prints it between the untrusted-text markers. Book text goes to the models you name. If a model's answer is refused
-  for its shape, no card is made and the answer is kept in a file for you to read. Cards cannot be searched yet.
+  for its shape, no card is made and the answer is kept in a file for you to read. `card-index` builds a catalog of the cards and
+  `card-search` finds them by keyword; the catalog is not updated as cards are made.
 
-Planned, not built: the thin workbench package that gives an agent `search` and `read` in a project, a search of the cards, themes
+Planned, not built: the thin workbench package that gives an agent `search` and `read` in a project, themes
 made with a local or cloud model, a search across fields, and a scheduled program that adds sources while the owner is away.
 
 The design and its reasons are in [docs/specs/knowledge-base.md](docs/specs/knowledge-base.md).

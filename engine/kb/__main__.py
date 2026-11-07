@@ -3,8 +3,8 @@ import argparse
 import json
 import sys
 
-from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, config, convert_html, convert_pdf,
-               identity, index, library, models, process, read, scan, search, stages, textutil)
+from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
+               convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil)
 from .store import Store
 
 
@@ -73,8 +73,26 @@ def main(argv=None):
     sw.add_argument("book_id")
     sw.add_argument("--version", help="the version (default: the book's current version)")
     sw.add_argument("--generation", type=int, help="the card to show (default: the newest)")
+    sub.add_parser("card-index", help="build the catalog of cards again from the book folders (cards are not added to it as they are made)")
+    cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
+    cx.add_argument("query")
+    cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
+    cx.add_argument("--in", dest="within", choices=list(catalog.SIDES), default="all",
+                    help="where to look: all, summary (the card in the words of its source) or neutral (the five neutral fields)")
+    cx.add_argument("--limit", type=int, default=catalog.DEFAULT_LIMIT, help=f"at most this many results (1 to {catalog.MAX_LIMIT})")
     args = parser.parse_args(argv)
     try:
+        if args.command == "card-index":
+            counts = catalog.rebuild(Store.open())
+            print(json.dumps(counts))
+            if counts["failed"]:
+                print(f"{counts['failed']} book or card could not be read and is not in the catalog", file=sys.stderr)
+                return 1
+            return 0
+        if args.command == "card-search":
+            found = catalog.search(config.load()["index_root"], args.query, limit=args.limit, book_id=args.book, within=args.within)
+            print(json.dumps(found, indent=1))
+            return 0
         if args.command == "cards":
             cfg = config.load()
             models.choose(cfg, "card")  # model work on and a model set for the card task, before any book is touched

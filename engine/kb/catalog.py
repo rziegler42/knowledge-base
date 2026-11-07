@@ -24,18 +24,24 @@ import time
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from . import KbError, card, textutil
+from . import KbError, card, ids, textutil
 from . import read as citation  # the form of a citation line that a read gives
+from . import search as fulltext  # the words of a query and the excerpt: the same rules as the search of the text
 
 INDEX_FILE = "cards.sqlite"
 LOCK_FILE = "cards.lock"
 LOCK_WAIT = 120  # seconds a writer waits for another before it gives up
 FORMAT = 1
 COMMAND = "python3 -m kb card-index"
+SEARCH_SECONDS = fulltext.SEARCH_SECONDS
+PROGRESS_STEPS = fulltext.PROGRESS_STEPS
+DEFAULT_LIMIT = fulltext.DEFAULT_LIMIT
+MAX_LIMIT = fulltext.MAX_LIMIT
 FIELDS = ("title", "summary", "uses", "topics", "adjacent", "ideas", "n_problem", "n_approach", "n_needs", "n_provides", "n_limits", "caveats")
 SUMMARY_SIDE = ("title", "summary", "uses", "topics", "adjacent", "ideas", "caveats")  # the card in the vocabulary of its source
 NEUTRAL_SIDE = ("n_problem", "n_approach", "n_needs", "n_provides", "n_limits")        # the five neutral fields
 
+SIDES = {"all": FIELDS, "summary": SUMMARY_SIDE, "neutral": NEUTRAL_SIDE}
 _COLUMNS = ["id", "book_id", "version_id", "generation", "is_current", "added", "citation", "card"]
 _SCHEMA = (
     "CREATE TABLE cards (id INTEGER PRIMARY KEY, book_id TEXT NOT NULL, version_id TEXT NOT NULL, generation INTEGER NOT NULL, "
@@ -116,7 +122,7 @@ def citation_of(made):
     if "arxiv_id" in source:
         where = f"arXiv:{source['arxiv_id']}{source.get('label', '')}"
     elif source.get("address_final") or source.get("address_asked"):
-        where = source.get("address_final") or source.get("address_asked")
+        where = (source.get("address_final") or source.get("address_asked")).replace('"', "%22").replace(" ", "%20")  # as a read does
     else:
         where = "no source address recorded"
     retrieved = source.get("retrieved")
@@ -208,3 +214,68 @@ def rebuild(store):
                     except OSError:
                         pass
     return counts
+
+
+def _expression(words, columns):
+    """The words as the full-text table's query language: each in quotes (a word is letters and digits only), all of them to match, and
+    for a side of the card only the columns named in a filter. The columns are constants of this module, never taken from a query."""
+    quoted = fulltext.quote_words(words)
+    return quoted if columns == FIELDS else "{" + " ".join(columns) + "} : (" + quoted + ")"
+
+
+def _matched(conn, row_id, words, columns):
+    """The fields of one card, among `columns` (the side that was searched), in which at least one word of the query is, in the order of
+    the card."""
+    any_word = " OR ".join(f'"{w}"' for w in words)
+    return [field for field in FIELDS if field in columns
+            and conn.execute("SELECT 1 FROM cards_fts WHERE cards_fts MATCH ? AND rowid = ?", ("{" + field + "} : (" + any_word + ")", row_id)).fetchone()]
+
+
+def search(index_root, query, limit=DEFAULT_LIMIT, book_id=None, within="all"):
+    """Ranked results for a query, at most `limit` (1 to 50): the cards whose text holds every word. `within` is `all`, `summary` (the card
+    in the vocabulary of its source: title, summary, uses, topics, adjacent topics, key ideas, caveats) or `neutral` (the five neutral
+    fields); `book_id` names one book. Each result carries the card, rendered as `card-show` renders it, between the untrusted-text
+    markers, and the facts that hold no free text. A search reads the catalog file and nothing else."""
+    if type(limit) is not int or not 1 <= limit <= MAX_LIMIT:
+        raise KbError(f"the limit must be a whole number from 1 to {MAX_LIMIT}")
+    if not isinstance(within, str) or within not in SIDES:
+        raise KbError(f"a search is within {', '.join(SIDES)}")
+    if book_id is not None:
+        ids.check_id(book_id)
+    words = fulltext.words_of(query)
+    sql = ("SELECT c.id, c.book_id, c.version_id, c.generation, c.is_current, c.added, c.citation, c.card, bm25(cards_fts) "
+           "FROM cards_fts JOIN cards c ON c.id = cards_fts.rowid WHERE cards_fts MATCH ?"
+           + (" AND c.book_id = ?" if book_id is not None else "") + " ORDER BY bm25(cards_fts), c.book_id, c.version_id LIMIT ?")
+    params = [_expression(words, SIDES[within])] + ([book_id] if book_id is not None else []) + [limit]
+    end = time.monotonic() + SEARCH_SECONDS
+    try:
+        with closing(connect(path_of(index_root), readonly=True)) as conn:
+            conn.set_progress_handler(lambda: 1 if time.monotonic() > end else 0, PROGRESS_STEPS)
+            rows = conn.execute(sql, params).fetchall()
+            matched = {row[0]: _matched(conn, row[0], words, SIDES[within]) for row in rows}
+    except sqlite3.Error as e:
+        if time.monotonic() > end:
+            raise KbError(f"the search took too long (more than {SEARCH_SECONDS} seconds) and was stopped") from None
+        raise KbError(f"the catalog cannot be read ({e}): run `{COMMAND}` to build it again") from None
+    damaged = KbError(f"the catalog holds a card that is not valid or does not belong to its row: run `{COMMAND}` to build it again")
+    results = []
+    for row_id, row_book, row_version, generation, current, added, cite, stored, rank in rows:
+        try:
+            made = json.loads(stored)
+            card.validate(made)
+            # everything printed comes from the checked card, or is checked against it: a row altered after the build is refused
+            if (made["book_id"] != row_book or made["version_id"] != row_version or cite != citation_of(made)
+                    or not (added == "" or card._ISO.fullmatch(added)) or type(generation) is not int or generation < 1
+                    or current not in (0, 1)):
+                raise damaged
+            fields = matched[row_id]
+            excerpt = card._shown(fulltext.excerpt_of(_fields(made)[FIELDS.index(fields[0])], words)) if fields else ""
+            results.append({"book_id": row_book, "version_id": row_version, "generation": generation, "is_current": bool(current),
+                            "added": added, "score": float(rank),  # the score is computed by the query, not stored: nothing to check
+                            "matched": fields, "excerpt_field": fields[0] if fields else None,
+                            "partial": made["partial"], "citation": cite, "untrusted": True,
+                            "excerpt": f"{fulltext.MARKER}\n{excerpt}",
+                            "text": f"{fulltext.MARKER}\n{card.render(made)}\n{citation.END_MARKER}"})
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, KbError):
+            raise damaged from None
+    return results

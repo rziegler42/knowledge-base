@@ -457,7 +457,7 @@ again only by the bridge.
 
 A card is a short entry for one book, written by a model: what the book is about, what it is useful for, key ideas, and a
 description of the problem it addresses and its approach in words of no field. The engine makes one on command, for the books you
-name. It does not make one when a book is filed, and `process` does not make one. Nothing searches the cards yet.
+name. It does not make one when a book is filed, and `process` does not make one. They can be searched by keyword (below).
 
 ```sh
 cd engine
@@ -522,6 +522,43 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   nothing deletes them; delete them as you like. If the answer cannot be kept (the folder is a link, others can enter it, it is
   full, the write failed), the report says so in its reason and the refusal stands. Only a refused shape keeps an answer: a failed
   call, a missing setting or a skipped book keeps nothing.
+
+### Searching the cards
+
+```sh
+python3 -m kb card-index                       # build the catalog from the book folders
+python3 -m kb card-search 'stopping rule' [--in all|summary|neutral] [--book BOOK_ID] [--limit N]
+```
+
+- **The catalog.** `cards.sqlite` in the index root holds the newest card of each version of each active book, the whole card as
+  JSON, and a full-text table with a column for each text field of the card (title, summary, uses, topics, adjacent topics, key
+  ideas, the five neutral fields, caveats). It is separate from the search index of the text, which it does not touch. It is built
+  from the book folders alone, by `card-index`, which reads every card with its hashes checked and leaves out and counts any that
+  fail; the file is private to you, can be deleted, and a rebuild gives the same catalog. **It is not updated when a card is made**:
+  run `card-index` again after `cards` (a card made after the last `card-index` is not found). A search does not say how old the
+  catalog is.
+- **A search** is words, never syntax, like `search`: put the query in quotes as one argument; each word is quoted for the
+  full-text table and bound as a parameter, so an operator, a column name, a quote or SQL in a query is only a word. Every word must
+  match in one card, in any field, without regard to case or accents. `--in summary` looks at the card in the words of its source
+  (title, summary, uses, topics, adjacent topics, key ideas, caveats), `--in neutral` only at the five neutral fields, and
+  `--book` at one book's cards. At most 50 results (10 by default), ranked by the table's measure and then by book and version, so the
+  same library gives the same order after a rebuild. A search reads only the catalog, so it works with the bulk root away, and it is
+  stopped after ten seconds.
+- **A result** gives the card: its text, rendered as `card-show` renders it, between the untrusted-text markers (a field that holds
+  the words of a marker is withheld); an excerpt of the first field that matched, on one line behind the marker; which fields
+  matched (on the side that was searched); the facts that hold no free text: the book and version, the generation of the card,
+  whether it is for the book's current version, the date the book was added, the score (smaller is better) and whether the card is
+  partial; and a citation line, which does hold text from the book, its title and its source address, cleaned, the title blanked if
+  it holds the words of a marker, and printed outside the markers. Every search checks each row against the card it holds (the
+  citation, the date, the generation and the version flag must be what that card gives), and a card with no model part is found by
+  its title only.
+- **The citation line** is built when the catalog is written, from the facts the card holds, in the form a read gives. It is the
+  same as a read's line except where a card holds less than the source record: for an arXiv paper it lacks the PDF address that a read
+  adds; a card keeps only a web address with no user name (a read says `non-web address` for another); and it keeps an address to 300
+  characters, a read to 500.
+- **A damaged catalog.** A file of another format, with other tables, a trigger or a view, a stored card that is not a valid card
+  (or is nested too deeply to read), or a row whose citation, date, generation or version flag is not what its card gives, is
+  refused with the command to run (`card-index`). Nothing in the catalog is run.
 
 Not covered. A card is model output about a book and may be wrong; it is a lead, not a claim. The neutral fields still name the
 book's field often; nothing checks that by code. A model that writes a list longer than its limit makes the card fail; nothing is

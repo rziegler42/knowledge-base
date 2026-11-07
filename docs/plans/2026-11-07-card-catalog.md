@@ -221,3 +221,37 @@ there at the start, and the other states that keep a book out. Noted for B: `con
 search must wrap errors of its own queries in a refusal that says to run `card-index`; and an operating-system error that is not a
 refusal propagates, as in the full-text index, and is reported by the command. Not changed: `versions` and `cards` in the counts are
 always equal for now.
+
+### Increment B — Searching the catalog, and the two commands (2026-11-07)
+
+Added `catalog.search` and the commands `card-index` (rebuild, print the counts, exit 1 if any card failed) and `card-search QUERY
+[--book ID] [--in all|summary|neutral] [--limit N]` (the query is one quoted argument, as in `search`). The words of a query are cut
+and quoted by the rules of `search.py` and bound as a parameter; the side is a column filter built from constants; the book id is
+checked and bound; the limit is 1 to 50 (10 by default); the catalog is opened read-only and a search is stopped after ten seconds;
+results are ranked by the table's measure and then by book and version. Each result carries the card rendered as `card-show` renders
+it, between the untrusted-text markers (a field with the words of a marker is withheld), an excerpt of the first matching field behind
+the marker, the fields that matched on the side searched, the score, and facts: book, version, generation, whether it is the current
+version, the date added, whether the card is partial, and a citation line. A search reads the catalog file and nothing else. Every row
+is checked against its stored card before it is shown: the card must pass `card.validate`, belong to the row's book and version, and
+the row's citation, date, generation and version flag must be what the card gives; a row that is not, a card nested too deeply to read,
+and a database error are refusals that say to run `card-index`. The excerpt is cut from the stored card and not from the full-text
+columns. `engine/README.md` has a section "Searching the cards" and `README.md` says the cards can be searched.
+
+Verification run: `python3 -m unittest engine.tests.test_catalog engine.tests.test_card engine.tests.test_setup` gave 160 tests, OK
+(74 in `test_catalog`, which also pass with a resource warning treated as an error). Tests were written first and failed because the
+search and the commands did not exist. Deliberate breaks of the search, the row checks and the commands were caught except where a
+break's code no longer exists. How that check went, honestly: my first run of the breaks was on a baseline with one failing test of
+mine (a wrong expected order), so I discarded it, fixed the test, and ran again; the second run had three survivors, which were gaps in
+my tests (ties in the score, the stored-card check, the read-only open) and now have tests; after the review's fixes one break
+survived again (the book and version check was covered only through the citation check, so I added a test with two books whose
+citations are the same) and one was a check that cannot fail (the score is computed by the query, not stored), which I removed. Also,
+my scripted edit of the documents was refused by the command gate, and I made the edits with the edit tools. Not run: any other test
+file, and the catalog on the owner's library (increment C).
+
+Review: the `reviewer` agent, one exchange, no blocking findings. Applied: the facts printed outside the markers (citation, date,
+generation, version flag) came from the row unchecked and are now checked against the card on every search; an address in the
+citation is escaped as a read escapes it (a quotation mark, a space), since a card is only checked for a web prefix; the fields that
+matched and the excerpt now follow the side that was searched and come from the stored card; a tampered row or a deeply nested card
+gives a refusal and not a traceback; and the README no longer calls the citation a fact without free text (it holds the title and the
+address, cleaned, outside the markers). Recorded, not changed: `card.validate` accepts a quotation mark or a space in an address,
+which `mechanical` never produces; tightening it would change `card.py`, outside this plan, so the catalog escapes it instead.
