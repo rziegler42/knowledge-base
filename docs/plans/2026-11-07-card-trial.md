@@ -259,3 +259,52 @@ Reviewer: Codex through the review engine (model gpt-5.6-terra). Round 1 of 3: c
 - Verification as run: the runs above, read as written; `python3 -m unittest engine.tests.test_cardmake engine.tests.test_catalog`
   gave 159 tests, OK. Not run: any other test file.
 - No code changed. The commit holds this entry only.
+- Committed as `8db655f`.
+
+### Increment C — The questions, the run and the decision (run; not finished)
+
+Done: steps 1 to 3 and the numbers of step 5. **Not done:** step 4 (reading cards with the owner), the rest of step 5 (what the
+owner found on reading, the length and shape that worked) and step 6 (the recommendation and the owner's decision). This entry
+is therefore a partial result, and the plan is not complete.
+
+- **The corpus.** Fifteen questions over the 12 carded books, with two short plain-word queries each and 17 (question, right book)
+  pairs in all. I drafted twelve of them from my knowledge of the books, without reading any card, and the owner added three
+  more about one book (the annealing page). The right books are my labels, which the owner saw and kept; they are not an independent
+  judgment. The questions are about public papers and pages and name no project. The queries were frozen when the file was
+  written. The corpus and the report are held outside the repository.
+- **The run.** `python3 -m kb trial <corpus> <report>` at commit `8db655f`, Python 3.15.0, on 2026-11-07 (22:21 UTC), with the
+  catalog built by `card-index` after the last card was made. The corpus sha256 is
+  `fa7e0e4a5a8f104a8b6645a68141ddc615c0f05a77f6f561b9c3f5a8f6711961`. The manifest holds 12 cards, one per carded book, the catalog
+  file sha256 `83291fd222dc67c7d6f42af83c6b65d61357e5773739f1bb8c737b28662dd39c` and the text index sha256
+  `decc0ac6a2a8beb3c0cfdedc3f335cf3cf401b290fc495cefac69165c57298bb`. No right book was uncovered. No model was called.
+- **The numbers** (the unit is a pair; every right book had a card):
+
+  | | cards, all fields | summary side | neutral side | full text |
+  |---|---|---|---|---|
+  | recall, of 17 pairs | 16 | 16 | 13 | 15 |
+  | questions with a right book found, of 15 | 14 | 14 | 11 | 14 |
+  | mean reciprocal rank | 0.89 | 0.89 | 0.70 | 0.82 |
+  | other books found per question, mean | 1.53 | 1.40 | 0.87 | 5.20 |
+
+  Of the 17 pairs, 15 were found by both the cards (all fields) and the full text, 1 by the cards only, none by the text only,
+  and 1 by neither. The full-text search reached its limit of 50 blocks for at least one query in 9 of the 15 questions, so its
+  books, and its count of other books, are lower bounds.
+- **What each found that the other did not.** The cards found one right book the text missed (a translation paper for a question
+  about attending over source words). Neither found the right book for the stopping-criterion question about annealing; I suspect
+  the page does not cover it, but I did not check, so that is unverified. The neutral side missed the question in German and two
+  others, and the cards ranked one right book third where the text ranked it first.
+- **The leak measure.** All 12 cards repeat words of their title or topics in their neutral fields (by the word-list measure of
+  the README, which counts words such as "attention" in a card titled with it). Card length: 223 to 337 words, mean 280.8, over
+  12 cards. The neutral side still found 13 of 17 pairs, which may be because of those repeated words; this was not tested.
+- **What this can and cannot show.** The questions are easy: plain topical queries, mostly one right book, drafted from the books
+  themselves, over 18 books, so both searches nearly reach the ceiling and a difference of one pair (16 against 15) is noise. Four
+  of the 15 questions concern one book, so they are not independent. The labels are mine. It shows that a search of the cards does
+  not do worse than a search of the full text on questions like these, and that it returns far fewer other books; it does not show
+  that cards help in real use, and says nothing about questions that share no words with the book.
+- Provenance: the `trial` command of `engine/kb/trial.py` at commit `8db655f` (increment A committed as `61874f4`), run once on
+  the corpus with hash `fa7e0e4a…1961`; the numbers above are copied from its summary and from the per-question places in the
+  report, and are not recomputed elsewhere.
+- Verification as run: the trial run above, read as written. Not yet run for C: `python3 -m unittest engine.tests.test_trial`
+  once more, and the whole-plan verification.
+- Next: with the owner, read a few cards (one found well, one not found, one with a leak), then the recommendation and the
+  owner's decision (search by meaning, themes, both, or neither for now).
