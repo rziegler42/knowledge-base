@@ -498,5 +498,105 @@ owner approves it again.
   `84ffbe8b5ca6a0c788a3a20233022d885fc772cd418497f45fc363ef3d5f3026`) 7.0 s, 76 MB, `scan_incomplete`; `hostile_predictor` 11.8 s, 86 MB;
   `hostile_escapes` 5.0 s, 152 MB; `hostile_matches` 8.6 s, 77 MB; `images_100` 1.1 s, 180 MB; `images_1000` 7.8 s, 180 MB; `expanding`
   8.9 s, 77 MB; `tiny` 3.5 s, 205 MB: all inside the 20 seconds and 600 MB of completion criterion 3.
-- **Not done:** the commit; increment C, without which B is not put in the config.
-- **Left for the owner:** the word to commit B, and whether to open the small plan for the memory of escapes.
+- **Committed** as 1ae23deb37f849ddd0dd98d776dc4f8caf06d656 (not pushed). Increment C is still needed before B is put in the config.
+- **Left for the owner:** whether to open the small plan for the memory of escapes.
+
+### Increment C — Where a match sits decides its name (implemented and reviewed; security review not yet decided; not committed)
+
+- **Done** in `engine/kb/scan_tool.py` (label 0.0.7, with its history line): a new kind, `pattern_in_binary_data` ("usually a coincidence,
+  and not read as a viewer would"); the reader yields where each stream's data starts; `scan_pdf` collects the raw spans of the streams
+  that are binary places and tallies the file as a text part (the gaps, joined with newlines) and a binary part (the spans, joined
+  with a separator), the decoded pieces of picture-shaped streams going through `_tally_binary` and every other decoded piece
+  through `_tally`; a match with the shape of a use keeps its own kind (the strong patterns are the same patterns with a fixed-width
+  look-behind of twelve printable bytes and a look-ahead of white space, `(` or `<`), any other match in a binary place counts in
+  `pattern_in_binary_data`; nothing is dropped (`every >= shaped`, and the two together are what was counted before); in a picture a
+  slash costs 70 units in the work meter, not 35, as the pixels are read twice. The README ("Where a match sits") and the pipeline
+  spec say it.
+- **Places**, as built: **binary** are the raw and the decoded bytes of picture-shaped streams (a stream with `/Subtype /Image`, no
+  `/Type` but `/XObject`, none of the container keys), the raw bytes of streams whose filters are all image codecs, and the raw bytes
+  of a stream the scan decoded with state ok, limit or spent; **text** is everything else: the file outside streams, dictionaries,
+  unfiltered streams, the decoded content (and the bytes before a predictor) of streams that are not pictures, the bytes of a stream
+  whose decode failed or was refused, and of a stream the scan did not reach (the deadline, a limit, a skipped stream).
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_scan engine.tests.test_convert_run
+  engine.tests.test_bench_pdf`: 262 tests, OK; `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_search
+  engine.tests.test_read`: 167 tests, OK; `engine/.venv/bin/python -B -W error::ResourceWarning -m unittest
+  engine.tests.test_convert.ToolVersionTest engine.tests.test_search.CommandLineTest engine.tests.test_read.ReadTest`: 44 tests, OK. The
+  new tests (`PlacesTest`, 15 tests, a stage test for the new kind, and limits tests for pictures full of matches) failed first.
+  Break-it: fourteen mutations (the weaker kind never reported; the matches without a shape dropped; every binary match keeping its
+  kind; eleven and thirteen bytes of look-behind; any byte as a value start; an unfiltered picture, a decoded stream's raw bytes and
+  decoded pixels each not a binary place; no pad at the start; no separator at the end; the binary places not taken out of the text):
+  all caught, after two survivors got tests (the compressed bytes of a decoded stream, and the end of a span; for the first a stored
+  block was found whose last content bytes are `/J` and whose checksum begins with `S`, so `/JS` is in the file though not in the
+  content).
+- **Comparison with the committed scan (0.0.6, B)** on the nine papers and the sixty PDFs: 66 identical, 3 different, exactly as
+  designed: GPT-3 `javascript 1` becomes `pattern_in_binary_data 1` (83 large images, no `scan_incomplete`); CLIP `javascript 24`
+  becomes `pattern_in_binary_data 24`; PaLM `javascript 1` becomes `pattern_in_binary_data 1` (4 large images). The sixty system PDFs
+  and the other six papers are unchanged, and the one real `javascript` outside streams is still `javascript`. None of the 26 matches in
+  binary places has the shape of a use. So completion criterion 1 holds: none of the nine says `scan_incomplete` or `javascript`, and
+  every caveat that is not `large_image_streams` is `pattern_in_binary_data`.
+- **Benchmarks, 50 MB, `/usr/bin/time -l`** (hostile files built for C, with the sha256: `hostile_pixels_shaped` 50,001,642 bytes
+  `fd0b5ce30863e219ee848ad6d447a3ec9f01790190b2f7cf79892cdb1bfb0845`, 25,000 picture streams of `/JS ` repeated; `hostile_pixels_weak`
+  50,000,712 `120f18468d329ee7a7cb7a3934512227737d56111db9bfe8c85db58122f9c4fd`, `/JS/JS` repeated; `hostile_raw_shaped` 49,600,166
+  `210a934cb7f0fedc17adb4a2de745d81c441cff4d7210d6de54cf02f50715570`, one unfiltered picture of `/JS ` repeated; `hostile_raw_weak`
+  49,800,166 `eb4b28bbe918f8ea3fd2892f3a01916471f5a2a7fce9a453617940ad8adf8539`): 11.0 s and 182 MB, 9.8 s and 184 MB, 4.0 s and 268 MB,
+  4.8 s and 269 MB; before slashes in pictures cost twice, the first two took 20.6 s and 18.3 s (past the 20 of the criterion). The
+  earlier hostile files of B are unchanged.
+- **Deviations from the plan text (for the owner):** (1) *the digit:* the plan lets "a digit" begin a value; the code does not, because
+  every pattern ends in "not followed by a letter or digit", so a digit can never follow a match and the plan's digit was vacuous.
+  (2) *the null:* a null byte is not "printable or white space" in the look-behind and not a value start in the look-ahead (it is PDF
+  white space; the measurement script of A allowed it); black pixels are nulls, so allowing it would give a flat patch of the colour
+  that spells `/JS` followed by black a full-strength match. A test pins it. (3) *what is not a value start:* `/`, `>`, `[` and `)`.
+  This is what keeps the flat patch weak (`/JS/JS/JS` has a slash after every run), and its cost is that a compact real action with no
+  white space after the name (`<</S/Launch/F(x)>>`), placed in image bytes by a fake extent, is weak, not full strength: the goal's
+  sentence "a match that is shaped like a real use stays at full strength wherever it is" holds for the ordinary spelling (a space or a
+  string after the name) and is narrower than it reads. `<</S/JavaScript/JS(` keeps full strength through `/JS(`. It is never
+  silent. (4) *how the positions are found:* step 2 says to search the file as it is with the escaped spellings of each pattern; the
+  code unescapes the joined text and binary parts and judges the shape on the unescaped text (a test pins that bytes written with
+  escapes count as the bytes they spell); the result is the same. (5) *the counts:* `javascript` and the weaker kind together are at
+  least what B counted, not always equal: a name that ends a stream's data with no line end before `endstream` (`/JSendstream`) was not
+  a match in B and is a weak match now, since the end of the data is not a letter. A picture stored without compression counts a match
+  in its raw bytes and again in its pixels (B did the same). (6) *the end and start of the data:* the start counts as printable and
+  the end is not a value start; the data of a stream ends with the line end before `endstream`, so a name that ends it is followed by
+  white space in a real file.
+- **Review (independent reviewer, one round):** no blocking finding, and no way found to get a real action no caveat: every byte of the
+  file is in the text part or a binary span, every match is counted as strong or weak, spans are in order and cannot overlap (the
+  reader's position only moves forward), a match cannot straddle two spans or the text and a span (every span starts after a line
+  end), the separators cannot create a match or lend a shape, a stream the scan did not reach keeps its bytes in the text. Applied:
+  three tests for gaps (a deflate stream with a real object after its end is a text place; a stream skipped by the deadline stays text;
+  escapes in the twelve bytes change the shape), the README wording (which streams are decoded; the null; the compact action), and
+  this record of deviations. Noted, not changed: a picture-shaped dictionary can be claimed by a stream that is not a picture (an
+  embedded document, with no container key): its decoded content becomes a binary place, where a real action keeps full strength if it
+  has the shape of a use; the worst-case time sum of B (deadline, last stream, file-level steps, check for filters outside streams)
+  is unchanged in structure and the file-level binary tally was measured at 4 to 5 s on 50 MB.
+- **Security review (security-reviewer, one round, run on 2026-11-07 at the owner's word, on a copy of the tree; it read
+  `scan_tool.py` in full and the README paragraphs, not the plan's C text, the tests or the spec; it called `scan_pdf` directly, not
+  the command line, and tested no viewer):** no Critical or High finding; no dropped match in 30,000 fuzzed files (strong plus weak is
+  never less than the plain count of the whole unescaped file); a forged `/Subtype /Image` on an object stream or xref stream stays
+  strong; a hidden Flate object stream gives `scan_incomplete`; the weak count cannot hide a strong kind.
+  - *Medium 1, accepted as a recorded limit (the owner agreed with the recommendation):* a real action put in the data of an image
+    stream that nothing refers to (a viewer reaches it by xref offset or `/OpenAction`) is reported as `pattern_in_binary_data` when it
+    is compact (`<</S/Launch/F(x)>>`, `<</Type/EmbeddedFile>>`), when a slash, `>`, `[`, `%` or NUL follows the name, when twelve
+    unprintable bytes precede it, or when the name is spelled with `#xx`. The attacker chooses this; it is the deviation recorded
+    above, not an accident. The action is still counted and never silent, `/JS(` and `/JS 6 0 R` still give `javascript`, and the
+    spaced form stays strong. Closing it would bring back the CLIP and GPT-3 false alarms, which the plan exists to remove.
+  - *Medium 2, fixed (test first, see below):* `_tally_binary` cost about 260 ns a byte (a look-behind at the start of a regex is tried
+    at every position), about a hundred times the plain tally and not charged to the work budget; a 47 MB file of repeated `/JS/`
+    followed by pictures that used up the 25 s took 40.6 s of the 60 s. The shape is now checked on each match after the plain
+    pattern finds it. Tests: `BinaryTallyTest` (counts equal the first definition on 3,000 random inputs and at the ends of the
+    data; 10 MB with all seven patterns under 1 s: 2.7 s before, 0.18 s after). Measured after: the 47 MB `/JS/` image 2.3 s; the
+    hostile files pixels shaped 10.9 s, pixels weak 5.9 s, raw shaped 4.0 s, raw weak 2.7 s, matches 8.7 s, `images_1000` 7.6 s. The
+    label stays 0.0.7 (never committed); its recorded hash in `test_convert.py` is the new one. The 66 identical and 3 differing
+    papers are unchanged.
+  - *Low 3, recorded:* an image of 8 million `#2FJS ` repeats peaked at 2.13 GB (the same bytes as text 1.84 GB; `#41` escapes 1.6 GB),
+    16% above the case in the deferral, from the same cause (`_unescape_names` on millions of escapes) plus the joined and padded
+    copies; time 4 s to 12 s. The deferral stands, with this figure.
+  - *Low 4, recorded:* a name that ends the stream data right before `endstream` counts as a weak match where a plain scan of the file
+    counts nothing: an over-count, never a drop.
+- **Second look at the fix (reviewer, read only, ran nothing):** no blocking finding; the old strong matches are exactly the plain
+  matches that pass the shape test (no overlap, no alternative that backtracks to a different match, `start - 12` never negative
+  because every pattern begins with a slash and the pad has none, int membership sound). Applied: a comment saying so (hash recorded
+  again). Not changed: the reference in the test uses the production pad and end markers (the scan-level tests of `PlacesTest` pin
+  those); the 1.0 s timing bound is wall-clock (0.18 s measured, a wide margin); the cost per match in Python was answered by
+  re-timing the hostile files above, which did not get slower.
+- **Not done:** the commit.
+- **Left for the owner:** the word to commit C.

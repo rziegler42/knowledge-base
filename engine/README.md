@@ -249,6 +249,24 @@ number, an escaped bracket) is `scan_incomplete` too, because the list read ends
 those can put before the real end. A dictionary with more than one `/Filter` key is `scan_incomplete` too: the text is read without knowing strings, so a decoy
 in a string could say an image codec, which the scan does not look into, ahead of the real filter. A picture with a predictor counts against the scan's limits on streams, work and bytes undone, as any stream does (a test builds twenty
 figures of 950,000 bytes and 1,500 and 2,500 small ones that give no caveat).
+**Where a match sits.** The patterns (`/JS`, `/JavaScript`, `/Launch` and the others) are three to eleven bytes, and in the compressed
+bytes and the pixels of a large file they turn up by chance, or are spelled by a flat patch of one colour (#2F4A53 is `/JS`). So a
+match is named by where it sits. The **binary places** are the raw and the decoded bytes of an image (a stream with `/Subtype
+/Image` and none of the keys of a container, whatever its `/Type`), the raw bytes of a stream with an image codec (`DCTDecode`,
+`JPXDecode`, `CCITTFaxDecode`, `JBIG2Decode`), and the raw bytes of a stream the scan decoded (to its end, or as far as its limits
+allowed); every other place (the file outside streams, a stream dictionary, an unfiltered stream, the decoded content of a stream
+that is not a picture, such as an object stream, and the bytes of a stream the scan could not decode or did not reach) is a **text
+place**. A match in a text place is reported as its own kind. A match in a binary place is too if it has **the
+shape of a use**: the twelve bytes before it (after escapes are undone) are printable ASCII or white space other than a null, as in a dictionary, and the
+byte after it is white space, `(` or `<` (the start of its value; a digit cannot follow, it would continue the name; a slash, `>` or `[`
+does not count, which is what keeps a flat patch of the colour that spells `/JS` weak). Any other match in a binary place is
+counted in **`pattern_in_binary_data`**: "usually a coincidence, and not read as a viewer would". Nothing is dropped: the two
+counts together are what the scan counted before. The start of the data counts as printable and the end of it is not a value start;
+neighbouring streams do not lend each other a shape. What this leaves: a real action placed in image bytes behind bytes that are
+not syntax (a stream extent that a viewer does not see the way the scan does), or written compactly with no white space after the
+name (`<</S/Launch/F(x)>>`), is reported under the weaker name, never as nothing;
+and a flat patch of the colour that spells a pattern, followed by a byte that begins a value, keeps its own kind (the end of such a
+patch is a space or a black pixel only by luck).
 **How it finds a stream.** The scan reads the file forward. In the space between objects it looks for an `N G obj` header (and for
 `trailer`); from a header it reads the object's value with a reader that knows literal strings (nesting, escapes, octal), hex
 strings, comments, names, arrays and dictionaries, takes the exact text of the dictionary, and, if the word `stream` and a line end

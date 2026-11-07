@@ -8,7 +8,7 @@ from kb import scan_tool
 
 def streams(data):
     reader = {"incomplete": False, "steps": scan_tool.MAX_READ_STEPS, "objects": 0, "unfinished": 0}
-    found = list(scan_tool._streams(data, reader))
+    found = [(located, blob) for located, blob, _start in scan_tool._streams(data, reader)]
     return found, reader
 
 

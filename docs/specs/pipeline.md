@@ -55,7 +55,9 @@ spec), or how an agent reads the result (the reading spec).
   descriptions, then their indexes) and, if the weave is built, *threaded*. Keyword indexing happens right after converted, so the
   book is searchable by keyword; vector indexing happens after carded, so it is searchable by meaning. The scan is bounded in time, not
   in what a file may hold: it decodes at most 2 MB of a stream, 500,000 streams and a stated amount of work in all (a figure-heavy paper
-  stays well under), and a file past a limit is reported as not read to the end, never as clean.
+  stays well under), and a file past a limit is reported as not read to the end, never as clean. A match of a pattern (a script, a launch action) in the bytes of
+  an image or of a compressed stream, where it turns up by chance or is spelled by a colour, is reported as `pattern_in_binary_data`, not as
+  a script, unless it has the shape of a use; nothing is dropped.
 - **[proposed]** A stage of a version is pending, done, failed or skipped, the words of `book.md`. A stage that has failed after
   its bounded retries and is set aside with its reason is parked, and the word means only that.
 - **[proposed]** Each stage has a named input, a named output and a version of its own code and prompt. A change to a stage's

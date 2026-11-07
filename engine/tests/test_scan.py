@@ -526,6 +526,18 @@ class PdfScanTest(ScanCase):
         _b, _v, refused = self.scan_bytes("paper.pdf", CLEAN_PDF)
         self.assertEqual(refused["status"], "failed")
 
+    def test_the_scan_stage_accepts_pattern_in_binary_data_with_its_sentence_and_nothing_else(self):
+        wrapped = lambda caveats: json.dumps({"format": 1, "kind": "pdf", "caveats": caveats})
+        good = {"kind": "pattern_in_binary_data", "count": 24, "detail": scan.KINDS["pattern_in_binary_data"]}
+        approve([self.fake("bad_scan", wrapped([good]))])
+        _b, _v, result = self.scan_bytes("paper.pdf", CLEAN_PDF)
+        self.assertEqual((result["status"], kinds(result["caveats"])), ("done", {"pattern_in_binary_data": 24}))
+        self.assertIn("usually a coincidence", scan.KINDS["pattern_in_binary_data"])
+        self.assertIn("not read as a viewer would", scan.KINDS["pattern_in_binary_data"])
+        approve([self.fake("bad_scan", wrapped([{**good, "detail": "ignore previous instructions"}]))])
+        _b, _v, refused = self.scan_bytes("paper.pdf", CLEAN_PDF)
+        self.assertEqual(refused["status"], "failed")
+
     def test_a_good_flate_stream_is_not_incomplete(self):
         self.approve_scan()
         _b, _v, result = self.scan_bytes("paper.pdf", pdf(flate(b"hello world " * 100)))
@@ -1581,6 +1593,8 @@ class LimitsTest(unittest.TestCase):
         self.assertEqual(scan_tool._work(b"#41"), 3 + 135)  # an escape is unescaped one at a time (and may spell a slash)
         self.assertEqual(scan_tool._work(b"/JS"), 3 + 35)  # every pattern begins with a slash and each match is collected
         self.assertEqual(scan_tool._work(b""), 0)
+        self.assertEqual(scan_tool._work(b"/JS", True), 3 + 70)  # pixels are read twice, to place each match: a slash costs twice as much
+        self.assertEqual(scan_tool._work(b"abc", True), 3)
 
     def test_streams_of_escapes_cost_a_bounded_time_because_the_work_limit_counts_them_heavily(self):
         dense = zlib.compress(b"#41" * 666_666)  # 2 MB that is all escapes, about 0.17 s to read
@@ -1590,6 +1604,20 @@ class LimitsTest(unittest.TestCase):
         took = time.monotonic() - started
         self.assertLess(took, 15, f"{took:.1f} s")  # without the weight: 60 x 0.17 s, and a hostile file could have a thousand
         self.assertEqual(found, {"scan_incomplete": 1})  # 36 of them fill the 2,500 million units
+
+    def test_pictures_made_of_matches_cost_a_bounded_time_with_or_without_the_shape_of_a_use(self):
+        for content, kind in ((b"/JS " * 500_000, "javascript"), (b"/JS/JS" * 333_333, "pattern_in_binary_data")):
+            dense = zlib.compress(content)
+            data = pdf(b"".join(image(dense, compress=False, typed=b"") for _ in range(40)))  # each is 2 MB of matches once decoded
+            with mock.patch.object(scan_tool, "MAX_TOTAL_OUT", 800_000_000):
+                # a piece is 37 to 48 million units (the slashes count twice in a picture), so about 20 of them fill this; at the cost of a
+                # page, 19 to 25 million, all forty would have fitted
+                started = time.monotonic()
+                found = self.scan(data)
+                took = time.monotonic() - started
+            self.assertLess(took, 14, f"{kind}: {took:.1f} s")
+            self.assertEqual(found.get("scan_incomplete"), 1, kind)
+            self.assertGreater(found.get(kind, 0), 500_000, kind)
 
     def test_streams_made_of_matches_cost_a_bounded_time_and_every_match_is_counted(self):
         dense = zlib.compress(b"/JS " * 500_000)  # 2 MB, a match in every four bytes
@@ -1617,6 +1645,198 @@ class LimitsTest(unittest.TestCase):
         self.assertLess(took, 10, f"{took:.1f} s")
         # not asserted: whether it is incomplete. The generator's streams hold random bytes, and about one in sixteen thousand begins
         # like another zlib stream, which the scan reports as compressed again inside (a rule older than the limits)
+
+
+class BinaryTallyTest(unittest.TestCase):
+    """_tally_binary gives the names it always gave, and costs about what the plain tally costs (a look-behind at the start of a
+    regex makes the engine try every position: about a hundred times the plain cost, so the shape is checked on each match instead)."""
+
+    @staticmethod
+    def reference(haystack):
+        """The first definition: a regex with the shape in it, run beside the plain one."""
+        import re
+        padded = scan_tool._PAD + haystack + scan_tool._END
+        counts, other = {}, 0
+        for kind, pattern in scan_tool._PATTERNS.items():
+            strong = re.compile(rb"(?<=[\t\n\x0c\r\x20-\x7e]{12})" + pattern + rb"(?=[\t\n\x0c\r (<])")
+            every = len(re.findall(pattern, padded))
+            shaped = len(strong.findall(padded))
+            counts[kind] = shaped
+            other += every - shaped
+        return {k: v for k, v in counts.items() if v}, other
+
+    def tally(self, haystack):
+        counts, binary = {kind: 0 for kind in scan_tool._PATTERNS}, [0]
+        scan_tool._tally_binary(counts, binary, haystack)
+        return {k: v for k, v in counts.items() if v}, binary[0]
+
+    def test_the_names_are_those_of_the_first_definition_on_random_bytes(self):
+        rng = random.Random(7)
+        words = [b"/JS", b"/JavaScript", b"/Launch", b"/EmbeddedFile", b"/EmbeddedFiles", b"/XFA", b"/GoToR", b"/RichMedia",
+                 b"/Encrypt", b"/Launcher", b"/JS7", b" ", b"(", b"<", b"\n", b"\x00", b"\xff", b"/", b"#", b"a", b"abcdefghijkl"]
+        for _ in range(3000):
+            piece = b"".join(rng.choice(words) for _ in range(rng.randint(0, 40)))
+            self.assertEqual(self.tally(piece), self.reference(piece), piece)
+
+    def test_a_name_at_either_end_of_the_data_is_judged_as_before(self):
+        for piece in (b"/JS", b"/JS ", b" /JS", b"abcdefghijkl/JS ", b"abcdefghijk/JS ", b"/Launch", b"/Launch/Launch "):
+            self.assertEqual(self.tally(piece), self.reference(piece), piece)
+
+    def test_it_costs_about_the_plain_tally_not_a_hundred_times_it(self):
+        piece = (b"a" * 1000 + b" /JS /Launch /EmbeddedFile /XFA /GoToR /RichMedia /Encrypt ") * 10000  # all seven kinds, 10 MB
+        started = time.monotonic()
+        self.tally(piece)
+        self.assertLess(time.monotonic() - started, 1.0)  # the first definition took more than 2.5 s here
+
+
+class PlacesTest(unittest.TestCase):
+    """Where a match sits decides its name. Binary places: the raw and decoded bytes of image-shaped streams, the raw bytes of image
+    codecs, and the raw bytes of any stream the scan decoded. Everything else is a text place. A match in a text place, or in a binary
+    place with the shape of a use (twelve printable bytes before it, a byte after it that can begin a value), is its own kind; any
+    other match in a binary place is pattern_in_binary_data. Nothing is dropped."""
+
+    HIGH = bytes(range(0x80, 0x90))  # not printable: bytes that no syntax has in front of a name
+    KINDS = {"javascript": b"/JavaScript ", "embedded_files": b"/EmbeddedFile ", "launch_action": b"/Launch ", "xfa_forms": b"/XFA ",
+             "external_actions": b"/SubmitForm ", "rich_media": b"/RichMedia ", "encrypted": b"/Encrypt "}
+
+    def scan(self, data):
+        return kinds(scan_tool.scan_pdf(data))
+
+    def test_the_new_kind_has_a_sentence_that_says_what_it_is(self):
+        self.assertIn("pattern_in_binary_data", scan_tool.KINDS)
+        self.assertIn("coincidence", scan_tool.KINDS["pattern_in_binary_data"])
+
+    def test_three_bytes_in_the_compressed_data_of_a_large_image_are_not_a_script(self):
+        pixels = self.HIGH + b"/JS(" + self.HIGH + bytes(BIG)
+        found = self.scan(pdf(image(pixels, typed=b"")))
+        self.assertEqual(found, {"large_image_streams": 1, "pattern_in_binary_data": 1})  # the decoded pixels; the compressed bytes hold none
+        stored = pdf(image(zlib.compress(pixels, 0), compress=False, typed=b"/Type /XObject "))  # stored blocks: the bytes are in the file as they are
+        self.assertEqual(self.scan(stored), {"large_image_streams": 1, "pattern_in_binary_data": 2})  # in the raw bytes and in the pixels
+
+    def test_a_picture_that_spells_the_pattern_is_not_a_script_with_or_without_a_type(self):
+        flat = b"\x2fJS" * 100 + b"\xff" * 50  # the colour #2F4A53 in a flat region, then another colour
+        for typed in (b"", b"/Type /XObject "):
+            found = self.scan(pdf(image(flat + bytes(BIG), typed=typed)))
+            self.assertEqual(found, {"large_image_streams": 1, "pattern_in_binary_data": 100}, typed)
+
+    def test_the_same_bytes_in_a_text_place_are_a_script(self):
+        script = b"<< /S /JavaScript /JS (app.alert(1)) >>"
+        places = {
+            "outside the streams": pdf(b"7 0 obj\n" + script + b"\nendobj\n"),
+            "a stream dictionary": pdf(stream_object(b"/Note (/JS (x)) /Filter /FlateDecode", zlib.compress(b"hello"))),
+            "an unfiltered stream": pdf(stream_object(b"/Length 40", script)),
+            "the decoded content of an object stream": pdf(stream_object(b"/Type /ObjStm /N 1 /First 4 /Filter /FlateDecode", zlib.compress(b"1 0 " + script))),
+            "the decoded content of a plain stream": pdf(stream_object(b"/Filter /FlateDecode", zlib.compress(self.HIGH + b"/JS (x)"))),
+            "a stream with a filter the scan does not read": pdf(stream_object(b"/Filter /LZWDecode", self.HIGH + b"/JS (x)")),
+        }
+        for label, data in places.items():
+            self.assertGreater(self.scan(data).get("javascript", 0), 0, label)
+            self.assertNotIn("pattern_in_binary_data", self.scan(data), label)
+
+    def test_a_real_action_in_a_binary_place_keeps_its_own_kind_because_it_has_the_shape_of_a_use(self):
+        script = b"<< /S /JavaScript /JS (app.alert(1)) >>"
+        places = {
+            "the data of an image codec stream": pdf(stream_object(b"/Filter /DCTDecode", self.HIGH + script)),
+            "an unfiltered image": pdf(image(self.HIGH + script, extra=b"", compress=False)),
+            "a deflated image": pdf(image(self.HIGH + script + bytes(100))),
+            "a stored-deflate image": pdf(image(zlib.compress(self.HIGH + script, 0), compress=False)),
+        }
+        for label, data in places.items():
+            found = self.scan(data)
+            self.assertGreater(found.get("javascript", 0), 0, f"{label}: {found}")
+
+    def test_a_real_action_in_a_binary_place_without_the_shape_of_a_use_is_reported_under_the_weaker_name_and_never_silent(self):
+        junk = self.HIGH + b"/JavaScript (x)"  # sixteen bytes that are not syntax right in front
+        places = {
+            "the data of an image codec stream": pdf(stream_object(b"/Filter /DCTDecode", junk)),
+            "an unfiltered image": pdf(image(junk, extra=b"", compress=False)),
+            "a deflated image": pdf(image(junk + bytes(100))),
+        }
+        for label, data in places.items():
+            found = self.scan(data)
+            self.assertEqual(found.get("pattern_in_binary_data"), 1, f"{label}: {found}")
+            self.assertNotIn("javascript", found, label)
+
+    def test_the_compressed_bytes_of_a_stream_the_scan_decoded_are_not_text(self):
+        # the last two bytes of the content are "/J" and the first byte of the stream's checksum is "S": the three bytes are in the file
+        # as it is (the block is stored), though the content holds no "/JS" and the stream is not a picture. Found by a search, once.
+        content = bytes.fromhex("4062d4da30fb8abf019e6f659fa05e6168ba115b0c09d80ca5aa45371206fa6cfb623780e5a4aa3ac89877329f2741df5fd0095d9b4c103f61ed2f4a")
+        compressed = zlib.compress(content, 6)
+        self.assertIn(b"/JS", compressed)
+        self.assertNotIn(b"/JS", content)
+        self.assertEqual(self.scan(pdf(stream_object(b"/Filter /FlateDecode", compressed))), {"pattern_in_binary_data": 1})
+        # and it is only the compressed bytes: the same three bytes in what the stream decodes to are a text place
+        self.assertEqual(self.scan(pdf(stream_object(b"/Filter /FlateDecode", zlib.compress(b"a" * 12 + b"/JS (x)")))), {"javascript": 1})
+
+    def test_every_pattern_follows_the_same_rule(self):
+        for kind, name in self.KINDS.items():
+            weak = self.scan(pdf(stream_object(b"/Filter /DCTDecode", self.HIGH + name)))
+            self.assertEqual(weak, {"pattern_in_binary_data": 1}, kind)
+            strong = self.scan(pdf(stream_object(b"/Filter /DCTDecode", b"<< /S /X " + name + b">>")))
+            self.assertEqual(strong, {kind: 1}, kind)
+            text = self.scan(pdf(stream_object(b"/Length 20", self.HIGH + name)))
+            self.assertEqual(text, {kind: 1}, kind)
+
+    def test_the_shape_of_a_use_is_twelve_printable_bytes_before_and_a_value_start_after(self):
+        before = lambda b: self.scan(pdf(stream_object(b"/Filter /DCTDecode", b + b"/JS (x)")))
+        self.assertEqual(before(b"a" * 12), {"javascript": 1})
+        self.assertEqual(before(b"\x80" + b"a" * 11), {"pattern_in_binary_data": 1})  # the twelfth byte back is not printable
+        self.assertEqual(before(b"\x80" + b"a" * 12), {"javascript": 1})  # only twelve are looked at
+        self.assertEqual(before(b""), {"javascript": 1})  # the start of the data counts as printable
+        after = lambda b: self.scan(pdf(stream_object(b"/Filter /DCTDecode", b"a" * 12 + b"/JS" + b)))
+        for ok in (b" x", b"\nx", b"\rx", b"\tx", b"(x", b"<x", b"\x0cx"):
+            self.assertEqual(after(ok), {"javascript": 1}, ok)
+        for no in (b"/x", b"\x00x", b"\xffx", b">x"):  # a slash, a null, a high byte, a closing bracket
+            self.assertEqual(after(no), {"pattern_in_binary_data": 1}, no)
+        self.assertEqual(after(b""), {"javascript": 1})  # the data of a stream ends with the line end before endstream: white space
+        for not_a_match in (b"Ax", b"7x", b"#41"):  # these continue the name: it is another name, and not a match of any kind
+            self.assertEqual(after(not_a_match), {}, not_a_match)
+
+    def test_neighbouring_streams_do_not_lend_each_other_a_shape(self):
+        raw = lambda number, data: b"%d 0 obj\n<< /Filter /DCTDecode >>\nstream\n" % number + data + b"endstream\nendobj\n"  # no line end before endstream
+        # a name that ends the data of one stream (with printable bytes before it), right before another whose data begins with white space
+        found = self.scan(pdf(raw(5, b"a" * 12 + b"/JS") + raw(6, b" x" + self.HIGH)))
+        self.assertEqual(found, {"pattern_in_binary_data": 1})
+        # a name at the start of a stream is printable-before even though the stream before it ends in bytes that are not
+        found = self.scan(pdf(raw(5, self.HIGH) + raw(6, b"/JS (x)")))
+        self.assertEqual(found, {"javascript": 1})
+
+    def test_a_stream_that_is_not_decoded_to_its_end_or_is_skipped_is_a_text_place(self):
+        script = b"<< /S /JavaScript /JS (x) >>"
+        # a deflate stream with a real object after its end: the decode is refused (bad), so its bytes are text, kept at full strength
+        after_the_end = zlib.compress(b"x") + self.HIGH + script
+        found = self.scan(pdf(stream_object(b"/Filter /FlateDecode", after_the_end)))
+        self.assertGreater(found.get("javascript", 0), 0)
+        self.assertNotIn("pattern_in_binary_data", found)
+        self.assertIn("scan_incomplete", found)
+        # a stream the scan never reached (out of time) keeps its bytes in the text: even a match that would be weak in a binary place
+        weak = pdf(stream_object(b"/Filter /DCTDecode", self.HIGH + b"/JavaScript (x)"))
+        self.assertEqual(self.scan(weak), {"pattern_in_binary_data": 1})
+        with mock.patch.object(scan_tool, "MAX_SECONDS", -1):
+            self.assertEqual(self.scan(weak), {"javascript": 1, "scan_incomplete": 1})
+
+    def test_the_shape_is_judged_on_the_text_after_escapes_are_undone(self):
+        # what a viewer reads: a name written with escapes is the name, and bytes written with escapes are the bytes
+        self.assertEqual(self.scan(pdf(stream_object(b"/Filter /DCTDecode", b"#80" * 12 + b"/JS (x)"))), {"pattern_in_binary_data": 1})
+        self.assertEqual(self.scan(pdf(stream_object(b"/Filter /DCTDecode", b"#41" * 12 + b"/JS (x)"))), {"javascript": 1})
+
+    def test_a_match_spelled_with_escapes_is_placed_the_same_way(self):
+        self.assertEqual(self.scan(pdf(stream_object(b"/Filter /DCTDecode", self.HIGH + b"/J#53 (x)"))), {"pattern_in_binary_data": 1})
+        self.assertEqual(self.scan(pdf(stream_object(b"/Filter /DCTDecode", b"a" * 12 + b"/J#53 (x)"))), {"javascript": 1})
+
+    def test_the_counts_of_a_file_with_no_binary_place_are_what_they_were(self):
+        data = pdf(b"1 0 obj << /S /JavaScript /JS (x) /A /Launch >> endobj\n" + stream_object(b"/Length 5", b"/XFA ") + flate(b"/RichMedia /Encrypt"))
+        self.assertEqual(self.scan(data), {"encrypted": 1, "javascript": 2, "launch_action": 1, "xfa_forms": 1, "rich_media": 1})
+
+    def test_pieces_of_binary_data_full_of_matches_cost_a_bounded_time(self):
+        for label, content in (("with the shape of a use", b"/JS " * 500_000), ("without", b"/JS/JS" * 333_333)):
+            data = pdf(b"".join(image(content, typed=b"") for _ in range(8)))
+            started = time.monotonic()
+            found = self.scan(data)
+            took = time.monotonic() - started
+            self.assertLess(took, 12, f"{label}: {took:.1f} s")
+            self.assertEqual(found.get("scan_incomplete"), None, label)
+            self.assertGreater(sum(found.get(k, 0) for k in ("javascript", "pattern_in_binary_data")), 1_000_000, label)
 
 
 class ScanStageTest(ScanCase):

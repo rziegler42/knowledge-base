@@ -41,6 +41,7 @@ KINDS = {
     "xfa_forms": "The PDF contains XFA forms, which can carry scripts.",
     "external_actions": "The PDF can submit forms, import data or open other files.",
     "rich_media": "The PDF contains rich media, which can carry code.",
+    "pattern_in_binary_data": "Bytes inside an image or other binary data look like the name of a script, launch or similar entry. This is usually a coincidence, and it was not read as a viewer would.",
     "large_image_streams": "The PDF contains large images, of which only the first part was checked for code; code after that part would not be found.",
     "scan_incomplete": "Part of the file was not checked: it exceeded a limit of the scan, or is built in a way the scan does not read.",
     "script_elements": "The page contains script elements.",
@@ -567,7 +568,7 @@ def _streams(data, state):
                 return  # no end to this one: the rest is scanned as plain bytes, and said so
             located = (span[0], span[1], data[span[0]:span[1]]) if span[1] - span[0] <= MAX_DICT else None
             pos = stop + 9
-            yield located, data[start:stop]
+            yield located, data[start:stop], start
     except _OverBudget:
         state["incomplete"] = True
 
@@ -601,13 +602,43 @@ def _filter_outside(data, covered):
     return False
 
 
-def _work(piece):
+def _work(piece, picture=False):
     """What reading a decoded piece costs, in units of about three nanoseconds: a unit for each byte, and more for the bytes that make
     the reading slow. Ordinary content costs its length; a piece of nothing but escapes (#41) takes thirty times as long to unescape,
     and one that is all matches takes ten times as long to collect, which a hostile file can use to make the limit on the bytes alone
     allow minutes. The costs were measured on the worst pieces tried (a hash 260 to 400 ns, since an escape may spell a slash; a
-    slash 100 ns), and none took more than 3.8 ns a unit, so the limit is under ten seconds."""
-    return len(piece) + 135 * piece.count(b"#") + 35 * piece.count(b"/")
+    slash 100 ns), and none took more than 3.8 ns a unit, so the limit is under ten seconds. The pixels of a picture are read twice,
+    to place each match (_tally_binary), so a slash in one costs twice as much."""
+    return len(piece) + 135 * piece.count(b"#") + (70 if picture else 35) * piece.count(b"/")
+
+
+# The shape of a use: twelve bytes before a match that are printable or white space (the dictionary around a real name), and a byte after
+# it that can begin its value (white space, a string or a hex string: a digit cannot follow a name that is a match, it would continue it). Pixels and compressed bytes seldom have it; a real action dictionary always does. (The twelve bytes are
+# a fixed-width look-behind, so the pad of newlines in _tally_binary stands for the start of the data.)
+_PAD = b"\n" * 12  # stands in front of the data: the start of it is printable, as the shape asks
+_END = b"\xff"  # and after it: the end of the data is not a byte that begins a value (a name that ends the data has none)
+_PRINTABLE = rb"\t\n\x0c\r\x20-\x7e"
+_BEFORE = re.compile(rb"[" + _PRINTABLE + rb"]{12}")
+_VALUE_START = frozenset(b"\t\n\x0c\r (<")
+
+
+def _tally_binary(counts, binary, haystack):
+    """Add to `counts` the matches in a piece of binary data that have the shape of a use, and to `binary[0]` the others. Nothing is
+    dropped: the two numbers together are what _tally would have counted. The shape is checked on each match, after the plain
+    pattern has found it: a look-behind at the start of a regex makes the engine try every position, about a hundred times as slow.
+    (No two matches overlap: a name has no slash in it, and the end of a pattern looks ahead only. Every pattern begins with a slash
+    and the pad has none, so a match starts at 12 or later and `start - 12` is never negative, which a match position would clamp.)"""
+    padded = _PAD + haystack + _END
+    before = _BEFORE.match
+    for kind, pattern in _PATTERNS.items():
+        shaped = other = 0
+        for m in re.finditer(pattern, padded):
+            if padded[m.end()] in _VALUE_START and before(padded, m.start() - 12):
+                shaped += 1
+            else:
+                other += 1
+        counts[kind] += shaped
+        binary[0] += other
 
 
 def _tally(counts, haystack):
@@ -621,7 +652,7 @@ def scan_pdf(data):
     if b"%PDF-" not in data[:1024]:
         caveats.append(caveat("malformed"))
     counts = dict.fromkeys(_PATTERNS, 0)  # what each pattern matched, in every piece: a decoded piece is counted and dropped
-    _tally(counts, _unescape_names(data))  # the file as it is, which covers every stream that is not compressed
+    binary, spans = [0], []  # matches in binary places without the shape of a use; the raw data of the streams that are binary places
     total, decoded, covered, rows_left, bytes_left = 0, 0, [], [MAX_PREDICTED_ROWS], [MAX_PREDICTED_BYTES]
     reader = {"incomplete": False, "steps": MAX_READ_STEPS, "objects": 0, "unfinished": 0}  # what the forward reader keeps
     started = time.monotonic()
@@ -629,12 +660,13 @@ def scan_pdf(data):
         if time.monotonic() - started > MAX_SECONDS:
             incomplete = True  # out of time: the rest of the streams are not read, and it says so
             break
-        located, blob = found
+        located, blob, start = found
         if located is None:
             incomplete = True  # a stream whose dictionary could not be read, so what filter it uses is unknown
             continue
         covered.append(located[:2])  # the filters named inside this dictionary are accounted for below
         dictionary = _unescape_regular(located[2])
+        picture_shaped = _is_image(dictionary)  # its raw and decoded bytes are pixels, a binary place
         if len(_FILTER_KEY.findall(dictionary)) > 1:
             # the text is read without knowing strings or nested dictionaries, so which /Filter is the stream's own is not known: the
             # first one read could be a decoy that says an image codec, which the scan does not look into. Not guessed at, not skipped.
@@ -653,7 +685,9 @@ def scan_pdf(data):
         if _FILTER_KEY.search(dictionary) and not names:
             incomplete = True  # a filter written in a way this scan does not read
         elif not names or all(n in _IMAGE_FILTERS for n in names):
-            continue  # not compressed, or an image: covered by the plain scan above
+            if names or picture_shaped:
+                spans.append((start, start + len(blob)))  # an image codec's data, or the pixels of an unfiltered image
+            continue  # not compressed, or an image: covered by the scan of the file as it is, below
         elif all(n in _DECODABLE for n in names):
             try:
                 parms = _parms(dictionary, names)
@@ -667,7 +701,7 @@ def scan_pdf(data):
             cap = min(MAX_STREAM_OUT, MAX_TOTAL_OUT - total)
             raws, layers = [], [0]
             out, state = _decode_chain(blob, names, cap, parms, rows_left, raws, bytes_left, layers)
-            total += _work(out) + sum(_work(raw) for raw in raws) + layers[0]
+            total += _work(out, picture_shaped) + sum(_work(raw, picture_shaped) for raw in raws) + layers[0]
             only_deflate_last = (names[-1] in _FLATE_NAMES and sum(n in _FLATE_NAMES for n in names) == 1
                                  and len(_FILTER_KEY.findall(dictionary)) == 1)  # one filter key: a second might be the real list
             picture = (only_deflate_last and not _deflate_header(out) and _is_image(dictionary)
@@ -679,21 +713,36 @@ def scan_pdf(data):
                 large_images += 1
             elif state != "ok" or out[:2] in _ZLIB_MAGIC:  # damaged, cut short, or compressed again inside
                 incomplete = True
-            if out:
-                _tally(counts, _unescape_names(out))
-            # a dictionary is read as text, so a decoy /DecodeParms in a string would make the scan undo a predictor that the viewer
-            # never applies, and garble what it reads: the bytes from before the predictor are read as well
-            for raw in raws:
-                if raw:
-                    _tally(counts, _unescape_names(raw))
+            if picture_shaped or state in ("ok", "limit", "spent"):
+                spans.append((start, start + len(blob)))  # compressed bytes that were decoded, or a picture's: not text to a viewer
+            # what the stream decoded to is read where it sits: pixels are a binary place, any other content (an object stream, a font, a
+            # page) is a text place. A dictionary is read as text, so a decoy /DecodeParms in a string would make the scan undo a
+            # predictor that the viewer never applies, and garble what it reads: the bytes from before the predictor are read as well
+            for piece in ([out] if out else []) + [raw for raw in raws if raw]:
+                if picture_shaped:
+                    _tally_binary(counts, binary, _unescape_names(piece))
+                else:
+                    _tally(counts, _unescape_names(piece))
         else:
             incomplete = True  # a filter this scan does not decode (LZW, run-length, crypt, or one it has not heard of)
+    text, pieces, last = data, [], 0
+    for a, b in spans:  # the file as it is, which covers every stream that is not compressed: the places that are not binary...
+        pieces.append(data[last:a])
+        last = b
+    if spans:
+        text = b"\n".join(pieces + [data[last:]])  # (a newline between the pieces, so nothing is joined into a name)
+    _tally(counts, _unescape_names(text))
+    del text, pieces
+    if spans:  # ...and the binary ones, where only a match with the shape of a use keeps its own name
+        _tally_binary(counts, binary, _unescape_names((_END + _PAD).join(data[a:b] for a, b in spans)))
     incomplete = incomplete or reader["incomplete"]  # what the reader could not account for
     if not incomplete and _filter_outside(data, covered):
         incomplete = True  # a filter is declared somewhere that is not the dictionary of a stream the scan read
     for kind, count in counts.items():
         if count:
             caveats.append(caveat(kind, count))
+    if binary[0]:
+        caveats.append(caveat("pattern_in_binary_data", binary[0]))
     if large_images:
         caveats.append(caveat("large_image_streams", large_images))
     if incomplete:
