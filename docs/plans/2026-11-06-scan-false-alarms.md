@@ -381,7 +381,7 @@ owner approves it again.
 - **Done in A:** all of its steps; the commit adds the generator, its test and this record. Committed as
   a1e41448195adc90aac2459a8ee9e0be18515c9f (not pushed).
 
-### Increment B — The limits that ordinary files pass, and the image rule (implemented, reviewed and security-reviewed; not committed)
+### Increment B — The limits that ordinary files pass, and the image rule (implemented, reviewed and security-reviewed; committed as 1ae23de)
 
 - **Done** in `engine/kb/scan_tool.py` (label 0.0.6, `approvals.SCAN_VERSION`, with its history line): `MAX_STREAMS` 500,000 (was 2,000);
   `MAX_TOTAL_OUT` 2,500,000,000 (was 20,000,000), now a limit on work in the units of `_work`; each decoded piece is counted
@@ -501,7 +501,7 @@ owner approves it again.
 - **Committed** as 1ae23deb37f849ddd0dd98d776dc4f8caf06d656 (not pushed). Increment C is still needed before B is put in the config.
 - **Left for the owner:** whether to open the small plan for the memory of escapes.
 
-### Increment C — Where a match sits decides its name (implemented and reviewed; security review not yet decided; not committed)
+### Increment C — Where a match sits decides its name (implemented, reviewed and security-reviewed; committed as 4b08323)
 
 - **Done** in `engine/kb/scan_tool.py` (label 0.0.7, with its history line): a new kind, `pattern_in_binary_data` ("usually a coincidence,
   and not read as a viewer would"); the reader yields where each stream's data starts; `scan_pdf` collects the raw spans of the streams
@@ -598,5 +598,30 @@ owner approves it again.
   again). Not changed: the reference in the test uses the production pad and end markers (the scan-level tests of `PlacesTest` pin
   those); the 1.0 s timing bound is wall-clock (0.18 s measured, a wide margin); the cost per match in Python was answered by
   re-timing the hostile files above, which did not get slower.
-- **Not done:** the commit.
-- **Left for the owner:** the word to commit C.
+- **Not done in C:** nothing; committed on the owner's word as 4b08323.
+
+### Increment D — Approve the new scan and scan the library again (done; not committed)
+
+- **Provenance:** run on 2026-11-07 on this machine (Python 3.15.0) at commit 4b08323 (B and C together, scan label 0.0.7).
+- **Config:** `describe-tool all` printed `kb-scan` 0.0.7 pinned to `scan_tool.py` with sha256
+  `4e6053061955afe0fc67ec9bbb351e140fe8b7f33fe12fde376bd8ac846ef14d` (the committed file), reading only the Python install folder.
+  After a dry run, the owner said yes and the helper replaced only the `approved_tools` list (`kb-scan` 0.0.5 became 0.0.7; the other
+  three entries were unchanged), keeping a backup copy of the config beside it (mode 600). `python3 -m kb tools`: all four `ok`
+  (before: `kb-scan` said the file had changed since it was approved).
+- **Rescan:** `python3 -m kb reconvert --scan` with one `--book` for each of the eighteen ids, then `python3 -m kb process`: the
+  whole of `process` took 5.7 s (all eighteen books scanned, converted and indexed again).
+- **Comparison** (the current version's caveats, before and after; every book now carries `kb-scan 0.0.7`):
+
+  | Book | Before | After |
+  |---|---|---|
+  | GPT-3 | `javascript 1`, `large_image_streams 9`, `scan_incomplete 1` | `large_image_streams 83`, `pattern_in_binary_data 1` |
+  | CLIP | `scan_incomplete 1` | `pattern_in_binary_data 24` |
+  | PaLM | `javascript 1`, `large_image_streams 4` | `large_image_streams 4`, `pattern_in_binary_data 1` |
+
+  The other fifteen books are identical: Attention (`large_image_streams 3`), the ten web pages (their script, event-handler and
+  hidden-text counts), and Bahdanau, ResNet, BERT, ViT and VGG (none). Nothing says `scan_incomplete` that
+  did not before. None of the three papers shows `javascript`, `launch_action` or `scan_incomplete` now, which is what criterion 1
+  allows; each still carries the weaker `pattern_in_binary_data` (the plan's choice, see C).
+- **Not done:** the commit of this record; the plan's Completed status; a push.
+- **Left for the owner:** the word to commit D, then whether to mark the plan completed, then whether to push (five commits ahead of
+  the remote, six with this one).
