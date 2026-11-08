@@ -22,6 +22,8 @@ index root are: the index root is opened without following a link, the folders a
 made with the exclusive create and mode 600 under a temporary name and put in place with one rename, a file that is a link, a pipe,
 another user's, readable by others or larger than MAX_BYTES is refused, and a text that is not one JSON object with exactly the keys
 below is refused."""
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -43,6 +45,7 @@ _HEADER = ("book_id", "version_id", "conversion", "title", "kind", "limit", "pie
 _ENTRY = ("job", "entry", "values", "record")
 _RECORD = ("model", "registry", "prompt_version", "date", "input_tokens", "output_tokens")
 _CONVERSION = ("generation", "tool", "version")
+BOOK_FOR_NAMES = "01ARZ3NDEKTSV4RRFFQ69G5FAV"   # a run is named like the folder of a journal; the name of a file is not used for it
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
@@ -115,6 +118,10 @@ def _check_entry(e):
         raise bad
 
 
+class Stale(KbError):
+    """A journal that was made for another card than the one being made, or that holds calls the card does not make."""
+
+
 class Journal:
     """The calls made for one card. `save`, if given, is called with the journal each time a call is added, so that the call is kept
     before the next one is made."""
@@ -129,11 +136,14 @@ class Journal:
         if self._save is not None:
             self._save(self)
 
+    def set_save(self, save):
+        self._save = save
+
     def check_header(self, expected):
         """Refuse the journal as stale unless each key of `expected` has the same value in its header."""
         for key, value in expected.items():
             if key not in self.header or self.header[key] != value:
-                raise KbError(f"the saved state of the card is stale: its {key} is not what the card is being made with")
+                raise Stale(f"the saved state of the card is stale: its {key} is not what the card is being made with")
 
 
 def _open_folder(index_root, run, create):
@@ -179,23 +189,11 @@ def _open_folder(index_root, run, create):
         raise
 
 
-def write(index_root, run, book_id, version_id, journal):
-    """Put the journal in its file, whole, replacing an earlier one. Nothing else is left in the folder, and an earlier file is
-    untouched if the write fails."""
-    run, name = _names(run, book_id, version_id)
-    if journal.header["book_id"] != book_id or journal.header["version_id"] != version_id:
-        raise KbError("the journal is not the journal of this book and version")
-    _check_header(journal.header)
-    if len(journal.entries) > MAX_ENTRIES:
-        raise KbError("the saved state of a card holds too many calls")
-    for e in journal.entries:
-        _check_entry(e)
-    try:
-        data = (json.dumps({"format": FORMAT, "header": journal.header, "entries": journal.entries}) + "\n").encode("ascii")
-    except (TypeError, ValueError):
-        raise KbError("the saved state of a card is not plain data") from None
+def _put(index_root, run, name, data):
+    """Put `data` (bytes) in the file `name` of the run's folder, whole, under a temporary name and with one rename; an earlier file is
+    untouched if the write fails, and nothing else is left in the folder."""
     if len(data) > MAX_BYTES:
-        raise KbError("the saved state of a card is larger than the limit")
+        raise KbError("the saved state is larger than the limit")
     root_fd, run_fd = _open_folder(index_root, run, create=True)
     temp = None
     try:
@@ -216,7 +214,7 @@ def write(index_root, run, book_id, version_id, journal):
             os.rename(temp, name, src_dir_fd=run_fd, dst_dir_fd=run_fd)
             temp = None
         except OSError as e:
-            raise KbError(f"the saved state of a card could not be written: {textutil.clean(e.strerror or 'error', 100)}") from None
+            raise KbError(f"the saved state could not be written: {textutil.clean(e.strerror or 'error', 100)}") from None
     finally:
         if temp is not None:
             try:
@@ -225,6 +223,65 @@ def write(index_root, run, book_id, version_id, journal):
                 pass
         os.close(run_fd)
         os.close(root_fd)
+
+
+def _get(index_root, run, name):
+    """The text of the file `name` of the run's folder as a document (one JSON object, no repeated key), or None if there is no such
+    file. Refuses a file that is a link, a pipe, not the user's, readable by others or larger than MAX_BYTES."""
+    opened = _open_folder(index_root, run, create=False)
+    if opened is None:
+        return None
+    root_fd, run_fd = opened
+    try:
+        try:
+            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=run_fd)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise KbError("the saved state is a link, or cannot be opened") from None
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
+                raise KbError("the saved state is not a file of the user that no one else can read or write")
+            if st.st_size > MAX_BYTES:
+                raise KbError("the saved state is larger than the limit")
+            with os.fdopen(fd, "rb") as f:  # opened only for a regular file, so a directory is refused before it is read
+                fd = None
+                data = f.read(MAX_BYTES + 1)
+        except OSError:
+            raise KbError("the saved state cannot be read") from None
+        finally:
+            if fd is not None:
+                os.close(fd)
+    finally:
+        os.close(run_fd)
+        os.close(root_fd)
+    if len(data) > MAX_BYTES:
+        raise KbError("the saved state is larger than the limit")
+    try:
+        doc = _loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        raise KbError("the saved state is not valid JSON") from None
+    if not isinstance(doc, dict):
+        raise KbError("the saved state is not one JSON object")
+    return doc
+
+
+def write(index_root, run, book_id, version_id, journal):
+    """Put the journal in its file, whole, replacing an earlier one."""
+    run, name = _names(run, book_id, version_id)
+    if journal.header["book_id"] != book_id or journal.header["version_id"] != version_id:
+        raise KbError("the journal is not the journal of this book and version")
+    _check_header(journal.header)
+    if len(journal.entries) > MAX_ENTRIES:
+        raise KbError("the saved state of a card holds too many calls")
+    for e in journal.entries:
+        _check_entry(e)
+    try:
+        data = (json.dumps({"format": FORMAT, "header": journal.header, "entries": journal.entries}) + "\n").encode("ascii")
+    except (TypeError, ValueError):
+        raise KbError("the saved state of a card is not plain data") from None
+    _put(index_root, run, name, data)
 
 
 def _loads(data):
@@ -240,34 +297,10 @@ def _loads(data):
 def read(index_root, run, book_id, version_id):
     """The journal in its file, or None if there is no file. Refuses a file that is not as the module describes."""
     run, name = _names(run, book_id, version_id)
-    opened = _open_folder(index_root, run, create=False)
-    if opened is None:
+    doc = _get(index_root, run, name)
+    if doc is None:
         return None
-    root_fd, run_fd = opened
-    try:
-        try:
-            fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=run_fd)
-        except FileNotFoundError:
-            return None
-        except OSError:
-            raise KbError("the saved state of the card is a link, or cannot be opened") from None
-        with os.fdopen(fd, "rb") as f:
-            st = os.fstat(f.fileno())
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
-                raise KbError("the saved state of the card is not a file of the user that no one else can read or write")
-            if st.st_size > MAX_BYTES:
-                raise KbError("the saved state of the card is larger than the limit")
-            data = f.read(MAX_BYTES + 1)
-    finally:
-        os.close(run_fd)
-        os.close(root_fd)
-    if len(data) > MAX_BYTES:
-        raise KbError("the saved state of the card is larger than the limit")
-    try:
-        doc = _loads(data.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError, RecursionError):
-        raise KbError("the saved state of the card is not valid JSON") from None
-    if not isinstance(doc, dict) or set(doc) != {"format", "header", "entries"} or type(doc["format"]) is not int or doc["format"] != FORMAT:
+    if set(doc) != {"format", "header", "entries"} or type(doc["format"]) is not int or doc["format"] != FORMAT:
         raise KbError("the saved state of the card is not of this format")
     _check_header(doc["header"])
     if doc["header"]["book_id"] != book_id or doc["header"]["version_id"] != version_id:
@@ -277,6 +310,105 @@ def read(index_root, run, book_id, version_id):
     for e in doc["entries"]:
         _check_entry(e)
     return Journal(doc["header"], doc["entries"])
+
+
+# ---- the manifest of a run: which books it is for and where each has got to
+
+MANIFEST = "manifest.json"
+LOCK = "queue.lock"
+MAX_ITEMS = 10000
+STATUSES = ("waiting", "done", "failed", "dropped")
+_ITEM = ("book_id", "version_id", "fingerprint", "had", "status", "attempts", "generation", "reason")
+
+
+class Manifest:
+    """A run: when it was planned, whether it asked for new cards of books that have one, how many passes it has made, and its items."""
+
+    def __init__(self, run, created, again, items, passes=0):
+        self.run, self.created, self.again, self.items, self.passes = run, created, again, items, passes
+
+    def document(self):
+        return {"format": FORMAT, "run": self.run, "created": self.created, "again": self.again, "passes": self.passes, "items": self.items}
+
+
+def _check_item(i):
+    bad = KbError("the manifest of a run has an item that is not valid")
+    if not isinstance(i, dict) or set(i) != set(_ITEM):
+        raise bad
+    ids.check_id(i["book_id"])
+    if not isinstance(i["version_id"], str) or not _VERSION_ID.fullmatch(i["version_id"]):
+        raise bad
+    f = i["fingerprint"]
+    if f is not None and not (isinstance(f, dict) and set(f) == set(_CONVERSION) and _count(f["generation"], 10 ** 6)
+                              and all(isinstance(f[k], str) and 0 < len(f[k]) <= 100 for k in ("tool", "version"))):
+        raise bad
+    if not _count(i["had"], 10 ** 6) or i["status"] not in STATUSES or not _count(i["attempts"], 100):
+        raise bad
+    if i["generation"] is not None and not _count(i["generation"], 10 ** 6):
+        raise bad
+    if not isinstance(i["reason"], str) or len(i["reason"]) > 500 or textutil.clean(i["reason"], 500) != i["reason"]:
+        raise bad
+
+
+def write_manifest(index_root, run, manifest):
+    run, _ = _names(run, BOOK_FOR_NAMES, "v1")
+    if manifest.run != run:
+        raise KbError("the manifest is not the manifest of this run")
+    if len(manifest.items) > MAX_ITEMS or not isinstance(manifest.created, str) or len(manifest.created) > 40 \
+            or type(manifest.again) is not bool or not _count(manifest.passes, 1000):
+        raise KbError("the manifest of a run is not valid")
+    for i in manifest.items:
+        _check_item(i)
+    try:
+        data = (json.dumps(manifest.document()) + "\n").encode("ascii")
+    except (TypeError, ValueError):
+        raise KbError("the manifest of a run is not plain data") from None
+    _put(index_root, run, MANIFEST, data)
+
+
+def read_manifest(index_root, run):
+    """The manifest of a run, or None if the run has none. Refuses a file that is not as the module describes."""
+    run, _ = _names(run, BOOK_FOR_NAMES, "v1")
+    doc = _get(index_root, run, MANIFEST)
+    if doc is None:
+        return None
+    if set(doc) != {"format", "run", "created", "again", "passes", "items"} or type(doc["format"]) is not int or doc["format"] != FORMAT \
+            or doc["run"] != run or not isinstance(doc["created"], str) or len(doc["created"]) > 40 or type(doc["again"]) is not bool \
+            or not _count(doc["passes"], 1000) or not isinstance(doc["items"], list) or len(doc["items"]) > MAX_ITEMS:
+        raise KbError("the manifest of the run is not valid")
+    for i in doc["items"]:
+        _check_item(i)
+    return Manifest(run, doc["created"], doc["again"], doc["items"], doc["passes"])
+
+
+@contextlib.contextmanager
+def lock(index_root, run):
+    """Hold the lock of the queue: one run works at a time, whatever its name, since two runs could make a card for the same book twice
+    and would drive two models at once. A second holder, in this or another process, is refused. The lock is released when the holder
+    ends or is killed."""
+    run, _ = _names(run, BOOK_FOR_NAMES, "v1")
+    root_fd, run_fd = _open_folder(index_root, run, create=True)
+    folder_fd = None
+    try:
+        folder_fd = os.open(FOLDER, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+        fd = os.open(LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=folder_fd)
+    except OSError:
+        for each in (folder_fd, run_fd, root_fd):
+            if each is not None:
+                os.close(each)
+        raise KbError("the lock of the queue cannot be opened, or it is a link") from None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise KbError("another run holds the lock of the queue") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        for each in (fd, folder_fd, run_fd, root_fd):
+            os.close(each)
 
 
 def remove(index_root, run, book_id, version_id):

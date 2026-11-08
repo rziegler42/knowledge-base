@@ -622,7 +622,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
                 more = {"status": "refused" if isinstance(e, models.AnswerRefused) else "failed", "reason": textutil.clean(str(e), 300),
                         "fields": {f: {"why": w["why"]} for f, w in wanted.items()}}
     if journal is not None and len(journal.entries) > len(records):
-        raise KbError("the saved state of the card is stale: it holds calls that this card does not make")
+        raise cardstate.Stale("the saved state of the card is stale: it holds calls that this card does not make")
     return {"model": grounded["model"], "grounding": grounded["grounding"], "records": records, "pieces": len(read), "book_pieces": total,
             "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"], "checks": tally, "more": more,
             "notes": {"points": len(found), "verified": sum(1 for n in found.values() if n["verified"])}}
@@ -649,7 +649,7 @@ class CardRefused(KbError):
         self.kept, self.note = kept, note
 
 
-def _keep_aside(store, refusal, book_id, version_id):
+def keep_aside(store, refusal, book_id, version_id):
     """The answer that was refused, kept aside in the index root. A failure to keep it does not hide the refusal."""
     kept, note = None, ""
     try:
@@ -675,14 +675,15 @@ def _report(book_id, version_id, status, reason="", generation=None, made=None, 
             "unpaired": checks["unpaired"] if checks else None, "more": more, "book_pieces": book_pieces}
 
 
-def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
-    """Make and file the card of one version (the current one, if none is named) and return a report of what was done. A book that
-    is not active, or that has a card and `again` is not set, is skipped. A version that is not yet fetched or converted, a missing
-    setting, a failed call or an answer of the wrong shape is a refusal (a KbError), and nothing is filed. A version with no
-    conversion, or with less converted text than the cutoff, gets a card built from its metadata with no model call."""
+def plan_version(store, cfg, book_id, version_id=None, again=False):
+    """What `cards` does for a version, decided: `("skip", report)` for a book that is not active or a version that has a card when
+    `again` is not set; `("metadata", made)` for a version with no conversion or less converted text than the cutoff, whose card is
+    built from the metadata with no model call and is not yet filed; or `("model", loaded, mechanical)` for a version whose card is
+    made with the models (`loaded` is what `convert.load_in_use` gave, `mechanical` the mechanical part of the card). A version that
+    is not yet fetched or converted is a refusal (a KbError)."""
     book = store.read_book(book_id)
     if book.get("state") != "active":
-        return _report(book_id, book.get("current_version"), "skipped", "the book is not active")
+        return "skip", _report(book_id, book.get("current_version"), "skipped", "the book is not active")
     version_id = version_id or book.get("current_version")
     if not version_id:
         raise KbError("the book has no version")
@@ -693,28 +694,46 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
         raise KbError("the version has not been converted yet: run `python3 -m kb process` first")
     existing = card.generations(store, book_id, version_id)
     if existing and not again:
-        return _report(book_id, version_id, "skipped", f"the version already has a card (generation {existing[-1]}); "
-                       "ask again to make another", generation=existing[-1])
+        return "skip", _report(book_id, version_id, "skipped", f"the version already has a card (generation {existing[-1]}); "
+                               "ask again to make another", generation=existing[-1])
     cutoff = min_chars(cfg)
     loaded = convert.load_in_use(store, book_id, version_id) if state["converted"]["status"] == "done" else None
-    notes = checks = more = book_pieces = None
     if loaded is None:
-        made = card.make(store, book_id, version_id)
-    elif len(loaded[1].text) < cutoff:
-        made = card.make(store, book_id, version_id, reasons=[
+        return "metadata", card.make(store, book_id, version_id)
+    if len(loaded[1].text) < cutoff:
+        return "metadata", card.make(store, book_id, version_id, reasons=[
             f"the converted text is shorter than the cutoff of {cutoff} characters, so the card is built from the metadata"])
-    else:
-        mechanical = card.mechanical(store, book_id, version_id)
-        title = mechanical["title"]
-        try:
-            part = make_model_part(cfg, loaded[1], title, launcher=launcher, root=root, kind=mechanical["kind"])
-        except models.AnswerRefused as refusal:
-            raise _keep_aside(store, refusal, book_id, version_id) from None
-        made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
-                         calls=part["calls"], reasons=part["reasons"], grounding=part["grounding"])
-        notes, checks, more, book_pieces = part["notes"], part["checks"], part["more"], part["book_pieces"]
+    return "model", loaded, card.mechanical(store, book_id, version_id)
+
+
+def file_model_card(store, book_id, version_id, part):
+    """File the card made from the model part `part` (what `make_model_part` returns) as the next generation, and return the report."""
+    made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
+                     calls=part["calls"], reasons=part["reasons"], grounding=part["grounding"])
     number = card.file(store, made)
-    return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes, checks=checks, more=more, book_pieces=book_pieces)
+    return _report(book_id, version_id, "carded", generation=number, made=made, notes=part["notes"], checks=part["checks"],
+                   more=part["more"], book_pieces=part["book_pieces"])
+
+
+def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
+    """Make and file the card of one version (the current one, if none is named) and return a report of what was done. A book that
+    is not active, or that has a card and `again` is not set, is skipped. A version that is not yet fetched or converted, a missing
+    setting, a failed call or an answer of the wrong shape is a refusal (a KbError), and nothing is filed. A version with no
+    conversion, or with less converted text than the cutoff, gets a card built from its metadata with no model call."""
+    chosen = plan_version(store, cfg, book_id, version_id, again)
+    if chosen[0] == "skip":
+        return chosen[1]
+    version_id = version_id or store.read_book(book_id).get("current_version")
+    if chosen[0] == "metadata":
+        made = chosen[1]
+        number = card.file(store, made)
+        return _report(book_id, version_id, "carded", generation=number, made=made)
+    _, loaded, mechanical = chosen
+    try:
+        part = make_model_part(cfg, loaded[1], mechanical["title"], launcher=launcher, root=root, kind=mechanical["kind"])
+    except models.AnswerRefused as refusal:
+        raise keep_aside(store, refusal, book_id, version_id) from None
+    return file_model_card(store, book_id, version_id, part)
 
 
 def run(store, cfg, book_ids, again=False, launcher=None, root=None):

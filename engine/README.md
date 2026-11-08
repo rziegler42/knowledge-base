@@ -620,6 +620,54 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   full, the write failed), the report says so in its reason and the refusal stands. Only a refused shape keeps an answer: a failed
   call, a missing setting or a skipped book keeps nothing.
 
+### Cards for many books: a queue that works through the models one at a time
+
+`cards` goes through every model for one book before it starts the next. For many books that loads each model again and again.
+`cards-queue` makes the cards of many books by visiting each model once for all the books that are waiting for it.
+
+```sh
+cd engine
+python3 -m kb cards-queue plan [--book BOOK_ID ...] [--again]
+python3 -m kb cards-queue run RUN [--passes N]
+python3 -m kb cards-queue status RUN
+```
+
+- **`plan`** takes a snapshot: the active books whose version is converted and has no card (with `--again`, those that have one too;
+  with `--book`, only the books named) and writes it as a *run* in the index root (`card-runs/<run>/manifest.json`). It makes no call
+  and sends nothing. It prints the name of the run, the number of books, how many were left out and why, the order of the models by
+  their entries in your config (no server or address), and the calls that can be counted before the answers are known. A book that
+  arrives later is not in the run; the next `plan` has it. Two plans are two runs with their own state.
+- **`run`** works through the run in passes (at most `--passes`, 1 to 10, default 3). A pass visits the models in the order of the
+  stages (the notes, the card, the checks, and, if `card-more` is set, the second round and its checks). At each visit it takes every
+  waiting book as far as the calls of the model it is serving go, using the journal of the book (see "A card in the making can be
+  stopped and taken up again"), and a book that comes to a call for another model waits for that model's visit. The visits are
+  grouped by the server and model your config names for the stages, not by entry: two entries that name the same server and model are
+  one visit, and each call keeps the options of its own entry. So the number of times a model is changed does not depend on the number
+  of books. A model stays loaded between its calls only if the `keep_alive` of its record in the workbench's endpoint file (see
+  "Calling a model") is more than 0; the queue sets none of its own.
+  A card is filed as a new generation as soon as its last call is made, so a run that is stopped leaves the cards already made. A
+  call that fails, an answer that is refused (which is kept aside as `cards` keeps it) and a card that cannot be filed are tried again
+  in the next pass, and the book is reported as failed after one more try; the other books go on. (The second round is an addition: if
+  its call fails or is refused the card is filed without it, as with `cards`, and it is not tried again.) A book is dropped and
+  reported if it is no longer active, if the conversion in use is not the one the plan saw (or has gone, or has less text than the
+  cutoff now), if the book has a newer version than the plan saw, if its saved state cannot be read (it is left as it is, for you to look
+  at), or if its saved state was made with other settings (another model, a prompt of another version, another number of pieces); to
+  make its card, plan again. An error the program did not expect in one book fails that book and shows only the kind of error, and
+  the other books go on; a failure to keep the manifest of the run stops the run. `run` exits with 1 when a book failed. A book whose card was filed after the plan (a run that was stopped as the card was filed, or a
+  `cards` run) is marked done and no second card is made. At the end the catalog is rebuilt if a card was made now; if none was, but
+  the run has cards from before, the report says so in `catalog_note`. The report has the counts (`done`, `failed`, `dropped`,
+  `waiting`), each book with its status, generation, reason (cut at 200 characters) and number of tries, the passes made and the result
+  of rebuilding the catalog. A small book gets a card from its metadata with no call, as with `cards`. A run holds at most 10,000 books.
+- **A run can be stopped at any point** (an interrupt, a crash, the machine going off) **and run again**: the saved calls are not
+  made again. One run works at a time, whatever its name: `run` takes the lock `card-runs/queue.lock`, a second `run` of any run is
+  refused, and the lock is released when the holder ends or is killed. A run that is finished does nothing when run again. Nothing
+  deletes a run's folder; it holds only disposable state (the manifest and, for a book that failed, its journal) and can be deleted
+  whenever you like. A `cards` run at the same time is not stopped by the lock; the card it files is noticed by the queue.
+- **`status`** prints the counts and, for each book, its status, and for the waiting books how far their calls have got (not started,
+  notes, card, check, round, round check). It prints no text of any book.
+- Book text, notes and items go to the models your `tasks` setting names, as with `cards`, and only when you start a `run`. No option
+  names a model, a server or an address.
+
 ### Searching the cards
 
 ```sh

@@ -270,5 +270,106 @@ class ContentTest(Base):
             self.assertIn("stale", str(cm.exception))
 
 
+ITEM = {"book_id": BOOK, "version_id": "v1", "fingerprint": {"generation": 1, "tool": "trafilatura", "version": "2.3.1-kb1"}, "had": 0,
+        "status": "waiting", "attempts": 0, "generation": None, "reason": ""}
+
+
+class ManifestTest(Base):
+    def manifest(self, *items):
+        return cardstate.Manifest(RUN, "2026-11-08T10:00:00Z", False, [dict(i) for i in (items or (ITEM,))])
+
+    def folder(self):
+        return os.path.join(self.root, cardstate.FOLDER, RUN)
+
+    def test_a_manifest_is_written_and_read_back_the_same(self):
+        cardstate.write_manifest(self.root, RUN, self.manifest(ITEM, dict(ITEM, status="done", generation=2, had=1, attempts=1, reason="r")))
+        back = cardstate.read_manifest(self.root, RUN)
+        self.assertEqual((back.run, back.created, back.again, back.passes), (RUN, "2026-11-08T10:00:00Z", False, 0))
+        self.assertEqual(back.items, [ITEM, dict(ITEM, status="done", generation=2, had=1, attempts=1, reason="r")])
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.folder(), "manifest.json")).st_mode), 0o600)
+
+    def test_a_run_with_no_manifest_reads_as_none_and_a_bad_name_is_refused(self):
+        self.assertIsNone(cardstate.read_manifest(self.root, RUN))
+        for run in ("", "Run", "../x", "a/b", "a" * 41):
+            with self.subTest(run=run), self.assertRaises(KbError):
+                cardstate.read_manifest(self.root, run)
+
+    def test_an_item_that_is_not_valid_is_refused_when_writing_and_when_reading(self):
+        cases = {"an unknown status": lambda i: i.update(status="started"), "an extra key": lambda i: i.update(extra=1),
+                 "a missing key": lambda i: i.pop("had"), "a book that is not an id": lambda i: i.update(book_id="x"),
+                 "a version that is not a version": lambda i: i.update(version_id="1"), "attempts that are negative": lambda i: i.update(attempts=-1),
+                 "attempts that are true": lambda i: i.update(attempts=True), "a generation that is a text": lambda i: i.update(generation="1"),
+                 "a fingerprint that is a text": lambda i: i.update(fingerprint="c"), "a reason with a control character": lambda i: i.update(reason="a\x1bb"),
+                 "a reason that is too long": lambda i: i.update(reason="r" * 501)}
+        for label, change in cases.items():
+            item = dict(ITEM, fingerprint=dict(ITEM["fingerprint"]))
+            change(item)
+            with self.subTest(label):
+                with self.assertRaises(KbError):
+                    cardstate.write_manifest(self.root, RUN, self.manifest(item))
+                doc = {"format": 1, "run": RUN, "created": "2026-11-08T10:00:00Z", "again": False, "passes": 0, "items": [item]}
+                os.makedirs(self.folder(), exist_ok=True)
+                os.chmod(os.path.join(self.root, cardstate.FOLDER), 0o700)
+                os.chmod(self.folder(), 0o700)
+                with open(os.path.join(self.folder(), "manifest.json"), "w") as f:
+                    json.dump(doc, f)
+                os.chmod(os.path.join(self.folder(), "manifest.json"), 0o600)
+                with self.assertRaises(KbError):
+                    cardstate.read_manifest(self.root, RUN)
+
+    def test_a_manifest_whose_run_is_not_the_run_of_its_folder_is_refused(self):
+        cardstate.write_manifest(self.root, RUN, self.manifest())
+        path = os.path.join(self.folder(), "manifest.json")
+        with open(path) as f:
+            doc = json.load(f)
+        doc["run"] = "other-run"
+        with open(path, "w") as f:
+            json.dump(doc, f)
+        with self.assertRaises(KbError):
+            cardstate.read_manifest(self.root, RUN)
+
+    def test_too_many_items_are_refused(self):
+        with self.assertRaises(KbError):
+            cardstate.write_manifest(self.root, RUN, self.manifest(*([ITEM] * (cardstate.MAX_ITEMS + 1))))
+
+
+class LockTest(Base):
+    def test_a_second_holder_is_refused_while_the_first_holds_the_lock_and_may_take_it_after(self):
+        with cardstate.lock(self.root, RUN):
+            with self.assertRaises(KbError) as cm:
+                with cardstate.lock(self.root, RUN):
+                    self.fail("the second holder got the lock")
+            self.assertIn("another run", str(cm.exception))
+        with cardstate.lock(self.root, RUN):
+            pass
+
+    def test_one_queue_runs_at_a_time_so_a_run_of_another_name_is_refused_too(self):
+        with cardstate.lock(self.root, RUN):
+            with self.assertRaises(KbError) as cm:
+                with cardstate.lock(self.root, "run-2"):
+                    self.fail("the second holder got the lock")
+            self.assertIn("another run", str(cm.exception))
+        with cardstate.lock(self.root, "run-2"):
+            pass
+
+    def test_a_lock_that_is_a_link_is_refused(self):
+        folder = os.path.join(self.root, cardstate.FOLDER)
+        os.mkdir(folder, 0o700)
+        os.chmod(folder, 0o700)
+        other = os.path.join(self.base, "other.lock")
+        open(other, "w").close()
+        os.symlink(other, os.path.join(folder, cardstate.LOCK))
+        with self.assertRaises(KbError):
+            with cardstate.lock(self.root, RUN):
+                pass
+
+
+class StaleTest(Base):
+    def test_a_journal_that_is_stale_is_refused_with_a_kind_of_error_of_its_own(self):
+        with self.assertRaises(cardstate.Stale):
+            self.journal().check_header({"title": "Another"})
+        self.assertTrue(issubclass(cardstate.Stale, KbError))
+
+
 if __name__ == "__main__":
     unittest.main()

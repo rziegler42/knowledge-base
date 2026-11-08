@@ -131,6 +131,14 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   card made again from a journal is the card it would have been. A journal made for another card, another setting, another model or
   another version of a prompt is refused as stale, and a stop is possible only before a call for a model that the caller is not
   serving, so that work can be done one model at a time.
+- **[proposed]** The cards of many books can be made in one run that works through the models one at a time. A run is planned first, as
+  a snapshot of the books that need a card, and sends nothing; a book that arrives later is not in it. It then visits each model once
+  for all the books that are waiting for it, so that a model is loaded as few times as the work allows whatever the number of books,
+  grouping by the server and model the owner's config names and not by the registry entry. A card is filed as soon as its last call is
+  made. A call that fails, or a card that cannot be filed, is tried once more and then reported; a book whose conversion changed since
+  the plan, whose saved state was made with other settings, or that is no longer active, is dropped and reported. A run can be stopped
+  at any point and run again without a saved call being made twice, and only one run works at a time, whatever its name. The run starts
+  only when the owner starts it.
 - **[proposed]** A list of topics or key ideas that may have been cut off, or that lost most of its items, is offered one more
   round by a second model, named in the owner's config as the task `card-more`, which is optional. The round is offered when the
   card model gave as many items as were asked, or when the checks kept fewer than half of the items it gave and dropped at least two,

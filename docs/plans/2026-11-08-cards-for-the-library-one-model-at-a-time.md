@@ -299,7 +299,7 @@ since no other module reads the state of a run.
 - Provenance: measured on 2026-11-08 at commit `211014d` on the owner's server with the local models `gemma4:12b`, `gpt-oss:20b`,
   `phi4:latest` and `qwen3:14b` through the owner's bridge; the log is held outside the repository.
 
-### Increment C — Make a card in stages that can be saved and resumed (built; not committed)
+### Increment C — Make a card in stages that can be saved and resumed (committed as 87fd8a2)
 
 - **A deviation from the steps as approved, which the owner accepted on 2026-11-08 on my recommendation.** The plan's steps 2 and 3 say to split `make_model_part` into
   stage functions that read a state and return changes to it, with a state that holds the pieces, the notes, the reply, the verdicts,
@@ -337,3 +337,71 @@ since no other module reads the state of a run.
   `except Exception` that would report a `Pause` as a failure, so the queue must call `make_model_part` itself or catch `Pause`
   first; the queue is also where the journal's trust statement and the lock belong in the security review that is offered to the owner.
 - Next: increment D.
+
+### Increment D — Plan and run a queue over the library (built; not committed)
+
+- Built: `engine/kb/cardqueue.py` and the command `cards-queue plan | run | status` (no option names a model, a server, an address or a
+  path). `plan` makes a snapshot of the active books whose version is converted and has no card (with `--again` those with one too; with
+  `--book` only the books named, each once), writes it as a run (`card-runs/<run>/manifest.json`) and sends nothing; a book that
+  arrives later is not in it. `run` works in passes (at most 1 to 10, default 3); a pass visits the models in the order of the stages, one
+  visit for each run of stages on one server and model (the grouping is by the pair the config names, not by the entry, and each call keeps
+  its own entry's options), and at each visit takes every waiting book as far as the models served go, through `make_model_part` with
+  the book's journal and `allow` (increment C). A card is filed as a new generation as soon as its last call is made. A call that fails,
+  an answer that is refused (kept aside as `cards` keeps it) and a card that cannot be filed are tried again in the next pass and then
+  reported as failed; a book that failed in a pass is not tried again in the same pass. A book is dropped and reported if it is no longer
+  active, if its conversion is not the one the plan saw (or has gone, or is now below the cutoff), or if its saved state is stale or wrong.
+  A card filed after the plan (a stop between filing and saving the manifest, or a `cards` run) marks the book done and no second card is
+  made. One run works at a time, whatever its name (`card-runs/queue.lock`, released when the holder ends or is killed). The catalog is
+  rebuilt if a card was made now, and the report says in `catalog_note` when it was not and the run has cards from before. `status`
+  prints the counts and how far the waiting books have got, with no book text, and one unreadable journal does not hide the rest. In
+  `cardmake.py`, `make_for_version` was split into `plan_version` and `file_model_card` (all its tests unchanged) and `keep_aside` made
+  public; in `cardstate.py` the manifest, the lock and `Stale`; the engine README and the card spec.
+- Verification as run: `python3 -W error::ResourceWarning -m unittest engine.tests.test_cardmake engine.tests.test_card
+  engine.tests.test_cardstate engine.tests.test_cardqueue engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample
+  engine.tests.test_setup` gave 637 tests, OK, the existing tests unchanged; `wb run code-work check` found no problems. The tests were
+  written first and failed for the right reason. With a fake bridge that answers by job, the number of changes from one model to another
+  is the same for 2 books and for 6 (two: the notes, then the cards, then the checks), a run stopped after any number of calls and run
+  again repeats none and gives the same cards, and a run of three books with one that always fails makes two and reports the third as
+  failed with its reason. Deliberate breaks, each from a green baseline: 34 conditions of the queue and its state, all caught in the end;
+  the first round of breaks showed 11 gaps in the tests (the grouping was only tested through the physical changes of model, which are
+  the same with and without grouping; the turns, the retry on a failed call, a stale journal being dropped, the cap on passes, the
+  lock and the manifest checks had no test of their own), which were closed with tests. Not run: any live run with real models
+  (increment E), the full engine suite.
+- Review: the `reviewer` agent, round 1, one blocking finding and nine others. Applied: an error while filing a card (a card that is too
+  large, no free generation, a failed write) escaped `_serve` and ended the run, and a rerun reached the same book and ended the same
+  way; it is now a failure of that book, tried once more and reported, with a test for the card of a model and one for a card from
+  the metadata; two runs of different names could work on the same book at the same time and file two cards, so the lock is now of the
+  queue and not of the run, with tests; a book that had a conversion at the plan and now gets a metadata card was filed and reported as
+  done, it is now dropped; the README and the spec now say that a changed setting drops a book's saved state; `plan` counts the calls
+  that can be counted for the books that need the models only, names each book once, classifies "has a card" without matching text,
+  and loads each conversion once; the reasons in the manifest are cut at 200 characters and a run holds at most 10,000 books, so the
+  manifest cannot reach its size limit; `status` survives a journal it cannot read; the report says when the catalog was not rebuilt.
+  Not changed, with reasons: the second round is not tried again if it fails (as with `cards`; the README says so).
+- **Security review** (the owner asked for it on 2026-11-08; the `security-reviewer` agent, on a copy of the repository with a fake
+  launcher and a temporary index root, 29 tool runs, nothing of the owner's config or library read). No Critical or High finding.
+  - *Medium: one unreadable journal stops the whole queue.* A journal that was corrupt, in an old format, a directory, a pipe, or too
+    large made `run` raise out of `_serve`, so every book after it stayed waiting and every rerun failed the same way. Fixed: the
+    journal is read inside the handling of the book, a journal that cannot be read drops that book (and is left in place for the owner),
+    `_get` checks that a file is a regular file before it opens it for reading and closes its descriptor on every path, and tests cover
+    a corrupt file, a directory and a pipe in place of a journal.
+  - *Low: exceptions that are not a `KbError` escaped `_serve`.* Fixed: `run` catches any exception per book, fails that book (tried
+    once more, then reported) and shows only the kind of error, not its text, which may hold words of a book or a model; a failure to
+    keep the manifest (`ManifestFault`) still stops the run.
+  - *Low: a manifest or a journal that can be written can be bent.* Accepted, and said in the README: whoever can write the private
+    folder can make the program send the text of any existing book to the owner's models when the owner runs, forge what a check said
+    for an item (the cited note must still share words with it and its quote must occur in the book), put any text that a reply could
+    carry into a card, forge the record of which model made it, and lower `had` to cause a second card. They cannot write or delete
+    anything outside `card-runs` and new card generations, cannot make a card that `card.make` refuses, and cannot name another
+    book or version through a journal. The folder is private to the user, so the writer already has the owner's identity; if the
+    library were more protected than the index root, this would be an escalation.
+  - *Informational, taken:* a book that gains a newer version after the plan is dropped; `run` exits with 1 when a book failed; a run
+    name is checked against an existing manifest; the unexpected-error text is the kind only. *Not taken:* printing the books before a
+    run; the cost of rewriting the manifest at each status change (at most 10,000 items, about 2.5 MB); the message for a lock that is
+    a pipe, which fails closed.
+  - Disclosure: the reviewer ran three old timing scripts that were already in the scratch folder (benchmarks of the PDF scan from
+    earlier in the session) before noticing they were not its own; they touch nothing of the library.
+  - Limits: macOS only; files of another user and concurrent processes beyond a held lock were not tested; no real model server.
+- Verification after the review: the same seven test modules plus `test_cardqueue` gave 644 tests, OK; `wb run code-work check` found
+  no problems; the deliberate breaks of the queue and its state are 41 conditions, all caught except two equivalent edits (a redundant
+  check in `plan`, and a directory read as a journal that the read error refuses anyway).
+- Next: the owner's word to commit increment D; then increment E, the live run over the library.

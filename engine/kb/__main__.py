@@ -5,6 +5,7 @@ import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
+from . import cardqueue
 from . import cardsample
 from .store import Store
 
@@ -70,6 +71,19 @@ def main(argv=None):
     cs.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", required=True,
                     help="a book to make a card for (repeat for more; there is no way to cover the whole library)")
     cs.add_argument("--again", action="store_true", help="make another card for a book that has one, as a new generation")
+    cq = sub.add_parser("cards-queue", help="make the cards of many books by working through the models one at a time: plan a run (a "
+                                            "snapshot of the books that need a card; nothing is sent), run it, and see where it has got "
+                                            "to; book text goes to the models the tasks setting names; no model, server or address is an "
+                                            "argument")
+    cqs = cq.add_subparsers(dest="action", required=True)
+    cqp = cqs.add_parser("plan", help="plan a run for the active, converted books that have no card; sends nothing")
+    cqp.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", help="limit the plan to this book (repeat for more)")
+    cqp.add_argument("--again", action="store_true", help="include books that have a card, to make another as a new generation")
+    cqr = cqs.add_parser("run", help="run a planned run until nothing is waiting or the passes are made; it can be stopped and run again")
+    cqr.add_argument("run", help="the name of the run that `plan` printed")
+    cqr.add_argument("--passes", type=int, default=cardqueue.PASS_CAP, help=f"at most this many passes (1 to 10, default {cardqueue.PASS_CAP})")
+    cqt = cqs.add_parser("status", help="where each book of a run has got to; no book text")
+    cqt.add_argument("run", help="the name of the run")
     sw = sub.add_parser("card-show", help="the card of a book, with its text between the untrusted-text markers")
     sw.add_argument("book_id")
     sw.add_argument("--version", help="the version (default: the book's current version)")
@@ -119,6 +133,20 @@ def main(argv=None):
             return 0
         if args.command == "trial":
             print(json.dumps(trial.run(Store.open(write=False), args.corpus, args.report, replace=args.replace), indent=1))
+            return 0
+        if args.command == "cards-queue":
+            cfg = config.load()
+            store = Store.open() if args.action != "status" else Store.open(write=False)
+            if args.action == "plan":
+                out = cardqueue.plan(store, cfg, book_ids=args.books, again=args.again)
+            elif args.action == "run":
+                out = cardqueue.run(store, cfg, args.run, passes=args.passes)
+            else:
+                out = cardqueue.status(store, args.run)
+            print(json.dumps(out, indent=1))
+            if args.action == "run" and out["counts"]["failed"]:
+                print(f"{out['counts']['failed']} book could not be carded", file=sys.stderr)
+                return 1
             return 0
         if args.command == "card-index":
             counts = catalog.rebuild(Store.open())
