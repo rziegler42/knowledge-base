@@ -169,6 +169,29 @@ class PiecesTest(unittest.TestCase):
         self.assertIsNotNone(why)
 
 
+    def test_the_number_of_pieces_read_can_be_set_and_the_reason_names_both_numbers(self):
+        pieces = [f"piece {i}" for i in range(25)]
+        chosen, why = cardmake.sample(pieces, 20)
+        self.assertEqual(len(chosen), 20)
+        self.assertEqual((chosen[0], chosen[-1]), (pieces[0], pieces[-1]))
+        self.assertIn("read 20 of 25 pieces", why)
+        self.assertEqual(cardmake.sample(pieces, 25), (pieces, None))
+        self.assertEqual(cardmake.sample(pieces, 30), (pieces, None))  # a limit above the number of pieces reads them all
+        self.assertEqual(cardmake.sample(pieces, 2)[0], [pieces[0], pieces[-1]])
+        self.assertEqual(cardmake.sample(pieces, 1)[0], [pieces[0]])
+
+    def test_the_setting_is_a_whole_number_from_one_to_the_largest_with_twelve_as_the_default(self):
+        self.assertEqual(cardmake.pieces_limit({}), 12)
+        self.assertEqual(cardmake.MAX_PIECES, 12)
+        for good in (1, 2, 12, 20):
+            self.assertEqual(cardmake.pieces_limit({"card_pieces": good}), good)
+        self.assertEqual(cardmake.MAX_CARD_PIECES, 20)
+        for bad in (0, -1, 21, 12.0, 1.5, "12", True, None, [12], 10 ** 12):
+            with self.subTest(bad=bad), self.assertRaises(KbError) as cm:
+                cardmake.pieces_limit({"card_pieces": bad})
+            self.assertIn("card_pieces", str(cm.exception))
+
+
 class OutlineTest(unittest.TestCase):
     def test_the_headings_are_listed_by_level(self):
         out = cardmake.outline(conversion(heading("One"), block("text"), heading("Two", 2), heading("Three")))
@@ -1030,6 +1053,45 @@ class SecondRoundTest(Base):
         self.assertNotIn("added", out["grounding"])
 
 
+class PieceCapTest(Base):
+    """A long book of fourteen pieces, each one block of just under a piece, and a card whose items all say they are inferences."""
+
+    TEXTS = [f"piece {i} " + "word " * 3990 for i in range(14)]
+
+    def make(self, cfg, read):
+        self.script(*[reply(NOTES)] * read, reply(CARD))  # the notes of the pieces read, then the card
+        return self.run_make(conversion(*[block(x) for x in self.TEXTS]), cfg=cfg)
+
+    def test_by_default_twelve_of_fourteen_pieces_are_read_and_the_card_says_so(self):
+        out = self.make(config(), 12)
+        self.assertEqual((out["pieces"], out["book_pieces"], out["calls"]), (12, 14, 13))
+        self.assertIn("read 12 of 14 pieces", " ".join(out["reasons"]))
+
+    def test_a_larger_setting_reads_every_piece_and_the_card_is_not_partial_for_it(self):
+        out = self.make(dict(config(), card_pieces=14), 14)
+        self.assertEqual((out["pieces"], out["book_pieces"], out["calls"]), (14, 14, 15))
+        self.assertNotIn("read", " ".join(out["reasons"]))
+        self.assertEqual(sum(1 for _, p in self.calls() if "piece 13 word" in p), 1)  # the last piece went to a notes call
+
+    def test_a_smaller_setting_reads_fewer_pieces_spread_over_the_book(self):
+        out = self.make(dict(config(), card_pieces=5), 5)
+        self.assertEqual((out["pieces"], out["book_pieces"]), (5, 14))
+        self.assertIn("read 5 of 14 pieces", " ".join(out["reasons"]))
+        notes_prompts = [p for _, p in self.calls()[:5]]
+        self.assertTrue(any("piece 0 word" in p for p in notes_prompts) and any("piece 13 word" in p for p in notes_prompts))
+
+    def test_a_wrong_setting_is_refused_before_any_call(self):
+        self.script(reply(NOTES))
+        message = self.refused(conversion(*[block(x) for x in self.TEXTS]), cfg=dict(config(), card_pieces=0))
+        self.assertIn("card_pieces", message)
+        self.assertEqual(self.calls(), [])
+
+    def test_the_report_names_the_pieces_read_and_the_pieces_the_book_has(self):
+        self.assertIn("book_pieces", cardmake._report("b", "v1", "carded", made={"partial": False, "made": {"pieces": 3, "calls": 4, "records": []}},
+                                                       book_pieces=14))
+        self.assertEqual(cardmake._report("b", "v1", "skipped")["book_pieces"], None)
+
+
 class KindWordTest(unittest.TestCase):
     def test_the_prompt_uses_the_word_for_the_kind_of_source(self):
         for kind, word in (("preprint", "paper"), ("paper", "paper"), ("web page", "page"), ("book", "book"), ("something else", "book")):
@@ -1225,6 +1287,25 @@ class JoinTest(LibraryCase):
         self.assertEqual([r["task"] for r in filed["made"]["records"]],
                          ["card-notes", "card", "card-check", "card-check", "card-more", "card-check"])
         self.assertNotIn("more topics", json.dumps(report))  # the report holds no prompt
+
+    def test_the_setting_for_the_pieces_read_reaches_the_card_and_the_report(self):
+        blocks = [block(f"piece {i} " + "word " * 3990) for i in range(14)]
+        book, version = self.converted_book(blocks=blocks)
+        self.script(*[reply(NOTES)] * 12, reply(CARD))
+        (report,) = self.run_cards(book)
+        self.assertEqual((report["pieces"], report["book_pieces"], report["partial"]), (12, 14, True))
+        self.assertIn("read 12 of 14 pieces", " ".join(card.read(self.store, book, version)[1]["partial_reasons"]))
+        os.remove(os.path.join(self.fake, "n"))
+        self.set_config(card_pieces=14)
+        self.script(*[reply(NOTES)] * 14, reply(CARD))
+        (report,) = self.run_cards(book, again=True)
+        self.assertEqual((report["pieces"], report["book_pieces"], report["partial"], report["calls"]), (14, 14, False, 15))
+        number, filed = card.read(self.store, book, version)
+        self.assertEqual((number, filed["made"]["pieces"], len(filed["made"]["records"])), (2, 14, 15))
+        self.set_config(card_pieces=0)
+        (failed,) = self.run_cards(book, again=True)
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("card_pieces", failed["reason"])
 
     def test_a_card_from_the_metadata_alone_has_no_points(self):
         book, _ = self.converted_book(state="failed")
@@ -1584,6 +1665,16 @@ class CommandTest(LibraryCase):
         for number, servers in ((0, ("srv-n", "m-notes")), (1, ("srv-c", "m-card"))):  # the notes of the first book, then its card
             args = self.calls()[number][0]
             self.assertEqual((args[args.index("--server") + 1], args[args.index("--model") + 1]), servers)
+
+    def test_cards_refuses_a_wrong_number_of_pieces_before_any_work(self):
+        book, _ = self.converted_book()
+        for bad in (0, 21, "12", True):
+            with self.subTest(bad=bad):
+                self.set_config(card_pieces=bad)
+                r = self.kb("cards", "--book", book)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn("card_pieces", r.stderr)
+                self.assertEqual(self.calls(), [])
 
     def test_cards_refuses_an_unknown_book_before_any_work(self):
         book, _ = self.converted_book()

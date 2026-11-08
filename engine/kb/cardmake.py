@@ -18,7 +18,9 @@ import unicodedata
 from . import KbError, card, convert, models, quotes, refused, stages, textutil
 
 PIECE_BYTES = 20_000     # a piece of the book, in bytes: with the rules and the other sections it fits a window of about 32 KB
-MAX_PIECES = 12
+MAX_PIECES = 12           # the number of pieces read when the config does not say (`card_pieces`)
+MAX_CARD_PIECES = 20     # the largest number the config may name: at 20, the notes in the card prompt are about 32 KB at the most, which fits
+# the window of the model for the card with the rules and the outline; a card then needs at most 20 notes, 1 card call, 4 checks, a round and 2 checks
 MAX_OUTLINE = 2500       # characters of the outline of headings
 MAX_HEADING = 120        # characters of one heading in the outline
 NOTE_ITEMS = 6           # points in the note of one piece
@@ -182,14 +184,23 @@ def pieces(conversion):
     return out
 
 
-def sample(found):
-    """`(pieces to read, reason or None)`: all of them if there are at most MAX_PIECES, otherwise MAX_PIECES evenly spaced ones,
-    always the first and the last, and the reason that the card may miss parts of the book."""
+def pieces_limit(cfg):
+    """The number of pieces of a book that the note stage reads, from the config (`card_pieces`, a whole number from 1 to
+    MAX_CARD_PIECES), or MAX_PIECES when it is not set."""
+    value = cfg.get("card_pieces", MAX_PIECES)
+    if type(value) is not int or not 1 <= value <= MAX_CARD_PIECES:
+        raise KbError(f"card_pieces in the config is a whole number of pieces from 1 to {MAX_CARD_PIECES}")
+    return value
+
+
+def sample(found, limit=MAX_PIECES):
+    """`(pieces to read, reason or None)`: all of them if there are at most `limit`, otherwise `limit` evenly spaced ones, always the
+    first and, when more than one is read, the last, and the reason that the card may miss parts of the book."""
     count = len(found)
-    if count <= MAX_PIECES:
+    if count <= limit:
         return found, None
-    chosen = [found[round(i * (count - 1) / (MAX_PIECES - 1))] for i in range(MAX_PIECES)]
-    return chosen, f"read {MAX_PIECES} of {count} pieces, evenly spaced, so the card may miss parts of the book"
+    chosen = [found[0]] if limit == 1 else [found[round(i * (count - 1) / (limit - 1))] for i in range(limit)]
+    return chosen, f"read {limit} of {count} pieces, evenly spaced, so the card may miss parts of the book"
 
 
 def outline(conversion):
@@ -417,8 +428,10 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
     piece is also given the text. The quotes are checked and then dropped: only the point and whether it is verified go on. Nothing is filed. The model of each job is the
     one the config sets for it, found before the first call, so a missing setting stops the card before anything is sent. A call
     that fails, or an answer of the wrong shape, stops the card."""
+    limit = pieces_limit(cfg)
     found = pieces(conversion)
-    read, why = sample(found)
+    total = len(found)
+    read, why = sample(found, limit)
     card_model = models.choose(cfg, "card")[0]
     notes_model = models.choose(cfg, "card-notes")[0]
     check_model = models.choose(cfg, "card-check")[0]
@@ -518,7 +531,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
             except KbError as e:  # the card stays as the first round made it; the round is an addition and may fail alone
                 more = {"status": "refused" if isinstance(e, models.AnswerRefused) else "failed", "reason": textutil.clean(str(e), 300),
                         "fields": {f: {"why": w["why"]} for f, w in wanted.items()}}
-    return {"model": grounded["model"], "grounding": grounded["grounding"], "records": records, "pieces": len(read),
+    return {"model": grounded["model"], "grounding": grounded["grounding"], "records": records, "pieces": len(read), "book_pieces": total,
             "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"], "checks": tally, "more": more,
             "notes": {"points": len(found), "verified": sum(1 for n in found.values() if n["verified"])}}
 
@@ -555,7 +568,7 @@ def _keep_aside(store, refusal, book_id, version_id):
     return CardRefused(str(refusal), kept, note)
 
 
-def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None, checks=None, more=None):
+def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None, checks=None, more=None, book_pieces=None):
     used = []
     for r in (made or {}).get("made", {}).get("records", []):
         item = {"task": r["task"], "registry": r["registry"], "model": r["model"]}
@@ -567,7 +580,7 @@ def _report(book_id, version_id, status, reason="", generation=None, made=None, 
             "points": notes["points"] if notes else None, "verified": notes["verified"] if notes else None,
             "checked": checks["checked"] if checks else None, "supported": checks["supports"] if checks else None,
             "partly": checks["partly"] if checks else None, "no": checks["no"] if checks else None,
-            "unpaired": checks["unpaired"] if checks else None, "more": more}
+            "unpaired": checks["unpaired"] if checks else None, "more": more, "book_pieces": book_pieces}
 
 
 def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
@@ -592,7 +605,7 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
                        "ask again to make another", generation=existing[-1])
     cutoff = min_chars(cfg)
     loaded = convert.load_in_use(store, book_id, version_id) if state["converted"]["status"] == "done" else None
-    notes = checks = more = None
+    notes = checks = more = book_pieces = None
     if loaded is None:
         made = card.make(store, book_id, version_id)
     elif len(loaded[1].text) < cutoff:
@@ -607,9 +620,9 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
             raise _keep_aside(store, refusal, book_id, version_id) from None
         made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
                          calls=part["calls"], reasons=part["reasons"], grounding=part["grounding"])
-        notes, checks, more = part["notes"], part["checks"], part["more"]
+        notes, checks, more, book_pieces = part["notes"], part["checks"], part["more"], part["book_pieces"]
     number = card.file(store, made)
-    return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes, checks=checks, more=more)
+    return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes, checks=checks, more=more, book_pieces=book_pieces)
 
 
 def run(store, cfg, book_ids, again=False, launcher=None, root=None):

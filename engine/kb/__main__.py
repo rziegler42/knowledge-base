@@ -135,6 +135,7 @@ def main(argv=None):
             cfg = config.load()
             for task in models.REQUIRED_TASKS:  # model work on and a model set for each task that is needed, before any book is touched
                 models.choose(cfg, task)
+            cardmake.pieces_limit(cfg)  # and the number of pieces to read, if the config sets one
             reports = cardmake.run(Store.open(), cfg, args.books, again=args.again)
             for report in reports:
                 print(json.dumps(report))

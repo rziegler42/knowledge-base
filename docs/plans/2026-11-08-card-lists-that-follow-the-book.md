@@ -223,6 +223,8 @@ reads what changed.
 - Rejected: none.
 - Left for the owner: whether to ask for round 3 before approving (the plan was approved after round 2).
 - Increment A: reviewed by the `reviewer` agent (see the Result): no blocking findings, two applied, two not changed with reasons.
+- Increment B: reviewed by the `reviewer` agent (see the Result): no blocking findings, three applied (the largest value lowered from
+  30 to 20 for the size of the card prompt, an up-front check in `cards`, a wording fix), one not changed with its reason.
 
 ## Deferred work
 
@@ -233,7 +235,7 @@ reads what changed.
 
 ## Result
 
-### Increment A — A second round for lists that were cut off or lost most of their items (built; not committed)
+### Increment A — A second round for lists that were cut off or lost most of their items (committed as 0fe7330)
 
 - Built: the optional task `card-more` (`models.REQUIRED_TASKS`, `OPTIONAL_TASKS`, `models.optional`; `cards` checks only the three
   needed tasks up front, and a `card-more` name that is not in the registry is still refused before any book, because the registry
@@ -263,4 +265,30 @@ reads what changed.
   says, and a corpus in which one generation has more of them than its share is refused, not rebalanced.
 - Recorded for C: a round that is refused is not kept aside, as a card call's reply is (`make_model_part` has no store); the report
   carries the reason. If a live run shows refusals, keeping the reply aside is a small addition.
-- Next: the owner's word to commit increment A.
+- Next: increment B.
+
+### Increment B — A setting for the number of pieces read (built; not committed)
+
+- Built: the config key `card_pieces` (a whole number from 1 to 20, default 12, which this plan does not change), read in
+  `cardmake.py` like `card_min_chars` (`pieces_limit`; no change to `config.py` was needed); `sample(found, limit)` reads `limit`
+  evenly spaced pieces, the first and last always, and with a limit of 1 only the first, and says "read N of M pieces"; the
+  generation's `made.pieces` is the pieces read and the report of `cards` has `book_pieces` for the pieces the book has; `cards`
+  refuses a wrong value before it tries any book, and `make_model_part` reads it before its first call; `card.MAX_RECORDS` is
+  unchanged at 30, which is enough (20 notes, 1 card call, 4 checks, a second round and 2 checks is 28; a test ties the two limits
+  together); the card spec and the engine README, with the cost of one notes call for each piece more.
+- Why 20 and not 30: the review pointed out that the card call is given the notes of every piece read, and a notes section can hold six
+  points of 240 characters, so 30 pieces could make a card prompt of about 47 KB, more than the window of the model for `card`
+  (16,384 tokens, about three bytes a token) with the rules and the outline, and the failure would come after 30 notes calls had been
+  paid for. At 20 the worst case is about 32 KB. A smaller window may still refuse a prompt (the README says so); nothing in the engine
+  measures the prompt before the notes are made.
+- Verification as run: `python3 -W error::ResourceWarning -m unittest engine.tests.test_cardmake engine.tests.test_card
+  engine.tests.test_catalog engine.tests.test_setup` gave 375 tests, OK; `wb run code-work check` found no problems. The tests were
+  written first and failed for the right reason (the up-front refusal in `cards` was added with the review and shown to be needed by
+  removing it: 4 tests fail). Deliberate breaks, each from a green baseline: 13 conditions, 12 caught and one redundant check that
+  survived (the records limit is checked again in `card.validate`). Not run: any live run with real models (increment C), the
+  full engine suite, and the other test files.
+- Review: the `reviewer` agent, round 1, no blocking findings. Applied: the largest value is 20 (see above) and `MAX_RECORDS` stays 30;
+  `cards` checks the value before any book; the spec and the README say that with 1 only the first piece is read. Not changed: a
+  skipped book or a card from the metadata alone never reads the setting, as with `card_min_chars`.
+- Next: the owner's word to commit increment B, then increment C, which needs the owner's word on the books, on the cloud labelling and
+  on at least ten calibration labels.

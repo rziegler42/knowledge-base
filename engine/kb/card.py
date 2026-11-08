@@ -43,7 +43,7 @@ _UNMARK = re.compile(r"\[\s*(stated|inferred)\s*\]", re.I)   # text that looks l
 _REF = re.compile(r"[1-9][0-9]{0,2}\.[1-9][0-9]?")   # the number of a point: the piece, a dot, the point
 MAX_REASONS = 20
 MAX_CAVEATS = 100
-MAX_RECORDS = 30
+MAX_RECORDS = 30   # at most 28 are needed: 20 notes at the largest cap of pieces, the card call, 4 checks of it, a second round and 2 checks
 
 # the model-written fields of a card, in the shape the model-call layer checks (`card.md`, "What a card holds")
 MODEL_SHAPE = {

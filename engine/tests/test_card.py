@@ -7,7 +7,7 @@ import unittest.mock
 
 from engine.tests.test_store import StoreCase, make_writable, read_json
 
-from kb import KbError, card, stages
+from kb import KbError, card, cardmake, stages
 
 MODEL = {"summary": "A short summary of the work.", "useful_for": ["finding a stopping rule"], "topics": ["stopping", "bandits"],
          "adjacent_topics": ["search"], "key_ideas": ["one idea", "a second idea", "a third idea"],
@@ -225,6 +225,19 @@ class MakeTest(CardCase):
         del missing["summary"]
         with self.assertRaises(KbError):
             card.make(self.store, book, version, model=missing, records=[dict(RECORD)])
+
+    def test_a_card_may_name_as_many_records_as_the_largest_cap_of_pieces_needs_and_no_more(self):
+        # the notes of every piece read, the card call, the checks of its 34 items at most (ten to a call), a second round, and the checks
+        # of the 12 items it may add
+        worst = cardmake.MAX_CARD_PIECES + 1 + 4 + 1 + 2
+        self.assertGreaterEqual(card.MAX_RECORDS, worst)
+        book, version = self.full_book()
+        made = card.make(self.store, book, version, model=copy.deepcopy(MODEL), records=[dict(RECORD) for _ in range(card.MAX_RECORDS)],
+                         pieces=cardmake.MAX_CARD_PIECES, calls=card.MAX_RECORDS)
+        self.assertEqual(len(made["made"]["records"]), card.MAX_RECORDS)
+        with self.assertRaises(KbError):
+            card.make(self.store, book, version, model=copy.deepcopy(MODEL), records=[dict(RECORD) for _ in range(card.MAX_RECORDS + 1)],
+                      pieces=1, calls=card.MAX_RECORDS + 1)
 
     def test_the_records_are_checked(self):
         book, version = self.full_book()

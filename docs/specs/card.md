@@ -112,7 +112,10 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 - **[proposed]** Regeneration is rare, because a full rebuild is costly at the expected scale. It is run for a book on request, or
   for a whole shelf when a clearly better prompt or model exists. The owner sees how many cards a run would redo before it starts.
 - **[proposed]** A card is made from the book's converted text, with a long book read in pieces. The model sees the structure of the
-  book where there is one, so a long book's card describes the whole work and not only its opening.
+  book where there is one, so a long book's card describes the whole work and not only its opening. A book of more pieces than a
+  setting of the owner's config allows (twelve unless the owner sets another number, up to twenty) is sampled, with the first and last
+  piece always read (only the first, if the number is one), and the card says how many pieces were read and how many the book has. A
+  larger number costs a notes call for each piece more, and whether it makes the card more accurate is measured, not assumed.
 - **[proposed]** Every piece of the book, a book of one piece too, first gets notes: a few points, each with a quote of the piece
   that supports it. The engine checks each quote against the piece it names (the rule is in `engine/README.md`, "Notes with
   quotes") and marks the point verified or not. The card is then written from the title, the outline and the points with their

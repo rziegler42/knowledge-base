@@ -482,7 +482,13 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 - **Reading a book.** The converted text is cut into pieces of at most 20,000 bytes that end at a block boundary. Every piece,
   of a book of one piece too, gets notes from the `card-notes` task, and then the `card` task makes the card from the title, the
   outline of the headings and the notes (a book of one piece is also given its text). A book of more than 12 pieces is sampled
-  (12 evenly spaced ones, always the first and last) and the card says so. A block larger than a piece is cut into pieces of 5,000
+  (12 evenly spaced ones, always the first and last) and the card says so. The number is the config key `card_pieces`, a whole
+  number from 1 to 20 (default 12, which this setting does not change; with 1 only the first piece is read, with more the first and the
+  last always are); a larger number reads more pieces of a long book and costs one notes call for each piece more. The card call is
+  given all the notes (at most about 1.6 KB for a piece), so 20 is the largest number that keeps the card prompt, at its worst about
+  32 KB with the rules and the outline, inside the window of a model of 16,384 tokens; with a smaller window the bridge may refuse
+  the call and the book is reported as failed. `cards` refuses a wrong value before it tries any book. The report has `pieces`
+  (read) and `book_pieces` (the book has), and a card that did not read every piece says so in its reasons. A block larger than a piece is cut into pieces of 5,000
   characters, so a page that converts to one very large block makes more calls than its size needs.
 - **Notes with quotes.** The notes on a piece are up to four points, each with a quote of the piece that supports it: two lists
   of the same length (a reply with lists of unequal length is refused like any other badly shaped reply). The engine checks each
