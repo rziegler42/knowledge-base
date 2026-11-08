@@ -504,7 +504,7 @@ the last finding has not been reviewed again.
   the owner's time to label about 15 items.
 - Committed as `710d7c6`.
 
-### Increment D-A — A mark must mean that the note supports the item (built; not committed)
+### Increment D-A — A mark must mean that the note supports the item (committed)
 
 - Built in `engine/kb/cardmake.py`: `pairs` (for each item that cites notes, the verified note it cites that shares most content
   words with it, by the first five letters of words of four letters or more, the first cited on a tie; no such note, no pair, and
@@ -541,7 +541,7 @@ the last finding has not been reviewed again.
   item sharing no word with its note is dropped, which I chose not to say so as not to teach the model to pad items with words.
 - Next: the owner's word to commit this amendment and increment D-A; then the owner's setting of `tasks.card-check`, and E.
 
-### Increment E — A live run, the labelled sample and the comparison (started; stopped after one book)
+### Increment E — A live run, the labelled sample and the comparison (run; not committed)
 
 - On the owner's word to start E I ran `cards --again` for one book, a web page of two pieces, as a new generation (generation 2;
   generation 1 is unchanged). Three calls, about 45 seconds. The notes had 8 points, and 7 of the 8 quotes were found in their
@@ -558,3 +558,80 @@ the last finding has not been reviewed again.
   so the catalog (built before it) is stale for that book until `card-index`, and `trial` refuses a stale catalog.
 - The owner chose to add a mechanical check of the cited note and a check by a second model; this became increment D-A, written as an
   amendment to the plan for the owner's new approval. E resumes after it.
+- **The check model was chosen by a test.** On the owner's word `phi4:latest` (the registry entry `local`) was set for `card-check`
+  after a bake-off: 30 hand-labelled pairs (23 firm labels; real card items and real sentences of the books, including the six
+  unrelated key ideas of the first live run) were put to four variants of local model with the engine's own prompt and reply rules,
+  twice each. All four said `no` to the six unrelated key ideas. `phi4` never said `supports` where the label was `no`, found every
+  real `supports`, was never refused, and gave the same answer on both repetitions (19 of 23 firm labels correct, its other errors
+  softer: `partly` for `no`, `no` for `partly`, and one `partly` passed as `supports`). `gemma4:12b`, which also writes the notes,
+  passed an unsupported item (the O(n squared) claim backed by a sentence about recurrence) in both repetitions. `qwen3:14b` with
+  thinking off was refused on one of three calls in both repetitions (a wrong number of verdicts); with thinking on it was the most
+  accurate (21 of 23) but 10 to 25 times slower and not fully consistent. The test is small and the labels are mine.
+- **The local run.** `cards --again` for 11 books (the page carded before D-A was left out). First pass: 7 carded and 4 failed; a
+  second try of the four carded 2 more. 9 of 11 books have a card of generation 2 (note quotes verified 65 to 89 percent; the
+  checker supported 63 to 93 percent of the items put to it; one card, of the longest paper, is thin). Two books failed twice. Of
+  the 15 card calls made over the two passes, 5 were refused for format by the card model (`gpt-oss`): three times a list of
+  supports with fewer entries than its list of topics (12 topics against 5 to 7 supports), once more than 8 key-idea supports, and
+  once (a notes call) a point 9 characters over the limit of 240. A refused answer fails the whole book, and the engine retries
+  nothing. A fix that makes a mismatch impossible (the support written with its own item) would change the design and needs the
+  owner's approval of an amendment; it is not made.
+- **The sample.** `card-index` was run (12 cards). A first sample of 80 items had only 23 in the four fields the pipeline changes
+  (the draw takes fields in turn and six of nine fields are unmarked), too few to compare; it was replaced by a sample of 300 items,
+  150 from each generation of the nine books that have both, 181 of them in topics, key ideas, caveats and the limit. Both are held
+  outside the repository. Nothing has been sent to a cloud model.
+- **The labelling.** With the owner's word, six cloud-model subagents (Opus class) each labelled 50 of the 300 items, given the
+  items file, the rubric and the passages, and not the key, the generation or the plan's reading of the old cards (300 of 300
+  labelled, no format problem). 143 labels carry a note. The owner labelled the 15 calibration items blind, through a private page
+  that showed the same passages and no model label.
+- **Accuracy by generation** (`card-accuracy`; skipped items are left out of the shares):
+
+  | | generation 1 (old) | generation 2 (grounded) |
+  |---|---|---|
+  | items / skipped | 150 / 6 | 150 / 3 |
+  | supported | 41.7% | 62.6% |
+  | inference | 17.4% | 8.2% |
+  | unsupported | 41.0% | 29.3% |
+
+  By field, generation 1 to 2 (supported of items): topics 27/30 to 39/40 (one skipped in each); key ideas 12/26 to 26/37;
+  caveats 0/27 to 1/8; the limit 0/9 to 0/4; summary 9/22 to 10/25; the four other neutral fields 12/36 to 16/36. Topics and key
+  ideas, the fields the pipeline checks, rose; key ideas also lost the weakest items (unsupported 8 of 26 to 6 of 37). The fields it
+  does not mark did not improve: summary and the neutral fields are written from the whole outline, as before, and `neutral_needs`
+  and the limit remain almost all unsupported. Caveats and the limit are claims about where the book would not work, which a passage
+  rarely states; they are nearly all `inferred` and nearly all unsupported.
+- **The marks.** In generation 2, `stated` items of topics and key ideas: of 73 judged, 64 supported (88%), 5 inference and 4
+  unsupported. `inferred` items (caveats, the limit, a few key ideas and one topic): of 13 judged, 2 supported, 1 inference and 10
+  unsupported (77%). So `stated` means what it says, and `inferred` is a mark for items to distrust.
+- **Agreement with the owner.** On the 15 calibration items the model and the owner agreed on 12 (80%): all 7 the owner called
+  supported and 5 of the 7 the owner called unsupported (the owner's one inference was not matched). The three differences were all at the edge between
+  inference and unsupported (two items the model gave inference that the owner called unsupported, one the owner called inference
+  that the model called unsupported), in both directions. No item was supported to one and unsupported to the other. With 15 items
+  this is a rough estimate; the supported and unsupported shares carry the sample, and the inference share is approximate.
+- **The second look.** The 5 calibration items that both the model and the owner called unsupported were given, with the whole
+  converted text of their book, to one Opus-class labeller each under the same rubric. All 5 stayed unsupported, so no retrieval
+  miss was found among them (0 of 5, the sample being small). In four the book states part of the item and not an added clause:
+  "high safety requirements", "real-time inference on limited hardware" (the book shows the opposite for small datasets),
+  "especially on long sentences" (true only against a weaker baseline of the same paper) and "careful architectural choices" (the
+  paper argues for the fewest possible changes); the fifth is a generic caveat about age. One labeller searched for terms and read the
+  relevant section and not the book end to end. Note for a next design: the commonest error is a true statement with an unsupported
+  extra clause, which neither the quote check nor a check of the item as a whole catches; a check clause by clause would.
+- **Search again.** `trial` on the same corpus (same hash) into a new report, 15 questions: the neutral search found 13 questions
+  (before 11), rank 0.87 (0.70), books found 15 (13); the card and summary searches found 13 (14), rank 0.82 (0.89), books found 15
+  (16); one question is now found by the text search only. The cards are 251 words on average (281). Nine of twelve books have a new
+  card, so old and new cards are mixed, and one or two questions are within noise. The earlier decision (neither search by meaning
+  nor themes for now) is unchanged.
+- **Failures and cost.** Of 11 books, 9 got a new card; two failed twice on the format of the card model's reply (support lists of
+  the wrong length, one over the ceiling, and a note point 9 characters over its limit). A failed book keeps its old card, so no
+  wrong card is made, but coverage is lost and a refused answer is not retried. Time was 25 to 136 seconds per book on the local
+  models; quote verification 65 to 89 percent; the check supported 63 to 93 percent of the items put to it.
+- **Limits.** Twelve books, nine in the comparison; 300 items by one labeller class, checked against the owner on 15 and the books on
+  5; the owner's labels and the bake-off labels are one person's; the labeller sees at most five passages, so a statement whose
+  support is elsewhere counts as unsupported (the second look found none such among 5); the unmarked fields were not changed.
+- **Recommendation and the owner's decision.** The owner chose to record the following as candidates for later plans and not to
+  amend this plan: (1) support written with its own item, and a longer note-point limit, so that a format slip does not fail a
+  book; (2) a check clause by clause, since the commonest error is an extra clause; (3) the same grounding for the summary and the
+  neutral fields; (4) treat `inferred` items as untrustworthy in display or search (drop or hide them), for the owner to decide;
+  (5) a queue per model so that loading a model is paid once for many books. None is made here; adding a candidate to a roadmap
+  waits for the owner's word.
+- Provenance: run on this repository at commit `674ea3d` plus the uncommitted plan edits, in the owner's library, with local models
+  `gemma4:12b` (notes), `gpt-oss:20b` (card), `phi4:latest` (check) through the owner's bridge, and cloud-model labellers (Opus
+  class) for the 300 items and the 5 whole-book looks; the sample, its key and the labels are held outside the repository.
