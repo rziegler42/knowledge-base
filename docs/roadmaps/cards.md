@@ -135,7 +135,8 @@ proposed. A bridge to local models (`ask-ollama`) is installed in the workbench,
 - A queue per model, so that loading a model is paid once for many books: the card work would hold a queue of calls for each
   model and run one queue at a time until all are empty. It speeds up the work and does not make cards findable or more accurate,
   so it belongs with model work in general (choosing between models, quotas and budgets), below.
-- Search by meaning and the embedding model: cards are stored so that vectors can be added later without rewriting any card.
+- Search by meaning and the embedding model: cards are stored so that vectors can be added later without rewriting any card. It is
+  a candidate of the roadmap [cross-field-discovery](cross-field-discovery.md#meaning-search-search-the-neutral-descriptions-by-meaning).
 - Themes, the weave and theme-level search: the card spec puts them after the card, and the trial decides whether they are worth
   their cost.
 - A second trial on harder questions and more books, once the cards are more accurate, to see whether more accurate cards find
