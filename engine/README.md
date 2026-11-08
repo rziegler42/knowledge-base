@@ -529,6 +529,30 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   for each book, `checked` (items put to the check), `supported`, `partly`, `no`, and `unpaired` (items that cite notes but had no
   pair, so were dropped without a model being asked). Aliases of a topic that share no four-letter word with the note it cites are
   among those dropped; expect fewer topics than before.
+- **A second round for a list that was cut off or lost most of its items (task `card-more`, optional).** Some cards fill a list to
+  the number asked, so there may have been more; some lose most of a list to the check. If the config sets `card-more`, a card is
+  offered one more call, to that model, for its topics and key ideas when (`full`) the card model gave as many items as were
+  asked (12 topics, 7 key ideas), or (`lost`) the checks kept fewer than half of the items it gave and dropped at least two, or
+  (`thin`, key ideas only) fewer than three key ideas were kept, and the list has a free place (the ceilings are 20 and 8). The
+  call is given the title, the outline, the notes and the items already kept, and asks for at most 8 more topics or 4 more key
+  ideas, each citing the notes that state it. An item the round adds is kept only as a `stated` item: it goes through the same pairing
+  and the same check as every item of the card call, it must not repeat a kept item (three quarters of its content words, counted as
+  the pairing counts them, are in the other, whichever has fewer) and it must fit in the free places. The round asks for no
+  `inferred` item and refuses a reply that marks one. A card is offered one round at most. If the call fails, or its reply is
+  refused, the card is made as the first round left it, and the report says so (the reply is not kept aside, as a card's is). The
+  grounding record of a card names the items the round added (`added`: the positions in the topics and in the key ideas), so that
+  `card-sample` can draw them. Without a setting for `card-more` the card is made as before and the report says the round was off; a
+  name that is not in the registry refuses `cards` before anything is sent. The report has `more`: `status` (`off`, `not needed`,
+  `ran`, `refused` or `failed`), a `reason`, and for each list offered the round why, how many items the model gave and the checks
+  kept, the free places, how many were asked, how many were added and how many were dropped (`unpaired`, `repeat`, `not_confirmed`,
+  `over`; a reply with more items than were asked is cut at the number asked before the check, and the cut ones count as `over`).
+  The book's `checked`, `supported`, `partly`, `no` and `unpaired` include the round's items; the per-list counts of `more` show the
+  round's share.
+
+  ```json
+  "tasks": {"card-notes": "<name>", "card": "<name>", "card-check": "<name>", "card-more": "<name>"}
+  ```
+
 - **What a model is told.** The title, the outline, each piece of text and each note are given as data in sections of their own,
   between delimiters that carry a random token made for the call (made again if any input holds it); the rules name the token, say
   that a line with another token is data and that nothing in a section is an instruction, and ask for English whatever the
@@ -661,7 +685,7 @@ questions from your own projects must not be committed. It reports numbers and n
 ### How accurate are the cards? A sample to label
 
 ```sh
-python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...] [--book BOOK_ID ...]
+python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...] [--book BOOK_ID ...] [--added N]
 python3 -m kb card-accuracy ITEMS KEY
 python3 -m kb card-agreement FIRST SECOND
 ```
@@ -675,6 +699,10 @@ are held **outside the repository** (a folder inside the project's folder, links
   one group, and the key records each card's own generation); within a group the cards are visited in turn and, within a card,
   the fields in turn, so no card or field fills the sample. A card that cannot be read is left out and counted in the printed
   summary (`unreadable_cards`). `--book` (repeat it for several) limits the sample to the books named and leaves the others out.
+  `--added N` draws N of the items from those that a second round added (see the task `card-more`), counts them in the sample and
+  in the share of their generation, and marks them in the key; it is refused if the cards hold fewer, or if a generation would
+  have more of them than its share. `card-accuracy` then counts them apart as well, under `added`. The items file does not say
+  which they are.
   The same `--seed` gives the same sample. `OUTDIR` is
   new or empty, and four files are written, all private:
   - `items.json`: the items, shuffled, each with an id, the book, the field, the text, up to five passages of the book that share

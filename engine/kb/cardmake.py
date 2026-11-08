@@ -74,6 +74,30 @@ def _check_support(values):
 
 CARD_JOB = models.Job("card", "v4", {**card.MODEL_SHAPE_GROUNDED, **SUPPORT_SHAPE}, schema="card.json", check=_check_support)
 
+MORE_FIELDS = ("topics", "key_ideas")   # the lists that a second round serves
+MORE_ASKED = {"topics": 8, "key_ideas": 4}   # the most items the second round is asked for, for a list (and never more than its free places)
+CEILING = {field: card.MODEL_SHAPE_GROUNDED[field]["max_items"] for field in MORE_FIELDS}
+REPEAT_SHARE = 0.75      # an item whose content words are this share of the fewer of its own and an other item's is a repeat of it
+MORE_SHAPE = {"topics": {"type": "strings", "max_items": 12, "max": 60},
+              "topics_support": {"type": "strings", "max_items": 12, "max": SUPPORT_CHARS},
+              "key_ideas": {"type": "strings", "max_items": 6, "max": 300},
+              "key_ideas_support": {"type": "strings", "max_items": 6, "max": SUPPORT_CHARS}}
+
+
+def _check_more(values):
+    """Each list of the second round has a support value for each item, and each is the numbers of notes: the round adds no item
+    that is only an inference."""
+    for field in MORE_FIELDS:
+        if len(values[f"{field}_support"]) != len(values[field]):
+            raise KbError(f"the answer's {field} and {field}_support are not lists of the same length")
+        for text in values[f"{field}_support"]:
+            if parse_support(text)[0] != "refs":
+                raise KbError(f"a support in the second round is the numbers of notes; inferred and none are not allowed: "
+                              f"{textutil.literal(text, 40)}")
+
+
+MORE_JOB = models.Job("card-more", "v1", MORE_SHAPE, schema="card-more.json", check=_check_more)
+
 CHECK_BATCH = 10         # the items that cite a note are checked this many to a call
 VERDICTS = ("supports", "partly", "no")
 CHECK_SHAPE = {"verdicts": {"type": "strings", "min_items": 1, "max_items": CHECK_BATCH, "max": 16}}
@@ -311,12 +335,78 @@ def ground(values, notes, confirmed):
     model["neutral_limits"] = values["neutral_limits"] if entry else ""
     grounding["neutral_limits"], dropped["neutral_limits"] = entry, 0 if entry else 1
     grounding["dropped"] = dropped
-    reasons = []
-    if len(model["key_ideas"]) < MIN_KEY_IDEAS:
-        left = len(model["key_ideas"])
-        reasons.append(f"only {left} key {'idea was' if left == 1 else 'ideas were'} left after the ones without support were dropped, "
-                       f"so the card holds fewer than {MIN_KEY_IDEAS}; none was added to make up the number")
-    return {"model": model, "grounding": grounding, "reasons": reasons}
+    return {"model": model, "grounding": grounding, "reasons": thin_reason(model)}
+
+
+def thin_reason(model, rounded=False):
+    """The reason, as a list, that the card is thin: fewer than MIN_KEY_IDEAS key ideas are left. `rounded` says that a second round
+    has added what it could."""
+    left = len(model["key_ideas"])
+    if left >= MIN_KEY_IDEAS:
+        return []
+    what = "the ones without support were dropped" + (" and a second round added what it could" if rounded else "")
+    return [f"only {left} key {'idea was' if left == 1 else 'ideas were'} left after {what}, "
+            f"so the card holds fewer than {MIN_KEY_IDEAS}; none was added to make up the number"]
+
+
+def triggers(values, model):
+    """The lists of a card that are offered the second round, from the reply to the card call (`values`) and the model part that
+    remains after the checks: `{field: {"why", "given", "kept", "free", "asked"}}`. A list is offered the round when it has a free place
+    and the model gave as many items as were asked (`full`), or the checks kept fewer than half of the items the model gave and
+    dropped at least two (`lost`), or, for the key ideas, fewer than MIN_KEY_IDEAS were kept (`thin`)."""
+    out = {}
+    for field in MORE_FIELDS:
+        given, kept = len(values[field]), len(model[field])
+        free = CEILING[field] - kept
+        if free <= 0:
+            continue
+        if given >= ASKED[field]:
+            why = "full"
+        elif given - kept >= 2 and kept * 2 < given:
+            why = "lost"
+        elif field == "key_ideas" and kept < MIN_KEY_IDEAS:
+            why = "thin"
+        else:
+            continue
+        out[field] = {"why": why, "given": given, "kept": kept, "free": free, "asked": min(free, MORE_ASKED[field])}
+    return out
+
+
+def more_prompt(title, outline_text, parts, model, wanted, kind="book"):
+    """The prompt of the second round. `parts` are the sections of notes of the card call, `model` is what the card holds now and
+    `wanted` says, for each list offered the round, how many items to ask for."""
+    w = source_word(kind)
+    kept = "\n".join(f"{field}: " + ("; ".join(model[field]) or "(none)") for field in MORE_FIELDS)
+    asks = []
+    for field in MORE_FIELDS:
+        name = {"topics": "short names for ideas it covers, including other names an idea is known by",
+                "key_ideas": f"ideas from the {w} that a reader might not expect"}[field]
+        if field in wanted:
+            asks.append(f"- \"{field}\": up to {wanted[field]['asked']} more {field.replace('_', ' ')}: {name}.")
+        else:
+            asks.append(f"- \"{field}\": an empty list.")
+    rules = (f"You are helping to complete the catalog entry (the card) of a {w}. Below are labelled sections of data: the {w}'s "
+             f"title, the outline of its headings, notes made earlier on each piece of it, and the items that the card already holds "
+             f"(KEPT).\n{_DATA}\nWrite in English, whatever the language of the source.\nEach note is a line like \"- [2.1 verified] a "
+             "point\": 2.1 is its number, and verified means that the quote behind the point was found in the text, unverified that it "
+             "was not.\nReply with one JSON object with exactly the keys \"topics\", \"topics_support\", \"key_ideas\" and "
+             "\"key_ideas_support\" and no others:\n" + "\n".join(asks) + "\nGive only an item that is not on the card yet and is not "
+             "a restatement of one that is; give fewer, or none, if the notes state nothing more. \"topics_support\" and "
+             "\"key_ideas_support\" are lists of the same length as their lists, in the same order. Each value is the one or two "
+             "numbers of the notes that best state the item, separated by spaces, such as \"1.1 3.2\". Cite only a note that is marked "
+             "verified and that bears on the item. Never write inferred or none: give an item only if a verified note states it, since "
+             "an item is kept only if a check of the note and the item confirms it.\n"
+             f"In the text of an item never mention notes, pieces, numbers of notes or this message: write about the {w} itself.\n{_NO_MORE}")
+    return _prompt(rules, [("TITLE", title), ("OUTLINE", outline_text), ("KEPT", kept), *parts])
+
+
+def similar(a, b):
+    """True when an item repeats another: the content words of the one that has fewer are mostly in the other (REPEAT_SHARE), or, with
+    no content word, the two are the same text."""
+    words_a, words_b = _prefixes(a), _prefixes(b)
+    if not words_a or not words_b:
+        return str(a).strip().casefold() == str(b).strip().casefold()
+    return len(words_a & words_b) / min(len(words_a), len(words_b)) >= REPEAT_SHARE
 
 
 def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book"):
@@ -332,6 +422,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
     card_model = models.choose(cfg, "card")[0]
     notes_model = models.choose(cfg, "card-notes")[0]
     check_model = models.choose(cfg, "card-check")[0]
+    more_model = models.optional(cfg, "card-more")
     title = textutil.title(str(title if title is not None else ""), MAX_TITLE) or "(no title)"
     records = []
 
@@ -339,6 +430,65 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
         out = models.run_job(cfg, entry, prompt, job, launcher=launcher, root=root)
         records.append({**out["record"], "task": job.name})
         return out["values"]
+
+    def check_all(todo, tally, confirmed):
+        """Put the pairs to the check, ten to a call: the counts go into `tally` and the pairs that were confirmed into `confirmed`."""
+        for start in range(0, len(todo), CHECK_BATCH):
+            batch = todo[start:start + CHECK_BATCH]
+            got = ask(check_model, check_prompt(title, batch, kind=kind), check_job(len(batch)))["verdicts"]
+            said = [v.strip().casefold() for v in got]
+            records[-1].update(checked=len(batch), supported=said.count("supports"))
+            tally["checked"] += len(batch)
+            for word in VERDICTS:
+                tally[word] += said.count(word)
+            confirmed.update({(p["field"], p["index"]): p["ref"] for p, word in zip(batch, said) if word == "supports"})
+
+    def second_round(wanted, grounded, tally):
+        """One more call, to the model of card-more, for the lists in `wanted`; what it adds goes through the pairing and the check of
+        the card call and is kept only if a check confirmed it, it is not a repeat and a place is free. Nothing of the card is changed
+        unless every call has been made. Returns the report of the round."""
+        model, grounding = grounded["model"], grounded["grounding"]
+        got = ask(more_model, more_prompt(title, outline(conversion), parts, model, wanted, kind=kind), MORE_JOB)
+        stats = {f: {**wanted[f], "added": 0, "dropped": {"unpaired": 0, "repeat": 0, "not_confirmed": 0, "over": 0}} for f in wanted}
+        candidates = {"topics": [], "topics_support": [], "key_ideas": [], "key_ideas_support": [], "caveats": [], "caveats_support": [],
+                      "neutral_limits": "", "neutral_limits_support": "none"}
+        for field in wanted:
+            for item, support in zip(got[field], got[f"{field}_support"]):
+                if any(similar(item, kept) for kept in model[field]):
+                    stats[field]["dropped"]["repeat"] += 1
+                elif len(candidates[field]) >= wanted[field]["asked"]:  # a model may write more than it is asked for: the rest is cut, so the lists
+                    # never pass their ceilings (what is asked is at most the free places)
+                    stats[field]["dropped"]["over"] += 1
+                else:
+                    candidates[field].append(item)
+                    candidates[f"{field}_support"].append(support)
+        todo_more, confirmed_more = pairs(candidates, found), {}
+        local = {"checked": 0, "supports": 0, "partly": 0, "no": 0, "unpaired": 0}
+        check_all(todo_more, local, confirmed_more)
+        paired = {(p["field"], p["index"]) for p in todo_more}
+        added = {}
+        for field in wanted:
+            first = len(model[field])
+            for index, (item, support) in enumerate(zip(candidates[field], candidates[f"{field}_support"])):
+                ref, dropped = confirmed_more.get((field, index)), stats[field]["dropped"]
+                if (field, index) not in paired:
+                    dropped["unpaired"] += 1
+                elif ref not in parse_support(support)[1] or not found[ref]["verified"]:
+                    dropped["not_confirmed"] += 1
+                elif any(similar(item, other) for other in model[field][first:]):
+                    dropped["repeat"] += 1
+                else:
+                    model[field].append(item)
+                    grounding[field].append({"mark": "stated", "notes": [ref], "quote": found[ref]["quote"]})
+                    added.setdefault(field, []).append(len(model[field]) - 1)
+                    stats[field]["added"] += 1
+        if added:
+            grounding["added"] = added
+        for word, count in local.items():
+            tally[word] += count
+        tally["unpaired"] += sum(s["dropped"]["unpaired"] for s in stats.values())
+        grounded["reasons"] = thin_reason(model, True)
+        return {"status": "ran", "reason": "", "fields": stats}
 
     parts, found = [("BOOK TEXT", read[0])] if len(read) == 1 else [], {}
     for number, piece in enumerate(read, start=1):
@@ -354,18 +504,22 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
     values = ask(card_model, card_prompt(title, outline(conversion), parts, kind=kind), CARD_JOB)
     todo, confirmed = pairs(values, found), {}
     tally = {"checked": 0, "supports": 0, "partly": 0, "no": 0, "unpaired": unpaired(values, todo)}
-    for start in range(0, len(todo), CHECK_BATCH):
-        batch = todo[start:start + CHECK_BATCH]
-        got = ask(check_model, check_prompt(title, batch, kind=kind), check_job(len(batch)))["verdicts"]
-        said = [v.strip().casefold() for v in got]
-        records[-1].update(checked=len(batch), supported=said.count("supports"))
-        tally["checked"] += len(batch)
-        for word in VERDICTS:
-            tally[word] += said.count(word)
-        confirmed.update({(p["field"], p["index"]): p["ref"] for p, word in zip(batch, said) if word == "supports"})
+    check_all(todo, tally, confirmed)
     grounded = ground(values, found, confirmed)
+    more = {"status": "off", "reason": "no model is set for card-more", "fields": {}}
+    if more_model:
+        wanted = triggers(values, grounded["model"])
+        if not wanted:
+            more = {"status": "not needed", "fields": {}, "reason": "no list was full, lost half of what the model gave, or (the key "
+                    "ideas) was under the floor, or the list had no free place"}
+        else:
+            try:
+                more = second_round(wanted, grounded, tally)
+            except KbError as e:  # the card stays as the first round made it; the round is an addition and may fail alone
+                more = {"status": "refused" if isinstance(e, models.AnswerRefused) else "failed", "reason": textutil.clean(str(e), 300),
+                        "fields": {f: {"why": w["why"]} for f, w in wanted.items()}}
     return {"model": grounded["model"], "grounding": grounded["grounding"], "records": records, "pieces": len(read),
-            "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"], "checks": tally,
+            "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"], "checks": tally, "more": more,
             "notes": {"points": len(found), "verified": sum(1 for n in found.values() if n["verified"])}}
 
 
@@ -401,7 +555,7 @@ def _keep_aside(store, refusal, book_id, version_id):
     return CardRefused(str(refusal), kept, note)
 
 
-def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None, checks=None):
+def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None, checks=None, more=None):
     used = []
     for r in (made or {}).get("made", {}).get("records", []):
         item = {"task": r["task"], "registry": r["registry"], "model": r["model"]}
@@ -413,7 +567,7 @@ def _report(book_id, version_id, status, reason="", generation=None, made=None, 
             "points": notes["points"] if notes else None, "verified": notes["verified"] if notes else None,
             "checked": checks["checked"] if checks else None, "supported": checks["supports"] if checks else None,
             "partly": checks["partly"] if checks else None, "no": checks["no"] if checks else None,
-            "unpaired": checks["unpaired"] if checks else None}
+            "unpaired": checks["unpaired"] if checks else None, "more": more}
 
 
 def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
@@ -438,7 +592,7 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
                        "ask again to make another", generation=existing[-1])
     cutoff = min_chars(cfg)
     loaded = convert.load_in_use(store, book_id, version_id) if state["converted"]["status"] == "done" else None
-    notes = checks = None
+    notes = checks = more = None
     if loaded is None:
         made = card.make(store, book_id, version_id)
     elif len(loaded[1].text) < cutoff:
@@ -453,9 +607,9 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
             raise _keep_aside(store, refusal, book_id, version_id) from None
         made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
                          calls=part["calls"], reasons=part["reasons"], grounding=part["grounding"])
-        notes, checks = part["notes"], part["checks"]
+        notes, checks, more = part["notes"], part["checks"], part["more"]
     number = card.file(store, made)
-    return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes, checks=checks)
+    return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes, checks=checks, more=more)
 
 
 def run(store, cfg, book_ids, again=False, launcher=None, root=None):

@@ -1,6 +1,6 @@
 # Card lists that follow the book
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-08
 Candidate: cards#card-grounding
 Specs: docs/specs/card.md
@@ -221,7 +221,8 @@ reads what changed.
   them the Result says no decision is supported; (3) the third trigger is tested for key ideas only, with a test that it starts no
   round for topics.
 - Rejected: none.
-- Left for the owner: whether to ask for round 3 before approving.
+- Left for the owner: whether to ask for round 3 before approving (the plan was approved after round 2).
+- Increment A: reviewed by the `reviewer` agent (see the Result): no blocking findings, two applied, two not changed with reasons.
 
 ## Deferred work
 
@@ -232,4 +233,34 @@ reads what changed.
 
 ## Result
 
-Empty until work starts.
+### Increment A — A second round for lists that were cut off or lost most of their items (built; not committed)
+
+- Built: the optional task `card-more` (`models.REQUIRED_TASKS`, `OPTIONAL_TASKS`, `models.optional`; `cards` checks only the three
+  needed tasks up front, and a `card-more` name that is not in the registry is still refused before any book, because the registry
+  checks every task of the config); in `cardmake.py` the triggers (`full`: the model gave the asked number; `lost`: the checks kept
+  fewer than half of what it gave and dropped at least two; `thin`: key ideas only, fewer than three kept; each needs a free place),
+  the prompt (title, outline, notes, the kept items), the job `card-more` v1 with its schema (a support must be note numbers; a
+  reply that marks `inferred` or `none` is refused), a cut of the reply at the number asked (which is at most the free places, so the
+  ceilings hold), a repeat limit (three quarters of the content words of the item with fewer, 5-letter prefixes as `pairs` counts
+  them), the use of `pairs`, `check_job` and the same ten-to-a-call check for the items it adds, a merge after every call has been
+  made (so a refused or failed round leaves the card as the first round made it), thin-card wording that says a second round was
+  made, and the report field `more`; in `card.py` the optional `added` entry of the grounding record (positions in order, in range,
+  stated, topics and key ideas only); in `cardsample.py` the option `added` (draws that many of the added items, counts them in their
+  generation's share, marks them in the key; refuses more than exist or than a generation's share) and a group `added` in
+  `card-accuracy`; `card-sample --added N`; the card spec and the engine README.
+- Verification as run: `python3 -W error::ResourceWarning -m unittest engine.tests.test_cardmake engine.tests.test_card
+  engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample` gave 495 tests, OK; `wb run code-work check` found
+  no problems. The tests were written first and failed for the right reason. Deliberate breaks, each from a green baseline: 32
+  conditions of the new code, 31 caught at once and one equivalent edit that survived (a changed label in the KEPT section of the
+  prompt, with the items still shown). Four gaps found by the breaks and fixed with tests: one dropped item is not a list that lost
+  much; the number asked is at most the free places; a generation's share of added items; and, after the review, a reply with more
+  items than were asked. Not run: any live run with real models (increment C), the full engine suite, and the other test files.
+- Review: the `reviewer` agent, round 1, no blocking findings. Applied: a reply with more items than were asked is cut at the number
+  asked before the check (the cut ones count as `over`), which also makes the ceiling check in the merge unreachable, so it was
+  removed; the report's `checks` totals include the round's items, now said in the README. Not changed, with reasons: the thin
+  wording says "a second round added what it could" whenever a round ran, which is true because the key ideas are always offered the
+  round when fewer than three are kept; `--added` draws uniformly over all added items, which is a group of their own as the plan
+  says, and a corpus in which one generation has more of them than its share is refused, not rebalanced.
+- Recorded for C: a round that is refused is not kept aside, as a card call's reply is (`make_model_part` has no store); the report
+  carries the reason. If a live run shows refusals, keeping the reply aside is a small addition.
+- Next: the owner's word to commit increment A.

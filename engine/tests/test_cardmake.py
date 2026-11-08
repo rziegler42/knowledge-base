@@ -57,7 +57,7 @@ def failure():
 def config(**tasks):
     entry = lambda server, model: {"bridge": "ask-ollama", "server": server, "model": model}
     return {"models_on": True, "models": {"notes": entry("srv-n", "m-notes"), "cardm": entry("srv-c", "m-card"),
-                                          "checker": entry("srv-k", "m-check")},
+                                          "checker": entry("srv-k", "m-check"), "morem": entry("srv-m", "m-more")},
             "tasks": tasks if tasks else {"card-notes": "notes", "card": "cardm", "card-check": "checker"}}
 
 
@@ -812,6 +812,224 @@ class GroundedCardTest(Base):
         self.assertEqual(cm.exception.job, "card")
 
 
+def round_reply(topics=(), topics_support=None, key_ideas=(), key_ideas_support=None):
+    """A reply to the call of the second round."""
+    return {"topics": list(topics), "topics_support": list(topics_support if topics_support is not None else []),
+            "key_ideas": list(key_ideas), "key_ideas_support": list(key_ideas_support if key_ideas_support is not None else [])}
+
+
+class SecondRoundTest(Base):
+    """The second round: when it is offered, what it adds, and what happens when it goes wrong. The notes are those of
+    GroundedCardTest: 1.1 and 2.1 are verified, 1.2 is not."""
+
+    TEXTS = GroundedCardTest.TEXTS
+    NOTES_REPLIES = GroundedCardTest.NOTES_REPLIES
+
+    def cfg(self, more="morem"):
+        cfg = config()
+        if more:
+            cfg["tasks"]["card-more"] = more
+        return cfg
+
+    def full_topics(self, count=12, **over):
+        return answer(topics=[f"early rule {n}" for n in range(count)], topics_support=["1.1"] * count, **over)
+
+    def make(self, card_reply, checks, more=None, more_checks=(), cfg=None):
+        replies = [reply(n) for n in self.NOTES_REPLIES] + [reply(card_reply)] + list(checks)
+        if more is not None:
+            replies.append(more if "stdout" in more else reply(more))
+            replies += list(more_checks)
+        self.script(*replies)
+        return self.run_make(conversion(*[block(x) for x in self.TEXTS]), title="A paper on stopping",
+                             cfg=cfg if cfg is not None else self.cfg())
+
+    def full_checks(self, extra=1):
+        """The checks of a card of twelve topics, three key ideas and a limit: sixteen pairs, ten and six to a call."""
+        return [verdicts(*["supports"] * 10), verdicts(*["supports"] * 6)][:1 + extra]
+
+    def test_a_list_that_reached_the_asked_number_is_offered_a_round_and_the_items_it_adds_are_stated(self):
+        out = self.make(self.full_topics(), self.full_checks(),
+                        round_reply(topics=["tight bound sides", "tight bound proof"], topics_support=["2.1", "2.1"]),
+                        [verdicts("supports", "supports")])
+        self.assertEqual(out["model"]["topics"][:12], [f"early rule {n}" for n in range(12)])
+        self.assertEqual(out["model"]["topics"][12:], ["tight bound sides", "tight bound proof"])
+        added = out["grounding"]["topics"][12:]
+        self.assertEqual([e["mark"] for e in added], ["stated", "stated"])
+        self.assertEqual([e["notes"] for e in added], [["2.1"], ["2.1"]])
+        self.assertEqual(added[0]["quote"], "says the bound is tight")
+        self.assertEqual(out["grounding"]["added"], {"topics": [12, 13]})
+        self.assertEqual(out["more"]["status"], "ran")
+        self.assertEqual(out["more"]["fields"]["topics"]["why"], "full")
+        self.assertEqual(out["more"]["fields"]["topics"]["added"], 2)
+        self.assertNotIn("key_ideas", out["more"]["fields"])
+        self.assertEqual(out["model"]["key_ideas"], ["the rule stops early", "the bound is tight", "an early stop"])
+
+    def test_a_list_that_lost_more_than_half_of_what_the_model_gave_is_offered_a_round(self):
+        out = self.make(answer(topics=[f"early rule {n}" for n in range(6)], topics_support=["1.1"] * 6),
+                        [verdicts("supports", "no", "no", "no", "no", "supports", "supports", "supports", "supports", "supports")],
+                        round_reply(topics=["tight bound sides"], topics_support=["2.1"]), [verdicts("supports")])
+        self.assertEqual(out["model"]["topics"], ["early rule 0", "early rule 5", "tight bound sides"])
+        self.assertEqual(out["grounding"]["added"], {"topics": [2]})
+        self.assertEqual(out["more"]["fields"]["topics"]["why"], "lost")
+
+    def test_key_ideas_under_the_floor_are_offered_a_round_and_topics_are_not(self):
+        card_reply = answer(key_ideas=["the rule stops early", "the bound is tight", "an early stop", "early rule again"],
+                            key_ideas_support=["1.1", "2.1", "1.1", "1.1"])
+        out = self.make(card_reply, [verdicts("supports", "supports", "supports", "supports", "no", "no", "supports")],
+                        round_reply(key_ideas=["a looser bound for dependent data"], key_ideas_support=["2.1"]), [verdicts("supports")])
+        self.assertEqual(out["more"]["fields"]["key_ideas"]["why"], "thin")
+        self.assertNotIn("topics", out["more"]["fields"])
+        self.assertEqual(out["model"]["key_ideas"], ["the rule stops early", "the bound is tight", "a looser bound for dependent data"])
+        self.assertEqual(out["grounding"]["added"], {"key_ideas": [2]})
+        self.assertEqual(out["reasons"], [])  # three key ideas are left, so the card is no longer thin
+        prompt = self.calls()[len(self.NOTES_REPLIES) + 2][1]
+        self.assertIn("more key ideas", prompt)
+        self.assertNotIn("more topics", prompt)
+
+    def test_a_card_whose_lists_were_neither_full_nor_lost_much_gets_no_round(self):
+        out = self.make(answer(), [verdicts(*["supports"] * 6)], more=round_reply(topics=["tight bound sides"], topics_support=["2.1"]))
+        self.assertEqual(out["more"]["status"], "not needed")
+        self.assertEqual(len(self.calls()), 4)  # two notes, the card, one check
+        self.assertNotIn("added", out["grounding"])
+
+    def test_a_list_at_its_ceiling_has_no_free_place_and_gets_no_round(self):
+        out = self.make(self.full_topics(20), [verdicts(*["supports"] * 10), verdicts(*["supports"] * 10), verdicts(*["supports"] * 4)],
+                        more=round_reply(topics=["tight bound sides"], topics_support=["2.1"]))
+        self.assertEqual(len(out["model"]["topics"]), 20)
+        self.assertEqual(out["more"]["status"], "not needed")
+        self.assertEqual(len(self.calls()), 6)
+
+    def test_only_the_free_places_are_filled(self):
+        out = self.make(self.full_topics(19), [verdicts(*["supports"] * 10), verdicts(*["supports"] * 10), verdicts(*["supports"] * 3)],
+                        round_reply(topics=["tight bound sides", "tight bound proof"], topics_support=["2.1", "2.1"]),
+                        [verdicts("supports")])  # only the one that was asked for is checked
+        self.assertEqual(len(out["model"]["topics"]), 20)
+        self.assertIn("up to 1 more topics", self.calls()[6][1])  # one place is free, so one item is asked for
+        self.assertEqual(out["model"]["topics"][19], "tight bound sides")
+        self.assertEqual(out["more"]["fields"]["topics"]["dropped"]["over"], 1)
+
+    def test_one_dropped_item_is_not_a_list_that_lost_much(self):
+        out = self.make(answer(topics=["early rule 0"], topics_support=["1.1"]), [verdicts("no", "supports", "supports", "supports", "supports")],
+                        more=round_reply(topics=["tight bound sides"], topics_support=["2.1"]))
+        self.assertEqual(out["model"]["topics"], [])
+        self.assertEqual(out["more"]["status"], "not needed")
+
+    def test_a_reply_with_more_items_than_were_asked_is_cut_at_the_number_asked_before_the_check(self):
+        names = "alpha bravo charlie delta echoo foxtrot golf hotel india juliet".split()
+        out = self.make(self.full_topics(), self.full_checks(),
+                        round_reply(topics=[f"tight bound {n}" for n in names], topics_support=["2.1"] * 10), [verdicts(*["supports"] * 8)])
+        self.assertEqual(len(out["model"]["topics"]), 20, out["more"])
+        fields = out["more"]["fields"]["topics"]
+        self.assertEqual((fields["asked"], fields["added"], fields["dropped"]["over"]), (8, 8, 2))
+        self.assertEqual(self.calls()[-1][1].count("quote:"), 8)  # only eight were put to the check
+
+    def test_what_the_round_adds_must_be_cited_confirmed_and_new(self):
+        round_items = round_reply(topics=["tight bound sides", "stopping nothing", "tight bound rationale", "early rule 3",
+                                          "tight bound sides again"],
+                                  topics_support=["2.1", "1.2", "2.1", "1.1", "2.1"])
+        out = self.make(self.full_topics(), self.full_checks(), round_items, [verdicts("supports", "no", "supports")])
+        # the second cites a note that was not verified, the fourth repeats a kept topic, and these are never checked; the third is
+        # refused by the check; the fifth repeats the first
+        self.assertEqual(out["model"]["topics"][12:], ["tight bound sides"])
+        self.assertEqual(out["more"]["fields"]["topics"]["dropped"], {"unpaired": 1, "repeat": 2, "not_confirmed": 1, "over": 0})
+        self.assertEqual(out["more"]["fields"]["topics"]["added"], 1)
+        self.assertEqual(self.calls()[-1][1].count("quote:"), 3)
+
+    def test_an_item_the_check_says_only_partly_supports_is_dropped(self):
+        out = self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=["2.1"]),
+                        [verdicts("partly")])
+        self.assertEqual(len(out["model"]["topics"]), 12)
+        self.assertNotIn("added", out["grounding"])
+        self.assertEqual(out["more"]["fields"]["topics"]["dropped"]["not_confirmed"], 1)
+
+    def test_a_round_that_marks_an_item_as_an_inference_is_refused_and_the_card_is_as_the_first_round_made_it(self):
+        for support in (["inferred"], ["none"]):
+            with self.subTest(support=support):
+                if os.path.exists(os.path.join(self.dir, "n")):
+                    os.remove(os.path.join(self.dir, "n"))  # the fake counts its calls from the start again
+                out = self.make(self.full_topics(), self.full_checks(),
+                                round_reply(topics=["tight bound sides"], topics_support=support))
+                self.assertEqual(out["more"]["status"], "refused")
+                self.assertEqual(len(out["model"]["topics"]), 12)
+                self.assertNotIn("added", out["grounding"])
+                self.assertIn("support", out["more"]["reason"])
+
+    def test_a_round_whose_lists_do_not_match_is_refused_and_the_card_is_kept(self):
+        out = self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=[]))
+        self.assertEqual(out["more"]["status"], "refused")
+        self.assertEqual(len(out["model"]["topics"]), 12)
+
+    def test_a_round_that_cannot_be_made_leaves_the_card_as_it_was(self):
+        out = self.make(self.full_topics(), self.full_checks(), failure())
+        self.assertEqual(out["more"]["status"], "failed")
+        self.assertEqual(len(out["model"]["topics"]), 12)
+        self.assertEqual(out["checks"]["checked"], 16)
+
+    def test_a_card_that_stays_thin_says_the_round_was_made(self):
+        card_reply = answer()
+        out = self.make(card_reply, [verdicts("supports", "supports", "supports", "no", "no", "supports")],
+                        round_reply(key_ideas=["a looser bound for dependent data"], key_ideas_support=["2.1"]), [verdicts("supports")])
+        self.assertEqual(len(out["model"]["key_ideas"]), 2)
+        self.assertEqual(len(out["reasons"]), 1)
+        self.assertIn("second round", out["reasons"][0])
+        self.assertIn("only 2 key ideas", out["reasons"][0])
+
+    def test_without_the_task_there_is_no_round_and_the_report_says_so(self):
+        out = self.make(self.full_topics(), self.full_checks(), cfg=self.cfg(more=None))
+        self.assertEqual(out["more"]["status"], "off")
+        self.assertEqual(len(self.calls()), 5)  # two notes, the card, two checks
+        self.assertEqual(len(out["model"]["topics"]), 12)
+
+    def test_a_name_that_is_not_listed_is_refused_before_any_call(self):
+        self.script(*[reply(n) for n in self.NOTES_REPLIES])
+        message = self.refused(conversion(*[block(x) for x in self.TEXTS]), cfg=self.cfg(more="nowhere"))
+        self.assertIn("card-more", message)
+        self.assertEqual(self.calls(), [])
+
+    def test_the_round_goes_to_the_model_set_for_it_and_its_checks_to_the_checker(self):
+        self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=["2.1"]),
+                  [verdicts("supports")])
+        calls = self.calls()
+        args, prompt = calls[5]
+        self.assertEqual((option(args, "--server"), option(args, "--model"), option(args, "--schema")),
+                         ("srv-m", "m-more", "engine/kb/schemas/card-more.json"))
+        self.assertEqual(option(calls[6][0], "--server"), "srv-k")
+
+    def test_the_prompt_of_the_round_shows_what_is_kept_and_the_verified_notes_and_asks_for_no_inference(self):
+        self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=["2.1"]),
+                  [verdicts("supports")])
+        prompt = self.calls()[5][1]
+        token = re.search(r"token (\w+)", prompt).group(1)
+        found = sections(prompt, token)
+        self.assertIn("early rule 7", found["KEPT"])
+        self.assertIn("[1.1 verified]", found["NOTES 1"])
+        self.assertIn("[1.2 unverified]", found["NOTES 1"])
+        self.assertNotIn("a quote that is not there", prompt)
+        self.assertIn("up to 8 more topics", prompt)
+        self.assertIn("never", prompt)
+        self.assertIn("inferred", prompt)
+
+    def test_the_records_name_the_round_and_its_checks(self):
+        out = self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=["2.1"]),
+                        [verdicts("supports")])
+        tasks = [r["task"] for r in out["records"]]
+        self.assertEqual(tasks, ["card-notes", "card-notes", "card", "card-check", "card-check", "card-more", "card-check"])
+        self.assertEqual((out["records"][-1]["checked"], out["records"][-1]["supported"]), (1, 1))
+        self.assertEqual(out["calls"], 7)
+        self.assertEqual(out["checks"], {"checked": 17, "supports": 17, "partly": 0, "no": 0, "unpaired": 0})
+
+    def test_a_round_at_most_once_for_a_card(self):
+        self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=["2.1"]),
+                  [verdicts("supports"), reply(round_reply(topics=["x"], topics_support=["2.1"]))])
+        self.assertEqual(sum(1 for _, p in self.calls() if "more topics" in p), 1)
+
+    def test_a_round_that_adds_nothing_leaves_no_added_entry(self):
+        out = self.make(self.full_topics(), self.full_checks(), round_reply())
+        self.assertEqual(out["more"]["status"], "ran")
+        self.assertEqual(out["more"]["fields"]["topics"]["added"], 0)
+        self.assertNotIn("added", out["grounding"])
+
+
 class KindWordTest(unittest.TestCase):
     def test_the_prompt_uses_the_word_for_the_kind_of_source(self):
         for kind, word in (("preprint", "paper"), ("paper", "paper"), ("web page", "page"), ("book", "book"), ("something else", "book")):
@@ -851,7 +1069,7 @@ class JobTest(unittest.TestCase):
         self.assertIsNotNone(cardmake.CARD_JOB.check)
 
     def test_the_jobs_are_the_kinds_of_work_the_engine_knows(self):
-        self.assertEqual({cardmake.CARD_JOB.name, cardmake.NOTES_JOB.name, cardmake.check_job(1).name}, set(models.TASKS))
+        self.assertEqual({cardmake.CARD_JOB.name, cardmake.NOTES_JOB.name, cardmake.check_job(1).name, cardmake.MORE_JOB.name}, set(models.TASKS))
 
     def test_each_job_has_a_prompt_version(self):
         self.assertEqual((cardmake.CARD_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v4", "v3"))
@@ -956,7 +1174,7 @@ class LibraryCase(StoreCase):
 def config_models():
     entry = lambda server, model: {"bridge": "ask-ollama", "server": server, "model": model}
     return {"models_on": True, "models": {"notes": entry("srv-n", "m-notes"), "cardm": entry("srv-c", "m-card"),
-                                          "checker": entry("srv-k", "m-check")},
+                                          "checker": entry("srv-k", "m-check"), "morem": entry("srv-m", "m-more")},
             "tasks": {"card-notes": "notes", "card": "cardm", "card-check": "checker"}}
 
 
@@ -982,6 +1200,31 @@ class JoinTest(LibraryCase):
         other, _ = self.converted_book(blocks=[block("a book that holds neither of the quotes of the notes at all " + "filler " * 200)], title="Other")
         (report,) = self.run_cards(other)
         self.assertEqual((report["points"], report["verified"]), (2, 0))
+
+    def test_the_report_says_whether_the_second_round_was_made_and_what_it_added(self):
+        book, version = self.converted_book(blocks=[block("the text studies one stopping rule and it proves a bound on regret " + "filler " * 200)])
+        card_reply = dict(CARD, topics=[f"stopping rule {n}" for n in range(12)], topics_support=["1.1"] * 12,
+                          key_ideas=["one stopping rule studied", "a bound on regret", "a third idea"], key_ideas_support=["1.1", "1.2", "inferred"],
+                          neutral_limits="a bound on regret only", neutral_limits_support="1.2")
+        more_reply = round_reply(topics=["regret bound proof"], topics_support=["1.2"])
+        self.script(reply(NOTES), reply(card_reply), verdicts(*["supports"] * 10), verdicts(*["supports"] * 5),
+                    reply(more_reply), verdicts("supports"))
+        (off,) = self.run_cards(book)
+        self.assertEqual((off["more"]["status"], off["calls"]), ("off", 4))
+        os.remove(os.path.join(self.fake, "n"))
+        self.set_config(tasks=dict(self.cfg_data["tasks"], **{"card-more": "morem"}))
+        (report,) = self.run_cards(book, again=True)
+        self.assertEqual((report["status"], report["generation"], report["calls"]), ("carded", 2, 6))
+        self.assertEqual(report["more"]["status"], "ran")
+        self.assertEqual(report["more"]["fields"]["topics"]["added"], 1)
+        self.assertEqual({m["task"] for m in report["models"]}, {"card-notes", "card", "card-check", "card-more"})
+        number, filed = card.read(self.store, book, version)
+        self.assertEqual(filed["model"]["topics"][12:], ["regret bound proof"])
+        self.assertEqual(filed["grounding"]["added"], {"topics": [12]})
+        self.assertEqual(filed["grounding"]["topics"][12], {"mark": "stated", "notes": ["1.2"], "quote": "proves a bound on regret"})
+        self.assertEqual([r["task"] for r in filed["made"]["records"]],
+                         ["card-notes", "card", "card-check", "card-check", "card-more", "card-check"])
+        self.assertNotIn("more topics", json.dumps(report))  # the report holds no prompt
 
     def test_a_card_from_the_metadata_alone_has_no_points(self):
         book, _ = self.converted_book(state="failed")

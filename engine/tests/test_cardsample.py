@@ -326,6 +326,150 @@ class FilesTest(SampleCase):
         self.assertEqual(snapshot(), before)
 
 
+def stated_grounding(model, added=None):
+    """A grounding record in which every item is stated, with the items a second round added named by `added`."""
+    entry = {"mark": "stated", "notes": ["1.1"], "quote": "a quote of the book"}
+    out = {field: [dict(entry) for _ in model[field]] for field in ("topics", "key_ideas", "caveats")}
+    out["neutral_limits"] = dict(entry) if model["neutral_limits"] else None
+    out["dropped"] = {"topics": 0, "key_ideas": 0, "caveats": 0, "neutral_limits": 0}
+    if added:
+        out["added"] = added
+    return out
+
+
+class AddedTest(SampleCase):
+    """Generation 3 of two books is a grounded card in which a second round added three items."""
+
+    def setUp(self):
+        super().setUp()
+        self.added = {"alpha": {"topics": [1], "key_ideas": [2]}, "bravo": {"key_ideas": [1]}}
+        for tag, added in self.added.items():
+            model = model_for(f"{tag}z")
+            version = self.store.version_ids(self.books[tag])[0]
+            card.file(self.store, card.make(self.store, self.books[tag], version, model=model, records=[], pieces=1, calls=1,
+                                            grounding=stated_grounding(model, added)))
+
+    def sample3(self, **kw):
+        kw.setdefault("items", 12)
+        return cardsample.sample(self.store, self.out, calibration=3, seed=7, generations=(3,), **{k: v for k, v in kw.items() if k != "items"},
+                                 items=kw["items"])
+
+    def test_the_items_a_second_round_added_are_drawn_as_a_group_of_their_own_and_marked_in_the_key(self):
+        summary = self.sample3(added=3)
+        key = self.load("key.json")["items"]
+        marked = {(e["book_id"], e["field"], e["position"]) for e in key.values() if e.get("added")}
+        self.assertEqual(marked, {(self.books["alpha"], "topics", 1), (self.books["alpha"], "key_ideas", 2),
+                                  (self.books["bravo"], "key_ideas", 1)})
+        self.assertEqual(len(key), 12)
+        self.assertEqual(summary["added"], 3)
+        texts = {i["id"]: i["text"] for i in self.load("items.json")["items"]}
+        self.assertEqual(sorted(texts[i] for i, e in key.items() if e.get("added")),
+                         sorted(["alphaz topic two", "alphaz idea three", "bravoz idea two"]))
+        self.assertEqual(len({(e["book_id"], e["field"], e["position"]) for e in key.values()}), 12)  # no item twice
+
+    def test_some_of_the_added_items_can_be_drawn(self):
+        self.sample3(added=2)
+        key = self.load("key.json")["items"]
+        self.assertEqual(sum(1 for e in key.values() if e.get("added")), 2)
+        self.assertEqual(len(key), 12)
+
+    def test_without_the_option_no_entry_of_the_key_is_marked_and_the_added_items_are_drawn_like_any_other(self):
+        self.sample3()
+        self.assertFalse(any("added" in e for e in self.load("key.json")["items"].values()))
+
+    def test_more_added_items_than_there_are_is_refused_and_writes_nothing(self):
+        with self.assertRaises(KbError) as cm:
+            self.sample3(added=4)
+        self.assertIn("added", str(cm.exception))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_more_added_items_than_the_sample_is_refused(self):
+        with self.assertRaises(KbError):
+            self.sample3(items=2, added=3)
+
+    def test_a_generation_cannot_hold_more_added_items_than_its_share_of_the_sample(self):
+        model = model_for("charliez")
+        version = self.store.version_ids(self.books["charlie"])[0]
+        card.file(self.store, card.make(self.store, self.books["charlie"], version, model=model, records=[], pieces=1, calls=1,
+                                        grounding=stated_grounding(model)))  # generation 3 of charlie, with nothing added
+        fourth = {"alpha": {"topics": [0, 1], "key_ideas": [0]}, "bravo": {"topics": [0]}}  # a fourth generation with four added items
+        for tag, added in fourth.items():
+            model = model_for(f"{tag}w")
+            version = self.store.version_ids(self.books[tag])[0]
+            card.file(self.store, card.make(self.store, self.books[tag], version, model=model, records=[], pieces=1, calls=1,
+                                            grounding=stated_grounding(model, added)))
+        with self.assertRaises(KbError) as cm:  # seven items in a sample of seven: four and three, and generation 4 has four added items
+            cardsample.sample(self.store, self.out, items=7, calibration=2, seed=7, generations=(3, 4), added=7)
+        self.assertIn("share", str(cm.exception))
+        self.assertFalse(os.path.exists(self.out))
+        cardsample.sample(self.store, self.out, items=8, calibration=2, seed=7, generations=(3, 4), added=7)  # four each: all seven fit
+        shares = {}
+        for e in self.load("key.json")["items"].values():
+            shares[e["generation"]] = shares.get(e["generation"], 0) + (1 if e.get("added") else 0)
+        self.assertEqual(shares, {3: 3, 4: 4})
+
+    def test_the_option_is_a_whole_number(self):
+        for bad in (-1, True, 1.5, "2", 10 ** 6):
+            with self.subTest(bad=bad), self.assertRaises(KbError):
+                self.sample3(added=bad)
+
+    def test_the_items_file_does_not_say_which_items_were_added(self):
+        self.sample3(added=3)
+        text = json.dumps(self.load("items.json")) + json.dumps(self.load("calibration.json"))
+        self.assertNotIn("added", text.replace("labelled_by", ""))
+
+    def test_the_accuracy_counts_the_added_items_apart(self):
+        self.sample3(added=3)
+        items = self.load("items.json")
+        for n, item in enumerate(items["items"]):
+            item.update(label="supported" if n % 2 else "unsupported", labelled_by="model")
+        path = os.path.join(self.base, "labelled.json")
+        with open(path, "w") as f:
+            json.dump(items, f)
+        report = cardsample.accuracy(path, os.path.join(self.out, "key.json"))
+        group = report["generations"]["3"]
+        self.assertEqual(group["items"], 12)
+        self.assertEqual(group["added"]["items"], 3)
+        self.assertEqual(group["added"]["supported"] + group["added"]["unsupported"], 3)
+        self.assertEqual(report["generations"]["3"]["fields"]["topics"]["items"] + report["generations"]["3"]["fields"]["key_ideas"]["items"]
+                         + sum(f["items"] for n, f in group["fields"].items() if n not in ("topics", "key_ideas")), 12)
+
+    def test_a_sample_without_added_items_has_no_added_group_in_its_accuracy(self):
+        self.sample()
+        items = self.load("items.json")
+        for item in items["items"]:
+            item.update(label="supported", labelled_by="model")
+        path = os.path.join(self.base, "labelled.json")
+        with open(path, "w") as f:
+            json.dump(items, f)
+        report = cardsample.accuracy(path, os.path.join(self.out, "key.json"))
+        self.assertFalse(any("added" in g for g in report["generations"].values()))
+
+    def test_a_key_entry_may_carry_the_mark_only_as_true(self):
+        self.sample3(added=3)
+        doc = self.load("key.json")
+        first = next(iter(doc["items"]))
+        doc["items"][first]["added"] = "yes"
+        bad = os.path.join(self.base, "badkey.json")
+        with open(bad, "w") as f:
+            json.dump(doc, f)
+        items = self.load("items.json")
+        for item in items["items"]:
+            item.update(label="supported", labelled_by="model")
+        path = os.path.join(self.base, "labelled.json")
+        with open(path, "w") as f:
+            json.dump(items, f)
+        with self.assertRaises(KbError):
+            cardsample.accuracy(path, bad)
+
+    def test_the_command_has_the_option(self):
+        env = dict(os.environ, KB_CONFIG_DIR=self.cfg)
+        r = subprocess.run([sys.executable, "-m", "kb", "card-sample", self.out, "--items", "12", "--calibration", "3", "--seed", "7",
+                            "--generation", "3", "--added", "3"], cwd=ENGINE_DIR, env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout)["added"], 3)
+
+
 def labelled(book="01M6SR01QXBXAZ9V8ZHBWPCDAF", field="topics", text="t", label="supported", by="model", note="", item_id="i001"):
     return {"id": item_id, "book_id": book, "title": "T", "field": field, "text": text, "passages": [], "label": label, "labelled_by": by,
             "note": note}

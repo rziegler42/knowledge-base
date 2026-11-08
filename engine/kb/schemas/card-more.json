@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "properties": {
+    "topics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "topics_support": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "key_ideas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "key_ideas_support": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "topics",
+    "topics_support",
+    "key_ideas",
+    "key_ideas_support"
+  ],
+  "additionalProperties": false
+}

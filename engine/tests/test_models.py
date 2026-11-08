@@ -696,7 +696,21 @@ class TaskTest(Base):
         self.assertEqual(models.choose(cfg, "card")[0], "other")
 
     def test_the_kinds_of_work_are_named_in_the_engine_with_no_model(self):
-        self.assertEqual(set(models.TASKS), {"card-notes", "card", "card-check"})
+        self.assertEqual(set(models.TASKS), {"card-notes", "card", "card-check", "card-more"})
+        self.assertEqual(set(models.REQUIRED_TASKS), {"card-notes", "card", "card-check"})
+
+    def test_the_second_round_is_the_one_kind_of_work_that_may_be_left_unset(self):
+        self.assertIsNone(models.optional(with_tasks({"card-notes": "local"}, local=entry()), "card-more"))
+        self.assertIsNone(models.optional(config(), "card-more"))
+        cfg = with_tasks({"card-more": "other"}, local=entry(), other=entry())
+        self.assertEqual(models.optional(cfg, "card-more"), "other")
+        with self.assertRaises(KbError):  # a name that is not listed is a refusal, and not a skipped round
+            models.optional(with_tasks({"card-more": "nowhere"}, local=entry()), "card-more")
+        with self.assertRaises(KbError):  # a kind of work that is needed is not optional
+            models.optional(cfg, "card")
+        off = dict(cfg, models_on=False)
+        with self.assertRaises(KbError):
+            models.optional(off, "card-more")
 
     def test_a_kind_of_work_with_no_setting_is_refused_with_the_key_to_set_even_if_one_model_is_listed(self):
         for cfg in (config(), with_tasks({}), with_tasks({"card-notes": "local"}, local=entry())):

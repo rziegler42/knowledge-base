@@ -153,15 +153,17 @@ def passages(blocks, text):
     return out
 
 
-def _draw(rng, cards, quota):
-    """`quota` items from `cards`: `[(book_id, version_id, card, generation, field, position, text)]`."""
+def _draw(rng, cards, quota, skip=frozenset()):
+    """`quota` items from `cards`: `[(book_id, version_id, card, generation, field, position, text)]`, none of which is in `skip`, a set
+    of `(book_id, version_id, generation, field, position)`."""
     order = sorted(cards, key=lambda c: (c[0], c[1]))
     rng.shuffle(order)
     pools = []
     for book_id, version_id, made, number in order:
         by_field = {}
         for field, position, text in _items_of(made["model"]):
-            by_field.setdefault(field, []).append((position, text))
+            if (book_id, version_id, number, field, position) not in skip:
+                by_field.setdefault(field, []).append((position, text))
         names = sorted(by_field)
         rng.shuffle(names)
         for name in names:
@@ -230,10 +232,26 @@ def _write_text(path, text):
         os.fsync(f.fileno())
 
 
-def sample(store, outdir, items=80, calibration=15, seed=None, generations=None, books=None):
+def _added_items(pool):
+    """The items that a second round added to the cards of `pool`, as `[(book_id, version_id, card, generation, field, position, text)]`
+    in a fixed order."""
+    out = []
+    for group in sorted(pool):
+        for book_id, version_id, made, number in sorted(pool[group], key=lambda c: (c[0], c[1], c[3])):
+            for field, positions in sorted(((made.get("grounding") or {}).get("added") or {}).items()):
+                out += [(book_id, version_id, made, number, field, p, made["model"][field][p]) for p in positions
+                        if made["model"][field][p].strip()]
+    return out
+
+
+def sample(store, outdir, items=80, calibration=15, seed=None, generations=None, books=None, added=0):
     """Draw the sample and write its files in `outdir`; returns a summary of numbers. Refuses a folder inside the project or one that
     holds files, a sample larger than the cards hold, a calibration larger than the sample, a generation no card has, and a book
-    whose converted text cannot be read. Changes nothing in the library."""
+    whose converted text cannot be read. With `added`, that many of the items are drawn from those that a second round added to the
+    cards (`cards#card-grounding`), marked in the key and counted in the sample; it is refused if the cards hold fewer, or if a
+    generation would have more of them than its share of the sample. Changes nothing in the library."""
+    if type(added) is not int or not 0 <= added <= MAX_ITEMS:
+        raise KbError(f"the number of added items is a whole number from 0 to {MAX_ITEMS}")
     if type(items) is not int or not 1 <= items <= MAX_ITEMS or type(calibration) is not int or not 0 <= calibration <= items:
         raise KbError(f"the sample is from 1 to {MAX_ITEMS} items and its calibration subset from 0 to as many as the sample")
     if seed is None:
@@ -251,11 +269,23 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
     for cards in pool.values():  # a book whose text cannot be read stops the sample before anything is written
         for book_id, version_id, _, _ in cards:
             _blocks(store, book_id, version_id)
+    if added > items:
+        raise KbError("the sample cannot hold more added items than its own size")
     numbers = sorted(pool)
-    picked = []
+    drawn = []
+    if added:
+        candidates = _added_items(pool)
+        if added > len(candidates):
+            raise KbError(f"the cards hold only {len(candidates)} items that a second round added, and the sample asks for {added}")
+        drawn = random.Random(f"{seed}:added").sample(candidates, added)
+    skip = {(e[0], e[1], e[3], e[4], e[5]) for e in drawn}
+    picked = list(drawn)
     for n, group in enumerate(numbers):
         quota = items // len(numbers) + (1 if n < items % len(numbers) else 0)
-        picked += _draw(random.Random(f"{seed}:{group}"), pool[group], quota)
+        have = sum(1 for e in drawn if (0 if wanted is None else e[3]) == group)
+        if have > quota:
+            raise KbError("a generation would hold more added items than its share of the sample")
+        picked += _draw(random.Random(f"{seed}:{group}"), pool[group], quota - have, skip)
     random.Random(f"{seed}:order").shuffle(picked)
     cache = {}
     listed, key = [], {}
@@ -267,6 +297,8 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
                        "passages": passages(cache[(book_id, version_id)], text), "label": None, "labelled_by": None, "note": ""})
         key[item_id] = {"book_id": book_id, "version_id": version_id, "generation": number, "field": field, "position": position,
                         "sha256": _sha(text)}
+        if (book_id, version_id, number, field, position) in skip:
+            key[item_id]["added"] = True
     subset = _spread(random.Random(f"{seed}:calibration"), listed, calibration)
     head = {"format": FORMAT, "untrusted": True, "rubric": RUBRIC}
     folder, made_here = _prepare(outdir)
@@ -293,7 +325,8 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
         raise
     count = lambda values: {str(k): values.count(k) for k in sorted(set(values))}
     return {"items": len(listed), "calibration": len(subset), "seed": seed, "cards": len({(e[0], e[1], e[3]) for e in picked}),
-            "unreadable_cards": unreadable, "generations": count([e[3] for e in picked]), "fields": count([e[4] for e in picked])}
+            "unreadable_cards": unreadable, "generations": count([e[3] for e in picked]), "fields": count([e[4] for e in picked]),
+            "added": len(drawn)}
 
 
 def _read_json(path, what):
@@ -369,7 +402,8 @@ def _load_key(path):
     if not isinstance(doc, dict) or doc.get("format") != FORMAT or not isinstance(doc.get("items"), dict):
         raise KbError("the key file is not a key of this format")
     for entry in doc["items"].values():
-        if not isinstance(entry, dict) or set(entry) != {"book_id", "version_id", "generation", "field", "position", "sha256"} \
+        base = {"book_id", "version_id", "generation", "field", "position", "sha256"}
+        if not isinstance(entry, dict) or set(entry) not in (base, base | {"added"}) or entry.get("added", True) is not True \
                 or type(entry["generation"]) is not int or not 1 <= entry["generation"] <= 10 ** 6:
             raise KbError("the key file holds an entry that is not valid")
     return doc["items"]
@@ -392,12 +426,17 @@ def accuracy(items_path, key_path):
     generations = {}
     for item in items:
         group = generations.setdefault(str(key[item["id"]]["generation"]), {**blank(), "fields": {}})
-        for target in (group, group["fields"].setdefault(item["field"], blank())):
+        targets = [group, group["fields"].setdefault(item["field"], blank())]
+        if key[item["id"]].get("added"):  # the items that a second round added are counted apart as well
+            targets.append(group.setdefault("added", blank()))
+        for target in targets:
             target["items"] += 1
             target["skipped" if item["label"] == "skip" else item["label"]] += 1
     for group in generations.values():
-        judged = group["items"] - group["skipped"]
-        group["shares"] = {label: round(group[label] / judged, 4) for label in LABELS} if judged else None
+        for part in (group, group.get("added")):
+            if part is not None:
+                judged = part["items"] - part["skipped"]
+                part["shares"] = {label: round(part[label] / judged, 4) for label in LABELS} if judged else None
     labeller = {}
     for item in items:
         labeller[item["labelled_by"]] = labeller.get(item["labelled_by"], 0) + 1

@@ -555,6 +555,56 @@ class GroundedTest(CardCase):
             with self.subTest(label), self.assertRaises(KbError):
                 card.validate(made)
 
+    def stated_round(self, **added):
+        """A card whose second and third topics and its second key idea are stated (a second round added them) and `added` names them."""
+        model = dict(MODEL, topics=["a", "b", "c"], key_ideas=["x", "y", "z"])
+        made = self.grounded(model=model)
+        for field, position in (("topics", 1), ("topics", 2), ("key_ideas", 1)):
+            made["grounding"][field][position] = copy.deepcopy(STATED)
+        made["grounding"]["added"] = added
+        return made
+
+    def test_a_card_may_name_the_items_a_second_round_added_and_the_names_survive_filing_and_reading(self):
+        made = self.stated_round(topics=[1, 2], key_ideas=[1])
+        card.validate(made)
+        number = card.file(self.store, made)
+        _, read_back = card.read(self.store, made["book_id"], made["version_id"], number)
+        self.assertEqual(read_back["grounding"]["added"], {"topics": [1, 2], "key_ideas": [1]})
+        self.assertEqual(card.validate(self.stated_round(key_ideas=[1]))["grounding"]["added"], {"key_ideas": [1]})
+
+    def test_a_card_with_no_second_round_has_no_added_entry_and_is_still_valid(self):
+        made = self.grounded()
+        self.assertNotIn("added", made["grounding"])
+        card.validate(made)
+
+    def test_the_added_entry_is_refused_when_it_does_not_fit_the_card(self):
+        cases = {
+            "an entry that is not an object": lambda g: g.update(added=[1]),
+            "an empty entry": lambda g: g.update(added={}),
+            "the caveats": lambda g: g.update(added={"caveats": [0]}),
+            "an unknown field": lambda g: g.update(added={"summary": [0]}),
+            "an empty list": lambda g: g.update(added={"topics": []}),
+            "a list that is not a list": lambda g: g.update(added={"topics": 1}),
+            "a position that is not in the card": lambda g: g.update(added={"topics": [3]}),
+            "a negative position": lambda g: g.update(added={"topics": [-1, 1]}),
+            "a position that is a text": lambda g: g.update(added={"topics": ["1"]}),
+            "a position that is true": lambda g: g.update(added={"topics": [True]}),
+            "a position twice": lambda g: g.update(added={"topics": [1, 1]}),
+            "positions out of order": lambda g: g.update(added={"topics": [2, 1]}),
+            "an item that is only inferred": lambda g: g["topics"][2].update(mark="inferred", notes=[], quote=None),
+        }
+        for label, mutate in cases.items():
+            made = self.stated_round(topics=[1, 2], key_ideas=[1])
+            mutate(made["grounding"])
+            with self.subTest(label), self.assertRaises(KbError):
+                card.validate(made)
+
+    def test_a_card_of_format_1_may_not_name_added_items(self):
+        made = card.make(self.store, *self.full_book(), model=copy.deepcopy(MODEL), records=[dict(RECORD)], pieces=1, calls=1)
+        made["grounding"] = {"added": {"topics": [0]}}
+        with self.assertRaises(KbError):
+            card.validate(made)
+
     def test_a_limit_that_was_dropped_leaves_the_field_empty_and_no_mark(self):
         model = dict(MODEL, neutral_limits="")
         made = self.grounded(model=model, dropped=dict(DROPPED, neutral_limits=1))

@@ -201,7 +201,7 @@ def _grounding(g, model):
     """The grounding record of a card of format 2, checked against its model part."""
     bad = lambda what: KbError(f"the card is not valid: grounding, {what}")
     keys = set(GROUNDED_LISTS) | {"neutral_limits", "dropped"}
-    if not isinstance(g, dict) or set(g) != keys:
+    if not isinstance(g, dict) or set(g) not in (keys, keys | {"added"}):
         raise bad("its keys")
     for field in GROUNDED_LISTS:
         if not isinstance(g[field], list) or len(g[field]) != len(model[field]):
@@ -217,6 +217,24 @@ def _grounding(g, model):
     if not isinstance(dropped, dict) or set(dropped) != set(GROUNDED_LISTS) | {"neutral_limits"} \
             or not all(_count(v, 1000) for v in dropped.values()):
         raise bad("the counts of what was dropped")
+    if "added" in g:
+        _added(g["added"], g, model, bad)
+
+
+ADDED_LISTS = ("topics", "key_ideas")   # the lists that a second round may add to
+
+
+def _added(added, g, model, bad):
+    """The items a second round added: for some of the lists the second round serves, the positions in the list, in order, of items
+    that are stated."""
+    if not isinstance(added, dict) or not added or not set(added) <= set(ADDED_LISTS):
+        raise bad("the items a second round added are named for the topics and the key ideas only, and at least one list")
+    for field, positions in added.items():
+        if not isinstance(positions, list) or not positions or not all(type(p) is int for p in positions) \
+                or positions != sorted(set(positions)) or positions[0] < 0 or positions[-1] >= len(model[field]):
+            raise bad(f"the positions of the items added to {field}")
+        if any(g[field][p]["mark"] != "stated" for p in positions):
+            raise bad(f"an item added to {field} that is not stated")
 
 
 def make(store, book_id, version_id, model=None, records=(), pieces=0, calls=0, reasons=(), grounding=None):

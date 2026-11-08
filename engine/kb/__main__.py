@@ -92,6 +92,8 @@ def main(argv=None):
     cs.add_argument("outdir", help="the folder to write the sample in (new or empty)")
     cs.add_argument("--items", type=int, default=80, help="the number of items (default 80)")
     cs.add_argument("--calibration", type=int, default=15, help="the number of items in the calibration subset (default 15)")
+    cs.add_argument("--added", type=int, default=0, help="the number of items to draw from those that a second round added to the cards "
+                    "(default 0); they are counted in the sample and marked in the key")
     cs.add_argument("--seed", type=int, default=None, help="the seed (default: a random one, recorded in the key)")
     cs.add_argument("--book", action="append", help="a book to draw from; repeat for several (default: every book that has a card)")
     cs.add_argument("--generation", type=int, action="append", help="a card generation to draw from; repeat for several "
@@ -106,7 +108,8 @@ def main(argv=None):
     try:
         if args.command == "card-sample":
             print(json.dumps(cardsample.sample(Store.open(write=False), args.outdir, items=args.items, calibration=args.calibration,
-                                               seed=args.seed, generations=args.generation, books=args.book), indent=1))
+                                               seed=args.seed, generations=args.generation, books=args.book, added=args.added),
+                             indent=1))
             return 0
         if args.command == "card-accuracy":
             print(json.dumps(cardsample.accuracy(args.items, args.key), indent=1))
@@ -130,7 +133,7 @@ def main(argv=None):
             return 0
         if args.command == "cards":
             cfg = config.load()
-            for task in models.TASKS:  # model work on and a model set for each task, before any book is touched
+            for task in models.REQUIRED_TASKS:  # model work on and a model set for each task that is needed, before any book is touched
                 models.choose(cfg, task)
             reports = cardmake.run(Store.open(), cfg, args.books, again=args.again)
             for report in reports:

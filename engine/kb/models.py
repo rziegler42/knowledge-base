@@ -77,7 +77,9 @@ def _entry(name, e):
     return dict(e)
 
 
-TASKS = ("card-notes", "card", "card-check")  # the kinds of model work the engine knows; the engine attaches no model to any of them
+REQUIRED_TASKS = ("card-notes", "card", "card-check")  # the kinds of model work that a card needs; the engine attaches no model to any of them
+OPTIONAL_TASKS = ("card-more",)  # the kinds that may be left unset: the work is then not done, and that is said
+TASKS = REQUIRED_TASKS + OPTIONAL_TASKS
 
 
 def _settings(cfg, entries):
@@ -124,6 +126,17 @@ def choose(cfg, task):
     if task not in settings:
         raise KbError(f"no model is set for the task {task}: set tasks.{task} in the config to the name of a listed model")
     return settings[task], f"set for {task} in the config"
+
+
+def optional(cfg, task):
+    """The entry name that the user's `tasks` setting names for a kind of work that may be left unset, or None when it is not set. A
+    name that is not listed, and model work that is off, are refusals, as for `choose`; a kind of work that is needed is not optional."""
+    entries = registry(cfg)
+    if cfg.get("models_on") is not True:
+        raise KbError("model work is off: set models_on to true in the config to turn it on")
+    if task not in OPTIONAL_TASKS:
+        raise KbError(f"{textutil.clean(task, 40)!r} is not a kind of work that may be left unset ({', '.join(OPTIONAL_TASKS)})")
+    return _settings(cfg, entries).get(task)
 
 
 def listing(cfg):

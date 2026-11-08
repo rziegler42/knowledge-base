@@ -123,6 +123,14 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   be supported makes the item stated. A `stated` mark comes only from these checks; `inferred` is the card model's own word and is
   not checked. The prompt names the kind of source (a paper, a page) and tells the model to write about it and not about the
   notes.
+- **[proposed]** A list of topics or key ideas that may have been cut off, or that lost most of its items, is offered one more
+  round by a second model, named in the owner's config as the task `card-more`, which is optional. The round is offered when the
+  card model gave as many items as were asked, or when the checks kept fewer than half of the items it gave and dropped at least two,
+  or, for the key ideas, when fewer than three were kept, and only if the list has a free place. The round is given the notes and the
+  items already kept and asked for items that a verified note states. An item it adds is kept only as a `stated` item, by the pairing
+  and the check above, and only if it does not repeat a kept item; it asks for no `inferred` item, which makes the round stricter
+  than the first. A card is offered at most one round. A round that fails or is refused leaves the card as the first round made it.
+  The grounding record of the card names the items the round added, so that a sample of items can draw them as a group of their own.
 
 ### Searching the catalog
 
