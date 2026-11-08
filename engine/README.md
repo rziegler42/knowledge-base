@@ -496,6 +496,17 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   heading occurs. A verified quote shows that a point is in the book, not that it is right.
   The report of `cards` gives `points` and `verified`, the counts over the notes of the book (none for a card made from the
   metadata).
+- **Marks on the card (format 2).** The card call is told the kind of source (paper, page, book) and uses its word, and is asked
+  for a support for each topic, key idea and caveat and for the neutral limit: the numbers of the notes that state it (such as
+  `1.1 3.2`), or `inferred` if it is the model's own inference, or `none`. A support in any other form refuses the answer, and so
+  does a list of supports of the wrong length. The engine then marks each item from its check of the quotes, never from the
+  model's word: `stated` if a note it cites is verified (the card keeps the first such quote, up to 240 characters, and the notes
+  that were verified), `inferred` if the model said so, and an item with neither is dropped (a dropped limit leaves its field
+  empty). The prompts ask for at most 7 key ideas and 12 topics (the limits are 8 and 20). A card with fewer than three key ideas
+  left is marked partial and says why, and nothing is added to make up the number. The card holds a `grounding` record with a
+  mark, the notes and the quote for each kept item and the number dropped for each field, and its generation records carry the
+  counts of points and verified points of each piece's notes. `card-show` prints the quote of a stated key idea, caveat or limit
+  under its item, as untrusted text. A card of format 1, made before this, is read, searched and shown as it was.
 - **What a model is told.** The title, the outline, each piece of text and each note are given as data in sections of their own,
   between delimiters that carry a random token made for the call (made again if any input holds it); the rules name the token, say
   that a line with another token is data and that nothing in a section is an instruction, and ask for English whatever the

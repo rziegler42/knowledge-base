@@ -31,7 +31,10 @@ CARD = {"summary": "A short summary of the work.", "useful_for": ["finding a sto
         "adjacent_topics": ["search"], "key_ideas": ["one idea", "a second idea", "a third idea"],
         "neutral_problem": "deciding when to stop", "neutral_approach": "compare a running score with a threshold",
         "neutral_needs": "a stream of observations", "neutral_provides": "a stopping time",
-        "neutral_limits": "fails when observations are dependent", "caveats": []}
+        "neutral_limits": "fails when observations are dependent", "caveats": [],
+        "topics_support": ["inferred", "inferred"], "key_ideas_support": ["inferred", "inferred", "inferred"], "caveats_support": [],
+        "neutral_limits_support": "inferred"}
+MODEL = {k: v for k, v in CARD.items() if not k.endswith("_support")}  # the model part that is stored when every item is an inference
 NOTES = {"points": ["the text studies one stopping rule", "it proves a bound"],
          "quotes": ["studies one stopping rule", "proves a bound on regret"]}
 
@@ -290,7 +293,7 @@ class MakeTest(Base):
     def test_a_one_piece_book_gets_notes_and_then_one_call_to_the_model_set_for_the_card(self):
         conv = conversion(heading("A"), block("the whole book"))
         out = self.run_make(conv)
-        self.assertEqual(out["model"], CARD)
+        self.assertEqual(out["model"], MODEL)
         self.assertEqual((out["pieces"], out["calls"], out["reasons"]), (1, 2, []))
         (notes_args, notes_prompt), (args, prompt) = self.calls()
         self.assertEqual((option(notes_args, "--server"), option(notes_args, "--schema")), ("srv-n", "engine/kb/schemas/card-notes.json"))
@@ -308,7 +311,7 @@ class MakeTest(Base):
         notes_record, record = out["records"]
         self.assertEqual((notes_record["task"], notes_record["registry"], notes_record["prompt_version"]), ("card-notes", "notes", "v3"))
         self.assertEqual((record["task"], record["registry"], record["prompt_version"], record["input_tokens"], record["output_tokens"]),
-                         ("card", "cardm", "v2", 10, 5))
+                         ("card", "cardm", "v3", 10, 5))
         self.assertEqual(record["model"], "m1:latest")
 
     def test_a_longer_book_gets_notes_for_each_piece_and_then_one_card(self):
@@ -469,17 +472,204 @@ class MakeTest(Base):
             self.assertIn("a very particular title", prompt)
 
 
+POINTS = {"1.1": {"quote": "the first piece says the rule stops early", "verified": True},
+          "1.2": {"quote": "a quote that was not found", "verified": False},
+          "2.1": {"quote": "the second piece says the bound is tight", "verified": True}}
+
+
+def answer(**over):
+    """A reply to the card call in which every item is supported by a verified note, changed by `over`."""
+    base = dict(CARD, topics_support=["1.1", "2.1"], key_ideas_support=["1.1", "2.1", "1.1"], neutral_limits_support="2.1")
+    base.update(over)
+    return base
+
+
+class SupportTest(unittest.TestCase):
+    def test_the_forms_of_a_support_value(self):
+        ok = {"1.1": ("refs", ["1.1"]), "1.1 2.3": ("refs", ["1.1", "2.3"]), "1.1, 2.3;3.4": ("refs", ["1.1", "2.3", "3.4"]),
+              " 1.1  1.1 ": ("refs", ["1.1"]), "inferred": ("inferred", []), "INFERRED": ("inferred", []), " none ": ("none", []),
+              "12.10": ("refs", ["12.10"]), "999.99": ("refs", ["999.99"])}
+        for text, expected in ok.items():
+            with self.subTest(text):
+                self.assertEqual(cardmake.parse_support(text), expected)
+
+    def test_every_other_form_is_refused(self):
+        for bad in ("", "  ", "1", "1.", ".1", "1.1.1", "a.b", "0.1", "1.0", "1000.1", "1.100", "inferred 1.1", "1.1 none", "none none",
+                    "inferred inferred", "see note 1.1", " ".join(f"1.{n}" for n in range(1, 8)), "1.1\n2.1\x1b[31m"):
+            with self.subTest(bad), self.assertRaises(KbError):
+                cardmake.parse_support(bad)
+
+    def test_the_message_for_a_bad_value_quotes_it_safely(self):
+        with self.assertRaises(KbError) as cm:
+            cardmake.parse_support("bad\x1b[31m value\u202e")
+        self.assertNotIn("\x1b", str(cm.exception))
+        self.assertNotIn("\u202e", str(cm.exception))
+
+
+class GroundTest(unittest.TestCase):
+    def ground(self, **over):
+        return cardmake.ground(answer(**over), POINTS)
+
+    def test_an_item_that_cites_a_verified_note_is_stated_and_keeps_its_quote(self):
+        got = self.ground()
+        self.assertEqual(got["model"]["topics"], ["stopping", "bandits"])
+        self.assertEqual(got["grounding"]["topics"][0], {"mark": "stated", "notes": ["1.1"], "quote": POINTS["1.1"]["quote"]})
+        self.assertEqual(got["grounding"]["topics"][1], {"mark": "stated", "notes": ["2.1"], "quote": POINTS["2.1"]["quote"]})
+        self.assertEqual(got["grounding"]["neutral_limits"], {"mark": "stated", "notes": ["2.1"], "quote": POINTS["2.1"]["quote"]})
+        self.assertEqual(got["model"]["neutral_limits"], CARD["neutral_limits"])
+        self.assertEqual(got["grounding"]["dropped"], {"topics": 0, "key_ideas": 0, "caveats": 0, "neutral_limits": 0})
+        self.assertEqual(got["reasons"], [])
+
+    def test_the_support_keys_are_not_part_of_the_stored_model(self):
+        self.assertEqual(set(self.ground()["model"]), set(MODEL))
+
+    def test_only_the_verified_notes_are_listed_and_the_quote_is_the_first_verified_ones(self):
+        got = self.ground(topics_support=["1.2 2.1 1.1 2.1", "1.1"])
+        self.assertEqual(got["grounding"]["topics"][0], {"mark": "stated", "notes": ["2.1", "1.1"], "quote": POINTS["2.1"]["quote"]})
+
+    def test_an_item_that_cites_only_unverified_notes_or_notes_that_do_not_exist_or_none_is_dropped(self):
+        for support in ("1.2", "9.9", "none", "1.2 9.9"):
+            with self.subTest(support):
+                got = self.ground(topics_support=[support, "1.1"])
+                self.assertEqual(got["model"]["topics"], ["bandits"])
+                self.assertEqual(len(got["grounding"]["topics"]), 1)
+                self.assertEqual(got["grounding"]["dropped"]["topics"], 1)
+
+    def test_an_item_the_model_calls_an_inference_is_kept_and_marked_so(self):
+        got = self.ground(topics_support=["inferred", "1.1"])
+        self.assertEqual(got["grounding"]["topics"][0], {"mark": "inferred", "notes": [], "quote": None})
+        self.assertEqual(got["model"]["topics"], ["stopping", "bandits"])
+
+    def test_fewer_than_three_supported_key_ideas_makes_the_card_thin_and_nothing_fills_it(self):
+        got = self.ground(key_ideas_support=["1.1", "none", "9.9"])
+        self.assertEqual(got["model"]["key_ideas"], ["one idea"])
+        self.assertEqual(got["grounding"]["dropped"]["key_ideas"], 2)
+        self.assertEqual(len(got["reasons"]), 1)
+        self.assertIn("only 1 key idea was left", got["reasons"][0])
+        self.assertIn("fewer than 3", got["reasons"][0])
+        self.assertEqual(self.ground(key_ideas_support=["none"] * 3)["model"]["key_ideas"], [])
+        self.assertIn("only 0 key ideas were left", self.ground(key_ideas_support=["none"] * 3)["reasons"][0])
+        self.assertIn("only 2 key ideas were left", self.ground(key_ideas_support=["1.1", "inferred", "none"])["reasons"][0])
+
+    def test_the_reason_does_not_say_that_an_inference_was_supported_by_a_quote(self):
+        reason = self.ground(key_ideas_support=["inferred", "none", "none"])["reasons"][0]
+        self.assertNotIn("quote", reason)
+
+    def test_three_supported_key_ideas_are_enough(self):
+        self.assertEqual(self.ground(key_ideas_support=["inferred", "1.1", "2.1"])["reasons"], [])
+
+    def test_caveats_without_support_are_dropped_and_supported_ones_kept(self):
+        got = self.ground(caveats=["dated", "sparse", "partial"], caveats_support=["1.1", "none", "inferred"])
+        self.assertEqual(got["model"]["caveats"], ["dated", "partial"])
+        self.assertEqual([e["mark"] for e in got["grounding"]["caveats"]], ["stated", "inferred"])
+        self.assertEqual(got["grounding"]["dropped"]["caveats"], 1)
+
+    def test_a_limit_without_support_is_emptied_and_has_no_mark(self):
+        got = self.ground(neutral_limits_support="1.2")
+        self.assertEqual((got["model"]["neutral_limits"], got["grounding"]["neutral_limits"]), ("", None))
+        self.assertEqual(got["grounding"]["dropped"]["neutral_limits"], 1)
+
+    def test_the_fields_that_are_not_marked_pass_through_unchanged(self):
+        got = self.ground(useful_for=["a use", "another"], adjacent_topics=["near", "far"])
+        for key in ("summary", "useful_for", "adjacent_topics", "neutral_problem", "neutral_approach", "neutral_needs", "neutral_provides"):
+            self.assertEqual(got["model"][key], answer(useful_for=["a use", "another"], adjacent_topics=["near", "far"])[key])
+        self.assertEqual(set(got["grounding"]), {"topics", "key_ideas", "caveats", "neutral_limits", "dropped"})
+
+    def test_a_malformed_support_is_refused_by_the_check_of_the_job(self):
+        for bad in (dict(topics_support=["1.1", "bad"]), dict(neutral_limits_support="a.b"), dict(key_ideas_support=["1.1", "2.1", ""])):
+            with self.subTest(bad), self.assertRaises(KbError):
+                cardmake.CARD_JOB.check(answer(**bad))
+        cardmake.CARD_JOB.check(answer())
+
+    def test_a_support_list_of_the_wrong_length_is_refused_by_the_check_of_the_job(self):
+        for bad in (dict(topics_support=["1.1"]), dict(key_ideas_support=["1.1"] * 4), dict(caveats_support=["1.1"])):
+            with self.subTest(bad), self.assertRaises(KbError) as cm:
+                cardmake.CARD_JOB.check(answer(**bad))
+            self.assertIn("same length", str(cm.exception))
+
+
+class GroundedCardTest(Base):
+    """The calls and the card, with notes whose quotes do and do not occur."""
+
+    def make(self, reply_card, notes_replies=None, texts=None):
+        texts = texts or ["the first piece says the rule stops early " + "word " * 3000, "the second piece says the bound is tight " + "word " * 3000]
+        notes_replies = notes_replies or [reply(notes(("it stops early", "says the rule stops early"), ("an unfounded point", "a quote that is not there"))),
+                                          reply(notes(("the bound is tight", "says the bound is tight")))]
+        self.script(*notes_replies, reply_card)
+        return self.run_make(conversion(*[block(x) for x in texts]), title="A paper on stopping")
+
+    def test_the_card_is_marked_from_the_checked_quotes_and_not_from_what_the_model_says(self):
+        out = self.make(reply(answer(topics_support=["1.1", "1.2"], key_ideas_support=["1.1", "2.1", "1.2"], neutral_limits_support="2.1")))
+        self.assertEqual(out["model"]["topics"], ["stopping"])
+        self.assertEqual(out["model"]["key_ideas"], ["one idea", "a second idea"])
+        self.assertEqual(out["grounding"]["key_ideas"][1]["quote"], "says the bound is tight")
+        self.assertIn("only 2 key ideas were left", " ".join(out["reasons"]))
+        self.assertEqual(out["notes"], {"points": 3, "verified": 2})
+
+    def test_the_records_of_the_notes_carry_the_counts_and_the_card_call_does_not(self):
+        out = self.make(reply(answer()))
+        notes_records = [r for r in out["records"] if r["task"] == "card-notes"]
+        self.assertEqual([(r["points"], r["verified"]) for r in notes_records], [(2, 1), (1, 1)])
+        self.assertNotIn("points", [r for r in out["records"] if r["task"] == "card"][0])
+
+    def test_the_card_prompt_shows_the_labels_and_asks_for_support_and_names_no_quote(self):
+        self.make(reply(answer()))
+        prompt = self.calls()[2][1]
+        self.assertIn("[1.1 verified]", prompt)
+        self.assertIn("[1.2 unverified]", prompt)
+        self.assertNotIn("a quote that is not there", prompt)
+        for word in ("topics_support", "key_ideas_support", "caveats_support", "neutral_limits_support", "inferred", "none"):
+            self.assertIn(word, prompt)
+
+    def test_a_reply_that_cites_a_note_in_a_wrong_form_is_refused(self):
+        with self.assertRaises(KbError) as cm:
+            self.make(reply(answer(topics_support=["note one", "2.1"])))
+        self.assertIn("support", str(cm.exception))
+
+    def test_a_reply_whose_support_lists_do_not_match_is_refused_as_an_answer_that_is_kept(self):
+        with self.assertRaises(models.AnswerRefused) as cm:
+            self.make(reply(answer(topics_support=["1.1"])))
+        self.assertEqual(cm.exception.job, "card")
+
+
+class KindWordTest(unittest.TestCase):
+    def test_the_prompt_uses_the_word_for_the_kind_of_source(self):
+        for kind, word in (("preprint", "paper"), ("paper", "paper"), ("web page", "page"), ("book", "book"), ("something else", "book")):
+            with self.subTest(kind):
+                prompt = cardmake.card_prompt("T", "O", [("NOTES 1", "- [1.1 verified] a")], kind=kind)
+                self.assertIn(f"the catalog entry (the card) of a {word}", prompt)
+
+    def test_the_prompt_lets_the_model_give_fewer_key_ideas_than_it_could(self):
+        self.assertIn("give fewer if it holds fewer", cardmake.card_prompt("T", "O", [("NOTES 1", "- [1.1 verified] a")]))
+
+    def test_the_prompt_forbids_talk_of_notes_and_caveats_that_fit_any_source(self):
+        prompt = cardmake.card_prompt("T", "O", [("NOTES 1", "- [1.1 verified] a")])
+        self.assertIn("never mention notes", prompt.lower())
+        self.assertIn("would hold for any", prompt)
+
+    def test_the_numbers_asked_for_are_the_ones_the_plan_names(self):
+        self.assertEqual((cardmake.ASKED["key_ideas"], cardmake.ASKED["topics"]), (7, 12))
+
+
 class JobTest(unittest.TestCase):
-    def test_the_card_job_uses_the_shape_of_a_card_with_at_least_three_key_ideas(self):
+    def test_the_card_job_asks_for_the_fields_of_a_grounded_card_and_a_support_for_each_marked_list(self):
+        shape = cardmake.CARD_JOB.shape
         self.assertEqual(cardmake.CARD_JOB.name, "card")
-        self.assertEqual(cardmake.CARD_JOB.shape["key_ideas"]["min_items"], 3)
-        self.assertEqual(set(cardmake.CARD_JOB.shape), set(card.MODEL_SHAPE))
+        self.assertEqual(set(shape), set(card.MODEL_SHAPE_GROUNDED) | {"topics_support", "key_ideas_support", "caveats_support",
+                                                                       "neutral_limits_support"})
+        for key, spec in card.MODEL_SHAPE_GROUNDED.items():
+            self.assertEqual(shape[key], spec, key)
+        self.assertEqual((shape["topics"]["max_items"], shape["key_ideas"]["max_items"]), (20, 8))
+        for key in ("topics", "key_ideas", "caveats"):
+            self.assertEqual(shape[f"{key}_support"]["max_items"], shape[key]["max_items"])
+        self.assertEqual(shape["neutral_limits_support"]["type"], "string")
+        self.assertIsNotNone(cardmake.CARD_JOB.check)
 
     def test_the_jobs_are_the_kinds_of_work_the_engine_knows(self):
         self.assertEqual({cardmake.CARD_JOB.name, cardmake.NOTES_JOB.name}, set(models.TASKS))
 
     def test_each_job_has_a_prompt_version(self):
-        self.assertEqual((cardmake.CARD_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v2", "v3"))
+        self.assertEqual((cardmake.CARD_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v3", "v3"))
 
     def test_the_prompts_ask_for_fewer_items_than_the_limits_so_a_small_overshoot_still_passes(self):
         shape = cardmake.CARD_JOB.shape
@@ -594,7 +784,7 @@ class JoinTest(LibraryCase):
                                             {"task": "card", "registry": "cardm", "model": "m1:latest"}])
         number, filed = card.read(self.store, book, version)
         self.assertEqual(number, 1)
-        self.assertEqual(filed["model"], CARD)
+        self.assertEqual(filed["model"], MODEL)
         self.assertEqual(filed["title"], "A paper on stopping")
         self.assertEqual([r["registry"] for r in filed["made"]["records"]], ["notes", "cardm"])
         self.assertEqual(len(self.calls()), 2)
@@ -613,6 +803,49 @@ class JoinTest(LibraryCase):
         self.assertEqual((report["points"], report["verified"]), (None, None))
         (skipped,) = self.run_cards(book)
         self.assertEqual((skipped["points"], skipped["verified"]), (None, None))
+
+    def test_the_card_call_is_told_the_kind_of_the_book_it_is_for(self):
+        book, _ = self.converted_book()  # a preprint
+        self.run_cards(book)
+        self.assertIn("the catalog entry (the card) of a paper", self.calls()[1][1])
+        page, _ = self.converted_book(title="A page")
+        self.store._rewrite(self.store.book_file(page), lambda root: root.__setitem__("kind", "web page"))
+        self.run_cards(page)
+        self.assertIn("the catalog entry (the card) of a page", self.calls()[3][1])
+
+    def test_a_book_whose_quotes_occur_is_carded_in_format_2_with_marks_quotes_and_counts(self):
+        book, version = self.converted_book(blocks=[block("the text studies one stopping rule and it proves a bound on regret " + "filler " * 200)])
+        self.script(reply(NOTES), reply(dict(CARD, topics_support=["1.1", "1.2"], key_ideas_support=["1.1", "1.2", "inferred"],
+                                             neutral_limits_support="1.2")))
+        (report,) = self.run_cards(book)
+        self.assertEqual((report["status"], report["partial"], report["points"], report["verified"]), ("carded", False, 2, 2))
+        number, filed = card.read(self.store, book, version)
+        self.assertEqual(filed["format"], 2)
+        self.assertEqual(filed["model"], MODEL)
+        self.assertEqual([e["mark"] for e in filed["grounding"]["key_ideas"]], ["stated", "stated", "inferred"])
+        self.assertEqual(filed["grounding"]["key_ideas"][0], {"mark": "stated", "notes": ["1.1"], "quote": "studies one stopping rule"})
+        self.assertEqual(filed["grounding"]["neutral_limits"]["quote"], "proves a bound on regret")
+        notes_record, card_record = filed["made"]["records"]
+        self.assertEqual((notes_record["task"], notes_record["points"], notes_record["verified"]), ("card-notes", 2, 2))
+        self.assertNotIn("points", card_record)
+        shown = card.render(filed)
+        self.assertIn("quote for key idea 1: studies one stopping rule", shown)
+        self.assertIn("quote for neutral limits: proves a bound on regret", shown)
+
+    def test_a_book_whose_quotes_do_not_occur_gets_a_thin_card_with_what_the_model_called_an_inference(self):
+        book, version = self.converted_book(blocks=[block("a book that holds neither of the quotes of the notes at all " + "filler " * 200)])
+        self.script(reply(NOTES), reply(dict(CARD, topics_support=["1.1", "none"], key_ideas_support=["1.1", "1.2", "inferred"],
+                                             neutral_limits_support="1.1")))
+        (report,) = self.run_cards(book)
+        self.assertEqual((report["status"], report["partial"], report["points"], report["verified"]), ("carded", True, 2, 0))
+        number, filed = card.read(self.store, book, version)
+        self.assertEqual((filed["model"]["topics"], filed["model"]["key_ideas"], filed["model"]["neutral_limits"]), ([], ["a third idea"], ""))
+        self.assertEqual(filed["grounding"]["dropped"], {"topics": 2, "key_ideas": 2, "caveats": 0, "neutral_limits": 1})
+        self.assertTrue(filed["partial"])
+        self.assertIn("only 1 key idea was left", " ".join(filed["partial_reasons"]))
+        shown = card.render(filed)
+        self.assertIn("partial because: only 1 key idea was left", shown)
+        self.assertNotIn("neutral limits", shown)
 
     def test_the_report_has_no_card_text(self):
         book, _ = self.converted_book()
@@ -764,7 +997,7 @@ class RefusedAnswerTest(LibraryCase):
             return json.loads(f.read())
 
     def too_many_topics(self):
-        return reply(dict(CARD, topics=[f"topic {i}" for i in range(20)]))
+        return reply(dict(CARD, topics=[f"topic {i}" for i in range(21)], topics_support=["inferred"] * 21))
 
     def test_a_refused_card_answer_is_kept_and_the_failed_report_names_the_file(self):
         book, version = self.converted_book()
@@ -775,7 +1008,7 @@ class RefusedAnswerTest(LibraryCase):
         self.assertEqual(self.kept_files(), [report["kept"]])
         doc = self.read_kept(report["kept"])
         self.assertEqual((doc["book_id"], doc["version_id"], doc["job"], doc["registry"], doc["prompt_version"]),
-                         (book, version, "card", "cardm", "v2"))
+                         (book, version, "card", "cardm", "v3"))
         self.assertEqual(json.loads(doc["answer"])["topics"][19], "topic 19")
         self.assertIn("topics", doc["reason"])
         self.assertEqual(card.generations(self.store, book, version), [])
@@ -920,7 +1153,7 @@ class CommandTest(LibraryCase):
 
     def test_cards_prints_the_name_of_the_file_that_keeps_a_refused_answer(self):
         book, _ = self.converted_book()
-        self.script(reply(NOTES), reply(dict(CARD, topics=[f"t{i}" for i in range(20)])))
+        self.script(reply(NOTES), reply(dict(CARD, topics=[f"t{i}" for i in range(21)], topics_support=["inferred"] * 21)))
         r = self.kb("cards", "--book", book)
         self.assertEqual(r.returncode, 1)
         report = json.loads(r.stdout)

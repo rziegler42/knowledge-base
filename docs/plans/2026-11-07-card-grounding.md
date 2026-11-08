@@ -377,4 +377,37 @@ the last finding has not been reviewed again.
   and not a risk.
 - Do not run increment E on this state: the card call receives `[N.K verified]` lines that the v2 card prompt does not explain,
   and a one-piece book gets both its text and its notes. Increment C changes the card prompt and the card format.
-- Next: the owner's word to commit increment B.
+- Committed as `2357614`.
+
+### Increment C — A card that is grounded in the notes (built; not committed)
+
+- Built card format 2 in `engine/kb/card.py` (the `grounding` record with a mark, notes and quote for each topic, key idea, caveat
+  and neutral limit, and the number dropped for each; higher ceilings of 20 topics and 8 key ideas; key ideas may be few; the
+  neutral limit may be empty; optional `points` and `verified` counts in the generation record of a notes call; the quote of a
+  stated item rendered under it as untrusted text), the card job at v3 in `engine/kb/cardmake.py` (support lists, the check that
+  refuses a support of a wrong form or length, `parse_support`, `ground`, the new prompt with the kind word), the card schema,
+  tests (`test_card.py`, `test_cardmake.py`, and a class in `test_catalog.py` for the catalog reading cards of both formats), the
+  statements of `docs/specs/card.md` and a README bullet. A card made without a grounding record is still format 1, and a card of
+  format 1 is read, searched and shown as before. The counts that increment B reported only in the `cards` report are now in the
+  generation record, which closes the difference noted there.
+- Verification as run: `python3 -W error::ResourceWarning -m unittest engine.tests.test_card engine.tests.test_cardmake
+  engine.tests.test_catalog engine.tests.test_quotes` gave 282 tests, OK; `python3 -m unittest engine.tests.test_models
+  engine.tests.test_trial engine.tests.test_cardsample engine.tests.test_setup` gave 218, OK, since those read cards or use the
+  card fixtures; `wb run code-work check` found no problems. Not run: any other test file, and any live model call.
+- Deliberate breaks, each from a green baseline: 41 (18 of the card format, 23 of the marking and prompt). 37 were caught at once;
+  four survived (a note cited twice, the tool name recorded for a payload, the kind word reaching the prompt, the wording that lets
+  the model give fewer key ideas) and a test was added for each, after which each was caught. The tests of the card format were
+  written before the code; the cardmake tests too, apart from the fixtures that the new reply shape changed.
+- Review: the `reviewer` agent, round 1, no blocking findings. Applied: the reason a thin card gives said that the key ideas left
+  were "supported by a quote", which is wrong for an inference; it now says how many key ideas were left after the ones without
+  support were dropped. Recorded, not changed: (1) the engine's check cannot tell whether a verified note supports the item that
+  cites it, so a model that cites one verified note for every item keeps every item, and the quote shown beside an item may be
+  unrelated to it; (2) `inferred` is the model's own word and is not checked, so the drop rule bites only on items cited with
+  unverified or missing notes or marked `none`; the marks that come from the engine alone are the `stated` ones; (3) a support
+  value in a slightly wrong form (a trailing full stop, `inferred 1.1`) refuses the whole card answer, which is kept aside; this
+  follows the plan and errs on the safe side. Increment E should report how often each happens: the share of items that are
+  `inferred`, the labels of `stated` items whose quote does not bear on them, and the number of refused card answers.
+- Not run on a real book: the card prompt, the support lists and the marking have been run only against fake model replies, so
+  nothing is known yet about how often local models give a quote that verifies, cite correctly, or write a support in the form
+  asked.
+- Next: the owner's word to commit increment C; then D (the marks in `card-show` and in the result of `card-search`).

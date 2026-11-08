@@ -453,6 +453,183 @@ class RenderTest(CardCase):
         self.assertNotIn("[end of untrusted text]", card.render(self.good(book, version)))
 
 
+STATED = {"mark": "stated", "notes": ["1.1"], "quote": "studies one stopping rule"}
+INFERRED = {"mark": "inferred", "notes": [], "quote": None}
+DROPPED = {"topics": 0, "key_ideas": 0, "caveats": 0, "neutral_limits": 0}
+
+
+def grounding(model=None, **over):
+    """A grounding record for MODEL (or another model part): the first item of each list is stated, the others inferred."""
+    model = model or MODEL
+    out = {field: [copy.deepcopy(STATED if n == 0 else INFERRED) for n, _ in enumerate(model[field])] for field in
+           ("topics", "key_ideas", "caveats")}
+    out["neutral_limits"] = copy.deepcopy(STATED) if model["neutral_limits"] else None
+    out["dropped"] = dict(DROPPED)
+    out.update(over)
+    return out
+
+
+class GroundedTest(CardCase):
+    def grounded(self, model=None, record=None, reasons=(), **over):
+        model = copy.deepcopy(model or MODEL)
+        return card.make(self.store, *self.full_book(), model=model, records=[record or dict(RECORD)], pieces=1, calls=1, reasons=reasons,
+                         grounding=grounding(model, **over))
+
+    def test_a_card_with_a_grounding_record_is_of_format_2_and_valid_and_filed_and_read_back_unchanged(self):
+        made = self.grounded()
+        self.assertEqual((made["format"], card.FORMAT_GROUNDED), (2, 2))
+        self.assertEqual(set(made["grounding"]), {"topics", "key_ideas", "caveats", "neutral_limits", "dropped"})
+        self.assertEqual(card.validate(made), made)
+        number = card.file(self.store, made)
+        self.assertEqual(card.read(self.store, made["book_id"], made["version_id"], number), (number, made))
+
+    def test_the_payload_of_a_card_names_the_format_it_was_filed_in(self):
+        grounded, old = self.grounded(), self.good(*self.full_book())
+        for made, tool in ((grounded, "kb-card 2"), (old, "kb-card 1")):
+            number = card.file(self.store, made)
+            self.assertEqual(self.store.verify_payload(made["book_id"], made["version_id"], f"derived/card/{number}")["tool"], tool)
+
+    def test_a_card_without_a_grounding_record_is_still_of_format_1_and_has_none(self):
+        made = self.good(*self.full_book())
+        self.assertEqual(made["format"], 1)
+        self.assertNotIn("grounding", made)
+
+    def test_a_card_of_format_1_may_not_carry_a_grounding_record_and_one_of_format_2_must(self):
+        made = self.grounded()
+        old = copy.deepcopy(made)
+        old["format"] = 1
+        with self.assertRaises(KbError):
+            card.validate(old)
+        missing = copy.deepcopy(made)
+        del missing["grounding"]
+        with self.assertRaises(KbError):
+            card.validate(missing)
+        other = copy.deepcopy(made)
+        other["format"] = 3
+        with self.assertRaises(KbError):
+            card.validate(other)
+
+    def test_a_card_with_no_model_part_cannot_be_of_format_2(self):
+        made = card.make(self.store, *self.full_book())
+        bad = dict(made, format=2, grounding=None)
+        with self.assertRaises(KbError):
+            card.validate(bad)
+
+    def test_every_malformed_mark_is_refused(self):
+        cases = {
+            "an unknown mark": lambda g: g["topics"][0].update(mark="verified"),
+            "a stated item with no quote": lambda g: g["topics"][0].update(quote=None),
+            "a stated item with an empty quote": lambda g: g["topics"][0].update(quote=""),
+            "a stated item with no notes": lambda g: g["topics"][0].update(notes=[]),
+            "an inferred item with notes": lambda g: g["topics"][1].update(notes=["1.1"]),
+            "an inferred item with a quote": lambda g: g["topics"][1].update(quote="some words of a quote"),
+            "a note number without a point": lambda g: g["topics"][0].update(notes=["1"]),
+            "a note number that is not a number": lambda g: g["topics"][0].update(notes=["a.b"]),
+            "a note number from zero": lambda g: g["topics"][0].update(notes=["0.1"]),
+            "a point number from zero": lambda g: g["topics"][0].update(notes=["1.0"]),
+            "a note number that is too large": lambda g: g["topics"][0].update(notes=["1000.1"]),
+            "more than six notes": lambda g: g["topics"][0].update(notes=[f"1.{n}" for n in range(1, 8)]),
+            "notes that are not a list": lambda g: g["topics"][0].update(notes="1.1"),
+            "the same note twice": lambda g: g["topics"][0].update(notes=["1.1", "1.1"]),
+            "a quote of 241 characters": lambda g: g["topics"][0].update(quote="q" * 241),
+            "a quote that is not in its clean form": lambda g: g["topics"][0].update(quote="a  quote\twith odd space"),
+            "a quote that is not text": lambda g: g["topics"][0].update(quote=5),
+            "an extra key in an item": lambda g: g["topics"][0].update(extra=1),
+            "a missing key in an item": lambda g: g["topics"][0].pop("quote"),
+            "an item that is not an object": lambda g: g["topics"].__setitem__(0, "stated"),
+            "too few items for the topics": lambda g: g["topics"].pop(),
+            "too many items for the key ideas": lambda g: g["key_ideas"].append(copy.deepcopy(INFERRED)),
+            "an item for a limit that is empty": lambda g: g.update(neutral_limits=None),
+            "an extra key in the record": lambda g: g.update(extra=[]),
+            "a missing key in the record": lambda g: g.pop("caveats"),
+            "a dropped count that is negative": lambda g: g["dropped"].update(topics=-1),
+            "a dropped count that is not a number": lambda g: g["dropped"].update(key_ideas="2"),
+            "a dropped count that is true": lambda g: g["dropped"].update(caveats=True),
+            "an extra dropped key": lambda g: g["dropped"].update(summary=1),
+            "dropped that is not an object": lambda g: g.update(dropped=[]),
+            "a record that is not an object": lambda g: g.update(topics=None),
+        }
+        for label, mutate in cases.items():
+            made = self.grounded()
+            mutate(made["grounding"])
+            with self.subTest(label), self.assertRaises(KbError):
+                card.validate(made)
+
+    def test_a_limit_that_was_dropped_leaves_the_field_empty_and_no_mark(self):
+        model = dict(MODEL, neutral_limits="")
+        made = self.grounded(model=model, dropped=dict(DROPPED, neutral_limits=1))
+        self.assertEqual((made["model"]["neutral_limits"], made["grounding"]["neutral_limits"]), ("", None))
+        full = copy.deepcopy(made)
+        full["grounding"]["neutral_limits"] = copy.deepcopy(STATED)
+        with self.assertRaises(KbError):
+            card.validate(full)  # a mark for a limit that is not there
+        old = self.good(*self.full_book())
+        old["model"]["neutral_limits"] = ""
+        with self.assertRaises(KbError):
+            card.validate(old)  # a card of format 1 may not leave it empty
+
+    def test_other_fields_may_not_be_empty_in_either_format(self):
+        for field in ("summary", "neutral_problem", "neutral_approach", "neutral_needs", "neutral_provides"):
+            with self.subTest(field), self.assertRaises(KbError):
+                self.grounded(model=dict(MODEL, **{field: ""}))
+
+    def test_the_ceilings_of_format_2_are_higher_and_key_ideas_may_be_fewer(self):
+        wide = dict(MODEL, key_ideas=[f"idea {n}" for n in range(8)], topics=[f"topic {n}" for n in range(20)])
+        made = self.grounded(model=wide)
+        self.assertEqual((len(made["model"]["key_ideas"]), len(made["model"]["topics"])), (8, 20))
+        for bad in (dict(MODEL, key_ideas=[f"idea {n}" for n in range(9)]), dict(MODEL, topics=[f"topic {n}" for n in range(21)])):
+            with self.assertRaises(KbError):
+                self.grounded(model=bad)
+        with self.assertRaises(KbError):  # format 1 keeps its ceilings
+            card.make(self.store, *self.full_book(), model=dict(MODEL, key_ideas=[f"idea {n}" for n in range(6)]))
+        with self.assertRaises(KbError):
+            card.make(self.store, *self.full_book(), model=dict(MODEL, topics=[f"topic {n}" for n in range(16)]))
+
+    def test_a_card_with_fewer_than_three_key_ideas_must_be_partial_and_say_why(self):
+        thin = dict(MODEL, key_ideas=["only one idea"])
+        with self.assertRaises(KbError):
+            self.grounded(model=thin)
+        made = self.grounded(model=thin, reasons=["only 1 key idea was supported"])
+        self.assertTrue(made["partial"])
+        self.assertIn("only 1 key idea was supported", made["partial_reasons"])
+        none = self.grounded(model=dict(MODEL, key_ideas=[]), reasons=["no key idea was supported"])
+        self.assertEqual(none["model"]["key_ideas"], [])
+
+    def test_a_record_of_the_notes_may_carry_the_counts_of_points_and_verified_points(self):
+        record = dict(RECORD, task="card-notes", points=4, verified=3)
+        made = self.grounded(record=record)
+        self.assertEqual((made["made"]["records"][0]["points"], made["made"]["records"][0]["verified"]), (4, 3))
+        for bad in ({"points": 4}, {"verified": 3}, {"points": 2, "verified": 3}, {"points": -1, "verified": 0}, {"points": True, "verified": 1},
+                    {"points": "4", "verified": 3}, {"points": 4, "verified": 3, "extra": 1}):
+            with self.subTest(bad), self.assertRaises(KbError):
+                self.grounded(record=dict(RECORD, **bad))
+        with self.assertRaises(KbError):  # a card of format 1 keeps its records as they were
+            card.make(self.store, *self.full_book(), model=copy.deepcopy(MODEL), records=[record], pieces=1, calls=1)
+
+    def test_the_quote_of_a_stated_item_is_rendered_with_it_as_untrusted_text(self):
+        model = dict(MODEL, caveats=["the source is dated"])
+        made = self.grounded(model=model)
+        text = card.render(made)
+        self.assertIn("quote for key idea 1: studies one stopping rule", text)
+        self.assertIn("quote for caveat 1: studies one stopping rule", text)
+        self.assertIn("quote for neutral limits: studies one stopping rule", text)
+        self.assertNotIn("quote for key idea 2", text)  # an inferred item has no quote
+        self.assertNotIn("quote for topic", text)
+
+    def test_a_quote_that_holds_the_words_of_a_marker_is_withheld_and_an_empty_limit_is_not_shown(self):
+        made = self.grounded(model=dict(MODEL, neutral_limits=""), dropped=dict(DROPPED, neutral_limits=1))
+        made["grounding"]["key_ideas"][0]["quote"] = "words of an untrusted text marker here"
+        text = card.render(card.validate(made))
+        self.assertIn("quote for key idea 1: " + card.WITHHELD, text)
+        self.assertNotIn("neutral limits", text)
+        self.assertNotIn("marker here", text)
+
+    def test_a_card_of_format_1_renders_as_before(self):
+        text = card.render(self.good(*self.full_book()))
+        self.assertNotIn("quote for", text)
+        self.assertIn("key idea 1: one idea", text)
+
+
 class ValidateTest(CardCase):
     def setUp(self):
         super().setUp()

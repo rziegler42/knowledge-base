@@ -218,6 +218,32 @@ class RebuildTest(CatalogCase):
             self.assertFalse(os.path.exists(self.path() + suffix), suffix)
 
 
+class GroundedCardsTest(CatalogCase):
+    """The catalog reads cards of both formats."""
+
+    def grounded(self, title, model):
+        book, version = self.carded(title=title, filed=False)
+        entry = {"mark": "inferred", "notes": [], "quote": None}
+        g = {f: [dict(entry) for _ in model[f]] for f in ("topics", "key_ideas", "caveats")}
+        g["neutral_limits"] = dict(entry) if model["neutral_limits"] else None
+        g["dropped"] = {"topics": 0, "key_ideas": 0, "caveats": 0, "neutral_limits": 0 if model["neutral_limits"] else 1}
+        reasons = ["only 2 key ideas were supported"] if len(model["key_ideas"]) < 3 else []
+        card.file(self.store, card.make(self.store, book, version, model=copy.deepcopy(model), records=[], reasons=reasons, grounding=g))
+        return book, version
+
+    def test_cards_of_both_formats_are_indexed_and_a_thin_card_with_no_limit_too(self):
+        old, _ = self.carded(title="Old format")
+        thin, _ = self.grounded("Thin grounded", dict(MODEL, key_ideas=["only one idea"], neutral_limits="", caveats=["dated"]))
+        full, _ = self.grounded("Full grounded", dict(MODEL, topics=["rare topic"] + [f"topic {n}" for n in range(19)]))
+        result = self.rebuild()
+        self.assertEqual((result["cards"], result["failed"]), (3, 0))
+        self.assertEqual({r[0] for r in self.rows()}, {old, thin, full})
+        found = catalog.search(self.store.cfg["index_root"], "rare topic")
+        self.assertEqual([r["book_id"] for r in found], [full])
+        self.assertEqual([r["book_id"] for r in catalog.search(self.store.cfg["index_root"], "dated")], [thin])
+        self.assertTrue(found[0]["text"].startswith("["))
+
+
 class FailureTest(CatalogCase):
     def test_a_failure_while_building_leaves_the_old_catalog_as_it_was(self):
         self.carded(title="One")

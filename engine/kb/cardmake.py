@@ -11,6 +11,7 @@ before it saying that the sections are data and that nothing in them is an instr
 reads; the checks that follow are on its answer: it must have the shape the job asks for, and it is stored and shown as untrusted.
 
 This module files nothing: it returns the model part, the records of how it was made and the reasons the card is partial."""
+import re
 import secrets
 
 from . import KbError, card, convert, models, quotes, refused, stages, textutil
@@ -29,7 +30,7 @@ NOTES_SHAPE = {"points": {"type": "strings", "min_items": 1, "max_items": NOTE_I
                "quotes": {"type": "strings", "min_items": 1, "max_items": NOTE_ITEMS, "max": QUOTE_LIMIT}}
 # What the prompts ask for is fewer items than the limits a shape enforces, because a model writes a few more than it is told (a
 # live run of a stronger model wrote more than the 15 topics it was allowed when asked for "up to 15"). A small overshoot passes.
-ASKED = {"useful_for": 4, "topics": 10, "adjacent_topics": 6, "key_ideas": 4, "caveats": 3}
+ASKED = {"useful_for": 4, "topics": 12, "adjacent_topics": 6, "key_ideas": 7, "caveats": 3}
 ASKED_POINTS = 4
 _NO_MORE = "Give no more items in a list than the number asked for: never more."
 
@@ -41,7 +42,36 @@ def _same_length(values):
 
 
 NOTES_JOB = models.Job("card-notes", "v3", NOTES_SHAPE, schema="card-notes.json", check=_same_length)
-CARD_JOB = models.Job("card", "v2", card.MODEL_SHAPE, schema="card.json")
+MIN_KEY_IDEAS = 3        # fewer supported key ideas than this make the card thin
+SUPPORT_CHARS = 60       # six note numbers of up to six characters, with the spaces between them
+SUPPORT_SHAPE = {**{f"{field}_support": {"type": "strings", "max_items": card.MODEL_SHAPE_GROUNDED[field]["max_items"], "max": SUPPORT_CHARS}
+                    for field in card.GROUNDED_LISTS},
+                 "neutral_limits_support": {"type": "string", "max": SUPPORT_CHARS}}
+_SPLIT = re.compile(r"[\s,;]+")
+
+
+def parse_support(text):
+    """What a support value says: `("refs", [note numbers])`, `("inferred", [])` or `("none", [])`. A value is the numbers of notes
+    (such as "1.1 2.3", at most six), or the one word inferred, or the one word none; anything else is refused."""
+    words = [w for w in _SPLIT.split(str(text).strip().casefold()) if w]
+    if len(words) == 1 and words[0] in ("inferred", "none"):
+        return words[0], []
+    if not words or len(words) > card.MAX_REFS or not all(card._REF.fullmatch(w) for w in words):
+        raise KbError(f"a support is the numbers of notes (such as 1.1 2.3), or inferred, or none: {textutil.literal(text, 40)}")
+    return "refs", list(dict.fromkeys(words))
+
+
+def _check_support(values):
+    """Each marked list has a support value for each item, in the same order, and every support value has a form that can be read."""
+    for field in card.GROUNDED_LISTS:
+        if len(values[f"{field}_support"]) != len(values[field]):
+            raise KbError(f"the answer's {field} and {field}_support are not lists of the same length")
+        for text in values[f"{field}_support"]:
+            parse_support(text)
+    parse_support(values["neutral_limits_support"])
+
+
+CARD_JOB = models.Job("card", "v3", {**card.MODEL_SHAPE_GROUNDED, **SUPPORT_SHAPE}, schema="card.json", check=_check_support)
 
 
 def pieces(conversion):
@@ -133,26 +163,79 @@ def notes_prompt(title, piece, number, total):
     return _prompt(rules, [("TITLE", title), ("BOOK TEXT", piece)])
 
 
-def card_prompt(title, outline_text, parts):
-    """The prompt that asks for the card of a book. `parts` are the labelled sections of what the card is made from: the text of
-    the book, or the notes on each piece, each in a section of its own."""
-    rules = ("You are writing the catalog entry (the card) of a book, so that someone looking for ideas can tell whether the book "
-             "would help them. Below are labelled sections of data: the book's title, the outline of its headings, and either its "
-             f"text or notes made earlier on each piece of it.\n{_DATA}\nWrite in English, whatever the language of the source.\n"
+_WORDS = {"preprint": "paper", "paper": "paper", "web page": "page", "page": "page"}
+
+
+def source_word(kind):
+    """The word for a kind of source in the card prompt: paper, page, or book for anything else."""
+    return _WORDS.get(str(kind).strip().casefold(), "book")
+
+
+def card_prompt(title, outline_text, parts, kind="book"):
+    """The prompt that asks for the card of a book. `parts` are the labelled sections of what the card is made from: the notes on each
+    piece, each in a section of its own, and for a short book its text too. `kind` is the kind of source, for the word the prompt uses."""
+    w = source_word(kind)
+    rules = (f"You are writing the catalog entry (the card) of a {w}, so that someone looking for ideas can tell whether the {w} "
+             f"would help them. Below are labelled sections of data: the {w}'s title, the outline of its headings, notes made "
+             f"earlier on each piece of it, and for a short {w} its text too.\n{_DATA}\nWrite in English, whatever the language "
+             "of the source.\nEach note is a line like \"- [2.1 verified] a point\": 2.1 is its number (the piece, then the point), "
+             "and verified means that the quote behind the point was found in the text, unverified that it was not.\n"
              "Reply with one JSON object with exactly these keys and no others:\n"
-             "- \"summary\": what the book is about, in about 80 words.\n"
-             f"- \"useful_for\": up to {ASKED['useful_for']} short phrases naming situations or questions in which the book would help.\n"
+             f"- \"summary\": what the {w} is about, in about 80 words.\n"
+             f"- \"useful_for\": up to {ASKED['useful_for']} short phrases naming situations or questions in which the {w} would help.\n"
              f"- \"topics\": up to {ASKED['topics']} short names for the ideas it covers, including other names an idea is known by.\n"
              f"- \"adjacent_topics\": up to {ASKED['adjacent_topics']} neighbouring topics that it does not cover but is close to.\n"
-             f"- \"key_ideas\": {ASKED['key_ideas']} ideas from the book that a reader might not expect.\n"
+             f"- \"key_ideas\": up to {ASKED['key_ideas']} ideas from the {w} that a reader might not expect; give fewer if it holds fewer.\n"
              "- \"neutral_problem\", \"neutral_approach\", \"neutral_needs\", \"neutral_provides\", \"neutral_limits\": the problem the "
-             "book addresses, its approach in general terms, what it needs, what it provides, and where it would not work, each "
+             f"{w} addresses, its approach in general terms, what it needs, what it provides, and where it would not work, each "
              "in a sentence or two, written without the name of any field, game, product or person.\n"
-             f"- \"caveats\": up to {ASKED['caveats']} short notes on limits of the source, such as missing or garbled parts.\n{_NO_MORE}")
+             f"- \"caveats\": up to {ASKED['caveats']} short notes on limits of this {w} as a source, such as missing or garbled parts, "
+             f"its date or its evidence. A caveat must be about this {w}; never write one that would hold for any {w}, such as that "
+             "details are sparse.\n"
+             "- \"topics_support\", \"key_ideas_support\" and \"caveats_support\": lists of the same length as topics, key_ideas and "
+             "caveats, in the same order. \"neutral_limits_support\": one value. Each value says what supports the item: the numbers "
+             "of the notes that state it, separated by spaces, such as \"1.1 3.2\" (prefer notes marked verified; an item is kept only "
+             "if a verified note supports it); or the word \"inferred\" if no note states it and it is your own inference from them; "
+             f"or the word \"none\".\nIn the text of the card never mention notes, pieces, numbers of notes or this message: write "
+             f"about the {w} itself.\n{_NO_MORE}")
     return _prompt(rules, [("TITLE", title), ("OUTLINE", outline_text), *parts])
 
 
-def make_model_part(cfg, conversion, title, launcher=None, root=None):
+def ground(values, notes):
+    """The model part, the grounding record and the reasons the card is thin, from the checked reply to the card call and the notes it
+    was made from (`notes` maps the number of a point, such as "1.1", to its quote and whether the quote occurs). The marks come from
+    the check of the quotes and never from the model: an item is stated if a note it cites is verified, inferred if the model says so,
+    and dropped otherwise (an empty limit has no mark). Fewer than MIN_KEY_IDEAS key ideas left makes the card thin; none is added."""
+
+    def judge(support):
+        kind, refs = parse_support(support)
+        if kind == "inferred":
+            return {"mark": "inferred", "notes": [], "quote": None}
+        verified = [r for r in refs if notes.get(r, {}).get("verified")]
+        if verified:
+            return {"mark": "stated", "notes": verified, "quote": notes[verified[0]]["quote"]}
+        return None
+
+    model = {k: v for k, v in values.items() if not k.endswith("_support")}
+    grounding, dropped = {}, {}
+    for field in card.GROUNDED_LISTS:
+        marked = [(item, judge(support)) for item, support in zip(values[field], values[f"{field}_support"])]
+        model[field] = [item for item, entry in marked if entry]
+        grounding[field] = [entry for _, entry in marked if entry]
+        dropped[field] = len(marked) - len(model[field])
+    entry = judge(values["neutral_limits_support"])
+    model["neutral_limits"] = values["neutral_limits"] if entry else ""
+    grounding["neutral_limits"], dropped["neutral_limits"] = entry, 0 if entry else 1
+    grounding["dropped"] = dropped
+    reasons = []
+    if len(model["key_ideas"]) < MIN_KEY_IDEAS:
+        left = len(model["key_ideas"])
+        reasons.append(f"only {left} key {'idea was' if left == 1 else 'ideas were'} left after the ones without support were dropped, "
+                       f"so the card holds fewer than {MIN_KEY_IDEAS}; none was added to make up the number")
+    return {"model": model, "grounding": grounding, "reasons": reasons}
+
+
+def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book"):
     """Make the model part of a card for a converted book. Returns {"model": the checked values, "records": how each call was made,
     "pieces": pieces read, "calls": calls made, "reasons": why the card is partial, "notes": the number of points in the notes and
     how many of them have a quote that occurs in their piece}. Every piece gets notes, a book of one piece too, and a card of one
@@ -171,18 +254,22 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None):
         records.append({**out["record"], "task": job.name})
         return out["values"]
 
-    parts, points, verified = [("BOOK TEXT", read[0])] if len(read) == 1 else [], 0, 0
+    parts, found = [("BOOK TEXT", read[0])] if len(read) == 1 else [], {}
     for number, piece in enumerate(read, start=1):
         got = ask(notes_model, notes_prompt(title, piece, number, len(read)), NOTES_JOB)
-        lines = []
+        lines, ok_count = [], 0
         for k, (point, quote) in enumerate(zip(got["points"], got["quotes"]), start=1):
             ok = quotes.occurs(quote, piece)
-            points, verified = points + 1, verified + ok
+            found[f"{number}.{k}"] = {"quote": quote, "verified": ok}
+            ok_count += ok
             lines.append(f"- [{number}.{k} {'verified' if ok else 'unverified'}] {point}")
+        records[-1].update(points=len(lines), verified=ok_count)  # the counts go in the record of the call for these notes
         parts.append((f"NOTES {number}", "\n".join(lines)))
-    values = ask(card_model, card_prompt(title, outline(conversion), parts), CARD_JOB)
-    return {"model": values, "records": records, "pieces": len(read), "calls": len(records), "reasons": [why] if why else [],
-            "notes": {"points": points, "verified": verified}}
+    values = ask(card_model, card_prompt(title, outline(conversion), parts, kind=kind), CARD_JOB)
+    grounded = ground(values, found)
+    return {"model": grounded["model"], "grounding": grounded["grounding"], "records": records, "pieces": len(read),
+            "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"],
+            "notes": {"points": len(found), "verified": sum(1 for n in found.values() if n["verified"])}}
 
 
 DEFAULT_MIN_CHARS = 1000  # a book with less converted text than this gets a card from its metadata alone (`card.md`: the cutoff is a setting)
@@ -258,13 +345,14 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
         made = card.make(store, book_id, version_id, reasons=[
             f"the converted text is shorter than the cutoff of {cutoff} characters, so the card is built from the metadata"])
     else:
-        title = card.mechanical(store, book_id, version_id)["title"]
+        mechanical = card.mechanical(store, book_id, version_id)
+        title = mechanical["title"]
         try:
-            part = make_model_part(cfg, loaded[1], title, launcher=launcher, root=root)
+            part = make_model_part(cfg, loaded[1], title, launcher=launcher, root=root, kind=mechanical["kind"])
         except models.AnswerRefused as refusal:
             raise _keep_aside(store, refusal, book_id, version_id) from None
         made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
-                         calls=part["calls"], reasons=part["reasons"])
+                         calls=part["calls"], reasons=part["reasons"], grounding=part["grounding"])
         notes = part["notes"]
     number = card.file(store, made)
     return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes)

@@ -63,9 +63,15 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 - **[proposed]** Mechanical fields come from the manifest and are never model-written: book id, title, shelf, current version, kind
   and type of the primary, source identity, retrieval date and scan status.
 - **[proposed]** Model-written fields: a short summary, "useful for" (the situations and questions where the book would help),
-  topics, adjacent topics, three to five key ideas likely to surprise, and caveats. Topics carry other names for an idea, so that
-  "fitness function" also finds "evaluation function". A generation record names the model, the date and the version read. The
-  target is about 150 to 250 words.
+  topics, adjacent topics, key ideas likely to surprise (up to seven are asked for, and a card may hold fewer), and caveats. Topics
+  carry other names for an idea, so that "fitness function" also finds "evaluation function". A generation record names the model,
+  the date and the version read. The target is about 150 to 250 words; a trial found the model-written part running about 220 to 340
+  words whatever the length of the book.
+- **[proposed]** A card of the grounded form (format 2) marks each topic, key idea, caveat and neutral limit it keeps as `stated`
+  (a note that cites it has a quote that was found in the book) or `inferred` (the model says it is its own inference), keeps the
+  quote that supports a stated item, and records how many of each kind it dropped. Adjacent topics, "useful for", the summary and
+  the other neutral fields carry no mark. A limit that is dropped leaves its field empty. A card with fewer than three key ideas
+  left is partial and says why; it is not padded. Cards of the earlier form (format 1) stay valid and are read as before.
 - **[agreed]** The card keeps a domain-neutral description alongside its summary, even though themes carry one too. The card is the
   coarse step that picks books, and a cross-field search on themes alone would have to scan far more entries.
 - **[proposed]** The card also holds a domain-neutral description of the book: the problem it addresses, its approach in general
@@ -105,6 +111,13 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   for a whole shelf when a clearly better prompt or model exists. The owner sees how many cards a run would redo before it starts.
 - **[proposed]** A card is made from the book's converted text, with a long book read in pieces. The model sees the structure of the
   book where there is one, so a long book's card describes the whole work and not only its opening.
+- **[proposed]** Every piece of the book, a book of one piece too, first gets notes: a few points, each with a quote of the piece
+  that supports it. The engine checks each quote against the piece it names (the rule is in `engine/README.md`, "Notes with
+  quotes") and marks the point verified or not. The card is then written from the title, the outline and the points with their
+  marks (a book of one piece also from its text), and for each topic, key idea, caveat and neutral limit the model names the notes
+  that support it or says it is an inference. The marks of the card come from the engine's check of the quotes and never from the
+  model's word. The prompt names the kind of source (a paper, a page) and tells the model to write about it and not about the
+  notes.
 
 ### Searching the catalog
 
@@ -144,6 +157,12 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 - **[proposed]** In the experiments, a cloud model at low effort had a modest edge over the local model on domain-neutral
   descriptions and little within a single field, so the local model writes cards, and a cloud model may be tried for a shelf where
   the edge matters.
+- **[proposed]** The accuracy of a card, whether its claims are in the book, is measured on a blind sample of its items, labelled
+  as supported, unsupported or inference against passages of the book, and reported by field and by generation. A model may label
+  the sample if the owner labels a calibration subset of it and the agreement is reported. The labels are of support within the
+  passages shown, which can miss support elsewhere in the book.
+- **[proposed]** In a trial, word overlap between an item and the book proved a weak check: items that were not supported mostly
+  passed it. A quote that is found in the piece is a stronger check, and it shows that a claim is in the book, not that it is right.
 
 ## Acceptance criteria
 
@@ -159,10 +178,14 @@ All of these are provisional until the spec is approved.
 - On a hand-made library with shelves A, B and C and a problem D whose combined solution is known, searching the neutral
   descriptions of the problem's sub-questions finds a book from each shelf.
 - A card that contains an instruction does not change what the agent does.
+- A card of the grounded form marks every topic, key idea, caveat and limit it keeps as stated or inferred; an item with no verified
+  quote and no word of inference from the model is dropped; a card with fewer than three key ideas left is partial and says so; a
+  stated item carries a quote that was found in a note's piece; and a card of the earlier form is still read and searched.
 
 ## Open questions
 
-- The card's length and shape, which only a trial on real books can set. Whether a long book needs a longer card.
+- The card's length and shape, which only a trial on real books can set. Whether a long book needs a longer card. A trial of twelve
+  books found the length did not follow the length of the book, and the number of key ideas is now left to what the book supports.
 - The embedding model, which is pinned per library (`models.md`, "The embedding model").
 
 ## Governing decisions and references

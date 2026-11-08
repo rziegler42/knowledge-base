@@ -1,19 +1,92 @@
 {
   "type": "object",
   "properties": {
-    "summary": {"type": "string"},
-    "useful_for": {"type": "array", "items": {"type": "string"}},
-    "topics": {"type": "array", "items": {"type": "string"}},
-    "adjacent_topics": {"type": "array", "items": {"type": "string"}},
-    "key_ideas": {"type": "array", "items": {"type": "string"}},
-    "neutral_problem": {"type": "string"},
-    "neutral_approach": {"type": "string"},
-    "neutral_needs": {"type": "string"},
-    "neutral_provides": {"type": "string"},
-    "neutral_limits": {"type": "string"},
-    "caveats": {"type": "array", "items": {"type": "string"}}
+    "summary": {
+      "type": "string"
+    },
+    "useful_for": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "topics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "adjacent_topics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "key_ideas": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "neutral_problem": {
+      "type": "string"
+    },
+    "neutral_approach": {
+      "type": "string"
+    },
+    "neutral_needs": {
+      "type": "string"
+    },
+    "neutral_provides": {
+      "type": "string"
+    },
+    "neutral_limits": {
+      "type": "string"
+    },
+    "caveats": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "topics_support": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "key_ideas_support": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "caveats_support": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "neutral_limits_support": {
+      "type": "string"
+    }
   },
-  "required": ["summary", "useful_for", "topics", "adjacent_topics", "key_ideas", "neutral_problem", "neutral_approach",
-               "neutral_needs", "neutral_provides", "neutral_limits", "caveats"],
+  "required": [
+    "summary",
+    "useful_for",
+    "topics",
+    "adjacent_topics",
+    "key_ideas",
+    "neutral_problem",
+    "neutral_approach",
+    "neutral_needs",
+    "neutral_provides",
+    "neutral_limits",
+    "caveats",
+    "topics_support",
+    "key_ideas_support",
+    "caveats_support",
+    "neutral_limits_support"
+  ],
   "additionalProperties": false
 }

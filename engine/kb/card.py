@@ -18,6 +18,8 @@ from . import KbError, ids, models, stages, textutil
 from . import read as citation  # the rules a read already follows for an address and for the identifiers of a source
 
 FORMAT = 1
+FORMAT_GROUNDED = 2   # a card whose key ideas, topics, caveats and limit are marked as stated or inferred (`docs/specs/card.md`)
+FORMATS = (FORMAT, FORMAT_GROUNDED)
 TOOL = "card"
 FILENAME = "card.json"
 MAX_CARD = 262144
@@ -29,7 +31,14 @@ _SHELF = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _GENERATION = re.compile(r"[1-9][0-9]{0,5}")
 _TOP = ("format", "book_id", "version_id", "title", "kind", "shelf", "primary_type", "source", "scan", "conversion", "partial",
         "partial_reasons", "model", "made")
+_TOP_GROUNDED = _TOP + ("grounding",)
 _RECORD = ("task", "registry", "model", "prompt_version", "date", "input_tokens", "output_tokens")
+_COUNTS = ("points", "verified")   # the notes of a piece: how many points, how many with a quote that occurs (format 2 only)
+GROUNDED_LISTS = ("topics", "key_ideas", "caveats")
+MARKS = ("stated", "inferred")
+MAX_QUOTE = 240
+MAX_REFS = 6
+_REF = re.compile(r"[1-9][0-9]{0,2}\.[1-9][0-9]?")   # the number of a point: the piece, a dot, the point
 MAX_REASONS = 20
 MAX_CAVEATS = 100
 MAX_RECORDS = 30
@@ -52,6 +61,11 @@ MODEL_SHAPE = {
 
 _ISO = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}[0-9T:.+Z-]{0,40}")
 _ADDRESS_KEYS = ("address_asked", "address_final")
+
+
+# the model-written fields of a grounded card: higher ceilings, key ideas may be few (a thin card says so), and a limit may be empty
+MODEL_SHAPE_GROUNDED = {**MODEL_SHAPE, "topics": {"type": "strings", "max_items": 20, "max": 60},
+                        "key_ideas": {"type": "strings", "max_items": 8, "max": 300}}
 
 
 def _count(value, high=10 ** 9):
@@ -140,34 +154,79 @@ def mechanical(store, book_id, version_id):
             "conversion": conversion, "partial": bool(why), "partial_reasons": why}
 
 
-def _record(r):
-    ok = (isinstance(r, dict) and set(r) == set(_RECORD) and isinstance(r["task"], str) and models._NAME.fullmatch(r["task"])
+def _record(r, grounded=False):
+    counted = isinstance(r, dict) and any(k in r for k in _COUNTS)
+    ok = (isinstance(r, dict) and set(r) == set(_RECORD) | (set(_COUNTS) if counted and grounded else set()) and isinstance(r["task"], str) and models._NAME.fullmatch(r["task"])
           and isinstance(r["registry"], str) and models._NAME.fullmatch(r["registry"]) and models._valid_model(r["model"])
           and isinstance(r["prompt_version"], str) and models._VERSION.fullmatch(r["prompt_version"])
           and isinstance(r["date"], str) and _ISO.fullmatch(r["date"]) is not None
-          and all(r[k] is None or _count(r[k], 10 ** 12) for k in ("input_tokens", "output_tokens")))
+          and all(r[k] is None or _count(r[k], 10 ** 12) for k in ("input_tokens", "output_tokens"))
+          and (not counted or (_count(r["points"], 1000) and _count(r["verified"], 1000) and r["verified"] <= r["points"])))
     if not ok:
         raise KbError("a record of how the card was made is not in the expected form")
-    return {k: r[k] for k in _RECORD}
+    return {k: r[k] for k in _RECORD + (_COUNTS if counted else ())}
 
 
-def _checked_model(part):
-    """The model part, checked against the shape of a card and cleaned, or a refusal."""
+def _checked_model(part, grounded=False):
+    """The model part, checked against the shape of a card and cleaned, or a refusal. In a grounded card the limit may be empty."""
+    if grounded and isinstance(part, dict) and part.get("neutral_limits") == "":
+        return {**_checked_model({**part, "neutral_limits": "-"}, True), "neutral_limits": ""}
     try:
         text = json.dumps(part)
     except (TypeError, ValueError):
         raise KbError("the model part of a card is not plain data") from None
-    return models._check_answer(text, MODEL_SHAPE)
+    return models._check_answer(text, MODEL_SHAPE_GROUNDED if grounded else MODEL_SHAPE)
 
 
-def make(store, book_id, version_id, model=None, records=(), pieces=0, calls=0, reasons=()):
+def _entry(e, what):
+    """One entry of the grounding record: the mark of an item, the notes that support it and the quote of the first of them."""
+    bad = KbError(f"the card is not valid: the mark of {what}")
+    if not isinstance(e, dict) or set(e) != {"mark", "notes", "quote"} or e["mark"] not in MARKS:
+        raise bad
+    notes = e["notes"]
+    if not isinstance(notes, list) or len(notes) > MAX_REFS or not all(isinstance(n, str) and _REF.fullmatch(n) for n in notes) \
+            or len(set(notes)) != len(notes):
+        raise bad
+    if e["mark"] == "stated":
+        if not notes or not isinstance(e["quote"], str) or not e["quote"] or not _clean(e["quote"], MAX_QUOTE):
+            raise bad
+    elif notes or e["quote"] is not None:
+        raise bad
+
+
+def _grounding(g, model):
+    """The grounding record of a card of format 2, checked against its model part."""
+    bad = lambda what: KbError(f"the card is not valid: grounding, {what}")
+    keys = set(GROUNDED_LISTS) | {"neutral_limits", "dropped"}
+    if not isinstance(g, dict) or set(g) != keys:
+        raise bad("its keys")
+    for field in GROUNDED_LISTS:
+        if not isinstance(g[field], list) or len(g[field]) != len(model[field]):
+            raise bad(f"{field} has not one entry for each item")
+        for n, e in enumerate(g[field], start=1):
+            _entry(e, f"{field} {n}")
+    if model["neutral_limits"] == "":
+        if g["neutral_limits"] is not None:
+            raise bad("a mark for a limit that is not there")
+    else:
+        _entry(g["neutral_limits"], "the limit")
+    dropped = g["dropped"]
+    if not isinstance(dropped, dict) or set(dropped) != set(GROUNDED_LISTS) | {"neutral_limits"} \
+            or not all(_count(v, 1000) for v in dropped.values()):
+        raise bad("the counts of what was dropped")
+
+
+def make(store, book_id, version_id, model=None, records=(), pieces=0, calls=0, reasons=(), grounding=None):
     """A card for a version: the mechanical part and, if given, the model part and the records of how it was made. With no model
-    part the card is built from the metadata alone and is marked partial. `reasons` are further reasons it is partial."""
+    part the card is built from the metadata alone and is marked partial. `reasons` are further reasons it is partial. With a
+    `grounding` record the card is of format 2: its items are marked and it may be thin; without one it is of format 1."""
     base = mechanical(store, book_id, version_id)
+    if grounding is not None and model is None:
+        raise KbError("a grounding record needs a model part")
     if model is not None:
         if not isinstance(model, dict):
             raise KbError("the model part of a card is not an object")
-        model = _checked_model(model)
+        model = _checked_model(model, grounding is not None)
     else:
         base["partial_reasons"].append("built from the metadata alone: the card has no model part")
     if not isinstance(records, (list, tuple)) or len(records) > MAX_RECORDS:
@@ -178,7 +237,10 @@ def make(store, book_id, version_id, model=None, records=(), pieces=0, calls=0, 
     base["partial_reasons"] = (base["partial_reasons"] + [r for r in extra if r])[:MAX_REASONS]
     base["partial"] = bool(base["partial_reasons"])
     base["model"] = model
-    base["made"] = {"pieces": pieces, "calls": calls, "records": [_record(r) for r in records]}
+    base["made"] = {"pieces": pieces, "calls": calls, "records": [_record(r, grounding is not None) for r in records]}
+    if grounding is not None:
+        base["format"] = FORMAT_GROUNDED
+        base["grounding"] = grounding
     return validate(base)
 
 
@@ -188,11 +250,14 @@ def _strings(value, count, limit):
 
 def validate(card):
     """The card, if it has exactly the shape of a card of this format; otherwise a refusal."""
-    if not isinstance(card, dict) or set(card) != set(_TOP):
+    if not isinstance(card, dict) or set(card) not in (set(_TOP), set(_TOP_GROUNDED)):
         raise KbError("the card does not have the keys of a card")
     bad = lambda what: KbError(f"the card is not valid: {what}")
-    if type(card["format"]) is not int or card["format"] != FORMAT:
-        raise bad("its format is not " + str(FORMAT))
+    if type(card["format"]) is not int or card["format"] not in FORMATS:
+        raise bad("its format is not one of " + ", ".join(map(str, FORMATS)))
+    grounded = card["format"] == FORMAT_GROUNDED
+    if grounded != ("grounding" in card):
+        raise bad("a card of format 2 has a grounding record and one of format 1 has none")
     ids.check_id(card["book_id"])
     if not isinstance(card["version_id"], str) or not _VERSION.fullmatch(card["version_id"]):
         raise bad("version_id")
@@ -229,17 +294,29 @@ def validate(card):
         raise bad("a partial card must say why")
     model = card["model"]
     if model is None:
+        if grounded:
+            raise bad("a card with no model part is of format 1")
         if not card["partial"]:
             raise bad("a card with no model part must be partial")
     else:
-        if not isinstance(model, dict) or _checked_model(model) != model:
+        if not isinstance(model, dict):
             raise bad("model")
+        try:
+            same = _checked_model(model, grounded) == model
+        except KbError:
+            same = False
+        if not same:
+            raise bad("model")
+        if grounded:
+            _grounding(card["grounding"], model)
+            if len(model["key_ideas"]) < 3 and not card["partial"]:
+                raise bad("a card with fewer than three key ideas must be partial and say why")
     made = card["made"]
     if not (isinstance(made, dict) and set(made) == {"pieces", "calls", "records"} and _count(made["pieces"], 1_000_000)
             and _count(made["calls"], 1_000_000) and isinstance(made["records"], list) and len(made["records"]) <= MAX_RECORDS):
         raise bad("made")
     for r in made["records"]:
-        _record(r)
+        _record(r, grounded)
     return card
 
 
@@ -295,12 +372,22 @@ def render(card):
     for key, label in (("useful_for", "useful for"), ("topics", "topics"), ("adjacent_topics", "adjacent topics")):
         if model[key]:
             lines.append(f"{label}: " + _shown_list(model[key]))
+    marks = card.get("grounding") or {}
+
+    def quote_of(entry, label):
+        if entry and entry["mark"] == "stated":
+            add(f"quote for {label}", entry["quote"])
+
     for number, idea in enumerate(model["key_ideas"], start=1):
         add(f"key idea {number}", idea)
+        quote_of(marks.get("key_ideas", [None] * number)[number - 1], f"key idea {number}")
     for key in ("problem", "approach", "needs", "provides", "limits"):
         add(f"neutral {key}", model[f"neutral_{key}"])
-    for note in model["caveats"]:
+        if key == "limits" and model["neutral_limits"]:
+            quote_of(marks.get("neutral_limits"), "neutral limits")
+    for number, note in enumerate(model["caveats"], start=1):
         add("caveat", note)
+        quote_of(marks.get("caveats", [None] * number)[number - 1], f"caveat {number}")
     return "\n".join(lines)
 
 
@@ -326,7 +413,7 @@ def file(store, card):
     data = (json.dumps(card, indent=1) + "\n").encode()
     if len(data) > MAX_CARD:
         raise KbError("the card is larger than a card may be")
-    store.file_payload(book_id, version_id, f"derived/{TOOL}/{number}", {FILENAME: data}, tool=f"kb-card {FORMAT}", untrusted=True)
+    store.file_payload(book_id, version_id, f"derived/{TOOL}/{number}", {FILENAME: data}, tool=f"kb-card {card['format']}", untrusted=True)
     return number
 
 
