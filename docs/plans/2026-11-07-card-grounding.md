@@ -1,6 +1,6 @@
 # Making the cards accurate
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-07
 Candidate: cards#card-grounding
 Specs: card
