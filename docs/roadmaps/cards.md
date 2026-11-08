@@ -77,9 +77,11 @@ proposed. A bridge to local models (`ask-ollama`) is installed in the workbench,
 - Dependencies: card-trial (its result says what the cards get wrong), card-stage.
 - Boundary: in, higher ceilings in the merge call, a quote per claim and a mechanical check of it, the three marks, the labelled
   sample, the owner's calibration subset and the accuracy measure, a fix to the prompt's wording (the right word for the kind of
-  source, no mention of the pipeline's notes), and a cloud model to label the sample. Also in, if the labelled sample shows it
-  pays: a second model, named in the owner's config, that checks one more round when a list is full or an item's support is weak
-  (tested against the labels before it is trusted), agreement across two runs of the note stage, grounding of the summary and the
+  source, no mention of the pipeline's notes), a cloud model to label the sample, and a second model, named in the owner's config,
+  that checks that the note an item cites supports the item (added after the first live run showed that a model could keep every
+  item by citing one verified note). Also in, if the labelled sample shows it pays: a further round by that model when a list is
+  full or an item's support is weak (tested against the labels before it is trusted), agreement across two runs of the note stage,
+  grounding of the summary and the
   other neutral fields, and a test of whether covering every piece of a long book improves accuracy before the sample cap is
   raised. Out, search by meaning, themes, a cloud model as a card writer or checker, a second trial on harder questions and more
   books (see Deferred work), and rewriting existing cards (a new card is a new generation).

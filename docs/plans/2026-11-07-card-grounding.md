@@ -10,7 +10,8 @@ Specs: card
 The owner knows how accurate the cards are, and the cards are more accurate. When this is done, a card is made from notes in which
 every point carries a short verbatim quote that the engine has checked against the piece it names; the card's key ideas, topics,
 caveats and limits name the notes that support them (the summary and the other neutral fields are measured, not marked); each such
-item that is kept is marked stated or inferred, and what is neither is dropped; the marks are
+item that is kept is marked stated or inferred, and what is neither is dropped; an item is stated only if the note it cites is
+verified, bears on the item and is confirmed by a second model to support it; the marks are
 shown to a reader and in a search result. The accuracy of the old cards and of the new ones is measured on a sample of items that
 a strong model labels without knowing which card each came from, checked against a small subset that the owner labels.
 
@@ -24,6 +25,8 @@ a strong model labels without knowing which card each came from, checked against
 - The card call cites the notes that support an item; the engine marks each item, drops unsupported topics, key ideas, caveats and limits, marks a
   card with fewer than three supported key ideas as thin (it is not padded), and keeps the quotes that support an item as untrusted
   text in the card.
+- A check that the note an item cites supports the item: a mechanical test that they share a content word, and then one call to a
+  second model, named in the owner's config as the task `card-check`, for each ten items. Only an item that passes both is stated.
 - A new card format that carries the marks; cards of the old format stay readable and are shown as not checked.
 - A prompt with higher ceilings for key ideas and topics, the right word for the kind of source, and no mention of the pipeline's
   notes in the card.
@@ -33,8 +36,9 @@ a strong model labels without knowing which card each came from, checked against
 
 ## Non-goals
 
-- A second model that checks the card, agreement across two runs of the notes, and a higher cap on the pieces sampled from a long
-  book. They are deferred until the labelled sample shows that they would pay (see Deferred work).
+- A further round by a second model when a list is full or an item's support is weak, agreement across two runs of the notes, and a
+  higher cap on the pieces sampled from a long book. They are deferred until the labelled sample shows that they would pay (see
+  Deferred work). The check of the note an item cites is not among them: it is increment D-A.
 - Search by meaning, themes, or a cloud model as a card writer or checker. A cloud model is used only to label the accuracy
   sample, as the roadmap candidate allows.
 - A second trial on harder questions and more books. The roadmap lists it as deferred work.
@@ -65,6 +69,12 @@ a strong model labels without knowing which card each came from, checked against
 - The files of the labelled sample and its key are held outside the repository, and the commands refuse a path inside it, as
   `trial` does. They name the books by id and title; the books of the walk-through library are public.
 - Model names, the owner's paths and server names are not written into any tracked file.
+- The first live run of the grounded card (see the Result of increment E) showed that the engine's check of the quotes does not
+  show that a cited note supports the item that cites it: the card call cited one note for nearly every item. Increment D-A adds
+  the check that does. The owner names the model for it, which should not be the model that writes the card, by setting
+  `tasks.card-check` in the config; the engine names no model and, as for the other tasks, refuses to make a card before any call
+  if the setting is missing. The items, the notes' points and the quotes go to that model, as the text of the book goes to the
+  other two.
 - Anything the decision of the card trial leaves open stays open: this plan does not decide search by meaning or themes.
 
 ## Completion criteria
@@ -88,6 +98,10 @@ a strong model labels without knowing which card each came from, checked against
    of each generation, the agreement of the model with the owner, and the disagreements; and the plan records what the numbers
    show, the share of quotes that verified, the cost in calls, and the owner's decision on the deferred work.
 7. The tests named for each increment pass, and the whole-plan verification passes.
+8. An item that cites notes is marked stated only if one note it cites is verified, shares a content word with the item, and a call
+   to the `card-check` model answers that the note's point and quote support it; an item that fails any of these three is dropped,
+   not marked inferred; the check is tested against replies that reject the items an unrelated note was cited for, the generation
+   records carry the counts checked and supported, and a missing `card-check` setting is refused before any call.
 
 ## Increments
 
@@ -214,22 +228,61 @@ items of each mark its card has.
 reads the catalog.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-07-card-grounding#D`.
 
+### Increment D-A — A mark must mean that the note supports the item
+
+**Outcome:** an item of a card is `stated` only if a verified note that it cites shares a content word with it and a second model,
+given the item with that note's point and quote, says that they support it; any other item that cites notes is dropped.
+**Dependencies:** D.
+**Affected areas:** `engine/kb/cardmake.py` (the pairs, the check calls, `ground`, the card prompt), `engine/kb/models.py` (the new
+task `card-check`), `engine/kb/card.py` (an optional pair of counts in a generation record), `engine/kb/cardsample.py` and
+`engine/kb/__main__.py` (`card-sample --book`), `engine/kb/schemas/` (the schema of the new job), `docs/specs/card.md`,
+`engine/README.md`, and the tests `test_cardmake.py`, `test_card.py`, `test_models.py` and `test_cardsample.py`.
+**Steps:**
+1. Write the tests first, on hand-made replies. The mechanical test: an item that cites a verified note sharing no content word
+   (a word of four or more letters outside a short list, compared by its first five letters) with the note's point and quote has no
+   pair and is dropped; one that shares a word has a pair; an item with no content word has a pair, for the model to decide; of
+   several verified notes the one that shares most words is the pair's note, and the first on a tie. The check call: the pairs go
+   in batches of ten, each batch in one section of data with the item, the number of the note, its point and its quote; the reply
+   has one verdict for each pair, each `supports`, `partly` or `no`, and any other word or any other length refuses the answer,
+   which is kept aside; only `supports` confirms, and `partly` and `no` drop the item; an item the model calls an inference is not
+   sent; no pairs, no call. `ground`: a confirmed item is stated, with the confirmed note as its only note and that note's quote;
+   an item that cites verified notes and is not confirmed is dropped; the thin-card rule is as before. A card call that cites the
+   same verified note for every item, with a checker that rejects the unrelated ones, keeps only the related ones. Settings: a
+   missing `tasks.card-check` is refused before the first call, with the key to set. Records: the check calls carry `checked` and
+   `supported`, only as a pair and only in a grounded card, and a grounded card made before this still validates. The card prompt
+   asks for the one or two notes that best state each item and not for a note that is only loosely related.
+2. Add `card-check` to the tasks the engine knows; write the pairs, the mechanical test, the prompt of the check, its job and
+   schema, and the confirmation in `ground`; move the card prompt to v4; add the counts to the generation record and the figures
+   `checked` and `supported` to the report of `cards`.
+3. Add `--book` (repeatable) to `card-sample`, which the function already takes, so that a sample can leave out a book: the first
+   live run made a generation-2 card of one book before this increment, and it is not comparable with the cards made after it.
+4. Update `docs/specs/card.md` (a stated item is one whose note a second model confirmed to support it) and `engine/README.md`
+   (the task `card-check`, the pairs, the verdicts and what is dropped).
+**Verification:** `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_models
+engine.tests.test_catalog engine.tests.test_quotes engine.tests.test_trial engine.tests.test_cardsample`, since the task list and
+the card record are shared; deliberate breaks of the mechanical test, the batching, the forms of a verdict, the confirmation, the drop
+of an item that is not confirmed and the refusal of a missing setting.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-07-card-grounding#D-A`.
+
 ### Increment E — A live run, the labelled sample and the comparison
 
 **Outcome:** a blind sample of old and new items is labelled by a strong model and a calibration subset by the owner, the plan
 records what the numbers show and how far the two labellings agree, and the owner has decided what comes next.
-**Dependencies:** A, B, C and D. It needs the owner's word on the books, on sending their text to the local models, on sending the
-sample's items and passages, and the whole text of a few books for the second look, to a cloud model, and on the time to label the calibration subset.
+**Dependencies:** A, B, C, D and D-A. It needs the owner's setting of `tasks.card-check`, the owner's word on the books, on sending
+their text to the local models, on sending the sample's items and passages, and the whole text of a few books for the second look,
+to a cloud model, and on the time to label the calibration subset.
 **Affected areas:** the owner's library (a new card generation for the books named, the catalog), files outside the repository,
 and the plan's Result. No tracked file other than the plan changes.
 **Steps:**
 1. Propose the books to the owner (the 12 carded books are the natural choice), the size of the sample (about 80 items) and of the
    calibration subset (about 15), and say what it costs: about twice the calls of the first run, because of the notes stage for
-   every book; a cloud model reading the items and passages; and the owner's time for the subset only. Wait for the owner's word.
+   every book, and one more call for each ten items that cite a note; a cloud model reading the items and passages; and the owner's
+   time for the subset only. The page that the first live run carded (generation 2, made before D-A) is left out of the comparison.
+   Wait for the owner's word.
 2. Run `cards --again` for the books named, a few at a time. Record, for each book, the calls, the points and the share whose quote
-   verified, the items marked and dropped, and every failure; a refused answer is kept aside and read. If fewer than half of the
+   verified, the items marked and dropped, the items checked and the verdicts (`supports`, `partly`, `no`), and every failure; a refused answer is kept aside and read. If fewer than half of the
    quotes verify on a book, stop and report before going on: the check may be failing for a reason of conversion, not of the model.
-3. Run `card-index`, then `card-sample` drawing from both generations. The key file is kept by me and is not given to the labeller
+3. Run `card-index`, then `card-sample` drawing from generations 1 and 2 of the books named with `--book`. The key file is kept by me and is not given to the labeller
    or shown to the owner.
 4. Have a strong model label the items file as a subagent that is given the file and the rules for the three labels, and not the
    key, the generation or the plan's reading of the old cards. Record the model, the date and the instructions it was given. Give
@@ -248,15 +301,15 @@ and the plan's Result. No tracked file other than the plan changes.
 7. Give the owner a recommendation on the deferred work (a second model's check, two runs, a higher cap, a second trial) and
    record the owner's decision.
 **Verification:** the runs of steps 2 to 5, read as written; `python3 -m unittest engine.tests.test_cardsample engine.tests.test_quotes
-engine.tests.test_cardmake engine.tests.test_card engine.tests.test_catalog engine.tests.test_trial` once more.
+engine.tests.test_cardmake engine.tests.test_card engine.tests.test_catalog engine.tests.test_trial engine.tests.test_models` once more.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-07-card-grounding#E`, which holds the plan's Result.
 
 ## Verification for the plan as a whole
 
 Each increment's recorded verification still stands unless a later increment changed its inputs. After E, rerun once
 `python3 -m unittest engine.tests.test_cardsample engine.tests.test_quotes engine.tests.test_cardmake engine.tests.test_card
-engine.tests.test_catalog engine.tests.test_trial engine.tests.test_setup`. The wider engine suite is not named: the plan changes
-the card format and the notes and card jobs, and adds two commands, but no stage, no index and no store. The risk a wider run
+engine.tests.test_catalog engine.tests.test_trial engine.tests.test_models engine.tests.test_setup`. The wider engine suite is not
+named: the plan changes the card format, the notes and card jobs and the list of tasks, and adds three commands, but no stage, no index and no store. The risk a wider run
 would address is a place that reads a card and was not tested here; the readers are `catalog`, `trial` and `card-show`, which the
 list covers. A wider run is the owner's to ask for.
 
@@ -285,6 +338,12 @@ list covers. A wider run is the owner's to ask for.
   a path inside the project.
 - **Time.** The run takes tens of minutes of model time, and the labelling takes the owner's time.
 
+- **A third model reads items, notes and quotes.** The `card-check` model is named by the owner and is reached over the registry's
+  link as the others are; without the setting the engine refuses to make a card. It can be lenient or wrong: the labelled sample in
+  increment E measures how many of the items it let through are unsupported, and the share it rejected is recorded.
+- **More calls and a stricter card.** The check adds a call for each ten items that cite a note, and items it does not confirm are
+  dropped, so cards will hold fewer topics and key ideas and more of them may be thin. That is the intent; E reports it.
+
 ## Review record
 
 Reviewer: Codex through the review engine. Round 3 of 3 (the bound): ten findings in all, ten applied, none rejected. The fix of
@@ -301,13 +360,16 @@ the last finding has not been reviewed again.
 - Round 3, one finding, applied: the two labellers share the passages, so their agreement cannot measure support missed outside
   them. The claim was removed, the agreement is stated as support within the passages shown, and a second look at the full text of
   the items labelled unsupported on the calibration ids estimates the retrieval misses apart.
+- Amendment, 2026-11-07, after the first live run (see the Result of increment E): increment D-A and the changes it needs in the
+  Goal, Scope, Non-goals, Assumptions, Completion criteria (criterion 8), Increment E, the verification for the whole plan, the Risks
+  and the Deferred work. The amendment was written for the owner's new approval and has not been through a round of the review.
 - Left for the owner: whether to ask for a further round of review (the bound is reached; extending it is the owner's level
   `ask`) or to approve the plan as it stands.
 
 ## Deferred work
 
-- A second model that checks the card for support when a list is full or an item's support is weak, tested against the owner's
-  labels before it is trusted; agreement across two runs of the notes; and a test of whether covering every piece of a long book
+- A further round by the second model when a list is full or an item's support is weak, tested against the owner's labels before it
+  is trusted; agreement across two runs of the notes; and a test of whether covering every piece of a long book
   improves accuracy before the cap of twelve pieces is raised. Increment E ends with a recommendation on each.
 - A second trial on harder questions and more books, to see whether more accurate cards find more.
 - Search by meaning and themes, which the card trial decided against for now.
@@ -315,7 +377,7 @@ the last finding has not been reviewed again.
 
 ## Result
 
-### Increment A — Measuring the accuracy of the cards (built; not committed)
+### Increment A — Measuring the accuracy of the cards (committed)
 
 - Built `engine/kb/cardsample.py` (the commands `card-sample`, `card-accuracy` and `card-agreement`), `engine/kb/paths.py` (the
   rule that a file is held outside the repository, which `trial` now uses from there), `engine/tests/test_cardsample.py` (41 tests)
@@ -347,7 +409,7 @@ the last finding has not been reviewed again.
   shows counts by generation to the operator and is not to be passed to the labeller.
 - Committed as `822abac`.
 
-### Increment B — Notes with quotes that are checked (built; not committed)
+### Increment B — Notes with quotes that are checked (committed)
 
 - Built `engine/kb/quotes.py` (the normalisation and `occurs`), the notes job at version v3 in `engine/kb/cardmake.py` (up to four
   points, each with a quote, as two lists of equal length), an optional `check` on a model job in `engine/kb/models.py` (a refusal
@@ -379,7 +441,7 @@ the last finding has not been reviewed again.
   and a one-piece book gets both its text and its notes. Increment C changes the card prompt and the card format.
 - Committed as `2357614`.
 
-### Increment C — A card that is grounded in the notes (built; not committed)
+### Increment C — A card that is grounded in the notes (committed)
 
 - Built card format 2 in `engine/kb/card.py` (the `grounding` record with a mark, notes and quote for each topic, key idea, caveat
   and neutral limit, and the number dropped for each; higher ceilings of 20 topics and 8 key ideas; key ideas may be few; the
@@ -412,7 +474,7 @@ the last finding has not been reviewed again.
   asked.
 - Committed as `dca5ce5`.
 
-### Increment D — The marks where a reader sees them (built; not committed)
+### Increment D — The marks where a reader sees them (committed)
 
 - Built in `engine/kb/card.py`: the rendering of a card of format 2 shows `[stated]` or `[inferred]` after each topic, key idea,
   caveat and neutral limit, a card of format 1 that has a model part carries one line `grounding: not checked`, and
@@ -440,3 +502,59 @@ the last finding has not been reviewed again.
 - Next: the owner's word to commit increment D. Then E, which needs the owner's word on the books, on sending their text to the
   local models again, on sending the sample's items and passages (and a few whole books for the second look) to a cloud model, and
   the owner's time to label about 15 items.
+- Committed as `710d7c6`.
+
+### Increment D-A — A mark must mean that the note supports the item (built; not committed)
+
+- Built in `engine/kb/cardmake.py`: `pairs` (for each item that cites notes, the verified note it cites that shares most content
+  words with it, by the first five letters of words of four letters or more, the first cited on a tie; no such note, no pair, and
+  the item is dropped; an item with no content word of its own is paired with the first verified note it cites), `check_prompt` and
+  `check_job` (one verdict, `supports`, `partly` or `no`, for each pair, ten pairs to a call; a wrong word or count refuses the
+  answer and it is kept aside), `ground(values, notes, confirmed)` (an item is stated only if the check confirmed it, with the
+  confirmed note as its only note and that note's quote), the card prompt at v4 (the one or two notes that best state each item,
+  none that is only loosely related), `unpaired`, and the report fields `checked`, `supported`, `partly`, `no` and `unpaired`. In
+  `engine/kb/models.py` the task `card-check`; in `engine/kb/card.py` a generation record may carry the pair `checked`/`supported`
+  (or `points`/`verified`, not both), in a grounded card only; the schema `card-check.json`; `card-sample --book`; the spec and the
+  README. `cards` now checks all three tasks before it tries any book.
+- Verification as run: `python3 -W error::ResourceWarning -m unittest engine.tests.test_cardmake engine.tests.test_card
+  engine.tests.test_models engine.tests.test_catalog engine.tests.test_quotes engine.tests.test_trial engine.tests.test_cardsample`
+  gave 516 tests, OK; `python3 -m unittest engine.tests.test_setup` OK; `wb run code-work check` found no problems. Not run: any
+  other test file, and any live run of the check (the first live run was before D-A, with the old design).
+- Deliberate breaks, each from a green baseline: 25 of the pairs, the check call, the marking and the record (23 caught at once; two
+  survived, words of three letters counted as content words and verdicts not read without regard to case, and a test was added for
+  each, after which both were caught), then 5 of the changes made after the review (all caught). The tests were written first and
+  failed.
+- Review: the `reviewer` agent, round 1, no blocking findings. Applied: the spec and the README said that the marks never come from
+  the card model's word, which is false for `inferred`; they now say that a `stated` mark comes only from the checks and that
+  `inferred` is the model's own unchecked word. The report of `cards` now also gives `partly`, `no` and `unpaired` (the items that
+  cite notes but had no pair), which E step 2 needs. `cards` checks all three tasks before it tries any book, so a missing
+  `card-check` refuses the command and does not report each book as failed.
+- Recorded, not changed, for E to measure: (1) `inferred` is unchecked, so a card model can keep items by calling them inferences;
+  E should report the share of items that are inferred; (2) the mechanical test drops a topic that is an alias sharing no
+  four-letter word with its note, though the prompt asks for other names of an idea, so fewer topics are to be expected; (3) a
+  caveat or a limit is a claim about the source or where the book would not work, which a quote rarely states, so more of them
+  will be dropped or marked inferred; (4) the check prompt says an item is supported if the point and quote "state the item or
+  clearly lead to it", which is more lenient than "support", and gives no separate guidance for caveats and limits; (5) one verdict
+  reply with a wrong word or count fails the whole book (its answer is kept aside); (6) a list of verdicts of the right length
+  but in the wrong order cannot be detected; (7) a verified quote that holds an instruction can steer the checker as any text in a
+  data section can, which is the exposure the notes and card calls have too; (8) the card prompt does not tell the model that an
+  item sharing no word with its note is dropped, which I chose not to say so as not to teach the model to pad items with words.
+- Next: the owner's word to commit this amendment and increment D-A; then the owner's setting of `tasks.card-check`, and E.
+
+### Increment E — A live run, the labelled sample and the comparison (started; stopped after one book)
+
+- On the owner's word to start E I ran `cards --again` for one book, a web page of two pieces, as a new generation (generation 2;
+  generation 1 is unchanged). Three calls, about 45 seconds. The notes had 8 points, and 7 of the 8 quotes were found in their
+  piece (88%), well above the stop line of half. No answer was refused. The card has 12 topics, 7 key ideas, 3 caveats and a limit,
+  and is not partial.
+- **Finding: the marks do not mean what the card says.** The card call cited note 1.2 (or 1.1) for all 19 kept topics and key
+  ideas, so all 19 are marked `stated` and none was dropped, and the quote shown beside each of the seven key ideas is the same
+  sentence, which bears on only one of them. The three caveats and the limit were marked `inferred`. The engine checks that a quote
+  is in the book and not that the note it belongs to supports the item that cites it; a model can keep every item by citing one
+  verified note. This is the limit that the review of increment C recorded; the first real run shows it is not a corner case. Fake
+  model replies in the tests could not have shown it.
+- I did not run the other eleven books or draw the sample: more cards of this kind would have marks that read as support and are
+  not, and the labels would then measure a design that is already known to be weak. The library now has one card of generation 2,
+  so the catalog (built before it) is stale for that book until `card-index`, and `trial` refuses a stale catalog.
+- The owner chose to add a mechanical check of the cited note and a check by a second model; this became increment D-A, written as an
+  amendment to the plan for the owner's new approval. E resumes after it.
