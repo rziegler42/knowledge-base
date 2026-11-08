@@ -1,0 +1,23 @@
+{
+  "name": "kb",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Search the owner's library of outside sources by keyword and read a passage back; the owner builds the library.",
+  "provides": [
+    "kb:knowledge-search"
+  ],
+  "ships": [
+    "helper/kb"
+  ],
+  "commands": {
+    "kb": {
+      "helper": "helper/kb",
+      "runtime": "python",
+      "kit": 1,
+      "arguments": [
+        "search",
+        "read"
+      ]
+    }
+  }
+}

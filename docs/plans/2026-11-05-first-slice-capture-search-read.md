@@ -851,10 +851,52 @@ covers is an increment breaking an earlier one through the shared store.
     very large book were not measured; the machine is this one.
 - **Left for the owner:** the word to commit H.
 
-### Increment I — The thin workbench package (deferred by the owner's word, 2026-11-06)
+### Increment I — The thin workbench package (built and installed in a scratch project 2026-11-08; not committed)
 
-The owner said yes to running J before I, so I is not built. It stays deferrable as the plan says, and J's findings (below) are to
-be taken into account before it is built. Nothing was changed in the plan's text.
+The owner deferred I on 2026-11-06 to run J first, and asked to start it on 2026-11-08 after the walk-through's findings were fixed
+by three follow-up plans and the card plans. Nothing was changed in the plan's text.
+
+- Built: `package/package.json` (package `kb`, contract 1), `package/kb/module.json` (module `kb`, provides `kb:knowledge-search`
+  with the prefix that the stub gate found a package outside the workbench must use, one command `kb` with the arguments `search`
+  and `read`, no `owner` argument) and `package/kb/helper/kb`, and `engine/tests/test_package.py`.
+- The helper takes `search [--limit 1-20] [--] <query>` and `read [--version vN] [--chars 100-20000] <book> <locator-json>`. A book
+  is its 26-character identifier; a locator is a strict JSON object of at most 2,000 bytes and 6 levels; every other option name
+  is refused, so no argument can be a path, an address or a token. It runs `python -m kb search` or `read` with no shell, a fixed
+  argument shape (the query after `--`), a short environment (`HOME`, `LANG`, `LC_*`, a fixed `PATH`, no bytecode; no
+  `PYTHONPATH`, no `KB_CONFIG_DIR`), a 60-second limit, a 1 MiB cap on each stream and the process group killed at the end. It
+  finds the engine folder and the interpreter only in `~/.config/knowledge-base/helper.json` (keys `engine` and `python`, absolute
+  paths), which it refuses if it is a link, not the user's own, readable by others, not strict JSON, or if either path is inside the
+  project or its outermost git root (links resolved). The output is cleaned of control and invisible characters, stripped of the
+  engine, interpreter and home paths (also in their JSON-escaped spellings), cut at 65,536 characters with the cut marked, and
+  framed between two marker lines with a random token that the text does not hold, with a line that says it is untrusted data.
+- Verification as run: `KB_WORKBENCH_CHECKOUT=<workbench checkout> python3 -W error::ResourceWarning -m unittest
+  engine.tests.test_package` gave 29 tests, OK (they are skipped without the variable; they use a fake engine and no library);
+  `wb verify package` accepted the package. The tests were written first and failed because the helper did not exist. A
+  read-only check with the real engine and the real library, started with the helper's short environment: `search` and `read`
+  gave results (exit 0), and neither output held the library's bulk root, index root or the home folder. Deliberate breaks, each
+  from a green baseline: 31 conditions of the helper, 28 caught at once; of the three that survived, one is equivalent (a floor of
+  0 on `--limit`, which the number pattern already refuses), one changed nothing, and one removed a first kill that the final
+  `finally` repeats. Two real gaps found by the breaks (the owner check of the settings file, a token that the text already holds)
+  and one found by the review (the settings must not be read from the project, tested with the working directory in the project)
+  each got a test.
+- Review: the `reviewer` agent, round 1, no blocking findings. Applied: a path that the engine's JSON prints escaped (a letter
+  outside ASCII, a backslash) was not hidden, now hidden in both spellings with a test; the locator depth limit now has a boundary
+  test (5 accepted, 6 refused). Not changed, with reasons: the settings file is found through `HOME`, which the launcher builds
+  itself (`module-boundary.md` says the launcher builds the environment), as the other helpers do; a check that the
+  directory `~/.config/knowledge-base` is closed to others was not added, the file's own owner and mode being the rule of the plan;
+  the repeated kill after a normal exit has a theoretical process-id reuse window, which the first `mempalace`-style helper has too;
+  the helper cannot know the library roots, so the engine carries that masking (checked above on the real library, not in a test).
+  Recorded for the owner: a `read` of a locator that the engine does not find exits 1 in the engine, so the helper reports it as
+  `failed:` with the engine's words framed.
+- Steps 3 and 4, done by the owner on 2026-11-08 in a terminal: `wb approve package` (package `kb` 0.1.0, one module, tree hash
+  `b0e72708b008…`, no high risk, nothing written into a project), `~/.config/knowledge-base/helper.json` made with mode 600, the
+  install into a scratch project with the workbench's `claude`, `ask-ollama`, `groundwork`, `code-work` and `safe-git` modules and
+  `kb`, then in that project `wb run kb search -- 'simulated annealing'` (five results of one captured page, in the framed form,
+  with their locators, caveats and completeness) and `wb run kb read <book> '<locator>'` of the third result (status `found`, the
+  passage, its citation line with the source address, retrieval date and hash, and `next: null`). Neither output held a path of the
+  machine. The first `read` attempt was a typing error (placeholders in a shell). Not run: any other query, a query that finds
+  nothing, and a use by an agent in a brainstorm, which is the success test of `knowledge-base.md`.
+- A security review (`security-review`) of this boundary was offered to the owner and has not been asked for.
 
 ### Increment J — Loading walk-through (first batch done; the rest waits for the owner's word)
 

@@ -1,0 +1,8 @@
+{
+  "name": "kb",
+  "version": "0.1.0",
+  "contract": 1,
+  "modules": [
+    "kb"
+  ]
+}
