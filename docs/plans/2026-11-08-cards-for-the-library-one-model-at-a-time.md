@@ -1,6 +1,6 @@
 # Cards for the library, one model at a time
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-08
 Candidate: cross-field-discovery#neutral-cards-for-the-library
 Specs: docs/specs/card.md
@@ -19,8 +19,8 @@ owner has decided what to do with what the report says.
 
 - A read-only measurement of what loading a model costs on the owner's server, with the models of the owner's config, and a decision
   point: if loading is a small part of a call, the plan stops there and the owner decides.
-- A config setting that lets a model stay loaded between the calls of a queue run, and only of a queue run (the bridge already takes
-  it as an option of a call).
+- The owner's own change of the `keep_alive` in the endpoint records of the models (no code, and not done by the engine or by an agent),
+  so that a model stays loaded between the calls of a run.
 - Making a card in stages whose state can be saved and resumed, with the same result as today.
 - A command that plans a run (a snapshot of the books that need a card, sending nothing), runs it, and reports on it.
 - A live run over the library, on the owner's word, and the rebuilding of the catalog at its end.
@@ -65,9 +65,9 @@ owner has decided what to do with what the report says.
 1. The measurement is in the Result: for each model of the config, the time of a call that has to load the model and of one that does
    not, on prompts of the shapes the stages use, repeated, with the share of a call that loading takes; and the plan's decision at that
    point (go on, or stop for the owner) is recorded.
-2. The calls of a queue run pass `--keep-alive` with the value of a setting of the owner's config for queue runs only; the calls of
-   `cards` and every other command are exactly as before, whatever the config holds. A wrong value of the setting is refused when
-   the queue reads it, before any call.
+2. The owner's endpoint records give the models a `keep_alive` of a few minutes or more (the owner's change, which the Result records
+   with its value), so that a run finds a model loaded between its calls. The engine passes no `--keep-alive` of its own, and no
+   command of the engine changes for it.
 3. `make_model_part` gives the same result for the same replies as before the change (the existing tests pass unchanged), and a card
    made in stages can be stopped after any stage, saved, and resumed to the same card.
 4. `cards-queue plan` sends nothing, writes the state of the run, and prints the number of books, the number of calls it expects for
@@ -110,24 +110,17 @@ changes.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-08-cards-for-the-library-one-model-at-a-time#A`, which holds the
 plan's Result.
 
-### Increment B — Let a model stay loaded between the calls of a queue run
+### Increment B — Dropped: the owner sets the keep-alive in the endpoint records
 
-**Outcome:** a call can be given a `keep_alive` for that call only, and the config has a setting for the value that queue runs give
-their calls; no other call changes.
-**Dependencies:** A, and the owner's decision there to go on.
-**Affected areas:** `engine/kb/models.py` (`run_job` and `_argv` take an optional `keep_alive` of the call; a function that reads and
-checks the setting), `engine/tests/test_models.py`, `engine/README.md` where the registry and the config keys are described.
+**Outcome:** none. The measurement of increment A showed that the larger part of the saving comes from the models staying loaded
+between calls, and the owner chose to set the `keep_alive` of the models in the endpoint records, which needs no code. So there is
+no option of a call, no config key for queue runs and no change to `models.py` in this plan.
+**Dependencies:** none.
+**Affected areas:** none in the repository. The owner's endpoint file is changed by the owner and is not read or written by an agent.
 **Steps:**
-1. Write the tests first: a call given a `keep_alive` passes `--keep-alive` with that value; a call given none passes exactly the
-   arguments it passed before, whatever the config holds, so that `cards` and the other commands are unchanged (tested for each of
-   them); a value of the setting outside the bridge's grammar (`0`, `-1`, or one to four digits from 1 to 9 and then `s`, `m` or `h`),
-   a number and a value that is not text are refused, naming the rule and not the value; the setting has no default (unset means that
-   queue calls pass none).
-2. Add the argument to the call and the reading of the setting (`cards_queue_keep_alive`), and describe it in the engine README: it
-   overrides the value of the owner's endpoint record for the calls of a queue run only.
-**Verification:** `python3 -m unittest engine.tests.test_models engine.tests.test_cardmake` and `wb run code-work check`. The review
-of the `reviewer` agent is evaluated and recorded.
-**Evidence:** the one local commit, with the trailer `Plan: 2026-11-08-cards-for-the-library-one-model-at-a-time#B`.
+1. None. The Result records that the owner made the change and its value.
+**Verification:** none.
+**Evidence:** none: this increment makes no commit.
 
 ### Increment C — Make a card in stages that can be saved and resumed
 
@@ -161,7 +154,7 @@ the resume from a green baseline; the review of the `reviewer` agent is evaluate
 
 **Outcome:** `cards-queue plan`, `cards-queue run` and `cards-queue status` make the cards of every book that needs one, one model at
 a time, and report.
-**Dependencies:** B (if the owner went on at A) and C.
+**Dependencies:** C.
 **Affected areas:** `engine/kb/` (a module for the queue, `__main__.py` for the commands, `cardmake.py` for the filing), the lock and
 the state of a run in the index root, `engine/tests/` (tests of the queue), `docs/specs/card.md`, `engine/README.md`.
 **Steps:**
@@ -179,7 +172,7 @@ the state of a run in the index root, `engine/tests/` (tests of the queue), `doc
 2. Write the queue: the grouping of stages by the server and model that the config names for their tasks (the physical pair, so that
    two registry entries that name the same server and model share one queue and one load, while each call keeps the options of its
    own entry; tested with two tasks that name the same pair and with two that name different models), the order of the stages, the
-   pass, the lock, the report, the `keep_alive` of the setting for the calls of the run, and the call of `card-index` at the end of a
+   pass, the lock, the report, and the call of `card-index` at the end of a
    finished run (and a line for the owner when it was not run). No option names a model, a server or an address, as `cards` has
    none.
 3. Update the card spec and the engine README: the commands, the snapshot, the state, the lock, and what a run sends where.
@@ -198,14 +191,15 @@ the files made from model output, once.
 tracked file other than the plan changes.
 **Steps:**
 1. Tell the owner what the run will do: the books it will make cards for and their number, the calls expected for each model, the
-   time expected from A, the models and the `keep_alive` it will use, and that book text goes to the owner's models. Wait for the word.
+   time expected from A, the models and the `keep_alive` of the endpoint records, and that book text goes to the owner's models. Wait
+   for the word.
 2. Run `cards-queue plan`, show the counts, then `cards-queue run`, and read `status` while it goes. Stop and report if fewer than half
    of the quotes verify for a model's first books (the check may be failing for a reason of conversion, not of the model).
 3. At its end run `card-index` if the queue did not, and look at the report: the books made, failed and dropped, with the reasons.
 4. Write the result in the plan: the time, the calls, the number of changes of model, what failed and why, the comparison with the
    time that A predicts for the one-by-one way, and a recommendation on what the failures call for (a second run for the books that
    failed, the plan for `cards#card-format-resilience`). Record the owner's decision.
-**Verification:** the runs read as written; the tests of B, C and D once more.
+**Verification:** the runs read as written; the tests of C and D once more.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-08-cards-for-the-library-one-model-at-a-time#E`, which holds the
 plan's Result.
 
@@ -214,7 +208,7 @@ plan's Result.
 Each increment's recorded verification stands unless a later increment changed its inputs. After E, rerun
 `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_catalog engine.tests.test_models
 engine.tests.test_cardsample engine.tests.test_setup` and `wb run code-work check`, and the tests of the queue; nothing wider is named,
-since no other module reads the state of a run or the new option of the registry.
+since no other module reads the state of a run.
 
 ## Risks and sensitive actions
 
@@ -225,8 +219,9 @@ since no other module reads the state of a run or the new option of the registry
   safe to delete. A security review of this new surface is offered to the owner once, in increment D.
 - **A long unattended run.** It sends book text to the owner's models for hours. It starts only on the owner's word, can be stopped at
   any time, resumes, and reports. It writes only new generations of cards and the catalog.
-- **A model kept loaded takes memory** that other work on the server may want. The setting is the owner's and applies to the calls of
-  a queue run only; the owner's endpoint record and the calls of every other command are not changed.
+- **A model kept loaded takes memory** that other work on the server may want. The `keep_alive` is the owner's change to the endpoint
+  records, applies to every call of those models, and can be undone by the owner at any time; the engine and agents do not touch the
+  endpoint file.
 - **A card made from a stale state.** The conversion in use is recorded in the state and compared when the card is filed.
 - Nothing is deleted from the library: a run files new generations and the earlier ones are kept.
 
@@ -242,6 +237,9 @@ since no other module reads the state of a run or the new option of the registry
   model pair, keeping the options of each call's own entry, with tests for two tasks that name the same pair and for two that do not.
 - Rejected: none.
 - Left for the owner: whether to ask for round 2 before approving.
+- Amendment of 2026-11-08, after increment A: increment B (a keep-alive for queue runs only, which finding 2 above shaped) is dropped,
+  because the owner sets the `keep_alive` in the endpoint records instead; the scope, completion criterion 2, the dependencies of D, a
+  step of D and E, and two risks were changed to match. The amendment was not reviewed by a second model; it removes work and adds none.
 
 ## Deferred work
 
@@ -253,4 +251,50 @@ since no other module reads the state of a run or the new option of the registry
 
 ## Result
 
-Empty until work starts.
+### Increment A — What loading a model costs (run; the owner's decision is open; not committed)
+
+- **What was run** (the owner's word): for each of the four models of the config, in the order of the stages, three repeats of: a tiny
+  call with `--keep-alive 0` (the server unloads the model), a tiny call to the next model of the order (the room is used), a wait of
+  ten seconds, then the same prompt three times, the first of which has to load the model (`--keep-alive 10m`, so that the next two
+  find it loaded). The prompts have the shapes of the stages, made from one real paper: a notes prompt on a piece of 20 KB, a card
+  prompt with twelve sections of notes, a check prompt of ten items, and a round prompt. 60 calls, none failed, all to the owner's
+  server on the owner's network; the book text and notes went in the clear, as with every card call.
+- **Times, in seconds** (the three cold calls; the six calls that found the model loaded, as a median; the load is the difference of the
+  medians):
+
+  | stage, model | cold calls | median loaded | load | share of a cold call |
+  |---|---|---|---|---|
+  | notes, `gemma4:12b` | 8.9, 6.5, 6.4 | 2.2 | 4.3 | 66% |
+  | card, `gpt-oss:20b` | 18.6, 14.0, 22.3 | 14.7 | 3.9 | 21% |
+  | check, `phi4` | 19.7, 4.7, 4.7 | 1.95 | 2.7 | 58% |
+  | round, `qwen3:14b` | 7.0, 7.0, 7.0 | 4.0 | 3.0 | 43% |
+
+  No model was left out as not measured: every cold call was slower than the loaded ones. The load of `gpt-oss` is not measured well,
+  because the length of what it writes varies from call to call (loaded calls took 8.5 to 21.5 seconds), so its 3.9 seconds is an
+  estimate with a wide margin. The first cold call of `phi4` (19.7 seconds) is the first load of that model in the session; its later
+  loads took 4.7 seconds, and I used the later figure.
+- **What the library run would take** (assumptions: the 66 books that have no card, 220 notes calls, 66 card calls, about 2.2
+  check calls and 0.7 second rounds for each book, with 0.5 further check calls; the three models with `keep_alive=0` load on every
+  call, as the endpoint file says, and `phi4` loads once per book after the card call): about 60 minutes one by one; loads take about 27
+  of those minutes; through a queue, with each model loaded about once for each stage, about 34 minutes. That is a saving of about 45
+  percent, above the quarter that the plan sets.
+- **What a simpler change would save.** If the four endpoint records had a `keep_alive` of a few minutes (a change of the owner's
+  endpoint file, no code), the notes calls would stay loaded between the pieces of a book, which is 220 of the loads and about 16 of the
+  27 minutes; the loads left are the changes from one model to another for each book (about 11 minutes). So the queue's own saving, on top
+  of that, is about 11 minutes for this library, and the rest of what it buys is that a run can be stopped and started again, takes a
+  snapshot, retries what failed and reports.
+- **Limits.** Four models, three repeats, one paper's prompts; the figures for the numbers of calls are estimates from the previous
+  run; the server may not hold a model for a few minutes when memory is wanted for another.
+- **Recommendation:** see the owner's decision below. The plan's own rule (go on if the saving is a quarter of the time or more) says
+  go on. My own reading is that the larger part of the saving is the `keep_alive`, which needs no code, and that the plan is worth
+  going on with for the run that can be resumed, but that increment B (a keep-alive for queue runs only) is then not needed if the
+  owner sets the endpoint records, and could be dropped by an amendment.
+- **The owner's decision** (2026-11-08): option 2, namely that the owner sets the `keep_alive` of the models in the endpoint records
+  (no code, and the engine and agents do not touch that file), and that the plan goes on with C, D and E. Increment B is dropped by an
+  amendment of the plan, which needs the owner's new approval. The owner set the `keep_alive` of `phi4`, `gemma4:12b`, `gpt-oss:20b`
+  and `qwen3:14b` to 10 minutes on 2026-11-08, and `wb run ask-ollama check` (which reads the endpoint file and makes no connection)
+  shows `keep_alive=10m` on all four. A short test through the engine, which passes no `--keep-alive`: three one-sentence calls in a
+  row took 3.4, 1.0 and 1.1 seconds to `qwen3:14b`, and 3.5, 0.5 and 0.4 seconds to `gemma4:12b`, so the models stay loaded between
+  calls.
+- Provenance: measured on 2026-11-08 at commit `211014d` on the owner's server with the local models `gemma4:12b`, `gpt-oss:20b`,
+  `phi4:latest` and `qwen3:14b` through the owner's bridge; the log is held outside the repository.
