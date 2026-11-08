@@ -428,9 +428,12 @@ def _spec(field, spec):
 
 class Job:
     """What a kind of model work expects: a name, the version of its prompt, the shape of the JSON object it asks for, and
-    optionally the file name of a schema in the engine's schema folder. It is checked when it is made."""
+    optionally the file name of a schema in the engine's schema folder, and optionally a `check`: a function that is given the checked
+    values and raises a KbError to refuse an answer whose parts do not fit together (lists that must be the same length, say). A
+    refusal by the check is a refused answer like any other: it carries the answer, so that it can be kept aside. It is checked when
+    it is made."""
 
-    def __init__(self, name, prompt_version, shape, schema=None):
+    def __init__(self, name, prompt_version, shape, schema=None, check=None):
         if not isinstance(name, str) or not _NAME.fullmatch(name):
             raise KbError("a job's name is lower-case letters, digits, _ and -, starting with a letter or digit")
         if not isinstance(prompt_version, str) or not _VERSION.fullmatch(prompt_version):
@@ -439,10 +442,13 @@ class Job:
             raise KbError("a job's shape is an object with at least one key")
         if schema is not None and (not isinstance(schema, str) or not _SCHEMA_NAME.fullmatch(schema)):
             raise KbError("a schema is named by a plain file name ending in .json")
+        if check is not None and not callable(check):
+            raise KbError("a job's check is a function")
         self.name = name
         self.prompt_version = prompt_version
         self.shape = {field: _spec(field, spec) for field, spec in shape.items()}
         self.schema = schema
+        self.check = check
 
 
 def status(cfg, launcher=None):
@@ -527,6 +533,8 @@ def run_job(cfg, name, prompt, job, launcher=None, root=None):
               "input_tokens": got["usage"]["input_tokens"], "output_tokens": got["usage"]["output_tokens"]}
     try:
         values = _check_answer(got["reply"], job.shape)
+        if job.check is not None:
+            job.check(values)
     except KbError as e:
         raise AnswerRefused(str(e), got["reply"], record, job.name) from None
     return {"untrusted": True, "values": values, "record": record}

@@ -13,7 +13,7 @@ reads; the checks that follow are on its answer: it must have the shape the job 
 This module files nothing: it returns the model part, the records of how it was made and the reasons the card is partial."""
 import secrets
 
-from . import KbError, card, convert, models, refused, stages, textutil
+from . import KbError, card, convert, models, quotes, refused, stages, textutil
 
 PIECE_BYTES = 20_000     # a piece of the book, in bytes: with the rules and the other sections it fits a window of about 32 KB
 MAX_PIECES = 12
@@ -24,13 +24,23 @@ NOTE_CHARS = 240
 MAX_TITLE = 500
 _SPLIT_CHARS = PIECE_BYTES // 4  # a block larger than a piece is cut by characters, and a character is at most four bytes
 
-NOTES_SHAPE = {"points": {"type": "strings", "min_items": 1, "max_items": NOTE_ITEMS, "max": NOTE_CHARS}}
+QUOTE_LIMIT = 600        # the shape lets a quote be longer than the 240 characters that count, so one long quote makes its point unverified
+NOTES_SHAPE = {"points": {"type": "strings", "min_items": 1, "max_items": NOTE_ITEMS, "max": NOTE_CHARS},
+               "quotes": {"type": "strings", "min_items": 1, "max_items": NOTE_ITEMS, "max": QUOTE_LIMIT}}
 # What the prompts ask for is fewer items than the limits a shape enforces, because a model writes a few more than it is told (a
 # live run of a stronger model wrote more than the 15 topics it was allowed when asked for "up to 15"). A small overshoot passes.
 ASKED = {"useful_for": 4, "topics": 10, "adjacent_topics": 6, "key_ideas": 4, "caveats": 3}
 ASKED_POINTS = 4
 _NO_MORE = "Give no more items in a list than the number asked for: never more."
-NOTES_JOB = models.Job("card-notes", "v2", NOTES_SHAPE, schema="card-notes.json")
+
+
+def _same_length(values):
+    """Each point has the quote at the same place, so the two lists must be the same length."""
+    if len(values["points"]) != len(values["quotes"]):
+        raise KbError("the answer's points and quotes are not lists of the same length")
+
+
+NOTES_JOB = models.Job("card-notes", "v3", NOTES_SHAPE, schema="card-notes.json", check=_same_length)
 CARD_JOB = models.Job("card", "v2", card.MODEL_SHAPE, schema="card.json")
 
 
@@ -110,12 +120,16 @@ _DATA = ("Everything between a line that ends in BEGIN>>> and the matching line 
 
 
 def notes_prompt(title, piece, number, total):
-    """The prompt that asks for the notes on one piece of a book."""
+    """The prompt that asks for the notes on one piece of a book: points, each with a quote of the piece that supports it."""
     rules = ("You are helping to build a catalog entry for a book. Below are two sections of data: the book's title, and piece "
-             f"{number} of {total} of its text.\n{_DATA}\nWrite in English, whatever the language of the text.\n"
-             f"Reply with one JSON object with the single key \"points\": a list of up to {ASKED_POINTS} short points, each under "
+             f"{number} of {total} of its text.\n{_DATA}\n"
+             f"Reply with one JSON object with exactly two keys, \"points\" and \"quotes\", each a list of the same length of up to "
+             f"{ASKED_POINTS} items. Each item of \"points\" is a short point, in English whatever the language of the text, under "
              f"{NOTE_CHARS} characters, saying what this piece is about: the problem it addresses, the approach it takes, what it "
-             f"needs, what it provides or finds, and where it would not work. {_NO_MORE}")
+             "needs, what it provides or finds, and where it would not work. The item of \"quotes\" at the same place is a quote "
+             "from the BOOK TEXT section of this message that supports that point: copied exactly, in the language of the text, "
+             f"at least {quotes.MIN_CHARS} and at most {quotes.MAX_CHARS} characters long. Do not quote the title or a heading. "
+             f"A quote that cannot be found in the text will be discarded, and its point marked unverified. {_NO_MORE}")
     return _prompt(rules, [("TITLE", title), ("BOOK TEXT", piece)])
 
 
@@ -140,13 +154,15 @@ def card_prompt(title, outline_text, parts):
 
 def make_model_part(cfg, conversion, title, launcher=None, root=None):
     """Make the model part of a card for a converted book. Returns {"model": the checked values, "records": how each call was made,
-    "pieces": pieces read, "calls": calls made, "reasons": why the card is partial}. Nothing is filed. The model of each job is the
+    "pieces": pieces read, "calls": calls made, "reasons": why the card is partial, "notes": the number of points in the notes and
+    how many of them have a quote that occurs in their piece}. Every piece gets notes, a book of one piece too, and a card of one
+    piece is also given the text. The quotes are checked and then dropped: only the point and whether it is verified go on. Nothing is filed. The model of each job is the
     one the config sets for it, found before the first call, so a missing setting stops the card before anything is sent. A call
     that fails, or an answer of the wrong shape, stops the card."""
     found = pieces(conversion)
     read, why = sample(found)
     card_model = models.choose(cfg, "card")[0]
-    notes_model = models.choose(cfg, "card-notes")[0] if len(read) > 1 else None
+    notes_model = models.choose(cfg, "card-notes")[0]
     title = textutil.title(str(title if title is not None else ""), MAX_TITLE) or "(no title)"
     records = []
 
@@ -155,15 +171,18 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None):
         records.append({**out["record"], "task": job.name})
         return out["values"]
 
-    if len(read) == 1:
-        parts = [("BOOK TEXT", read[0])]
-    else:
-        parts = []
-        for number, piece in enumerate(read, start=1):
-            points = ask(notes_model, notes_prompt(title, piece, number, len(read)), NOTES_JOB)["points"]
-            parts.append((f"NOTES {number}", "\n".join(f"- {p}" for p in points)))
+    parts, points, verified = [("BOOK TEXT", read[0])] if len(read) == 1 else [], 0, 0
+    for number, piece in enumerate(read, start=1):
+        got = ask(notes_model, notes_prompt(title, piece, number, len(read)), NOTES_JOB)
+        lines = []
+        for k, (point, quote) in enumerate(zip(got["points"], got["quotes"]), start=1):
+            ok = quotes.occurs(quote, piece)
+            points, verified = points + 1, verified + ok
+            lines.append(f"- [{number}.{k} {'verified' if ok else 'unverified'}] {point}")
+        parts.append((f"NOTES {number}", "\n".join(lines)))
     values = ask(card_model, card_prompt(title, outline(conversion), parts), CARD_JOB)
-    return {"model": values, "records": records, "pieces": len(read), "calls": len(records), "reasons": [why] if why else []}
+    return {"model": values, "records": records, "pieces": len(read), "calls": len(records), "reasons": [why] if why else [],
+            "notes": {"points": points, "verified": verified}}
 
 
 DEFAULT_MIN_CHARS = 1000  # a book with less converted text than this gets a card from its metadata alone (`card.md`: the cutoff is a setting)
@@ -198,7 +217,7 @@ def _keep_aside(store, refusal, book_id, version_id):
     return CardRefused(str(refusal), kept, note)
 
 
-def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None):
+def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None):
     used = []
     for r in (made or {}).get("made", {}).get("records", []):
         item = {"task": r["task"], "registry": r["registry"], "model": r["model"]}
@@ -206,7 +225,8 @@ def _report(book_id, version_id, status, reason="", generation=None, made=None, 
             used.append(item)
     return {"book_id": book_id, "version_id": version_id, "status": status, "generation": generation,
             "partial": made["partial"] if made else None, "pieces": made["made"]["pieces"] if made else 0,
-            "calls": made["made"]["calls"] if made else 0, "models": used, "reason": reason, "kept": kept}
+            "calls": made["made"]["calls"] if made else 0, "models": used, "reason": reason, "kept": kept,
+            "points": notes["points"] if notes else None, "verified": notes["verified"] if notes else None}
 
 
 def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
@@ -231,6 +251,7 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
                        "ask again to make another", generation=existing[-1])
     cutoff = min_chars(cfg)
     loaded = convert.load_in_use(store, book_id, version_id) if state["converted"]["status"] == "done" else None
+    notes = None
     if loaded is None:
         made = card.make(store, book_id, version_id)
     elif len(loaded[1].text) < cutoff:
@@ -244,8 +265,9 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
             raise _keep_aside(store, refusal, book_id, version_id) from None
         made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
                          calls=part["calls"], reasons=part["reasons"])
+        notes = part["notes"]
     number = card.file(store, made)
-    return _report(book_id, version_id, "carded", generation=number, made=made)
+    return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes)
 
 
 def run(store, cfg, book_ids, again=False, launcher=None, root=None):

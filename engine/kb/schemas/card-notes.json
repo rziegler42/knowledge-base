@@ -1,8 +1,22 @@
 {
   "type": "object",
   "properties": {
-    "points": {"type": "array", "items": {"type": "string"}}
+    "points": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "quotes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
   },
-  "required": ["points"],
+  "required": [
+    "points",
+    "quotes"
+  ],
   "additionalProperties": false
 }

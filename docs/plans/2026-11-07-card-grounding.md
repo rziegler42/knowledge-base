@@ -345,4 +345,36 @@ the last finding has not been reviewed again.
 - For increment E: the wording of an item can reveal its generation to a labeller (the new prompt will not say "notes", for
   example), which no code here can prevent. Increment E should say so in its result, and the printed summary of `card-sample`
   shows counts by generation to the operator and is not to be passed to the labeller.
-- Next: the owner's word to commit increment A.
+- Committed as `822abac`.
+
+### Increment B — Notes with quotes that are checked (built; not committed)
+
+- Built `engine/kb/quotes.py` (the normalisation and `occurs`), the notes job at version v3 in `engine/kb/cardmake.py` (up to four
+  points, each with a quote, as two lists of equal length), an optional `check` on a model job in `engine/kb/models.py` (a refusal
+  by the check keeps the answer aside like any other refused answer), the notes schema, the `points` and `verified` counts in the
+  result of `make_model_part` and in the `cards` report, tests (`engine/tests/test_quotes.py`, and changes to `test_cardmake.py`
+  and `test_models.py`) and README text. The quote rule is stated in the module and in the README.
+- Verification as run: `python3 -W error::ResourceWarning -m unittest engine.tests.test_quotes engine.tests.test_cardmake
+  engine.tests.test_card` gave 164 tests, OK; `python3 -m unittest engine.tests.test_models engine.tests.test_catalog
+  engine.tests.test_trial engine.tests.test_cardsample engine.tests.test_setup` gave 293, OK, since the model layer and the fixtures
+  of the card tests changed; `wb run code-work check` found no problems. Not run: any other test file, and any live model call.
+- I wrote `quotes.py` in the same step as its tests, so I did not see the tests fail first; deliberate breaks stand in for that.
+  Breaks, each from a green baseline: 14 of the quote rule, 17 of the notes stage and 3 of the job check were all caught (two
+  breaks of the first set survived at first, which led to a test of letters of other forms and to replacing an invisible soft
+  hyphen in the source with a named escape), then 8 of the changes made after the review, of which 7 were caught at once and the
+  eighth, the boundary of the letters minimum, after one more test.
+- Two differences from the plan's wording. (1) The counts of points and verified points are not in the card's generation
+  record, because the validator of a card requires the record to have exactly its keys; they are in the result of
+  `make_model_part` and in the `cards` report, and increment C, which changes the card format, puts them in the record. (2) A
+  book of one piece is also given its text in the card call, besides its notes, so that a short page does not lose detail.
+- Review: the `reviewer` agent, round 1, no blocking findings. Applied: a quote that is too long (over 240 characters, up to a
+  shape limit of 600) now makes its point unverified and no longer refuses the whole reply, as criterion 3 says; a quote copied
+  across a line-end hyphen is now matched when its line break has become a space, as it does in a cleaned reply (the rule is a
+  hyphen between two letters followed by white space); a quote must hold at least eight letters or digits, so a run of dots or
+  dashes does not pass; the prompt now says not to quote "the title or a heading" and "marked unverified". Limits recorded and not
+  changed: an empty quote still refuses the reply, since the shape layer refuses empty text; a quote of a heading occurs, since a
+  heading is a block of the piece, so the engine cannot refuse it; word-by-word normalisation is done twice for each point, a cost
+  and not a risk.
+- Do not run increment E on this state: the card call receives `[N.K verified]` lines that the v2 card prompt does not explain,
+  and a one-piece book gets both its text and its notes. Increment C changes the card prompt and the card format.
+- Next: the owner's word to commit increment B.

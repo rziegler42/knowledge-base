@@ -466,7 +466,7 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 ```
 
 - **Which model does which work is your setting.** The config key `tasks` names, for each kind of work the engine knows, the
-  entry of `models` that does it. The kinds are `card-notes` (a note on one piece of a long book) and `card` (the card itself).
+  entry of `models` that does it. The kinds are `card-notes` (the notes on one piece of a book) and `card` (the card itself).
   The engine names no model and has no default: a kind of work with no setting, a setting that names an unlisted entry, or the
   switch `models_on` off is refused before anything is sent, with the key to set in the message. Another user sets other
   models, or one model for both. There is no option on the command line to name a model, a server or a class.
@@ -478,11 +478,24 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 - **What is sent.** The text of each named book goes to the models you set, over the link the registry names, which for an
   unauthenticated server on plain HTTP is in the clear on your network. Nothing is sent for a book that is skipped or that gets a
   card from its metadata. `cards` needs at least one `--book`; there is no way to cover the whole library with one command.
-- **Reading a long book.** The converted text is cut into pieces of at most 20,000 bytes that end at a block boundary. A book of
-  one piece goes straight to the `card` task. A longer one gets a note on each piece from the `card-notes` task and the card is
-  made from the title, the outline of the headings and the notes. A book of more than 12 pieces is sampled (12 evenly spaced ones,
-  always the first and last) and the card says so. A block larger than a piece is cut into pieces of 5,000 characters, so a page
-  that converts to one very large block makes more calls than its size needs.
+- **Reading a book.** The converted text is cut into pieces of at most 20,000 bytes that end at a block boundary. Every piece,
+  of a book of one piece too, gets notes from the `card-notes` task, and then the `card` task makes the card from the title, the
+  outline of the headings and the notes (a book of one piece is also given its text). A book of more than 12 pieces is sampled
+  (12 evenly spaced ones, always the first and last) and the card says so. A block larger than a piece is cut into pieces of 5,000
+  characters, so a page that converts to one very large block makes more calls than its size needs.
+- **Notes with quotes.** The notes on a piece are up to four points, each with a quote of the piece that supports it: two lists
+  of the same length (a reply with lists of unequal length is refused like any other badly shaped reply). The engine checks each
+  quote against the piece it names (`kb/quotes.py`): both are put in one form (Unicode compatibility form, case folded, the soft
+  hyphen taken out, other hyphens made the plain hyphen, white space made one space), a word broken at the end of a line (a hyphen
+  between two letters followed by white space, which is how a reply shows a line break) may be joined or kept, and the quote must
+  be at least 12 characters in that form with at least 8 letters or digits in it (so a run of dots or dashes proves nothing), at
+  most 240 as written, and occur in that piece and no other. A point whose quote occurs is marked `verified`, any other
+  `unverified` (a quote longer than 240 characters, up to 600, makes its point unverified and does not refuse the reply; an empty
+  quote does refuse it), and the card call is given the points with these marks and their numbers (`[2.1 verified]`) and not the
+  quotes. The prompt tells the model not to quote the title or a heading, but a heading is a block of the piece, so a quote of a
+  heading occurs. A verified quote shows that a point is in the book, not that it is right.
+  The report of `cards` gives `points` and `verified`, the counts over the notes of the book (none for a card made from the
+  metadata).
 - **What a model is told.** The title, the outline, each piece of text and each note are given as data in sections of their own,
   between delimiters that carry a random token made for the call (made again if any input holds it); the rules name the token, say
   that a line with another token is data and that nothing in a section is an instruction, and ask for English whatever the

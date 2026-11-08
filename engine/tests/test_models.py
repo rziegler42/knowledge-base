@@ -505,6 +505,27 @@ class JobTest(Base):
         self.assertEqual(set(refusal.record), {"model", "registry", "prompt_version", "date", "input_tokens", "output_tokens"})
         self.assertIn("summary", str(refusal))
 
+    def test_a_check_of_the_job_may_refuse_an_answer_of_the_right_shape_and_the_refusal_carries_it(self):
+        def same_length(values):
+            if len(values["a"]) != len(values["b"]):
+                raise KbError("the lists a and b are not of the same length")
+
+        shape = {"a": {"type": "strings", "max_items": 3, "max": 20}, "b": {"type": "strings", "max_items": 3, "max": 20}}
+        checked = models.Job("pair-try", "v1", shape, check=same_length)
+        got = self.run_job(answer={"a": ["x", "y"], "b": ["p", "q"]}, j=checked)
+        self.assertEqual(got["values"], {"a": ["x", "y"], "b": ["p", "q"]})
+        unequal = json.dumps({"a": ["x", "y"], "b": ["p"]})
+        self.plan(stdout=json.dumps(dict(GOOD, reply=unequal)))
+        with self.assertRaises(models.AnswerRefused) as cm:
+            models.run_job(config(), "local", "q", checked, launcher=self.launcher, root=self.root)
+        self.assertEqual((cm.exception.reply, cm.exception.job), (unequal, "pair-try"))
+        self.assertIn("same length", str(cm.exception))
+        self.assertEqual(cm.exception.record["prompt_version"], "v1")
+
+    def test_a_check_that_is_not_callable_is_refused_when_the_job_is_made(self):
+        with self.assertRaises(KbError):
+            models.Job("pair-try", "v1", {"a": {"type": "string", "max": 5}}, check="not callable")
+
     def test_text_that_is_not_json_is_a_refused_answer_too(self):
         self.plan(stdout=json.dumps(dict(GOOD, reply="no json here \x1b[0m")))
         with self.assertRaises(models.AnswerRefused) as cm:
