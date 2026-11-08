@@ -244,6 +244,35 @@ class GroundedCardsTest(CatalogCase):
         self.assertTrue(found[0]["text"].startswith("["))
 
 
+class MarkInResultTest(GroundedCardsTest):
+    def find(self, query):
+        self.rebuild()
+        return catalog.search(self.store.cfg["index_root"], query)
+
+    def test_a_result_counts_the_items_of_each_mark_or_says_not_checked(self):
+        old, _ = self.carded(title="Old format", model=dict(MODEL, topics=["marker topic"]))
+        new, _ = self.grounded("New format", dict(MODEL, topics=["marker topic"], caveats=["a caveat"]))
+        results = {r["book_id"]: r for r in self.find("marker topic")}
+        self.assertEqual(results[old]["grounding"], "not checked")
+        self.assertEqual(results[new]["grounding"], {"stated": 0, "inferred": 6})  # topics 1, key ideas 3, caveats 1, limit 1
+        self.assertIn("grounding: not checked", results[old]["text"])
+        self.assertIn("marker topic [inferred]", results[new]["text"])
+
+    def test_the_marks_change_neither_the_score_nor_the_order_nor_what_is_found(self):
+        same = dict(MODEL, summary="marker summary about stopping")
+        old, _ = self.carded(title="Same card", model=same)
+        new, _ = self.grounded("Same card", same)
+        results = {r["book_id"]: r for r in self.find("marker summary")}
+        self.assertEqual(set(results), {old, new})
+        self.assertEqual(results[old]["score"], results[new]["score"])
+        self.assertEqual((results[old]["matched"], results[old]["excerpt"]), (results[new]["matched"], results[new]["excerpt"]))
+
+    def test_a_search_for_a_mark_finds_nothing_because_the_marks_are_not_indexed(self):
+        self.grounded("Marked", dict(MODEL))
+        self.assertEqual(self.find("stated"), [])
+        self.assertEqual(self.find("inferred"), [])
+
+
 class FailureTest(CatalogCase):
     def test_a_failure_while_building_leaves_the_old_catalog_as_it_was(self):
         self.carded(title="One")

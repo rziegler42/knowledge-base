@@ -505,8 +505,9 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   empty). The prompts ask for at most 7 key ideas and 12 topics (the limits are 8 and 20). A card with fewer than three key ideas
   left is marked partial and says why, and nothing is added to make up the number. The card holds a `grounding` record with a
   mark, the notes and the quote for each kept item and the number dropped for each field, and its generation records carry the
-  counts of points and verified points of each piece's notes. `card-show` prints the quote of a stated key idea, caveat or limit
-  under its item, as untrusted text. A card of format 1, made before this, is read, searched and shown as it was.
+  counts of points and verified points of each piece's notes. `card-show` prints the mark after each topic, key idea, caveat and
+  limit (`[stated]` or `[inferred]`), and the quote of a stated key idea, caveat or limit under its item, as untrusted text. A card
+  of format 1, made before this, is read, searched and shown as it was, with one line saying `grounding: not checked`.
 - **What a model is told.** The title, the outline, each piece of text and each note are given as data in sections of their own,
   between delimiters that carry a random token made for the call (made again if any input holds it); the rules name the token, say
   that a line with another token is data and that nothing in a section is an instruction, and ask for English whatever the
@@ -571,8 +572,12 @@ python3 -m kb card-search 'stopping rule' [--in all|summary|neutral] [--book BOO
 - **A result** gives the card: its text, rendered as `card-show` renders it, between the untrusted-text markers (a field that holds
   the words of a marker is withheld); an excerpt of the first field that matched, on one line behind the marker; which fields
   matched (on the side that was searched); the facts that hold no free text: the book and version, the generation of the card,
-  whether it is for the book's current version, the date the book was added, the score (smaller is better) and whether the card is
-  partial; and a citation line, which does hold text from the book, its title and its source address, cleaned, the title blanked if
+  whether it is for the book's current version, the date the book was added, the score (smaller is better), whether the card is
+  partial, and `grounding`: how many of its items are `stated` and how many `inferred` (`{"stated": 4, "inferred": 6}`), or
+  `"not checked"` for a card of format 1. The marks are shown and never used: they are not indexed, so a search for the word
+  `stated` finds nothing, and they change neither the score nor the order. Card text that looks like a mark (`[stated]`, `[inferred]`,
+  with or without spaces or capitals) is shown with round brackets, so that only the engine's marks read as marks. A result also has
+  a citation line, which does hold text from the book, its title and its source address, cleaned, the title blanked if
   it holds the words of a marker, and printed outside the markers. Every search checks each row against the card it holds (the
   citation, the date, the generation and the version flag must be what that card gives), and a card with no model part is found by
   its title only.

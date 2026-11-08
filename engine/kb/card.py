@@ -38,6 +38,7 @@ GROUNDED_LISTS = ("topics", "key_ideas", "caveats")
 MARKS = ("stated", "inferred")
 MAX_QUOTE = 240
 MAX_REFS = 6
+_UNMARK = re.compile(r"\[\s*(stated|inferred)\s*\]", re.I)   # text that looks like the mark of an item is shown with round brackets
 _REF = re.compile(r"[1-9][0-9]{0,2}\.[1-9][0-9]?")   # the number of a point: the piece, a dot, the point
 MAX_REASONS = 20
 MAX_CAVEATS = 100
@@ -329,17 +330,31 @@ def _shown(value):
     value = str(value)
     if not value:
         return ""
-    return textutil.title(value, len(value)) or WITHHELD
+    shown = textutil.title(value, len(value))
+    return _UNMARK.sub(r"(\1)", shown) if shown else WITHHELD
 
 
-def _shown_list(items):
+def _shown_list(items, marks=None):
     """A list of texts as one line. Each item is withheld on its own if it holds the words of a marker; and if the items hold them
-    only together (one item ends with 'untrusted' and the next begins with 'text'), the whole line is withheld."""
+    only together (one item ends with 'untrusted' and the next begins with 'text'), the whole line is withheld. `marks` gives the
+    mark of each item (a card of format 2), shown after it."""
     shown = [_shown(x) for x in items]
     joined = "; ".join(items)
     if WITHHELD not in shown and joined and not textutil.title(joined, len(joined)):
         return WITHHELD
+    if marks:
+        shown = [f"{x} [{m['mark']}]" for x, m in zip(shown, marks)]
     return "; ".join(shown)
+
+
+def grounding_counts(card):
+    """How many items of a card are marked `stated` and how many `inferred`, as {"stated": n, "inferred": n}, or "not checked" for
+    a card of format 1 or one with no model part. The items are the topics, key ideas, caveats and the neutral limit if it is kept."""
+    g = card.get("grounding")
+    if not isinstance(g, dict):
+        return "not checked"
+    entries = [e for field in GROUNDED_LISTS for e in g[field]] + ([g["neutral_limits"]] if g["neutral_limits"] else [])
+    return {mark: sum(1 for e in entries if e["mark"] == mark) for mark in MARKS}
 
 
 def render(card):
@@ -347,10 +362,10 @@ def render(card):
     through `_shown`; the caller puts the whole between the untrusted-text markers."""
     lines = []
 
-    def add(label, value):
+    def add(label, value, mark=None):
         shown = _shown(value)
         if shown:
-            lines.append(f"{label}: {shown}")
+            lines.append(f"{label}: {shown}" + (f" [{mark['mark']}]" if mark else ""))
 
     add("title", card["title"])
     add("kind", card["kind"])
@@ -368,26 +383,31 @@ def render(card):
     if model is None:
         lines.append("model part: none (the card was built from the metadata alone, with no model part)")
         return "\n".join(lines)
+    marks = card.get("grounding") or {}
+    if "grounding" not in card:
+        lines.append("grounding: not checked (a card of the earlier form, whose items are not marked)")
     add("summary", model["summary"])
     for key, label in (("useful_for", "useful for"), ("topics", "topics"), ("adjacent_topics", "adjacent topics")):
         if model[key]:
-            lines.append(f"{label}: " + _shown_list(model[key]))
-    marks = card.get("grounding") or {}
+            lines.append(f"{label}: " + _shown_list(model[key], marks.get(key)))
 
     def quote_of(entry, label):
         if entry and entry["mark"] == "stated":
             add(f"quote for {label}", entry["quote"])
 
     for number, idea in enumerate(model["key_ideas"], start=1):
-        add(f"key idea {number}", idea)
-        quote_of(marks.get("key_ideas", [None] * number)[number - 1], f"key idea {number}")
+        entry = marks.get("key_ideas", [None] * number)[number - 1]
+        add(f"key idea {number}", idea, entry)
+        quote_of(entry, f"key idea {number}")
     for key in ("problem", "approach", "needs", "provides", "limits"):
-        add(f"neutral {key}", model[f"neutral_{key}"])
+        entry = marks.get("neutral_limits") if key == "limits" else None
+        add(f"neutral {key}", model[f"neutral_{key}"], entry)
         if key == "limits" and model["neutral_limits"]:
-            quote_of(marks.get("neutral_limits"), "neutral limits")
+            quote_of(entry, "neutral limits")
     for number, note in enumerate(model["caveats"], start=1):
-        add("caveat", note)
-        quote_of(marks.get("caveats", [None] * number)[number - 1], f"caveat {number}")
+        entry = marks.get("caveats", [None] * number)[number - 1]
+        add("caveat", note, entry)
+        quote_of(entry, f"caveat {number}")
     return "\n".join(lines)
 
 

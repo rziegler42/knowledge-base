@@ -1,4 +1,5 @@
 import copy
+from contextlib import closing
 import hashlib
 import json
 import os
@@ -435,7 +436,7 @@ class RefusalTest(TrialCase):
         other = self.add("Other", "other text", make_model(summary="other"))
         catalog.rebuild(self.store)
         root = self.store.cfg["index_root"]
-        with sqlite3.connect(catalog.path_of(root)) as conn:
+        with closing(sqlite3.connect(catalog.path_of(root))) as conn, conn:  # closed, and committed on leaving
             stolen = conn.execute("SELECT card FROM cards WHERE book_id = ?", (other,)).fetchone()[0]
             conn.execute("UPDATE cards SET card = ? WHERE book_id = ?", (stolen, self.a))  # right keys, another book's card
         self.assertIn("card-index", self.refused())

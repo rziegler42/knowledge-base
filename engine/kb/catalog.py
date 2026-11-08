@@ -273,7 +273,7 @@ def search(index_root, query, limit=DEFAULT_LIMIT, book_id=None, within="all"):
             results.append({"book_id": row_book, "version_id": row_version, "generation": generation, "is_current": bool(current),
                             "added": added, "score": float(rank),  # the score is computed by the query, not stored: nothing to check
                             "matched": fields, "excerpt_field": fields[0] if fields else None,
-                            "partial": made["partial"], "citation": cite, "untrusted": True,
+                            "partial": made["partial"], "grounding": card.grounding_counts(made), "citation": cite, "untrusted": True,
                             "excerpt": f"{fulltext.MARKER}\n{excerpt}",
                             "text": f"{fulltext.MARKER}\n{card.render(made)}\n{citation.END_MARKER}"})
         except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, KbError):

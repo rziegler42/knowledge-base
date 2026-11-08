@@ -123,6 +123,10 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 
 - **[proposed]** The catalog is searched by keyword and by meaning. A result gives the card, a score, the date the book was added,
   and how complete its source was, for example that the shelf is still being seeded.
+- **[proposed]** The card as shown to a reader marks each kept topic, key idea, caveat and neutral limit `[stated]` or `[inferred]`,
+  and a result says how many items of each mark its card has, or that the card was not checked (a card of the earlier form). The
+  marks are shown and take no part in ranking or filtering, and they are not searchable. Card text that looks like a mark is shown
+  with round brackets, so that only the engine's marks read as marks.
 - **[proposed]** A search can name shelves, take a date to show only newer books or the library as it was then, and ask for the
   neutral description to be searched alongside or instead of the summary.
 - **[proposed]** Following a result is layered, cheapest first: the card, the themes of its book, an excerpt by anchor, the full

@@ -410,4 +410,33 @@ the last finding has not been reviewed again.
 - Not run on a real book: the card prompt, the support lists and the marking have been run only against fake model replies, so
   nothing is known yet about how often local models give a quote that verifies, cite correctly, or write a support in the form
   asked.
-- Next: the owner's word to commit increment C; then D (the marks in `card-show` and in the result of `card-search`).
+- Committed as `dca5ce5`.
+
+### Increment D — The marks where a reader sees them (built; not committed)
+
+- Built in `engine/kb/card.py`: the rendering of a card of format 2 shows `[stated]` or `[inferred]` after each topic, key idea,
+  caveat and neutral limit, a card of format 1 that has a model part carries one line `grounding: not checked`, and
+  `grounding_counts(card)` gives `{"stated": n, "inferred": n}` or `"not checked"`. In `engine/kb/catalog.py` each search result has
+  a `grounding` field from it. Search is unchanged: the marks are not indexed, a search for the word `stated` finds nothing, and
+  two cards that differ only in format get the same score, matches and excerpt (tested). Tests in `test_card.py` and
+  `test_catalog.py`, README text and one statement in `docs/specs/card.md`, which the plan does not list for this increment but which
+  states what is true now.
+- Verification as run: `python3 -W error::ResourceWarning -m unittest engine.tests.test_catalog engine.tests.test_card
+  engine.tests.test_trial` gave 202 tests, OK; `python3 -W error::ResourceWarning -m unittest engine.tests.test_cardmake
+  engine.tests.test_cardsample engine.tests.test_quotes engine.tests.test_models engine.tests.test_setup` gave 311, OK;
+  `wb run code-work check` found no problems. Not run: any other test file, and any live model call.
+- Deliberate breaks, each from a green baseline: 11 of the rendering, the counts and the result field (all caught), then 5 of the
+  rule added after the review (all caught). The tests were written first and failed.
+- Review: the `reviewer` agent, round 1, no blocking findings. Applied: text of a card that looks like an engine mark (`[stated]`,
+  `[inferred]`, with spaces or capitals) could be read as one, in an item with no mark or beside a real one; it is now shown with
+  round brackets, by the one function that every shown card text passes through (`_shown`), so titles, excerpts and quotes too.
+  Item text cannot start a line, since white space is collapsed, so the lines of a card cannot be forged. A test was added for a
+  card of format 2 whose topics together hold the words of a marker (the whole line is withheld, with no marks); the code was
+  already right and the test fixes it.
+- Outside the plan's list for this increment: (1) the sentence in `docs/specs/card.md`, as above; (2) one test of `trial`
+  (`test_trial.py`) opened a database with `with sqlite3.connect(...)`, which commits but does not close, and left a
+  `ResourceWarning: unclosed database` at the end of the run; it is a defect of a test of mine from the trial plan, found when I ran
+  with warnings as errors, and it now closes the connection.
+- Next: the owner's word to commit increment D. Then E, which needs the owner's word on the books, on sending their text to the
+  local models again, on sending the sample's items and passages (and a few whole books for the second look) to a cloud model, and
+  the owner's time to label about 15 items.

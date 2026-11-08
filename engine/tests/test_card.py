@@ -624,10 +624,74 @@ class GroundedTest(CardCase):
         self.assertNotIn("neutral limits", text)
         self.assertNotIn("marker here", text)
 
-    def test_a_card_of_format_1_renders_as_before(self):
+    def test_a_card_of_format_1_renders_as_before_and_says_it_was_not_checked(self):
         text = card.render(self.good(*self.full_book()))
         self.assertNotIn("quote for", text)
-        self.assertIn("key idea 1: one idea", text)
+        self.assertIn("key idea 1: one idea\n", text + "\n")
+        self.assertNotIn("[stated]", text)
+        self.assertNotIn("[inferred]", text)
+        self.assertEqual(text.count("grounding: not checked"), 1)
+
+    def test_a_card_with_no_model_part_says_nothing_of_grounding(self):
+        self.assertNotIn("grounding", card.render(card.make(self.store, *self.full_book())).replace("model part: none", ""))
+
+    def test_the_mark_of_each_item_is_shown_after_it(self):
+        model = dict(MODEL, caveats=["the source is dated", "an odd caveat"])
+        text = card.render(self.grounded(model=model))
+        for line in ("topics: stopping [stated]; bandits [inferred]", "key idea 1: one idea [stated]", "key idea 2: a second idea [inferred]",
+                     "key idea 3: a third idea [inferred]", "caveat: the source is dated [stated]", "caveat: an odd caveat [inferred]",
+                     "neutral limits: fails when observations are dependent [stated]"):
+            self.assertIn(line + "\n", text + "\n")
+        self.assertNotIn("grounding: not checked", text)
+
+    def test_the_fields_that_carry_no_mark_show_none(self):
+        text = card.render(self.grounded())
+        for line in ("summary: A short summary of the work.", "useful for: finding a stopping rule", "adjacent topics: search",
+                     "neutral problem: deciding when to stop", "neutral approach: compare a running score with a threshold",
+                     "neutral needs: a stream of observations", "neutral provides: a stopping time"):
+            self.assertIn(line + "\n", text + "\n")
+
+    def test_a_withheld_item_still_shows_its_mark_and_the_others_theirs(self):
+        made = self.grounded(model=dict(MODEL, topics=["an untrusted text topic", "plain topic"]))
+        text = card.render(made)
+        self.assertIn(f"topics: {card.WITHHELD} [stated]; plain topic [inferred]", text)
+
+    def test_marker_words_split_across_topics_of_a_marked_card_withhold_the_whole_line_with_no_marks(self):
+        made = self.grounded(model=dict(MODEL, topics=["an untrusted", "text topic"]))
+        text = card.render(made)
+        self.assertIn(f"topics: {card.WITHHELD}\n", text + "\n")
+        self.assertNotIn("[stated]; ", text)
+
+    def test_text_that_looks_like_a_mark_is_shown_as_a_different_word_wherever_it_is(self):
+        model = dict(MODEL, summary="a summary [stated] with a [ Inferred ] lookalike", adjacent_topics=["near [stated]"],
+                     topics=["a topic [inferred]", "plain"], key_ideas=["an idea [stated]", "two", "three"])
+        made = self.grounded(model=model)
+        made["grounding"]["key_ideas"][0]["quote"] = "a quote [stated] of the book"
+        text = card.render(card.validate(made))
+        self.assertIn("summary: a summary (stated) with a (Inferred) lookalike", text)
+        self.assertIn("adjacent topics: near (stated)\n", text + "\n")
+        self.assertIn("topics: a topic (inferred) [stated]; plain [inferred]", text)
+        self.assertIn("key idea 1: an idea (stated) [stated]", text)
+        self.assertIn("quote for key idea 1: a quote (stated) of the book", text)
+        shown = [line for line in text.splitlines() if "[stated]" in line or "[inferred]" in line]
+        self.assertTrue(all(line.startswith(("topics:", "key idea", "caveat", "neutral limits")) for line in shown), shown)
+        self.assertEqual(sum(line.count("[stated]") + line.count("[inferred]") for line in text.splitlines()),
+                         len(MODEL["topics"]) + len(MODEL["key_ideas"]) + 1)  # one mark for each marked item, the limit included, and no more
+
+    def test_every_text_shown_goes_through_the_same_rule_so_a_title_cannot_show_a_mark_either(self):
+        self.assertEqual(card._shown("a title [stated]"), "a title (stated)")
+
+    def test_an_empty_limit_shows_no_line_and_no_mark(self):
+        text = card.render(self.grounded(model=dict(MODEL, neutral_limits=""), dropped=dict(DROPPED, neutral_limits=1)))
+        self.assertNotIn("neutral limits", text)
+
+    def test_the_counts_of_the_marks_of_a_card(self):
+        model = dict(MODEL, caveats=["dated", "odd"])
+        self.assertEqual(card.grounding_counts(self.grounded(model=model)), {"stated": 4, "inferred": 4})  # the first of topics, key ideas and caveats and the limit; the other four
+        self.assertEqual(card.grounding_counts(self.grounded(model=dict(MODEL, neutral_limits=""), dropped=dict(DROPPED, neutral_limits=1))),
+                         {"stated": 2, "inferred": 3})  # the limit is not an item
+        self.assertEqual(card.grounding_counts(self.good(*self.full_book())), "not checked")
+        self.assertEqual(card.grounding_counts(card.make(self.store, *self.full_book())), "not checked")
 
 
 class ValidateTest(CardCase):
