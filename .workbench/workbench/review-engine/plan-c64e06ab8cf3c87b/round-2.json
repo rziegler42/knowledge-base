@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Increment C, step 2 and step 5",
+      "problem": "The comparison treats two baseline generations for one book as the size of ordinary model variation, then uses that single-book value as the margin for recommendations across all books and both interventions. Each variant requires fresh model calls, so stochastic variation remains confounded with the treatment effects for the other books and conditions.",
+      "severity": "major",
+      "suggestion": "Repeat the baseline for every selected book (or otherwise hold generation randomness constant with a documented mechanism), record variability per comparison, and base each decision margin on the corresponding matched books."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Increment C, step 3; roadmap candidate cards#card-grounding Outcome and Boundary; docs/specs/card.md, Quality",
+      "problem": "The plan makes the owner's calibration labels optional ('if the owner wishes'), but the roadmap candidate requires the strong-model sample to be checked against a small owner-labelled subset, and the card spec conditions model labelling on that calibration. The plan could therefore complete and make recommendations without the required validation.",
+      "severity": "major",
+      "suggestion": "Require a defined calibration subset and its agreement result before using cloud-model labels for the comparisons, or explicitly stop the evaluation and record that no decision can be supported when the owner declines it."
+    },
+    {
+      "id": "R2-F3",
+      "location": "Completion criterion 1; Increment A, step 1",
+      "problem": "These say each of the three triggers is tested for both topics and key ideas, while the third trigger is explicitly only for key ideas. This makes the stated test obligation internally contradictory.",
+      "severity": "minor",
+      "suggestion": "Require tests for triggers (a) and (b) for both fields, and for trigger (c) for key ideas only, including a test that it does not trigger a topics round."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan has two material evaluation gaps: its treatment comparison does not adequately control generation variation, and it makes required owner calibration optional. It also has one contradictory test requirement.",
+  "verdict": "changes_needed"
+}

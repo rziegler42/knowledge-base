@@ -1,0 +1,43 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Completion criteria 1; Increment A, step 1",
+      "problem": "The stated trigger covers a ceiling-hit list and key ideas below the floor, but the goal and scope also promise a second round for any list that lost most items for lack of support. A topics list can lose most items without either reaching its asked count or affecting the key-idea floor, so that case is not implemented.",
+      "severity": "major",
+      "suggestion": "Define a measurable loss trigger for every applicable list, add it to the completion criterion, and test the topics case explicitly."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Completion criterion 2; Increment A, steps 3–4",
+      "problem": "The plan says every added item must cite and pass a verified note, which excludes `inferred` items. The card spec permits inferred format-2 topics and key ideas, and the plan calls their treatment deferred/non-goal. This silently changes the specified retention behavior.",
+      "severity": "major",
+      "suggestion": "Either preserve inferred added items under the existing format-2 rules, or explicitly scope and propose the spec change instead of deciding it implicitly."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Increment C, steps 2–5; Completion criteria 5–6",
+      "problem": "The comparison changes both the extra round and the piece cap without defining matched variants. It therefore cannot support the separate recommendations to keep the round or the larger cap: a difference may be caused by either intervention.",
+      "severity": "major",
+      "suggestion": "Specify matched generations that isolate each variable—for example baseline, round-only, cap-only, and both—and define the comparisons and decision thresholds for each."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Increment A affected areas and steps 4–5; Increment C, step 3",
+      "problem": "C requires sampling items added by the second round as their own group, but A records only card-level counts and does not preserve item-level round origin or include the sampling tool/schema among the affected areas. After generation, the required grouping cannot be reliably reconstructed from the proposed artifacts.",
+      "severity": "major",
+      "suggestion": "Persist item-level provenance for round-added items, expose it to `card-sample`, and add the corresponding schema, sampling, and test changes to Increment A."
+    },
+    {
+      "id": "R1-F5",
+      "location": "Increment B before Increment C; roadmap candidate `cards#card-grounding`",
+      "problem": "The candidate says to test whether covering every piece of a long book improves accuracy before raising the sample cap. B makes a larger configurable cap available before the labelled comparison, while C only says to use a larger value and does not require reading every piece or comparing that condition.",
+      "severity": "major",
+      "suggestion": "Make the evaluation explicitly compare the current cap with full-piece coverage on long books, and defer adopting a raised operational cap until the recorded result supports it."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has several material gaps in its triggers, spec alignment, and experimental design, so it cannot yet establish the decisions it promises.",
+  "verdict": "changes_needed"
+}
