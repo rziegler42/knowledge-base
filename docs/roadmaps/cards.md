@@ -1,7 +1,7 @@
 # Cards
 
 Status: Active
-Updated: 2026-11-07
+Updated: 2026-11-08
 
 ## Purpose
 
@@ -87,8 +87,54 @@ proposed. A bridge to local models (`ask-ollama`) is installed in the workbench,
   books (see Deferred work), and rewriting existing cards (a new card is a new generation).
 - Trigger: the trial's result is recorded and the owner asks for a plan.
 
+### card-format-resilience: Keep one reply slip from failing a whole book
+
+- ID: card-format-resilience
+- Outcome: a book is carded unless the model's answer is wrong in substance. The support for an item is written with the item it
+  belongs to, so a list of the wrong length cannot happen. A note point may be longer, and a refused answer is retried once with
+  the reason before the book fails. The books that failed twice in the grounding run get a new card.
+- Dependencies: card-grounding.
+- Boundary: in, the card and notes formats, the retry, the limits and the schemas. Out, a change of model and any change to what
+  counts as support.
+- Trigger: the owner asks for a plan.
+
+### card-clause-check: Check each clause of an item against its note
+
+- ID: card-clause-check
+- Outcome: an item is marked stated only if each clause of it is supported by the note it cites. The commonest error found in
+  the second look of the grounding run, a true statement with an unsupported extra clause, is caught or the clause is dropped.
+  The change is measured on a new blind sample against the labels of the grounding plan.
+- Dependencies: card-grounding. It builds on the check by a second model.
+- Boundary: in, splitting an item into clauses, the check prompt and its tests, and the accuracy measure. Out, a cloud model as a
+  checker and any change to the sample method.
+- Trigger: the owner asks for a plan.
+
+### card-ground-the-rest: Ground the summary and the neutral fields
+
+- ID: card-ground-the-rest
+- Outcome: the summary and the neutral description (problem, approach, needs, provides, limits) carry the same support, marks and
+  check as the key ideas and topics. They were the least supported fields in the grounding run. Accuracy is measured again on the
+  same fields.
+- Dependencies: card-grounding, and card-clause-check, since these fields are made of clauses.
+- Boundary: in, the card prompt and format for those fields, the marks, their display and the measure. Out, search by meaning and
+  themes.
+- Trigger: the owner asks for a plan.
+
+### card-inferred-items: Decide what to do with items the model only infers
+
+- ID: card-inferred-items
+- Outcome: the owner has decided, from the numbers of the grounding run, whether to drop inferred items, hide them from search or
+  show them with a warning, and the cards and the display do that.
+- Dependencies: card-grounding.
+- Boundary: in, the decision, the card format, the display and the search count. Out, how caveats and limits that a quote cannot
+  state should be written, until the owner says.
+- Trigger: the owner asks for a plan.
+
 ## Deferred work
 
+- A queue per model, so that loading a model is paid once for many books: the card work would hold a queue of calls for each
+  model and run one queue at a time until all are empty. It speeds up the work and does not make cards findable or more accurate,
+  so it belongs with model work in general (choosing between models, quotas and budgets), below.
 - Search by meaning and the embedding model: cards are stored so that vectors can be added later without rewriting any card.
 - Themes, the weave and theme-level search: the card spec puts them after the card, and the trial decides whether they are worth
   their cost.
