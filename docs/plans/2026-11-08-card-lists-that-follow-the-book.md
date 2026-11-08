@@ -1,6 +1,6 @@
 # Card lists that follow the book
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-08
 Candidate: cards#card-grounding
 Specs: docs/specs/card.md
@@ -267,7 +267,7 @@ reads what changed.
   carries the reason. If a live run shows refusals, keeping the reply aside is a small addition.
 - Next: increment B.
 
-### Increment B — A setting for the number of pieces read (built; not committed)
+### Increment B — A setting for the number of pieces read (committed as 5d3bd18)
 
 - Built: the config key `card_pieces` (a whole number from 1 to 20, default 12, which this plan does not change), read in
   `cardmake.py` like `card_min_chars` (`pieces_limit`; no change to `config.py` was needed); `sample(found, limit)` reads `limit`
@@ -290,5 +290,66 @@ reads what changed.
 - Review: the `reviewer` agent, round 1, no blocking findings. Applied: the largest value is 20 (see above) and `MAX_RECORDS` stays 30;
   `cards` checks the value before any book; the spec and the README say that with 1 only the first piece is read. Not changed: a
   skipped book or a card from the metadata alone never reads the setting, as with `card_min_chars`.
-- Next: the owner's word to commit increment B, then increment C, which needs the owner's word on the books, on the cloud labelling and
-  on at least ten calibration labels.
+- Next: increment C.
+
+### Increment C — A live run, the labelled sample and the comparison (run; decided; not committed)
+
+- **Books and variants** (the owner's word, with the second round on the model `qwen3:14b`, a different model from the card writer):
+  five books, namely a thin card (3 pieces), a page whose lists had reached their asked numbers (2 pieces), a paper that lost half or
+  more of a list (3 pieces), and two long papers (13 and 16 pieces). Generation 2 is baseline A (existing for four books, made for
+  the fifth in this run), generation 3 baseline B (a repeat), generation 4 the round on with the default cap of 12, generation 5
+  every piece read with the round off, generation 6 every piece read with the round on; a throwaway generation 1 of the 16-piece paper
+  lined its numbers up. The run made 13 cards (about 150 calls on the local models in the cards, and 7 refused attempts that used
+  further calls) in about 35 minutes of model time, with the owner's config changed between variants (backed up each time and
+  restored to what it was).
+- **What went wrong in the run.** The card call of the 16-piece paper was refused for support lists of the wrong length in 5 of its 8
+  attempts (the card model's slip, as in the grounding run; the cause is before anything this plan adds), including three attempts at
+  the round variant, so by the owner's choice that paper was dropped from the round, coverage and both variants and keeps its two
+  baselines. The coverage variant of the 13-piece paper needed three attempts. I stopped the first script of the run while the round
+  variant of the 13-piece paper was being made (to keep a later success from taking the wrong generation number), and the report of
+  that card was lost: the card (generation 4) has no call of the round and no added item, and I cannot say whether the round was
+  offered and refused or not offered. That card also kept only 1 topic and 2 key ideas, which shows how much two runs of the same
+  thing can differ (the three cards of the 13-piece paper at cap 12 kept 8, 9 and 1 topics).
+- **The round, where it ran:** offered to the topics and the key ideas of the three shorter books (all `full`: the model gave the asked
+  number) and added 2 items for the thin card's book (one topic, one key idea), 1 for the page (a key idea) and none for the third;
+  for the 13-piece paper at every piece it was offered to topics (the checks kept 5 of 12) and key ideas and added 5 (2 topics, 3 key
+  ideas). 8 items in all. It cost 1 call for the round and 1 more for the check where something was added.
+- **The samples** (drawn blind, held outside the repository): A, 120 items, 40 for each of generations 2, 3 and 4 over the five books,
+  with the 3 items the round added in it; B, 84 items, 21 for each of generations 2, 3, 5 and 6 of the 13-piece paper (nearly every
+  item of those four cards), with the 5 items the round added in it. Five Opus-class labellers, given the items and passages and
+  neither the key nor the generation nor the variant (the owner's word), labelled them. The owner labelled 16 calibration items,
+  blind, from the two samples.
+- **Agreement** of the model's labels with the owner's, on the calibration items: 16 of 16 (10 of 10 in A, 6 of 6 in B), so the gate
+  (three in four) is passed. All 16 were supported or unsupported, so the boundary of inference was not tested. The labellers differ in
+  strictness: one chunk of 40 had 24 unsupported and another 13; the items are shuffled across chunks.
+- **Sample A**, supported / unsupported / inference, of the items judged: generation 2, 38.5 / 48.7 / 12.8 percent; generation 3,
+  41.0 / 51.3 / 7.7; generation 4 (round on), 45.0 / 47.5 / 7.5. The difference between the two baselines is 2.6 points of supported;
+  the round is 4.0 above baseline B, which is of the same size.
+- **Sample B**, the 13-piece paper: generation 2, 61.9 / 33.3 / 4.8; generation 3, 50.0 / 35.0 / 15.0; generation 5 (every piece),
+  55.0 / 35.0 / 10.0; generation 6 (every piece, round on), 66.7 / 33.3 / 0.0. The two baselines differ by 11.9 points; every piece
+  is 5.0 above baseline B and 6.9 below baseline A; every piece with the round is 16.7 above baseline B and 4.8 above baseline A.
+  With 21 items to a group, none of these differences is clearly outside the difference between the two baselines.
+- **The items the round added:** 1 of 3 supported in A (2 unsupported), 4 of 5 in B (1 unsupported); together 5 of 8, 62.5 percent.
+- **Against the plan's thresholds.** Round: the items it added are supported at 62.5 percent, at least the 60 that the plan sets and
+  within the range of the cards' own shares (45 and 67 percent), by one item of eight; the cards as a whole with the round are not
+  less accurate than their baseline by more than the difference between the baselines (they are above it). So the rule of the plan
+  says keep the round on, on thin evidence. Every piece: the long paper did not gain a supported share (55 against baselines of 62
+  and 50, which average 56), and the extra piece cost one notes call and more failures of the card call (3 attempts at coverage,
+  against 1 at baseline B); the rule of the plan does not say read every piece.
+- **Limits.** Five books, 8 added items, 204 items labelled by one class of labeller against 16 labelled by the owner; the second
+  sample is one paper, so it cannot separate the effect of a book from the effect of a variant; the lost report; the dropped long paper
+  (the coverage comparison rests on one paper with a single piece beyond the cap); the calibration did not test inference.
+- **Recommendation.** Keep the round available and turn it on for the next run over the library: it meets the plan's rule, adds
+  supported items where a list was cut off or fell short, costs one or two calls for a card, and a failed or refused round leaves the
+  card as it was; say that the evidence is eight items. Do not raise the default number of pieces: reading every piece showed no gain
+  and costs more notes calls and more failures of the card call. The failures of the card call (support lists of the wrong length,
+  worse for books with many notes) are the larger problem for carding the library, and `cards#card-format-resilience` is where
+  they are dealt with.
+- **The owner's decision** (2026-11-08, on the recommendation as written): the round stays available and is turned on for the next run
+  over the library, by setting `tasks.card-more` to the entry `checker` (`qwen3:14b`) in the owner's config, which was done (the config
+  was backed up first); the default number of pieces stays 12 (`card_pieces` is not set).
+- Provenance: run at commit `5d3bd18` in the owner's library with the local models `gemma4:12b` (notes), `gpt-oss:20b` (card),
+  `phi4` (check) and `qwen3:14b` (the round) through the owner's bridge, and Opus-class labellers for the 204 items; the samples, the
+  key and the labels are held outside the repository. Verification as run: `python3 -W error::ResourceWarning -m unittest
+  engine.tests.test_cardmake engine.tests.test_card engine.tests.test_catalog engine.tests.test_models engine.tests.test_cardsample
+  engine.tests.test_setup` gave 535 tests, OK; `wb run code-work check` found no problems.
