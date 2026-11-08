@@ -90,6 +90,18 @@ class DrawTest(SampleCase):
         with self.assertRaises(KbError):
             self.sample(items=6 * PER_CARD + 1)
 
+    def test_a_sample_can_be_limited_to_the_books_named_and_the_others_are_left_out(self):
+        only = [self.books["alpha"], self.books["bravo"]]
+        summary = cardsample.sample(self.store, self.out, items=12, calibration=0, seed=3, generations=(1, 2), books=only)
+        self.assertEqual({e["book_id"] for e in self.load("key.json")["items"].values()}, set(only))
+        self.assertEqual(summary["cards"], 4)
+
+    def test_a_book_that_is_not_in_the_library_or_not_an_id_stops_the_sample(self):
+        for bad in (["01M6SR01QXBXAZ9V8ZHBWPCDAF"], ["../x"], [5]):
+            with self.subTest(bad), self.assertRaises(KbError):
+                cardsample.sample(self.store, self.out, items=6, calibration=0, seed=1, books=bad)
+        self.assertFalse(os.path.exists(self.out))
+
     def test_without_a_generation_the_newest_card_of_each_version_is_drawn(self):
         cardsample.sample(self.store, self.out, items=6, calibration=0, seed=1)
         self.assertEqual({e["generation"] for e in self.load("key.json")["items"].values()}, {2})
@@ -529,6 +541,16 @@ class CommandTest(SampleCase):
         r = self.kb("card-agreement", path, path)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout)["share"], 1.0)
+
+    def test_the_book_option_limits_the_sample_and_a_bad_id_is_refused(self):
+        a = self.books["alpha"]
+        r = self.kb("card-sample", self.out, "--items", "6", "--calibration", "0", "--seed", "1", "--generation", "1", "--book", a)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual({e["book_id"] for e in self.load("key.json")["items"].values()}, {a})
+        other = os.path.join(self.base, "other")
+        bad = self.kb("card-sample", other, "--items", "6", "--book", "not-an-id")
+        self.assertEqual(bad.returncode, 2)
+        self.assertFalse(os.path.exists(other))
 
     def test_the_command_refuses_a_folder_inside_the_project(self):
         inside = os.path.join(models._project_root(), "sample-should-not-exist")

@@ -466,13 +466,14 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 ```
 
 - **Which model does which work is your setting.** The config key `tasks` names, for each kind of work the engine knows, the
-  entry of `models` that does it. The kinds are `card-notes` (the notes on one piece of a book) and `card` (the card itself).
-  The engine names no model and has no default: a kind of work with no setting, a setting that names an unlisted entry, or the
-  switch `models_on` off is refused before anything is sent, with the key to set in the message. Another user sets other
-  models, or one model for both. There is no option on the command line to name a model, a server or a class.
+  entry of `models` that does it. The kinds are `card-notes` (the notes on one piece of a book), `card` (the card itself) and
+  `card-check` (whether the note an item cites supports it). The engine names no model and has no default: a kind of work with no
+  setting, a setting that names an unlisted entry, or the switch `models_on` off is refused before anything is sent, with the key
+  to set in the message. Another user sets other models, or one model for all. There is no option on the command line to name a
+  model, a server or a class.
 
   ```json
-  "tasks": {"card-notes": "<name of an entry of models>", "card": "<name of an entry of models>"}
+  "tasks": {"card-notes": "<name of an entry of models>", "card": "<name of an entry of models>", "card-check": "<name of an entry of models>"}
   ```
 
 - **What is sent.** The text of each named book goes to the models you set, over the link the registry names, which for an
@@ -497,17 +498,37 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   The report of `cards` gives `points` and `verified`, the counts over the notes of the book (none for a card made from the
   metadata).
 - **Marks on the card (format 2).** The card call is told the kind of source (paper, page, book) and uses its word, and is asked
-  for a support for each topic, key idea and caveat and for the neutral limit: the numbers of the notes that state it (such as
+  for a support for each topic, key idea and caveat and for the neutral limit: the one or two notes that best state it (such as
   `1.1 3.2`), or `inferred` if it is the model's own inference, or `none`. A support in any other form refuses the answer, and so
-  does a list of supports of the wrong length. The engine then marks each item from its check of the quotes, never from the
-  model's word: `stated` if a note it cites is verified (the card keeps the first such quote, up to 240 characters, and the notes
-  that were verified), `inferred` if the model said so, and an item with neither is dropped (a dropped limit leaves its field
-  empty). The prompts ask for at most 7 key ideas and 12 topics (the limits are 8 and 20). A card with fewer than three key ideas
-  left is marked partial and says why, and nothing is added to make up the number. The card holds a `grounding` record with a
-  mark, the notes and the quote for each kept item and the number dropped for each field, and its generation records carry the
-  counts of points and verified points of each piece's notes. `card-show` prints the mark after each topic, key idea, caveat and
-  limit (`[stated]` or `[inferred]`), and the quote of a stated key idea, caveat or limit under its item, as untrusted text. A card
-  of format 1, made before this, is read, searched and shown as it was, with one line saying `grounding: not checked`.
+  does a list of supports of the wrong length. The engine then marks each item: `stated` if its checks confirmed it (the next
+  bullet; the card keeps the confirmed note and its quote, up to 240 characters), which the model's word alone cannot make it;
+  `inferred` if the model said so, which is its own word and is not checked; and an item with neither is dropped (a dropped limit
+  leaves its field empty). The prompts ask for at most 7 key ideas and 12 topics (the limits are 8 and 20). A card with fewer than
+  three key ideas left is marked partial and says why, and nothing is added to make up the number. The card holds a `grounding`
+  record with a mark, the notes and the quote for each kept item and the number dropped for each field, and its generation records
+  carry the counts of points and verified points of each piece's notes, and of items checked and supported by each check call.
+  `card-show` prints the mark after each topic, key idea, caveat and limit (`[stated]` or `[inferred]`), and the quote of a stated
+  key idea, caveat or limit under its item, as untrusted text. A card of format 1, made before this, is read, searched and shown as
+  it was, with one line saying `grounding: not checked`.
+- **Is the note about the item? The check (task `card-check`).** A verified quote shows that a claim is in the book, not that the
+  note it belongs to supports the item that cites it: in the first live run one note was cited for nearly every item. So each item
+  that cites notes is paired with the verified note it cites that shares most content words with it (words of four letters or
+  more, compared by their first five letters; the first cited on a tie; an item with no content word of its own is paired with the
+  first verified note and left to the model). An item with no such note is dropped. The pairs go ten to a call to the model that
+  the config names for `card-check`, as the item, the note's point and its quote in a section of data; it answers `supports`,
+  `partly` or `no` for each, and any other word, or a list of a different length, refuses the answer (kept aside, as the others).
+  Only `supports` makes the item stated; `partly` and `no` drop it. An item the model calls an inference is not checked, and a
+  card with no item that cites a note makes no check call. The check model should not be the one that writes the card. Set it
+  with the others:
+
+  ```json
+  "tasks": {"card-notes": "<name>", "card": "<name>", "card-check": "<name>"}
+  ```
+
+  `cards` refuses before it tries any book, and sends nothing, if any of the three tasks has no setting. The report of `cards` has,
+  for each book, `checked` (items put to the check), `supported`, `partly`, `no`, and `unpaired` (items that cite notes but had no
+  pair, so were dropped without a model being asked). Aliases of a topic that share no four-letter word with the note it cites are
+  among those dropped; expect fewer topics than before.
 - **What a model is told.** The title, the outline, each piece of text and each note are given as data in sections of their own,
   between delimiters that carry a random token made for the call (made again if any input holds it); the rules name the token, say
   that a line with another token is data and that nothing in a section is an instruction, and ask for English whatever the
@@ -640,7 +661,7 @@ questions from your own projects must not be committed. It reports numbers and n
 ### How accurate are the cards? A sample to label
 
 ```sh
-python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...]
+python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...] [--book BOOK_ID ...]
 python3 -m kb card-accuracy ITEMS KEY
 python3 -m kb card-agreement FIRST SECOND
 ```
@@ -653,7 +674,8 @@ are held **outside the repository** (a folder inside the project's folder, links
   "useful for" lines. The number of items is split over the generations you name (by default the newest card of each version is
   one group, and the key records each card's own generation); within a group the cards are visited in turn and, within a card,
   the fields in turn, so no card or field fills the sample. A card that cannot be read is left out and counted in the printed
-  summary (`unreadable_cards`). The same `--seed` gives the same sample. `OUTDIR` is
+  summary (`unreadable_cards`). `--book` (repeat it for several) limits the sample to the books named and leaves the others out.
+  The same `--seed` gives the same sample. `OUTDIR` is
   new or empty, and four files are written, all private:
   - `items.json`: the items, shuffled, each with an id, the book, the field, the text, up to five passages of the book that share
     the most words with it (the best block with the block before and after, at most 600 characters, none within two blocks of

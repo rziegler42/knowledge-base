@@ -33,7 +33,8 @@ _TOP = ("format", "book_id", "version_id", "title", "kind", "shelf", "primary_ty
         "partial_reasons", "model", "made")
 _TOP_GROUNDED = _TOP + ("grounding",)
 _RECORD = ("task", "registry", "model", "prompt_version", "date", "input_tokens", "output_tokens")
-_COUNTS = ("points", "verified")   # the notes of a piece: how many points, how many with a quote that occurs (format 2 only)
+_COUNT_PAIRS = (("points", "verified"), ("checked", "supported"))   # a record may carry one pair, in a card of format 2: the notes of a piece
+# (points, and how many have a quote that occurs) or a call that checks the support of items (items checked, and how many were supported)
 GROUNDED_LISTS = ("topics", "key_ideas", "caveats")
 MARKS = ("stated", "inferred")
 MAX_QUOTE = 240
@@ -156,16 +157,17 @@ def mechanical(store, book_id, version_id):
 
 
 def _record(r, grounded=False):
-    counted = isinstance(r, dict) and any(k in r for k in _COUNTS)
-    ok = (isinstance(r, dict) and set(r) == set(_RECORD) | (set(_COUNTS) if counted and grounded else set()) and isinstance(r["task"], str) and models._NAME.fullmatch(r["task"])
+    present = [p for p in _COUNT_PAIRS if isinstance(r, dict) and any(k in r for k in p)]
+    extra = set(present[0]) if len(present) == 1 and grounded else set()
+    ok = (isinstance(r, dict) and len(present) <= 1 and (not present or grounded) and set(r) == set(_RECORD) | extra and isinstance(r["task"], str) and models._NAME.fullmatch(r["task"])
           and isinstance(r["registry"], str) and models._NAME.fullmatch(r["registry"]) and models._valid_model(r["model"])
           and isinstance(r["prompt_version"], str) and models._VERSION.fullmatch(r["prompt_version"])
           and isinstance(r["date"], str) and _ISO.fullmatch(r["date"]) is not None
           and all(r[k] is None or _count(r[k], 10 ** 12) for k in ("input_tokens", "output_tokens"))
-          and (not counted or (_count(r["points"], 1000) and _count(r["verified"], 1000) and r["verified"] <= r["points"])))
+          and (not present or (_count(r[present[0][0]], 1000) and _count(r[present[0][1]], 1000) and r[present[0][1]] <= r[present[0][0]])))
     if not ok:
         raise KbError("a record of how the card was made is not in the expected form")
-    return {k: r[k] for k in _RECORD + (_COUNTS if counted else ())}
+    return {k: r[k] for k in _RECORD + (present[0] if present else ())}
 
 
 def _checked_model(part, grounded=False):

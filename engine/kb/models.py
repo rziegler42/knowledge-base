@@ -77,7 +77,7 @@ def _entry(name, e):
     return dict(e)
 
 
-TASKS = ("card-notes", "card")  # the kinds of model work the engine knows; the engine attaches no model to any of them
+TASKS = ("card-notes", "card", "card-check")  # the kinds of model work the engine knows; the engine attaches no model to any of them
 
 
 def _settings(cfg, entries):

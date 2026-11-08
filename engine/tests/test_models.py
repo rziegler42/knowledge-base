@@ -696,7 +696,7 @@ class TaskTest(Base):
         self.assertEqual(models.choose(cfg, "card")[0], "other")
 
     def test_the_kinds_of_work_are_named_in_the_engine_with_no_model(self):
-        self.assertEqual(set(models.TASKS), {"card-notes", "card"})
+        self.assertEqual(set(models.TASKS), {"card-notes", "card", "card-check"})
 
     def test_a_kind_of_work_with_no_setting_is_refused_with_the_key_to_set_even_if_one_model_is_listed(self):
         for cfg in (config(), with_tasks({}), with_tasks({"card-notes": "local"}, local=entry())):

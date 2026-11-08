@@ -13,6 +13,7 @@ reads; the checks that follow are on its answer: it must have the shape the job 
 This module files nothing: it returns the model part, the records of how it was made and the reasons the card is partial."""
 import re
 import secrets
+import unicodedata
 
 from . import KbError, card, convert, models, quotes, refused, stages, textutil
 
@@ -71,7 +72,61 @@ def _check_support(values):
     parse_support(values["neutral_limits_support"])
 
 
-CARD_JOB = models.Job("card", "v3", {**card.MODEL_SHAPE_GROUNDED, **SUPPORT_SHAPE}, schema="card.json", check=_check_support)
+CARD_JOB = models.Job("card", "v4", {**card.MODEL_SHAPE_GROUNDED, **SUPPORT_SHAPE}, schema="card.json", check=_check_support)
+
+CHECK_BATCH = 10         # the items that cite a note are checked this many to a call
+VERDICTS = ("supports", "partly", "no")
+CHECK_SHAPE = {"verdicts": {"type": "strings", "min_items": 1, "max_items": CHECK_BATCH, "max": 16}}
+_FIELD_WORD = {"topics": "topic", "key_ideas": "key idea", "caveats": "caveat", "neutral_limits": "limit"}
+_STOP_WORDS = frozenset("with from that this have using used based what when where which into about than their these those there been were "
+                        "they them then also such other more most only over under between through while each both some many much very".split())
+_WORD = re.compile(r"\w+")
+
+
+def check_job(count):
+    """The job that asks a model whether the notes that `count` items cite support them: one verdict for each item."""
+
+    def check(values):
+        if len(values["verdicts"]) != count:
+            raise KbError("the answer's verdicts and the items asked about are not lists of the same length")
+        for verdict in values["verdicts"]:
+            if verdict.strip().casefold() not in VERDICTS:
+                raise KbError(f"a verdict is one of {', '.join(VERDICTS)}: {textutil.literal(verdict, 20)}")
+
+    return models.Job("card-check", "v1", CHECK_SHAPE, schema="card-check.json", check=check)
+
+
+def _prefixes(text):
+    """The content words of a text, each by its first five letters: words of four letters or more, outside a short list."""
+    words = _WORD.findall(unicodedata.normalize("NFKC", str(text)).casefold())
+    return {w[:5] for w in words if len(w) >= 4 and w not in _STOP_WORDS}
+
+
+def pairs(values, notes):
+    """The items of a reply to the card call that cite notes, each with the note it is to be checked against: the verified note that
+    it cites and that shares most content words with it (the first cited on a tie). An item that cites no verified note, or none that
+    shares a word, has no pair and so is dropped; an item with no content word of its own has a pair, and a model decides. An item
+    that is an inference, or that cites nothing, has none. Returns [{"field", "index", "item", "ref", "point", "quote"}], in the order
+    topics, key ideas, caveats, then the limit."""
+    items = [(field, index, item, values[f"{field}_support"][index]) for field in card.GROUNDED_LISTS
+             for index, item in enumerate(values[field])]
+    items.append(("neutral_limits", 0, values["neutral_limits"], values["neutral_limits_support"]))
+    out = []
+    for field, index, item, support in items:
+        kind, refs = parse_support(support)
+        if kind != "refs":
+            continue
+        words, best, best_score = _prefixes(item), None, 0
+        for ref in refs:
+            note = notes.get(ref)
+            if not note or not note["verified"]:
+                continue
+            score = len(words & _prefixes(note["point"] + " " + note["quote"])) if words else 1
+            if score > best_score:
+                best, best_score = ref, score
+        if best:
+            out.append({"field": field, "index": index, "item": item, "ref": best, "point": notes[best]["point"], "quote": notes[best]["quote"]})
+    return out
 
 
 def pieces(conversion):
@@ -193,37 +248,66 @@ def card_prompt(title, outline_text, parts, kind="book"):
              f"its date or its evidence. A caveat must be about this {w}; never write one that would hold for any {w}, such as that "
              "details are sparse.\n"
              "- \"topics_support\", \"key_ideas_support\" and \"caveats_support\": lists of the same length as topics, key_ideas and "
-             "caveats, in the same order. \"neutral_limits_support\": one value. Each value says what supports the item: the numbers "
-             "of the notes that state it, separated by spaces, such as \"1.1 3.2\" (prefer notes marked verified; an item is kept only "
-             "if a verified note supports it); or the word \"inferred\" if no note states it and it is your own inference from them; "
+             "caveats, in the same order. \"neutral_limits_support\": one value. Each value says what supports the item: the one or two "
+             "notes that best state it, separated by spaces, such as \"1.1 3.2\" (do not cite a note that is only loosely related; an item "
+             "is kept only if a verified note that bears on it supports it, and a check of the note and the item decides); or the word "
+             "\"inferred\" if no note states it and it is your own inference from them; "
              f"or the word \"none\".\nIn the text of the card never mention notes, pieces, numbers of notes or this message: write "
              f"about the {w} itself.\n{_NO_MORE}")
     return _prompt(rules, [("TITLE", title), ("OUTLINE", outline_text), *parts])
 
 
-def ground(values, notes):
-    """The model part, the grounding record and the reasons the card is thin, from the checked reply to the card call and the notes it
-    was made from (`notes` maps the number of a point, such as "1.1", to its quote and whether the quote occurs). The marks come from
-    the check of the quotes and never from the model: an item is stated if a note it cites is verified, inferred if the model says so,
-    and dropped otherwise (an empty limit has no mark). Fewer than MIN_KEY_IDEAS key ideas left makes the card thin; none is added."""
+_CHECK_LABEL = _FIELD_WORD
 
-    def judge(support):
+
+def unpaired(values, found):
+    """How many items cite notes and have no pair (so were dropped without a model being asked): `found` are the pairs."""
+    cited = sum(1 for field in card.GROUNDED_LISTS for support in values[f"{field}_support"] if parse_support(support)[0] == "refs")
+    cited += parse_support(values["neutral_limits_support"])[0] == "refs"
+    return cited - len(found)
+
+
+def check_prompt(title, found, kind="book"):
+    """The prompt that asks whether the note each item cites supports it. `found` are the pairs of `pairs`. The items, the points and
+    the quotes are data in one section, numbered in order; the answer is one verdict for each."""
+    w = source_word(kind)
+    lines = []
+    for n, p in enumerate(found, start=1):
+        lines += [f"{n}. [{_CHECK_LABEL[p['field']]}] {p['item']}", f"   note {p['ref']}: {p['point']}", f"   quote: \"{p['quote']}\""]
+    rules = (f"You are checking part of the catalog entry (the card) of a {w}. Below are two sections of data: the {w}'s title, and "
+             f"numbered items of its card. A model wrote each item and cited a note on the {w}, with a quote from it, as its support.\n"
+             f"{_DATA}\nFor each item decide whether the point and the quote of the note it cites support it. Judge only by the point and "
+             f"the quote shown, not by what you know of the {w}.\nReply with one JSON object with the single key \"verdicts\": a list "
+             "with one word for each item, in order, of the same length as the list of items: \"supports\" if the point and the quote "
+             "state the item or clearly lead to it, \"partly\" if they support only part of it, or \"no\" if they do not bear on it. "
+             f"{_NO_MORE}")
+    return _prompt(rules, [("TITLE", title), ("ITEMS", "\n".join(lines))])
+
+
+def ground(values, notes, confirmed):
+    """The model part, the grounding record and the reasons the card is thin, from the checked reply to the card call, the notes it
+    was made from (`notes` maps the number of a point, such as "1.1", to its quote and whether the quote occurs) and the items that
+    a check confirmed (`confirmed` maps (field, index) to the note that was confirmed). The marks come from the engine's checks and
+    never from the model: an item is stated if it was confirmed, inferred if the model says so, and dropped otherwise (an empty limit
+    has no mark). Fewer than MIN_KEY_IDEAS key ideas left makes the card thin; none is added."""
+
+    def judge(field, index, support):
         kind, refs = parse_support(support)
         if kind == "inferred":
             return {"mark": "inferred", "notes": [], "quote": None}
-        verified = [r for r in refs if notes.get(r, {}).get("verified")]
-        if verified:
-            return {"mark": "stated", "notes": verified, "quote": notes[verified[0]]["quote"]}
+        ref = confirmed.get((field, index))
+        if kind == "refs" and ref in refs and notes.get(ref, {}).get("verified"):
+            return {"mark": "stated", "notes": [ref], "quote": notes[ref]["quote"]}
         return None
 
     model = {k: v for k, v in values.items() if not k.endswith("_support")}
     grounding, dropped = {}, {}
     for field in card.GROUNDED_LISTS:
-        marked = [(item, judge(support)) for item, support in zip(values[field], values[f"{field}_support"])]
+        marked = [(item, judge(field, index, support)) for index, (item, support) in enumerate(zip(values[field], values[f"{field}_support"]))]
         model[field] = [item for item, entry in marked if entry]
         grounding[field] = [entry for _, entry in marked if entry]
         dropped[field] = len(marked) - len(model[field])
-    entry = judge(values["neutral_limits_support"])
+    entry = judge("neutral_limits", 0, values["neutral_limits_support"])
     model["neutral_limits"] = values["neutral_limits"] if entry else ""
     grounding["neutral_limits"], dropped["neutral_limits"] = entry, 0 if entry else 1
     grounding["dropped"] = dropped
@@ -238,7 +322,8 @@ def ground(values, notes):
 def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book"):
     """Make the model part of a card for a converted book. Returns {"model": the checked values, "records": how each call was made,
     "pieces": pieces read, "calls": calls made, "reasons": why the card is partial, "notes": the number of points in the notes and
-    how many of them have a quote that occurs in their piece}. Every piece gets notes, a book of one piece too, and a card of one
+    how many of them have a quote that occurs in their piece, "checks": the number of items checked against the note they cite and
+    the verdicts}. Every piece gets notes, a book of one piece too, and a card of one
     piece is also given the text. The quotes are checked and then dropped: only the point and whether it is verified go on. Nothing is filed. The model of each job is the
     one the config sets for it, found before the first call, so a missing setting stops the card before anything is sent. A call
     that fails, or an answer of the wrong shape, stops the card."""
@@ -246,6 +331,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
     read, why = sample(found)
     card_model = models.choose(cfg, "card")[0]
     notes_model = models.choose(cfg, "card-notes")[0]
+    check_model = models.choose(cfg, "card-check")[0]
     title = textutil.title(str(title if title is not None else ""), MAX_TITLE) or "(no title)"
     records = []
 
@@ -260,15 +346,26 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
         lines, ok_count = [], 0
         for k, (point, quote) in enumerate(zip(got["points"], got["quotes"]), start=1):
             ok = quotes.occurs(quote, piece)
-            found[f"{number}.{k}"] = {"quote": quote, "verified": ok}
+            found[f"{number}.{k}"] = {"point": point, "quote": quote, "verified": ok}
             ok_count += ok
             lines.append(f"- [{number}.{k} {'verified' if ok else 'unverified'}] {point}")
         records[-1].update(points=len(lines), verified=ok_count)  # the counts go in the record of the call for these notes
         parts.append((f"NOTES {number}", "\n".join(lines)))
     values = ask(card_model, card_prompt(title, outline(conversion), parts, kind=kind), CARD_JOB)
-    grounded = ground(values, found)
+    todo, confirmed = pairs(values, found), {}
+    tally = {"checked": 0, "supports": 0, "partly": 0, "no": 0, "unpaired": unpaired(values, todo)}
+    for start in range(0, len(todo), CHECK_BATCH):
+        batch = todo[start:start + CHECK_BATCH]
+        got = ask(check_model, check_prompt(title, batch, kind=kind), check_job(len(batch)))["verdicts"]
+        said = [v.strip().casefold() for v in got]
+        records[-1].update(checked=len(batch), supported=said.count("supports"))
+        tally["checked"] += len(batch)
+        for word in VERDICTS:
+            tally[word] += said.count(word)
+        confirmed.update({(p["field"], p["index"]): p["ref"] for p, word in zip(batch, said) if word == "supports"})
+    grounded = ground(values, found, confirmed)
     return {"model": grounded["model"], "grounding": grounded["grounding"], "records": records, "pieces": len(read),
-            "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"],
+            "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"], "checks": tally,
             "notes": {"points": len(found), "verified": sum(1 for n in found.values() if n["verified"])}}
 
 
@@ -304,7 +401,7 @@ def _keep_aside(store, refusal, book_id, version_id):
     return CardRefused(str(refusal), kept, note)
 
 
-def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None):
+def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None, checks=None):
     used = []
     for r in (made or {}).get("made", {}).get("records", []):
         item = {"task": r["task"], "registry": r["registry"], "model": r["model"]}
@@ -313,7 +410,10 @@ def _report(book_id, version_id, status, reason="", generation=None, made=None, 
     return {"book_id": book_id, "version_id": version_id, "status": status, "generation": generation,
             "partial": made["partial"] if made else None, "pieces": made["made"]["pieces"] if made else 0,
             "calls": made["made"]["calls"] if made else 0, "models": used, "reason": reason, "kept": kept,
-            "points": notes["points"] if notes else None, "verified": notes["verified"] if notes else None}
+            "points": notes["points"] if notes else None, "verified": notes["verified"] if notes else None,
+            "checked": checks["checked"] if checks else None, "supported": checks["supports"] if checks else None,
+            "partly": checks["partly"] if checks else None, "no": checks["no"] if checks else None,
+            "unpaired": checks["unpaired"] if checks else None}
 
 
 def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
@@ -338,7 +438,7 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
                        "ask again to make another", generation=existing[-1])
     cutoff = min_chars(cfg)
     loaded = convert.load_in_use(store, book_id, version_id) if state["converted"]["status"] == "done" else None
-    notes = None
+    notes = checks = None
     if loaded is None:
         made = card.make(store, book_id, version_id)
     elif len(loaded[1].text) < cutoff:
@@ -353,9 +453,9 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
             raise _keep_aside(store, refusal, book_id, version_id) from None
         made = card.make(store, book_id, version_id, model=part["model"], records=part["records"], pieces=part["pieces"],
                          calls=part["calls"], reasons=part["reasons"], grounding=part["grounding"])
-        notes = part["notes"]
+        notes, checks = part["notes"], part["checks"]
     number = card.file(store, made)
-    return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes)
+    return _report(book_id, version_id, "carded", generation=number, made=made, notes=notes, checks=checks)
 
 
 def run(store, cfg, book_ids, again=False, launcher=None, root=None):

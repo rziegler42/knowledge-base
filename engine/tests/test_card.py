@@ -606,6 +606,22 @@ class GroundedTest(CardCase):
         with self.assertRaises(KbError):  # a card of format 1 keeps its records as they were
             card.make(self.store, *self.full_book(), model=copy.deepcopy(MODEL), records=[record], pieces=1, calls=1)
 
+    def test_a_record_of_the_check_may_carry_the_counts_checked_and_supported_but_only_one_pair(self):
+        record = dict(RECORD, task="card-check", checked=10, supported=7)
+        made = self.grounded(record=record)
+        self.assertEqual((made["made"]["records"][0]["checked"], made["made"]["records"][0]["supported"]), (10, 7))
+        for bad in ({"checked": 10}, {"supported": 3}, {"checked": 2, "supported": 3}, {"checked": -1, "supported": 0},
+                    {"checked": True, "supported": 1}, {"checked": 4, "supported": 3, "points": 4, "verified": 3},
+                    {"checked": 4, "supported": 3, "extra": 1}, {"checked": 1001, "supported": 0}):
+            with self.subTest(bad), self.assertRaises(KbError):
+                self.grounded(record=dict(RECORD, **bad))
+        with self.assertRaises(KbError):  # a card of format 1 keeps its records as they were
+            card.make(self.store, *self.full_book(), model=copy.deepcopy(MODEL), records=[record], pieces=1, calls=1)
+
+    def test_a_grounded_card_made_before_the_check_still_validates(self):
+        made = self.grounded(record=dict(RECORD, task="card-notes", points=2, verified=1))
+        self.assertEqual(card.validate(made), made)
+
     def test_the_quote_of_a_stated_item_is_rendered_with_it_as_untrusted_text(self):
         model = dict(MODEL, caveats=["the source is dated"])
         made = self.grounded(model=model)

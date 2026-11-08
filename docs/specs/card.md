@@ -24,9 +24,11 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 
 - **[agreed]** Verifying that claims are true. A card is a lead to follow, not a claim to rely on.
 - **[proposed]** What the engine does check: that a key idea, topic, caveat or limit is supported by a verbatim quote that occurs
-  in the piece of the book it names. An item with no verified quote is kept only if the model says it is an inference, and is
-  otherwise dropped; each item kept is marked stated or inferred. A verified quote shows that a claim is in the book, not that
-  the claim is right, so the card stays a lead.
+  in the piece of the book it names, that the note the quote belongs to bears on the item (they share a content word), and that a
+  second model, given the item with the note's point and quote, says that they support it. An item that fails any of these is kept
+  only if the model says it is an inference, and is otherwise dropped; each item kept is marked stated or inferred. A verified
+  quote shows that a claim is in the book, and the second model's word that it supports the item, not that the claim is right, so
+  the card stays a lead.
 - **[proposed]** Replacing the book or the theme. A card helps choose a book. A theme finds a passage inside one.
 - **[proposed]** Browsing by hand. The owner does not expect to browse cards, so the card is written for an agent to search and
   not for a person to read at leisure.
@@ -68,7 +70,7 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   the date and the version read. The target is about 150 to 250 words; a trial found the model-written part running about 220 to 340
   words whatever the length of the book.
 - **[proposed]** A card of the grounded form (format 2) marks each topic, key idea, caveat and neutral limit it keeps as `stated`
-  (a note that cites it has a quote that was found in the book) or `inferred` (the model says it is its own inference), keeps the
+  (the note it cites has a quote that was found in the book, and a second model confirmed that the note supports it) or `inferred` (the model says it is its own inference), keeps the
   quote that supports a stated item, and records how many of each kind it dropped. Adjacent topics, "useful for", the summary and
   the other neutral fields carry no mark. A limit that is dropped leaves its field empty. A card with fewer than three key ideas
   left is partial and says why; it is not padded. Cards of the earlier form (format 1) stay valid and are read as before.
@@ -115,8 +117,11 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   that supports it. The engine checks each quote against the piece it names (the rule is in `engine/README.md`, "Notes with
   quotes") and marks the point verified or not. The card is then written from the title, the outline and the points with their
   marks (a book of one piece also from its text), and for each topic, key idea, caveat and neutral limit the model names the notes
-  that support it or says it is an inference. The marks of the card come from the engine's check of the quotes and never from the
-  model's word. The prompt names the kind of source (a paper, a page) and tells the model to write about it and not about the
+  that best state it or says it is an inference. The engine then pairs each such item with the verified note it cites that shares
+  most content words with it (an item with no such note is dropped) and a second model, named in the owner's config as the task
+  `card-check`, says for each pair, ten to a call, whether the note's point and quote support the item; only a pair that is said to
+  be supported makes the item stated. A `stated` mark comes only from these checks; `inferred` is the card model's own word and is
+  not checked. The prompt names the kind of source (a paper, a page) and tells the model to write about it and not about the
   notes.
 
 ### Searching the catalog
@@ -184,7 +189,8 @@ All of these are provisional until the spec is approved.
 - A card that contains an instruction does not change what the agent does.
 - A card of the grounded form marks every topic, key idea, caveat and limit it keeps as stated or inferred; an item with no verified
   quote and no word of inference from the model is dropped; a card with fewer than three key ideas left is partial and says so; a
-  stated item carries a quote that was found in a note's piece; and a card of the earlier form is still read and searched.
+  stated item carries a quote that was found in a note's piece and was confirmed by the second model to support the item; and a
+  card of the earlier form is still read and searched.
 
 ## Open questions
 
