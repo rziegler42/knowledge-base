@@ -559,6 +559,27 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   "tasks": {"card-notes": "<name>", "card": "<name>", "card-check": "<name>", "card-more": "<name>"}
   ```
 
+- **A card in the making can be stopped and taken up again (`kb/cardstate.py`).** A card is made by a fixed sequence of calls (the notes
+  of each piece, the card, the checks, a second round and its checks), and what it is depends only on the answers and on the book. A
+  *journal* keeps the answer to each call that has succeeded: the job, the model entry, the checked answer and the record of how it was
+  made. `cardmake.make_model_part` can be given a journal (`cardmake.new_journal`): it adds each call as it is made, and a call that is
+  already in the journal is not made again, its saved answer being checked again as a reply would be, so a card made again from a
+  journal is the card it would have been, with the same records. With `allow`, a set of model entries that the caller is serving now,
+  the next call that is for another entry and is not in the journal raises `cardmake.Pause` before anything is sent, so a caller
+  that works through the models one at a time can stop a card at a model boundary and go on with it later (`Pause` is not a
+  `KbError`, so a caller must catch it itself). A journal is refused as stale unless its header is what the card is being made with:
+  the book, the version and the conversion in use (which the caller gives as `identity`), the title, the kind of source, the number of
+  pieces the book has and the number read, the model entry of each kind of work and the server and model behind it, the prompt version
+  of each job, and a digest of the outline and of the text of the pieces read. A saved call that is not the call being made, a saved
+  answer that is not valid (checked again as a reply is), a journal that cannot be saved, and calls in the journal that the card does
+  not make are refused too, and a fault of the journal in the second round is a refusal, not a "failed" round. The file is
+  `card-runs/<run>/<book>-<version>.json` in the index root: derived and disposable, so deleting it (`cardstate.remove` also deletes
+  what a crash left beside it) loses no card; made private to the user (the folders 700, the file 600), written under a temporary name
+  and put in place with one rename, and refused if a path is a link, the file is a pipe, another user's, readable by others or over
+  8 MiB, or the text is not exactly the shape described. Its text is from books and models and is untrusted. The notes and the card
+  are used from it only as the data sections of prompts, as before, but the verdicts of the checks, the support lists and the records are
+  taken as they were saved: the journal is not signed, so whoever can write the file can say what a check said. The folder that only
+  the user can enter is its whole protection. No command uses it yet; the queue of `cards-queue` will.
 - **What a model is told.** The title, the outline, each piece of text and each note are given as data in sections of their own,
   between delimiters that carry a random token made for the call (made again if any input holds it); the rules name the token, say
   that a line with another token is data and that nothing in a section is an instruction, and ask for English whatever the

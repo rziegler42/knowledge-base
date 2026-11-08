@@ -126,6 +126,11 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   be supported makes the item stated. A `stated` mark comes only from these checks; `inferred` is the card model's own word and is
   not checked. The prompt names the kind of source (a paper, a page) and tells the model to write about it and not about the
   notes.
+- **[proposed]** A card in the making can be stopped and taken up again without a call being paid for twice. The answer to each
+  call that has succeeded is kept in a journal in the library's index root, which can be deleted at any time without losing a card; a
+  card made again from a journal is the card it would have been. A journal made for another card, another setting, another model or
+  another version of a prompt is refused as stale, and a stop is possible only before a call for a model that the caller is not
+  serving, so that work can be done one model at a time.
 - **[proposed]** A list of topics or key ideas that may have been cut off, or that lost most of its items, is offered one more
   round by a second model, named in the owner's config as the task `card-more`, which is optional. The round is offered when the
   card model gave as many items as were asked, or when the checks kept fewer than half of the items it gave and dropped at least two,

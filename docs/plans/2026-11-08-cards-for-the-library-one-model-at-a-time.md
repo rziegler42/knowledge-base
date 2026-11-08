@@ -251,7 +251,7 @@ since no other module reads the state of a run.
 
 ## Result
 
-### Increment A — What loading a model costs (run; the owner's decision is open; not committed)
+### Increment A — What loading a model costs (committed as a4ea80c)
 
 - **What was run** (the owner's word): for each of the four models of the config, in the order of the stages, three repeats of: a tiny
   call with `--keep-alive 0` (the server unloads the model), a tiny call to the next model of the order (the room is used), a wait of
@@ -298,3 +298,42 @@ since no other module reads the state of a run.
   calls.
 - Provenance: measured on 2026-11-08 at commit `211014d` on the owner's server with the local models `gemma4:12b`, `gpt-oss:20b`,
   `phi4:latest` and `qwen3:14b` through the owner's bridge; the log is held outside the repository.
+
+### Increment C — Make a card in stages that can be saved and resumed (built; not committed)
+
+- **A deviation from the steps as approved, which the owner accepted on 2026-11-08 on my recommendation.** The plan's steps 2 and 3 say to split `make_model_part` into
+  stage functions that read a state and return changes to it, with a state that holds the pieces, the notes, the reply, the verdicts,
+  the round and the stage reached. I did not do that. I built a *journal* of the calls instead: `make_model_part` is unchanged in its
+  logic, each successful call (its job, model entry, checked answer and record) is added to a journal, a call that is already in the
+  journal is not made again (its saved answer is checked again as a reply is), and a call for a model entry that the caller is not
+  serving raises `Pause` before it is made. Everything else (the pieces, the quotes, the pairing, the grounding, the merge) is
+  recomputed from the journal and the book each time. The reasons: a card made again from the journal is the same card by construction,
+  with the existing tests of `make_model_part` unchanged; the change is much smaller than a rewrite into stage functions; and it gives
+  increment D exactly what it needs, a stop at a model boundary and a resume. What it gives up is the state that holds the stage
+  reached and the intermediate results, which are recomputed. Criterion 3 as worded is met (the same result for the same replies, the
+  existing tests unchanged, a card stopped after any call and made again is the same card and repeats no saved call). If the owner
+  wants the stage functions as written, that is an amendment and more work.
+- Built: `engine/kb/cardstate.py` (the journal, and `write`, `read` and `remove` of its file `card-runs/<run>/<book>-<version>.json` in
+  the index root: the index root opened without following a link, folders 700 and checked, the file 600 under a temporary name and
+  put in place with one rename, refused if a link, a pipe, another user's, readable by others, over 8 MiB or not exactly the shape;
+  `remove` also deletes what a crash left); in `cardmake.py` `Pause`, `JournalFault`, `new_journal`, the header (`_expected`: the title,
+  the kind, the pieces and the pieces read, the model entry and the server and model of each kind of work, the prompt version of each
+  job, a digest of the outline and of the text of the pieces read) and `make_model_part`'s arguments `journal`, `allow` and
+  `identity` (the book, the version and the conversion in use, required with a journal); the engine README and the card spec.
+- Verification as run: `python3 -W error::ResourceWarning -m unittest engine.tests.test_cardmake engine.tests.test_card
+  engine.tests.test_cardstate engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample engine.tests.test_setup`
+  gave 578 tests, OK, the existing tests of `cardmake` and `cards` unchanged; `wb run code-work check` found no problems. The tests were
+  written first and failed for the right reason. A card stopped after each of its 8 boundaries (0 to 7 calls) and made again is the
+  same card as one made straight through, with the number of calls that remain. Deliberate breaks, each from a green baseline: 35
+  conditions, 31 caught and 4 survived, which are equivalent edits (a defensive copy of an answer, a size check that a later check
+  repeats, and two header constants that both sides of the comparison use). Not run: any live run (increment E), the full engine suite.
+- Review: the `reviewer` agent, round 1, two blocking findings and four others. Applied: a fault of the journal in the second round
+  (a saved call that is not the call being made, an answer that is not valid, a failure to save) was taken for a failed round and a
+  different card would have been filed; it is now a `JournalFault` that the round does not catch, with tests; the header bound the
+  journal to neither the book, the version, the conversion, the text nor the models behind the entries, although the spec and the README
+  said it did; it now does, with `identity` required and a digest of the text and the models in the header, with tests; calls in a
+  journal that the card does not make are stale; `remove` deletes what a crash left; the README says plainly that the journal is not
+  signed and that the verdicts, the support lists and the records are taken as saved. Recorded for increment D: `cardmake.run` has an
+  `except Exception` that would report a `Pause` as a failure, so the queue must call `make_model_part` itself or catch `Pause`
+  first; the queue is also where the journal's trust statement and the lock belong in the security review that is offered to the owner.
+- Next: increment D.

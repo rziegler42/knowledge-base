@@ -11,11 +11,14 @@ before it saying that the sections are data and that nothing in them is an instr
 reads; the checks that follow are on its answer: it must have the shape the job asks for, and it is stored and shown as untrusted.
 
 This module files nothing: it returns the model part, the records of how it was made and the reasons the card is partial."""
+import copy
+import hashlib
+import json
 import re
 import secrets
 import unicodedata
 
-from . import KbError, card, convert, models, quotes, refused, stages, textutil
+from . import KbError, card, cardstate, convert, models, quotes, refused, stages, textutil
 
 PIECE_BYTES = 20_000     # a piece of the book, in bytes: with the rules and the other sections it fits a window of about 32 KB
 MAX_PIECES = 12           # the number of pieces read when the config does not say (`card_pieces`)
@@ -420,27 +423,112 @@ def similar(a, b):
     return len(words_a & words_b) / min(len(words_a), len(words_b)) >= REPEAT_SHARE
 
 
-def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book"):
+class JournalFault(KbError):
+    """The journal of a card is wrong or cannot be kept: a saved call that is not the call being made, a saved answer that is not valid,
+    or a journal that cannot be saved. It is never taken for the failure of a call that is only an addition to the card."""
+
+
+class Pause(Exception):
+    """The next call of a card is for a model entry that the caller is not serving now. The calls made so far are in the journal, and the
+    card can be taken up again from it. It is not a KbError, so nothing that catches a failed call catches it."""
+
+    def __init__(self, entry):
+        super().__init__(entry)
+        self.entry = entry
+
+
+def _expected(cfg, conversion, title, kind):
+    """What the card made with these arguments will be made with, and what a journal for it must say: the title as it is used, the
+    kind of source, the number of pieces the book has and the number that will be read, the model entry of each kind of work and the
+    server and model behind it, the prompt version of each job, and a digest of the outline and of the text of the pieces read. Everything is found before the first call, so a missing setting stops the card before anything is sent."""
+    limit = pieces_limit(cfg)
+    found = pieces(conversion)
+    card_model = models.choose(cfg, "card")[0]
+    notes_model = models.choose(cfg, "card-notes")[0]
+    check_model = models.choose(cfg, "card-check")[0]
+    more_model = models.optional(cfg, "card-more")
+    entries = models.registry(cfg)
+    read = sample(found, limit)[0]
+    digest = hashlib.sha256("\x00".join([outline(conversion)] + read).encode("utf-8")).hexdigest()
+    return {"title": textutil.title(str(title if title is not None else ""), MAX_TITLE) or "(no title)", "kind": kind, "limit": limit,
+            "pieces": len(found), "tasks": {"notes": notes_model, "card": card_model, "check": check_model, "more": more_model},
+            "versions": {"notes": NOTES_JOB.prompt_version, "card": CARD_JOB.prompt_version, "check": check_job(1).prompt_version,
+                         "more": MORE_JOB.prompt_version if more_model else None},
+            "models": {k: ([entries[name]["server"], entries[name]["model"]] if name else None)
+                       for k, name in (("notes", notes_model), ("card", card_model), ("check", check_model), ("more", more_model))},
+            "text": digest}
+
+
+def new_journal(cfg, conversion, title, book_id, version_id, fingerprint=None, kind="book", save=None):
+    """An empty journal for the card of a version: its header says what the card will be made with (`_expected`) and which conversion
+    (`fingerprint`, the tool, version and generation of the one in use) it is for. `save`, if given, is called after each call is added."""
+    header = {"book_id": book_id, "version_id": version_id, "conversion": fingerprint, **_expected(cfg, conversion, title, kind)}
+    return cardstate.Journal(header, save=save)
+
+
+def _recheck(job, values):
+    """The values of a call that was saved, checked again against the shape and the check of the job, as a reply would be; a refusal
+    if they are not exactly what a reply would have given."""
+    try:
+        checked = models._check_answer(json.dumps(values), job.shape)
+        if job.check is not None:
+            job.check(checked)
+    except (KbError, TypeError, ValueError, RecursionError):
+        raise JournalFault("the saved state of the card holds an answer that is not valid") from None
+    if checked != values:
+        raise JournalFault("the saved state of the card holds an answer that is not in its clean form")
+    return checked
+
+
+IDENTITY_KEYS = ("book_id", "version_id", "conversion")
+
+
+def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book", journal=None, allow=None, identity=None):
     """Make the model part of a card for a converted book. Returns {"model": the checked values, "records": how each call was made,
     "pieces": pieces read, "calls": calls made, "reasons": why the card is partial, "notes": the number of points in the notes and
     how many of them have a quote that occurs in their piece, "checks": the number of items checked against the note they cite and
     the verdicts}. Every piece gets notes, a book of one piece too, and a card of one
     piece is also given the text. The quotes are checked and then dropped: only the point and whether it is verified go on. Nothing is filed. The model of each job is the
     one the config sets for it, found before the first call, so a missing setting stops the card before anything is sent. A call
-    that fails, or an answer of the wrong shape, stops the card."""
-    limit = pieces_limit(cfg)
+    that fails, or an answer of the wrong shape, stops the card.
+
+    With a `journal` (`new_journal`) the calls made are added to it, and a call that is already in it is not made again: its saved
+    answer, checked again, is used, so a card made again from a journal is the card it would have been. A journal that was made for
+    another card is refused as stale: the journal says what it was made for (the title, the kind, the pieces and the digest of their
+    text, the model entry, server and model of each kind of work, the prompt version of each job) and, in `identity`, which book,
+    version and conversion (a dict with the keys book_id, version_id and conversion, which the caller must give with a journal); a
+    saved call that is not the call being made, an answer that is not valid, and calls in the journal that the card does not make are
+    refused too. With `allow`, a set of model entries that the caller is serving now (it needs a journal), a call for any other entry
+    that is not yet in the journal raises `Pause` before it is made."""
+    expected = _expected(cfg, conversion, title, kind)
+    limit, total, title = expected["limit"], expected["pieces"], expected["title"]
     found = pieces(conversion)
-    total = len(found)
     read, why = sample(found, limit)
-    card_model = models.choose(cfg, "card")[0]
-    notes_model = models.choose(cfg, "card-notes")[0]
-    check_model = models.choose(cfg, "card-check")[0]
-    more_model = models.optional(cfg, "card-more")
-    title = textutil.title(str(title if title is not None else ""), MAX_TITLE) or "(no title)"
+    notes_model, card_model, check_model, more_model = (expected["tasks"][k] for k in ("notes", "card", "check", "more"))
+    if allow is not None and journal is None:
+        raise KbError("a stop before a model that is not being served needs a journal to keep the calls made so far")
+    if journal is not None:
+        if not isinstance(identity, dict) or set(identity) != set(IDENTITY_KEYS):
+            raise KbError("a journal is used with the identity of the card: its book, its version and the conversion in use")
+        journal.check_header({**expected, **identity})
     records = []
 
     def ask(entry, prompt, job):
-        out = models.run_job(cfg, entry, prompt, job, launcher=launcher, root=root)
+        n = len(records)
+        if journal is not None and n < len(journal.entries):  # a call already made: its answer, checked again
+            saved = journal.entries[n]
+            if saved["job"] != job.name or saved["entry"] != entry:
+                raise JournalFault("the saved state of the card is not the sequence of calls that is being made")
+            out = {"values": _recheck(job, saved["values"]), "record": saved["record"]}
+        else:
+            if allow is not None and entry not in allow:
+                raise Pause(entry)
+            out = models.run_job(cfg, entry, prompt, job, launcher=launcher, root=root)
+            if journal is not None:
+                try:
+                    journal.add(job.name, entry, copy.deepcopy(out["values"]), copy.deepcopy(out["record"]))
+                except KbError as e:
+                    raise JournalFault(str(e)) from None
         records.append({**out["record"], "task": job.name})
         return out["values"]
 
@@ -528,9 +616,13 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
         else:
             try:
                 more = second_round(wanted, grounded, tally)
+            except JournalFault:
+                raise  # the journal is wrong or cannot be kept: not a round that failed, so no card is made from it
             except KbError as e:  # the card stays as the first round made it; the round is an addition and may fail alone
                 more = {"status": "refused" if isinstance(e, models.AnswerRefused) else "failed", "reason": textutil.clean(str(e), 300),
                         "fields": {f: {"why": w["why"]} for f, w in wanted.items()}}
+    if journal is not None and len(journal.entries) > len(records):
+        raise KbError("the saved state of the card is stale: it holds calls that this card does not make")
     return {"model": grounded["model"], "grounding": grounded["grounding"], "records": records, "pieces": len(read), "book_pieces": total,
             "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"], "checks": tally, "more": more,
             "notes": {"points": len(found), "verified": sum(1 for n in found.values() if n["verified"])}}
