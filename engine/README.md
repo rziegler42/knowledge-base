@@ -750,8 +750,14 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   five neutral fields of the newest card of each version of each active book (problem, approach and provides; **not needs or
   limits**, most of whose sentences a sample found were not in the book), with the embedding model that your config sets for
   `card-embed` (see [Calling a model](#calling-a-model)), and writes them to `vectors.sqlite` in the index root. **The text of those
-  fields goes to that model**, over the link the registry names, when you run it. The file is built beside the old one and renamed
-  into place under the catalog's lock; it is private to you, is derived from the cards alone, and can be deleted. A vector is kept
+  fields goes to that model**, over the link the registry names, when you run it. The file is built in a folder of its own inside the
+  index folder (mode 0700, a random name beginning `.vectors-build-`) and renamed into place under the catalog's lock, so no file
+  at a name that could be guessed is opened or made private; a build that was killed leaves such a folder, and the next build
+  removes it. **It removes every folder, file or link in the index folder whose name begins `.vectors-build-`** (a link as a link,
+  never what it leads to) **and the old fixed names `vectors.sqlite.new` and its journal, and nothing else**. The build checks that the
+  folder is still the one it made, owned by you and not a link, when it makes it and again before it puts the file in place; that
+  narrows, and does not close, a race with someone who can write in the index folder and rename the folder in the moments between,
+  since SQLite makes the file through the folder's name. The file is private to you, is derived from the cards alone, and can be deleted. A vector is kept
   while the text it was made from (its SHA-256 is stored with it) and the model are the same, so a second run sends nothing; a
   card that changed has its vector made again. `--again` makes every vector again. The file says which model made the vectors (the
   name the bridge reported, and the name in your config) and their dimension; a file of another format, with other tables, a
@@ -780,6 +786,15 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   format, with a trigger or a view, or with a row that is not what the engine writes; and refused if the model that answers for the
   query is not the one that made the vectors. It reads both files read-only and writes nothing. A closeness says how near a field is
   to the query and nothing of whether the field is right: see the `grounding` counts of the result.
+- **Limits of the vectors that are known and not fixed** (from a security review of the search by meaning; the files are private to you
+  and small, and a person who could change them is you or a program run as you).
+  - The text hash in `vectors.sqlite` binds a vector to the text it was made from, not the other way: a person who can write the file
+    can put any vector under a correct hash, to rank a card first or last, and `card-vectors` keeps it while the text is unchanged.
+    **`card-vectors --again` makes every vector again from the cards** and is the recovery.
+  - A file of vectors and the catalog are read whole into memory when searched or rebuilt, with no cap on their size or on the time
+    taken, as the catalog is when it is built; the size of your library is the bound.
+  - The time limit of a build is for each call to the bridge, not for the whole build, so a very slow server makes a long build.
+  - A damaged file of vectors is refused with the command to run; it is never repaired in place.
 
 ### The trial: do the cards help?
 

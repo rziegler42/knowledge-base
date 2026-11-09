@@ -531,4 +531,47 @@ unchanged in D and again at the end.
   runs as the owner; in practice they are Low, and the fix for F2 is small and standard. F4 is inherent to the design.
 - **The owner's decision** (2026-11-09, on my recommendation): fix F1, F2 and F5 in a new Increment D-A, which needs the owner's new
   approval of the plan; state F3, F4 and F6 as known limits in the README; note the same gap in `catalog.rebuild` as deferred. The
-  plan was amended (Completion criteria, Increment D-A, the dependency of Increment E, Risks, Deferred work).
+  plan was amended (Completion criteria, Increment D-A, the dependency of Increment E, Risks, Deferred work); it was committed as
+  `6ce5e53` and approved again.
+
+### Increment D-A — Fix the findings of the security review of Increments B to D (done; not committed)
+
+- **F2 (the file built through a fixed name).** `vectors.build` now makes a folder with `tempfile.mkdtemp` inside the index folder
+  (mode 0700, a random name beginning `.vectors-build-`), under the catalog's lock, builds the file there, makes it private, and
+  renames it into place; the folder is removed whatever happens. `_clean_leftovers` removes, under the lock, every folder, file or
+  link whose name begins with the prefix (a link as a link, never its target) and the two fixed names an earlier version used
+  (`vectors.sqlite.new` and its journal), and nothing else. `_identity` checks that the folder is a real folder owned by this user
+  when it is made and again before the file is put in place, which was added after the second look (below).
+- **F1 (a raw SQLite error).** `_meta` turns a SQLite error into a refusal that names `card-vectors`; the other reads of the file were
+  already covered (`connect`, `read_rows`, `_old_rows`). A file with its `meta` page zeroed or filled with 0xff is refused by
+  `check_entry` and by `search`, and a build replaces it.
+- **F5 (marker words in the bridge's text).** `models._shown` cleans and cuts text from a bridge and shows a fixed `[text withheld]`
+  in place of text that holds the words of a marker; it is used for the `error` and `detail` of a failure and, after the second look,
+  for the stderr text in a refusal. It covers the chat call and `embed`.
+- **README.** The build folder, what a build removes, that the race is narrowed and not closed, and the known limits F3, F4 and F6
+  (with `card-vectors --again` as the recovery for F4).
+- **Tests first** and seen to fail: the new tests for F1, the leftovers and the planted link failed against the code of `4e93147`,
+  for the reasons the review gave (a raw `sqlite3.DatabaseError`; the build written through a planted link, shown by the file put in
+  place being the link). Then `python3 -W error::ResourceWarning -m unittest engine.tests.test_vectors engine.tests.test_models
+  engine.tests.test_catalog engine.tests.test_card engine.tests.test_setup engine.tests.test_cardmake engine.tests.test_cardqueue`
+  gave 723 tests, OK; `wb run code-work check` found no problems. The plan names the first three; the others were run because the
+  registry and the cards are read through the same code. No call was made to the owner's server.
+- **Deliberate breaks**, each from green: 16 (the old fixed name used; the file private only after it holds data; the folder not
+  private; a leftover not removed; a leftover removed that is not one; a link followed when a leftover is removed; the old fixed
+  names not removed; the folder left behind after a failure; a name that can be guessed; a SQLite error left to escape from `_meta`;
+  the words of a marker shown from the error text and from stderr; a withheld reason shown as empty; the identity of the folder not
+  checked when it is made, before the file is put in place, or for a link) were each caught. Not tested: the owner check of the
+  folder (`st_uid`), because a test cannot make a folder owned by another user.
+- **Second look** (the read-only `reviewer` agent, a fourth exchange of six): no bypass of F1, F5 fixed for the two fields it covered,
+  no blocking finding. Applied: (1) a narrow race remained for F2, since the file is made by SQLite through the folder's name and
+  someone who can write in the index folder could rename the folder and put a link at its name in the moments between; the
+  identity check above narrows it, and the README and this Result say it is narrowed and not closed (SQLite cannot be given a
+  folder's descriptor); (4) the README now says a build removes every name that begins with the prefix; (6) the stderr text of the
+  bridge, which F5 had not covered, is guarded in the same way. Not applied: (3) an `OSError` from `mkdtemp`, `chmod` or `replace`
+  was said to escape `build` as a traceback, but the command catches `OSError` and prints `failed:` with exit 1
+  (`__main__.py`, the `except OSError` after the `except KbError`); (5) the old file's journal, WAL and SHM files are still removed
+  before the rename, on purpose, so that a hot journal can never be replayed into the new file; if the rename then fails the old file
+  is complete, as the catalog's build also does. Noted: `catalog.rebuild` has the same fixed-name gap (already deferred). The
+  reviewer could not run anything and did not read the Result or all of the README.
+- **Not done / for the owner.** F3, F4 and F6 are known limits, stated in the README. The `catalog.rebuild` gap is deferred for the
+  owner to decide.

@@ -21,8 +21,11 @@ import json
 import math
 import os
 import re
+import shutil
 import sqlite3
+import stat
 import struct
+import tempfile
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +34,7 @@ from . import KbError, card, catalog, models, textutil
 from . import search as fulltext  # the limits of a result and the excerpt: the same as the search of the text
 
 INDEX_FILE = "vectors.sqlite"
+BUILD_PREFIX = ".vectors-build-"  # the folders in which a build is made; a killed build leaves one, and the next removes it
 FORMAT = 1
 COMMAND = "python3 -m kb card-vectors"
 FIELDS = ("neutral_problem", "neutral_approach", "neutral_provides")  # the fields of a card's model part that are embedded
@@ -109,7 +113,10 @@ def _check_shape(conn):
 
 
 def _meta(conn):
-    rows = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+    try:
+        rows = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+    except sqlite3.Error as e:
+        raise KbError(f"the file of vectors cannot be read ({e}): run `{COMMAND}` to build it again") from None
     if (set(rows) != set(_META_KEYS) or not all(isinstance(v, str) for v in rows.values()) or rows["format"] != str(FORMAT)
             or not _DIMENSION.fullmatch(rows["dimension"]) or not 1 <= int(rows["dimension"]) <= models.MAX_DIMENSION
             or not models._valid_model(rows["model"]) or not models._valid_model(rows["configured"]) or len(rows["built"]) > 40):
@@ -267,18 +274,24 @@ def build(store, cfg, again=False, launcher=None, root=None):
     model = made_model or (old_model if rows else None) or entry["model"]
     meta = {"format": str(FORMAT), "model": model, "configured": entry["model"], "dimension": str(entry["dimension"]),
             "built": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-    fresh = final + ".new"
     with catalog.lock(index_root):
         in_place = False
+        folder = None
         try:
-            for leftover in (fresh, fresh + "-journal"):
-                _remove(leftover, "a half-built file of vectors")
+            _clean_leftovers(index_root)
+            # the file is built in a folder of its own, private to the owner and with a name no one can know before it is made, so that
+            # nothing at a name that could be guessed is opened or made private; it is then renamed into place
+            folder = tempfile.mkdtemp(prefix=BUILD_PREFIX, dir=index_root)
+            identity = _identity(folder)
+            fresh = os.path.join(folder, INDEX_FILE)
             connect(fresh, create=True).close()
-            os.chmod(fresh, 0o600)  # the cards are the owner's, and so are the vectors made from them: private before it holds any
+            os.chmod(fresh, 0o600)  # the cards are the owner's, and so are the vectors made from them
             with closing(connect(fresh)) as conn:
                 _insert(conn, meta, rows)
                 conn.commit()
             store._guard()  # and the library is still there: if it went away part way, most of it was counted as unreadable
+            if _identity(folder) != identity:
+                raise KbError("the folder in which the file of vectors was built is not the one that was made; nothing was put in place")
             for stale in (final + "-journal", final + "-wal", final + "-shm"):
                 _remove(stale, "a file of the old vectors")
             os.replace(fresh, final)
@@ -286,14 +299,47 @@ def build(store, cfg, again=False, launcher=None, root=None):
         except sqlite3.Error as e:
             raise KbError(f"the file of vectors could not be written ({e})") from None
         finally:
-            if not in_place:  # whatever went wrong, the old file is as it was and no half-built file is left
-                for leftover in (fresh, fresh + "-journal"):
-                    try:
-                        os.remove(leftover)
-                    except OSError:
-                        pass
+            if folder is not None:  # whatever went wrong, the old file is as it was and no folder of the build is left
+                shutil.rmtree(folder, ignore_errors=True)
     return {**counts, "vectors": len(rows), "kept": len(rows) - len(made), "made": len(made), "texts_sent": len(todo), "model": model,
             "dimension": entry["dimension"], "replaced": reason is not None}
+
+
+def _identity(folder):
+    """`(device, inode)` of the folder just made for a build, which must be a real folder, not a link, owned by this user: whoever
+    can write in the index folder could rename it away and put a link at its name, and the build checks again before it puts the
+    file in place. This narrows that race; the file is made by SQLite through the folder's name, so it cannot close it."""
+    try:
+        info = os.lstat(folder)
+    except OSError as e:
+        raise KbError(f"the folder for the build cannot be read ({e.strerror})") from None
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise KbError("the folder made for the build is not a folder of this user's own; nothing was written")
+    return info.st_dev, info.st_ino
+
+
+def _clean_leftovers(index_root):
+    """Remove what an earlier build that was killed left, under the lock: a folder, a file or a link whose name begins with
+    BUILD_PREFIX, and the two fixed names (`vectors.sqlite.new` and its journal) that an earlier version of the build used. A link is
+    removed as a link, and its target is never entered or removed; nothing else in the index root is touched."""
+    final = path_of(index_root)
+    for path in (final + ".new", final + ".new-journal"):
+        _remove(path, "a half-built file of vectors")
+    try:
+        names = os.listdir(index_root)
+    except OSError as e:
+        raise KbError(f"the index folder cannot be read ({e.strerror})") from None
+    for name in names:
+        if not name.startswith(BUILD_PREFIX):
+            continue
+        path = os.path.join(index_root, name)
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError as e:
+            raise KbError(f"a leftover of an earlier build is in the way and cannot be removed ({e.strerror}): {path}") from None
 
 
 def _remove(path, what):

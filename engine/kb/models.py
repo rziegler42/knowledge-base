@@ -330,8 +330,18 @@ def _document(out):
         return None
 
 
+def _shown(value, limit):
+    """Text from a program that may be altered, as it is shown in a refusal: cleaned and cut, and not shown at all if it holds the
+    words of an untrusted-text marker (the same rule that blanks a title), a fixed text standing in its place."""
+    if not textutil.clean(value, limit):
+        return ""
+    return textutil.title(value, limit) or "[text withheld]"
+
+
 def _why_failed(doc):
-    parts = [textutil.clean(doc.get(k), 150) for k in ("error", "detail") if isinstance(doc.get(k), str)]
+    """The reason a bridge gave for a failure, cleaned and cut. It is text from a program that may be altered, so a reason that holds
+    the words of an untrusted-text marker is not shown (the same rule that blanks a title) and a fixed text stands in its place."""
+    parts = [_shown(doc.get(key), 150) for key in ("error", "detail") if isinstance(doc.get(key), str)]
     return ": ".join(p for p in parts if p) or "no reason given"
 
 
@@ -353,7 +363,7 @@ def _check(code, out, err):
     doc = _document(out)
     if doc is None:
         if code:
-            raise KbError(f"the bridge failed (exit {code}): {textutil.clean(err.decode('utf-8', 'replace'), 200) or 'no message'}")
+            raise KbError(f"the bridge failed (exit {code}): {_shown(err.decode('utf-8', 'replace'), 200) or 'no message'}")
         raise KbError("the bridge printed text that is not valid JSON")
     if not isinstance(doc, dict):
         raise KbError("the bridge's reply is not a JSON object")
@@ -478,7 +488,7 @@ def _check_embed(code, out, err, count, dimension):
     doc = _document(out)
     if doc is None:
         if code:
-            raise KbError(f"the bridge failed (exit {code}): {textutil.clean(err.decode('utf-8', 'replace'), 200) or 'no message'}")
+            raise KbError(f"the bridge failed (exit {code}): {_shown(err.decode('utf-8', 'replace'), 200) or 'no message'}")
         raise KbError("the bridge printed text that is not valid JSON")
     if not isinstance(doc, dict):
         raise KbError("the bridge's reply is not a JSON object")

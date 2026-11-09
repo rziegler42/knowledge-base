@@ -8,6 +8,7 @@ import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import closing
 from unittest import mock
@@ -381,6 +382,32 @@ class ConnectTest(VectorCase):
             self.assertIn("card-vectors", str(cm.exception))
             self.build()
 
+    def test_a_file_whose_meta_page_is_damaged_is_refused_with_the_command_and_a_build_replaces_it(self):
+        entry = models.registry(self.mcfg)["emb"]
+        for fill in (b"\x00", b"\xff"):
+            self.build(again=True)
+            with open(self.path(), "r+b") as f:
+                f.seek(4096)
+                f.write(fill * 4096)  # the second page, which holds the meta table
+            with self.subTest(fill=fill):
+                with self.assertRaises(KbError) as cm:
+                    with closing(vectors.connect(self.path(), readonly=True)) as conn:
+                        vectors.check_entry(conn, entry)
+                self.assertIn("card-vectors", str(cm.exception))
+                with self.assertRaises(KbError) as cm:
+                    vectors.search(self.store.cfg["index_root"], self.mcfg, "Q", launcher=self.launcher)
+                self.assertIn("card-vectors", str(cm.exception))
+                self.assertTrue(self.build()["replaced"])
+
+    def test_a_sqlite_error_on_the_meta_table_is_a_refusal_and_not_a_raw_error(self):
+        class Broken:
+            def execute(self, *args):
+                raise sqlite3.DatabaseError("database disk image is malformed")
+
+        with self.assertRaises(KbError) as cm:
+            vectors.check_entry(Broken(), models.registry(self.mcfg)["emb"])
+        self.assertIn("card-vectors", str(cm.exception))
+
     def test_a_missing_file_or_one_that_is_not_a_database_is_refused(self):
         with open(self.path(), "wb") as f:
             f.write(b"this is not a database at all" * 10)
@@ -465,18 +492,181 @@ class SafetyTest(VectorCase):
         self.assertEqual(self.stored(), before)
         self.assertFalse(os.path.exists(self.path() + ".new"))
 
-    def test_the_new_file_is_private_from_the_moment_it_holds_anything(self):
+    def build_dirs(self):
+        return sorted(n for n in os.listdir(self.store.cfg["index_root"]) if n.startswith(vectors.BUILD_PREFIX))
+
+    def test_the_new_file_is_private_from_the_moment_it_holds_anything_in_a_private_folder_of_the_index_root(self):
         self.carded(title="One", model=self.model_with("one"))
-        modes = []
+        seen = []
         real = vectors._insert
 
         def insert(conn, meta, rows):
-            modes.append(stat.S_IMODE(os.stat(self.path() + ".new").st_mode))
+            file = conn.execute("PRAGMA database_list").fetchone()[2]
+            folder = os.path.dirname(file)
+            seen.append((stat.S_IMODE(os.stat(file).st_mode), stat.S_IMODE(os.stat(folder).st_mode), os.path.dirname(folder),
+                         os.path.basename(folder).startswith(vectors.BUILD_PREFIX), os.path.basename(file)))
             return real(conn, meta, rows)
 
         with mock.patch.object(vectors, "_insert", insert):
             self.build()
-        self.assertEqual(modes, [0o600])
+        self.assertEqual(seen, [(0o600, 0o700, self.store.cfg["index_root"], True, "vectors.sqlite")])
+        self.assertEqual(self.build_dirs(), [])
+
+    def test_the_folder_of_a_build_has_a_name_that_is_not_the_same_twice(self):
+        self.carded(title="One", model=self.model_with("one"))
+        names = []
+        real = vectors._insert
+
+        def insert(conn, meta, rows):
+            names.append(os.path.dirname(conn.execute("PRAGMA database_list").fetchone()[2]))
+            return real(conn, meta, rows)
+
+        with mock.patch.object(vectors, "_insert", insert):
+            self.build()
+            self.build(again=True)
+        self.assertEqual(len(set(names)), 2)
+
+    def test_a_link_planted_at_the_old_fixed_names_after_the_leftovers_are_removed_is_not_followed(self):
+        self.carded(title="One", model=self.model_with("one"))
+        root = self.store.cfg["index_root"]
+        empty = os.path.join(self.base, "victim-empty")
+        with open(empty, "w"):
+            pass
+        os.chmod(empty, 0o666)
+        foreign = os.path.join(self.base, "victim-foreign.sqlite")
+        with closing(sqlite3.connect(foreign)) as conn:
+            conn.execute("CREATE TABLE precious (x TEXT)")
+            conn.execute("INSERT INTO precious VALUES ('keep')")
+            conn.commit()
+        os.chmod(foreign, 0o644)
+        journal_victim = os.path.join(self.base, "victim-journal")
+        with open(journal_victim, "w") as f:
+            f.write("keep")
+        real = vectors._clean_leftovers
+
+        def plant(index_root):
+            real(index_root)
+            os.symlink(empty, self.path() + ".new")
+            os.symlink(journal_victim, self.path() + ".new-journal")
+
+        for victim in (empty, foreign):
+            for name in (".new", ".new-journal"):
+                if os.path.lexists(self.path() + name):
+                    os.remove(self.path() + name)
+            os.remove(self.path()) if os.path.exists(self.path()) else None
+
+            def plant_one(index_root, victim=victim):
+                real(index_root)
+                os.symlink(victim, self.path() + ".new")
+                os.symlink(journal_victim, self.path() + ".new-journal")
+
+            with self.subTest(victim=victim), mock.patch.object(vectors, "_clean_leftovers", plant_one):
+                self.build()
+            self.assertEqual(len(self.stored()), 3)  # and the file of vectors is built and in place
+        self.assertEqual(os.stat(empty).st_size, 0)
+        self.assertEqual(stat.S_IMODE(os.stat(empty).st_mode), 0o666)
+        self.assertEqual(stat.S_IMODE(os.stat(foreign).st_mode), 0o644)
+        with closing(sqlite3.connect(foreign)) as conn:
+            self.assertEqual(conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall(), [("precious",)])
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT x FROM precious").fetchall(), [("keep",)])
+        with open(journal_victim) as f:
+            self.assertEqual(f.read(), "keep")
+
+    def test_a_folder_swapped_for_a_link_as_it_is_made_is_refused_and_the_target_is_not_written(self):
+        self.carded(title="One", model=self.model_with("one"))
+        victim = os.path.join(self.base, "victim-dir")
+        os.mkdir(victim)
+        real = tempfile.mkdtemp
+
+        def swapped(*args, **kw):
+            made = real(*args, **kw)
+            os.rename(made, made + "-moved")
+            os.symlink(victim, made)
+            return made
+
+        with mock.patch.object(vectors.tempfile, "mkdtemp", swapped):
+            with self.assertRaises(KbError):
+                self.build()
+        self.assertEqual(os.listdir(victim), [])
+        self.assertFalse(os.path.exists(self.path()))
+        self.build()  # and the next build removes what was left, link and folder, and builds
+        self.assertEqual(self.build_dirs(), [])
+        self.assertEqual(os.listdir(victim), [])
+
+    def test_a_folder_swapped_for_a_link_before_the_file_is_put_in_place_is_refused_and_the_old_file_stays(self):
+        self.carded(title="One", model=self.model_with("one"))
+        self.build()
+        before = self.stored()
+        self.carded(title="Two", model=self.model_with("two"))
+        victim = os.path.join(self.base, "victim-dir")
+        os.mkdir(victim)
+        with open(os.path.join(victim, "vectors.sqlite"), "w") as f:
+            f.write("evil")
+        root = self.store.cfg["index_root"]
+        real_guard, calls = self.store._guard, []
+
+        def guard():
+            real_guard()
+            calls.append(1)
+            if len(calls) == 2:  # the check made after the file is built and before it is put in place
+                folder = os.path.join(root, self.build_dirs()[0])
+                os.rename(folder, folder + "-moved")
+                os.symlink(victim, folder)
+
+        with mock.patch.object(self.store, "_guard", side_effect=guard):
+            with self.assertRaises(KbError) as cm:
+                self.build()
+        self.assertIn("folder", str(cm.exception))
+        self.assertEqual(self.stored(), before)
+        with open(os.path.join(victim, "vectors.sqlite")) as f:
+            self.assertEqual(f.read(), "evil")
+        self.build()
+        self.assertEqual(self.build_dirs(), [])
+
+    def test_the_leftovers_of_a_killed_build_are_removed_and_nothing_else(self):
+        self.carded(title="One", model=self.model_with("one"))
+        root = self.store.cfg["index_root"]
+        os.mkdir(os.path.join(root, ".vectors-build-killed"))
+        with open(os.path.join(root, ".vectors-build-killed", "vectors.sqlite"), "w") as f:
+            f.write("half")
+        with open(os.path.join(root, ".vectors-build-file"), "w") as f:
+            f.write("half")
+        outside = os.path.join(self.base, "outside-folder")
+        os.mkdir(outside)
+        with open(os.path.join(outside, "keep.txt"), "w") as f:
+            f.write("keep")
+        os.symlink(outside, os.path.join(root, ".vectors-build-link"))
+        os.symlink(outside, os.path.join(root, ".vectors-build-killed", "inner-link"))
+        for name in ("vectors.sqlite.new", "vectors.sqlite.new-journal"):  # the fixed names an earlier version of the build used
+            with open(os.path.join(root, name), "w") as f:
+                f.write("old")
+        keep = ["vectors-build-x", ".vectors-builder", ".vectors-build", "notes.txt", "cards.sqlite.new"]
+        for name in keep:
+            with open(os.path.join(root, name), "w") as f:
+                f.write("mine")
+        os.mkdir(os.path.join(root, "vectors-build-dir"))
+        self.build()
+        left = set(os.listdir(root))
+        for name in (".vectors-build-killed", ".vectors-build-file", ".vectors-build-link", "vectors.sqlite.new", "vectors.sqlite.new-journal"):
+            self.assertNotIn(name, left)
+        for name in keep + ["vectors-build-dir"]:
+            self.assertIn(name, left)
+        with open(os.path.join(outside, "keep.txt")) as f:  # a link's target is never removed or entered
+            self.assertEqual(f.read(), "keep")
+        self.assertEqual(self.build_dirs(), [])
+
+    def test_a_failure_leaves_no_folder_of_the_build(self):
+        self.carded(title="One", model=self.model_with("one"))
+        with mock.patch.object(vectors, "_insert", side_effect=sqlite3.OperationalError("disk I/O error")):
+            with self.assertRaises(KbError):
+                self.build()
+        self.assertEqual(self.build_dirs(), [])
+        with mock.patch.object(vectors, "_insert", side_effect=RuntimeError("something else")):
+            with self.assertRaises(RuntimeError):
+                self.build()
+        self.assertEqual(self.build_dirs(), [])
+        self.assertFalse(os.path.exists(self.path()))
 
     def test_a_text_that_cannot_be_sent_leaves_its_card_out_and_counts_it_and_the_others_go_on(self):
         self.two()
