@@ -7,6 +7,7 @@ returns only the entry the setting names. Nothing here retries or batches. What 
 untrusted data, and this module only checks that it has the bridge's shape. The server's address is in the workbench's own
 endpoint file; the registry holds a server name only."""
 import json
+import math
 import os
 import re
 import stat
@@ -32,12 +33,24 @@ _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _SERVER = _NAME
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._:-]*"
 _MODEL = re.compile(_SEGMENT + "(?:/" + _SEGMENT + ")*")  # the bridge's rule for a model name: segments joined by a slash
-_KEYS = ("bridge", "server", "model", "max_output", "thinking", "timeout")
+_KEYS = ("bridge", "server", "model", "max_output", "thinking", "timeout", "kind", "dimension")
+KINDS = ("chat", "embedding")
 _REQUIRED = ("bridge", "server", "model")
 MAX_MAX_OUTPUT = 200000
 MAX_TIMEOUT = 3600  # the bridge refuses a longer one
 MAX_MODEL = 128
 MAX_SCHEMA = 65536  # the bridge reads a schema file of at most this many bytes
+MAX_DIMENSION = 8192   # the largest vector the embed command of the bridge returns
+EMBED_CONTRACT = 1     # the version of the embedding contract of the bridge, apart from the bridge contract
+MAX_TEXT = 32768       # the bridge's limit on one text to embed, in bytes
+MAX_TEXTS = 100       # and on the texts of one call
+MAX_EMBED_TEXTS = 100_000  # the most texts one call of `embed` takes (it sends them in as many calls as the bridge needs)
+BATCH_BYTES = 200_000  # the bytes of one batch as sent (the bridge reads at most 262144)
+REPLY_BYTES = 1_500_000  # what one batch may be expected to print (the engine reads at most MAX_OUT)
+NUMBER_BYTES = 26      # what one number of a vector takes as printed, at most: 24 characters (`-1.2345678901234567e-100`) and `, `
+MAX_COMPONENT = 1e6    # a number of a vector larger than this in size is refused
+MIN_SCALE = 1e-30      # and so is a vector whose largest number is smaller than this (its squares would vanish in a cosine)
+MAX_EMBED_NUMBERS = 10_000_000  # the most numbers (texts times the dimension) one call of `embed` holds in memory
 SCHEMA_DIR = ("engine", "kb", "schemas")  # where a job's schema file is kept, relative to the project root
 _SCHEMA_NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\.json")
 _VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
@@ -68,18 +81,31 @@ def _entry(name, e):
         raise KbError(f"models.{name}.server is not a server name")
     if not _valid_model(e["model"]):
         raise KbError(f"models.{name}.model is not a model identifier")
+    kind = e.get("kind", "chat")
+    if not isinstance(kind, str) or kind not in KINDS:
+        raise KbError(f"models.{name}.kind must be one of {', '.join(KINDS)}")
+    if kind == "chat":
+        if "dimension" in e:
+            raise KbError(f"models.{name}.dimension belongs to an embedding entry")
+    else:
+        if not _count(e.get("dimension"), 1, MAX_DIMENSION):
+            raise KbError(f"models.{name}.dimension must be a whole number from 1 to {MAX_DIMENSION}")
+        for key in ("max_output", "thinking"):
+            if key in e:
+                raise KbError(f"models.{name}.{key} belongs to a chat entry")
     if "max_output" in e and not _count(e["max_output"], 1, MAX_MAX_OUTPUT):
         raise KbError(f"models.{name}.max_output must be a whole number from 1 to {MAX_MAX_OUTPUT}")
     if "thinking" in e and e["thinking"] not in ("on", "off"):
         raise KbError(f"models.{name}.thinking must be on or off")
     if "timeout" in e and not _count(e["timeout"], 1, MAX_TIMEOUT):
         raise KbError(f"models.{name}.timeout must be a whole number of seconds from 1 to {MAX_TIMEOUT}")
-    return dict(e)
+    return dict(e, kind=kind)
 
 
 REQUIRED_TASKS = ("card-notes", "card", "card-check")  # the kinds of model work that a card needs; the engine attaches no model to any of them
 OPTIONAL_TASKS = ("card-more",)  # the kinds that may be left unset: the work is then not done, and that is said
 TASKS = REQUIRED_TASKS + OPTIONAL_TASKS
+EMBED_TASKS = ("card-embed",)  # the kind of work that turns text into vectors: it names an entry of the kind embedding, no card task may
 
 
 def _settings(cfg, entries):
@@ -90,11 +116,13 @@ def _settings(cfg, entries):
         raise KbError("the config key tasks is not an object")
     out = {}
     for task, name in tasks.items():
-        if task not in TASKS:
+        if task not in TASKS + EMBED_TASKS:
             raise KbError(f"the config sets a model for {textutil.clean(task, 40)!r}, which is not a kind of work the engine knows "
-                          f"({', '.join(TASKS)})")
+                          f"({', '.join(TASKS + EMBED_TASKS)})")
         if not isinstance(name, str) or name not in entries:
             raise KbError(f"tasks.{task} in the config does not name a listed model")
+        if entries[name]["kind"] != ("embedding" if task in EMBED_TASKS else "chat"):
+            raise KbError(f"tasks.{task} in the config must name an entry of the kind {'embedding' if task in EMBED_TASKS else 'chat'}")
         out[task] = name
     return out
 
@@ -120,8 +148,8 @@ def choose(cfg, task):
     entries = registry(cfg)
     if cfg.get("models_on") is not True:
         raise KbError("model work is off: set models_on to true in the config to turn it on")
-    if not isinstance(task, str) or task not in TASKS:
-        raise KbError(f"{textutil.clean(task, 40)!r} is not a kind of work the engine knows ({', '.join(TASKS)})")
+    if not isinstance(task, str) or task not in TASKS + EMBED_TASKS:
+        raise KbError(f"{textutil.clean(task, 40)!r} is not a kind of work the engine knows ({', '.join(TASKS + EMBED_TASKS)})")
     settings = _settings(cfg, entries)
     if task not in settings:
         raise KbError(f"no model is set for the task {task}: set tasks.{task} in the config to the name of a listed model")
@@ -146,8 +174,8 @@ def listing(cfg):
     rows = []
     for name in sorted(entries):
         e = entries[name]
-        row = {"name": name, "bridge": e["bridge"]}
-        for key in ("max_output", "thinking", "timeout"):
+        row = {"name": name, "bridge": e["bridge"], "kind": e["kind"]}
+        for key in ("max_output", "thinking", "timeout", "dimension"):
             if key in e:
                 row[key] = e[key]
         rows.append(row)
@@ -395,6 +423,8 @@ def call(cfg, name, prompt, launcher=None, root=None, schema=None):
         raise KbError("model work is off: set models_on to true in the config to turn it on")
     if not isinstance(name, str) or name not in entries:
         raise KbError(f"the model {textutil.clean(name, 40)!r} is not listed in the config")
+    if entries[name]["kind"] != "chat":
+        raise KbError(f"the model {textutil.clean(name, 40)!r} is an embedding entry; a prompt is sent to a chat entry")
     data = _prompt_bytes(prompt)
     root = root or _project_root()
     relative = _schema_path(root, schema) if schema is not None else None
@@ -406,6 +436,117 @@ def call(cfg, name, prompt, launcher=None, root=None, schema=None):
     if why == "time":
         raise KbError(f"the call ran past its time limit of {limit} seconds and was stopped")
     return _check(code, out, err)
+
+
+def _batches(texts, dimension):
+    """The texts in order as groups for the bridge: at most MAX_TEXTS in a group, at most BATCH_BYTES as sent, and at most as many as
+    their vectors, of `dimension` numbers each, can be read back from one reply (REPLY_BYTES). No group is empty."""
+    most = max(1, min(MAX_TEXTS, REPLY_BYTES // (dimension * NUMBER_BYTES)))
+    groups, group, size = [], [], 0
+    for text in texts:
+        need = len(json.dumps(text)) + 2
+        if group and (len(group) >= most or size + need > BATCH_BYTES):
+            groups.append(group)
+            group, size = [], 0
+        group.append(text)
+        size += need
+    if group:
+        groups.append(group)
+    return groups
+
+
+def _vector(vector, dimension):
+    if not isinstance(vector, list):
+        raise KbError("the bridge's reply holds a vector that is not a list of numbers")
+    if len(vector) != dimension:
+        raise KbError(f"the bridge's reply holds a vector that does not have the dimension of the entry ({dimension})")
+    out = []
+    for x in vector:
+        if type(x) is bool or not isinstance(x, (int, float)) or (isinstance(x, float) and not math.isfinite(x)):
+            raise KbError("the bridge's reply holds a vector with something that is not a finite number")
+        if abs(x) > MAX_COMPONENT:
+            raise KbError("the bridge's reply holds a vector with a number that is out of range")
+        out.append(float(x))
+    if not any(out):
+        raise KbError("the bridge's reply holds a vector of zeros, which has no direction")
+    if max(abs(x) for x in out) < MIN_SCALE:
+        raise KbError("the bridge's reply holds a vector whose numbers are all too small to compare (out of range)")
+    return out
+
+
+def _check_embed(code, out, err, count, dimension):
+    doc = _document(out)
+    if doc is None:
+        if code:
+            raise KbError(f"the bridge failed (exit {code}): {textutil.clean(err.decode('utf-8', 'replace'), 200) or 'no message'}")
+        raise KbError("the bridge printed text that is not valid JSON")
+    if not isinstance(doc, dict):
+        raise KbError("the bridge's reply is not a JSON object")
+    if type(doc.get("contract")) is not int or doc["contract"] != EMBED_CONTRACT:
+        raise KbError(f"the bridge's reply is not embedding contract version {EMBED_CONTRACT}")
+    if type(doc.get("ok")) is not bool or doc.get("vendor") != VENDOR:
+        raise KbError(f"the bridge's reply does not have the shape of embedding contract version {EMBED_CONTRACT}")
+    if not doc["ok"]:
+        raise KbError("the bridge could not answer: " + _why_failed(doc))
+    if code:
+        raise KbError(f"the bridge reported success but exited with {code}")
+    model = doc.get("model")
+    if not _valid_model(model):
+        raise KbError("the bridge's reply names no valid model")
+    if type(doc.get("dimension")) is not int or doc["dimension"] != dimension:
+        raise KbError(f"the bridge's reply does not give the dimension of the entry ({dimension})")
+    vectors = doc.get("vectors")
+    if not isinstance(vectors, list) or len(vectors) != count:
+        raise KbError(f"the bridge's reply does not hold {count} vectors for the {count} texts")
+    return model, [_vector(v, dimension) for v in vectors]
+
+
+def embed(cfg, name, texts, launcher=None, root=None):
+    """Turn `texts` into vectors with the embedding entry listed as `name` and return {"model", "dimension", "vectors"}: the model as
+    the bridge reported it, the dimension of the entry, and one vector of floats for each text, in order. The texts go to the bridge
+    in as many calls as it needs (`_batches`). Every reply is checked: the same model each time, the number of vectors, the dimension
+    of the entry for each, finite numbers of a sensible size, no vector of zeros. One reply that is wrong refuses the whole call and
+    gives no vectors. The vectors are model output and untrusted data; this only checks their shape."""
+    entries = registry(cfg)
+    if cfg.get("models_on") is not True:
+        raise KbError("model work is off: set models_on to true in the config to turn it on")
+    if not isinstance(name, str) or name not in entries:
+        raise KbError(f"the model {textutil.clean(name, 40)!r} is not listed in the config")
+    entry = entries[name]
+    if entry["kind"] != "embedding":
+        raise KbError(f"the model {textutil.clean(name, 40)!r} is a chat entry; texts are embedded with an embedding entry")
+    if not isinstance(texts, list) or not texts or len(texts) > MAX_EMBED_TEXTS:
+        raise KbError(f"the texts to embed are a list of 1 to {MAX_EMBED_TEXTS} texts")
+    for n, text in enumerate(texts, start=1):
+        if not isinstance(text, str) or not text.strip():
+            raise KbError(f"text {n} to embed is not text with a character that is not white space")
+        try:
+            size = len(text.encode("utf-8"))
+        except UnicodeEncodeError:
+            raise KbError(f"text {n} to embed holds a character that cannot be sent") from None
+        if size > MAX_TEXT:
+            raise KbError(f"text {n} to embed is larger than the bridge takes ({MAX_TEXT} bytes)")
+    if len(texts) * entry["dimension"] > MAX_EMBED_NUMBERS:
+        raise KbError(f"the vectors of {len(texts)} texts of {entry['dimension']} numbers would not fit in memory; embed fewer texts at a time")
+    root = root or _project_root()
+    argv = [_launcher(launcher), "run", BRIDGE, "embed", "--server", entry["server"], "--model", entry["model"]]
+    if "timeout" in entry:
+        argv += ["--timeout", str(entry["timeout"])]
+    limit = entry.get("timeout", DEFAULT_TIMEOUT) + GRACE
+    vectors, model = [], None
+    for group in _batches(texts, entry["dimension"]):
+        data = json.dumps({"texts": group}).encode("ascii")
+        code, out, err, why = _run(argv, data, root, limit)
+        if why == "output":
+            raise KbError(f"the bridge printed too much (over {MAX_OUT} bytes); the call was stopped")
+        if why == "time":
+            raise KbError(f"the call ran past its time limit of {limit} seconds and was stopped")
+        got_model, got = _check_embed(code, out, err, len(group), entry["dimension"])
+        if model is not None and got_model != model:
+            raise KbError("the model that the bridge reported changed between the batches of one call")
+        model = got_model
+        vectors += got
+    return {"model": model, "dimension": entry["dimension"], "vectors": vectors}
 
 
 _TYPE_KEYS = {"string": {"type", "max", "optional"}, "strings": {"type", "min_items", "max_items", "max", "optional"},

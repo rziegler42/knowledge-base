@@ -328,6 +328,43 @@ unchanged in D and again at the end.
   only. The plan was amended accordingly (Goal, Scope, Non-goals, Assumptions, completion criterion 5, Increments C, D and E,
   Risks, Deferred work; Increment A's text is unchanged because it measured all five fields) and waits for the owner's new
   approval before Increment B. The calibration subset is still the owner's to label.
-- Provenance: sample drawn and labelled on 2026-11-09 at commit `aa58cc8` plus the uncommitted change to `engine/kb/cardsample.py`,
-  `engine/kb/__main__.py`, `engine/tests/test_cardsample.py` and `engine/README.md`; the labelling model was Claude Opus through
-  subagents; the sample files are `trial/sampleF` in the owner's data folder (untracked). `wb run code-work check`: see below.
+- Provenance: sample drawn and labelled on 2026-11-09 at commit `aa58cc8` plus the change to `engine/kb/cardsample.py`,
+  `engine/kb/__main__.py`, `engine/tests/test_cardsample.py` and `engine/README.md` (committed as `7fbd91b`); the labelling model was
+  Claude Opus through subagents; the sample files are `trial/sampleF` in the owner's data folder (untracked).
+
+### Increment B — Call the embedding model from the engine (done; not committed)
+
+- **What was built** (`engine/kb/models.py`): an entry may have `kind` (`chat`, the default, or `embedding`); an embedding entry
+  has a `dimension` from 1 to 8192 and no `max_output` or `thinking`, and a chat entry has no `dimension`. The kind of work
+  `card-embed` names an embedding entry, and a card task cannot name one; `call` refuses an embedding entry. `embed(cfg, name, texts)`
+  sends the texts to `wb run ask-ollama embed` as one JSON object on standard input, in batches (`_batches`: at most 100 texts, about
+  200 KB, and fewer as the dimension grows so that a reply of at most 1.5 MB can be read back), checks each reply (embedding contract
+  1, `ok`, vendor, a valid model that is the same in every batch, the dimension of the reply and of the entry, as many vectors as
+  texts, every number a finite non-boolean of size between `1e-30` (for the largest) and `1e6`, no vector of zeros) and refuses the
+  whole call if one reply is wrong. A text must be non-blank text of at most 32768 bytes, and a call is refused before anything is
+  sent if a text is wrong, if there are over 100,000 texts, or if texts times the dimension is over 10 million numbers. The spec
+  (`docs/specs/models.md`, "The embedding model") and the README ("Calling a model") say what is built.
+- **A deviation from the steps as approved.** Step 2 says to add `card-embed` to `OPTIONAL_TASKS`. I made a separate `EMBED_TASKS`
+  instead, so `models.TASKS` stays the card kinds (a test in `test_cardmake` equates it with the card jobs), `optional()` stays
+  for the card tasks, and `choose(cfg, "card-embed")` is refused with the key to set when it is unset, which is what Increment C needs.
+  The outcome is the one the step names.
+- **Tests first, seen to fail** (54 errors and a failure before any code); then `python3 -W error::ResourceWarning -m unittest
+  engine.tests.test_models engine.tests.test_setup engine.tests.test_cardmake engine.tests.test_cardqueue engine.tests.test_cardstate`
+  gave 478 tests, OK. The plan names `test_models` and `test_setup`; I also ran `test_cardmake`, `test_cardqueue` and `test_cardstate`
+  because the registry now returns a `kind` for every entry and checks the kind of the entry a task names, which those tests use. No
+  call was made to the owner's server (a fake bridge answers).
+- **Deliberate breaks**, each from green: 27 of the checks above (the kind, the dimension, the kind of an entry for a task and for a
+  call, each limit of a batch, the count of vectors, the dimension of the entry and of a vector, zeros, tiny and huge numbers,
+  booleans, whole numbers kept as numbers, the model name and a change of model between batches, the contract, `ok`, the size of a
+  text, blank texts, the memory bound) were each broken and each caught.
+- **Review.** The read-only `reviewer` agent, one exchange of six: no blocking finding. Applied: (a) the memory held by one call was
+  not bounded, so a call is refused when texts times the dimension is over 10 million; (b) a vector of tiny numbers passed the
+  check for zeros but its squares would vanish in a cosine, so a vector whose largest number is under `1e-30` is refused; (c) the
+  count of bytes a printed number takes was 24 and is 26, which changes a batch at dimension 1024 from 61 to 56 texts. Noted, not
+  changed: the deviation above (recorded here); the model the bridge reports is not compared with the entry's name, because a server
+  may report `name:latest`, and the store of Increment C records the name the bridge reported; the time limit applies to each batch
+  and not to a whole call (a stalled server costs one limit before the call is refused, a large call is many batches). The reviewer
+  did not read the tests, the README or the spec; it could not check the bridge's real behaviour or the real size of a reply at
+  dimension 8192, which Increment E shows.
+- **Not done / for the owner.** A security review has not been run: this increment starts a subprocess and parses output from a model
+  server, so it is a place to look; the reviewer named no concrete exposure. It runs only if the owner asks.

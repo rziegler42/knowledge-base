@@ -416,8 +416,8 @@ The engine can send one prompt to a model you have listed and take back one chec
 Ollama bridge (`wb run ask-ollama ask`), which it starts as a separate program with an argument list and no shell; the prompt goes
 in on standard input and never as an argument. The bridge, not the engine, holds the server's address, in the workbench's own
 endpoint file. The engine prefers no model: which entry does which kind of work is the `tasks` setting of the config (see
-[Cards](#cards)). Nothing here retries, batches or makes embeddings, and no stage calls a model on its own; only the `cards` command
-and `model-try` do.
+[Cards](#cards)). Nothing here retries, and no stage calls a model on its own; only the `cards` command and `model-try` do. The
+engine can also turn texts into vectors with an embedding entry (below); no command uses that yet.
 
 The registry is the keys `models` and `models_on` of the owner-only config (and `tasks`, described under Cards). Edit the file by
 hand; nothing in the engine writes it:
@@ -434,6 +434,25 @@ hand; nothing in the engine writes it:
   refuses the whole registry. With `models_on` missing or anything but `true`, model work is off.
 - `python3 -m kb models` lists the names, the options, the switch and whether the `wb` launcher is found. It makes no call and
   prints no server or model name.
+- **An embedding entry** has `"kind": "embedding"` and a `dimension` (a whole number from 1 to 8192: the length of the vectors
+  its model returns), and may have `timeout`; it may not have `max_output` or `thinking`, and a chat entry (the default `"kind":
+  "chat"`) may not have a `dimension`. The kind of work `card-embed` in `tasks` names an embedding entry, and a card task cannot
+  name one:
+
+  ```json
+  "models": {"emb": {"bridge": "ask-ollama", "server": "<server name>", "model": "<embedding model name>", "kind": "embedding", "dimension": 1024}},
+  "tasks": {"card-embed": "emb"}
+  ```
+
+  In code, `kb.models.embed(cfg, name, texts)` sends the texts to `wb run ask-ollama embed` (embedding contract 1) as one JSON object
+  on standard input, in as many calls as the bridge needs (at most 100 texts and about 200 KB a call, and fewer when the vectors
+  are long, so that a reply can be read), and returns the model the bridge reported, the dimension and one vector of floats for
+  each text, in order. A text must have a character that is not white space and be at most 32768 bytes. Every reply is checked:
+  the same model for each call, as many vectors as texts, the entry's `dimension` for each, finite numbers of a size below a
+  million, and no vector of zeros (it has no direction) or of numbers all smaller than `1e-30` (their squares vanish). One wrong
+  reply refuses the whole call. A call whose vectors (texts times the dimension) would be more than 10 million numbers is
+  refused before anything is sent. The vectors are model output and
+  are untrusted data; this only checks their shape.
 - `printf '<prompt>' | python3 -m kb model-try <name>` sends the prompt (at most 256 KB of UTF-8) and prints the answer. The answer
   is the model's text, so it is printed between the untrusted-text markers, with a record of the model the server reported, the
   registry name, the prompt version, the UTC date and the token counts. If the answer holds the words of a marker it is withheld.

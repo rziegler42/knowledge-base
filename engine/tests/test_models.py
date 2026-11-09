@@ -781,6 +781,343 @@ class TaskTest(Base):
         self.assertEqual(sorted(models.registry(with_tasks({"card": "local"}))), ["local", "other"])
 
 
+def embedding(**over):
+    e = {"bridge": "ask-ollama", "server": "srv", "model": "bge-m3:latest", "kind": "embedding", "dimension": 4}
+    e.update(over)
+    return e
+
+
+class EmbeddingRegistryTest(Base):
+    """An entry of the kind `embedding` and the kind of work `card-embed` that names one."""
+
+    def refused_registry(self, cfg):
+        with self.assertRaises(KbError):
+            models.registry(cfg)
+
+    def test_an_embedding_entry_is_accepted_and_is_listed_without_a_server_or_model_name(self):
+        cfg = config(local=entry(), emb=embedding(model="model-secret:1", server="srv-secret", dimension=1024, timeout=90))
+        reg = models.registry(cfg)
+        self.assertEqual(reg["emb"]["kind"], "embedding")
+        self.assertEqual(reg["emb"]["dimension"], 1024)
+        self.assertEqual(reg["local"]["kind"], "chat")
+        rows = {row["name"]: row for row in models.listing(cfg)["models"]}
+        self.assertEqual((rows["emb"]["kind"], rows["emb"]["dimension"]), ("embedding", 1024))
+        self.assertEqual(rows["local"]["kind"], "chat")
+        self.assertNotIn("secret", json.dumps(models.listing(cfg)))
+
+    def test_a_chat_entry_may_say_so_and_has_no_dimension(self):
+        self.assertEqual(models.registry(config(local=entry(kind="chat")))["local"]["kind"], "chat")
+        self.refused_registry(config(local=entry(dimension=4)))
+        self.refused_registry(config(local=entry(kind="chat", dimension=4)))
+
+    def test_a_kind_that_is_not_chat_or_embedding_is_refused(self):
+        for value in ("", "chat ", "Embedding", "embed", None, 5, True, ["chat"], {"a": 1}):
+            with self.subTest(value=value):
+                self.refused_registry(config(local=embedding(kind=value)))
+
+    def test_an_embedding_entry_needs_a_dimension_the_bridge_can_return(self):
+        e = embedding()
+        del e["dimension"]
+        self.refused_registry(config(emb=e))
+        for value in (0, -1, 1.5, "4", True, None, 8193, 10 ** 9, [4]):
+            with self.subTest(value=value):
+                self.refused_registry(config(emb=embedding(dimension=value)))
+        for value in (1, 8192):
+            self.assertEqual(models.registry(config(emb=embedding(dimension=value)))["emb"]["dimension"], value)
+
+    def test_an_embedding_entry_has_no_key_that_only_a_chat_entry_has(self):
+        for key, value in (("max_output", 500), ("thinking", "off")):
+            with self.subTest(key=key):
+                self.refused_registry(config(emb=embedding(**{key: value})))
+
+    def test_an_embedding_entry_keeps_the_checks_of_every_entry(self):
+        for field in ("server", "model"):
+            for value in ("-x", "a b", "a\nb", "", "../x", 5, None):
+                with self.subTest(field=field, value=value):
+                    self.refused_registry(config(emb=embedding(**{field: value})))
+        for value in (0, 3601, 1.5, True):
+            with self.subTest(timeout=value):
+                self.refused_registry(config(emb=embedding(timeout=value)))
+        self.refused_registry(config(emb=embedding(bridge="ask-codex")))
+
+    def test_the_kind_of_work_for_embeddings_is_named_in_the_engine_and_is_not_one_of_the_card_tasks(self):
+        self.assertEqual(models.EMBED_TASKS, ("card-embed",))
+        self.assertNotIn("card-embed", models.TASKS)
+        self.assertNotIn("card-embed", models.REQUIRED_TASKS)
+
+    def test_card_embed_names_the_embedding_entry(self):
+        cfg = with_tasks({"card-embed": "emb"}, local=entry(), emb=embedding())
+        self.assertEqual(models.choose(cfg, "card-embed")[0], "emb")
+        self.assertEqual(models.listing(cfg)["tasks"], {"card-embed": "emb"})
+
+    def test_card_embed_cannot_name_a_chat_entry_and_a_card_task_cannot_name_an_embedding_entry(self):
+        self.refused_registry(with_tasks({"card-embed": "local"}, local=entry(), emb=embedding()))
+        for task in ("card-notes", "card", "card-check", "card-more"):
+            with self.subTest(task=task):
+                self.refused_registry(with_tasks({task: "emb"}, local=entry(), emb=embedding()))
+
+    def test_card_embed_with_no_setting_is_refused_with_the_key_to_set(self):
+        cfg = with_tasks({"card": "local"}, local=entry(), emb=embedding())
+        with self.assertRaises(KbError) as cm:
+            models.choose(cfg, "card-embed")
+        self.assertIn("tasks.card-embed", str(cm.exception))
+
+    def test_card_embed_is_refused_when_model_work_is_off_and_is_not_an_optional_card_task(self):
+        cfg = with_tasks({"card-embed": "emb"}, local=entry(), emb=embedding())
+        with self.assertRaises(KbError):
+            models.optional(cfg, "card-embed")
+        off = dict(cfg, models_on=False)
+        with self.assertRaises(KbError):
+            models.choose(off, "card-embed")
+
+    def test_a_chat_call_to_an_embedding_entry_is_refused_before_anything_runs(self):
+        with self.assertRaises(KbError):
+            models.call(config(emb=embedding()), "emb", "q", launcher=self.launcher, root=self.root)
+        self.assertIsNone(self.seen("args.json"))
+
+
+FAKE_EMBED = """#!{python}
+import json, os, sys
+here = os.path.dirname(os.path.abspath(__file__))
+plan = json.load(open(os.path.join(here, "plan.json")))
+args = sys.argv[1:]
+data = sys.stdin.buffer.read()
+with open(os.path.join(here, "calls.jsonl"), "a") as f:
+    f.write(json.dumps({{"args": args, "stdin": data.decode("utf-8")}}) + "\\n")
+texts = json.loads(data)["texts"]
+dim = plan.get("dim", 4)
+def vec(t):
+    base = sum(map(ord, t))
+    return [((base * (i + 3)) % 97 + 1) / 97.0 for i in range(dim)]
+vectors = [vec(t) for t in texts]
+mode = plan.get("mode")
+out = {{"contract": 1, "ok": True, "vendor": "ollama", "model": plan.get("model", "bge-m3:latest"), "dimension": dim,
+       "vectors": vectors, "usage": {{"input_tokens": 1}}}}
+if plan.get("bad_call") is not None and len(open(os.path.join(here, "calls.jsonl")).readlines()) == plan["bad_call"]:
+    mode = plan["bad_mode"]
+if mode == "short":
+    out["vectors"] = vectors[:-1]
+elif mode == "extra":
+    out["vectors"] = vectors + [vectors[0]]
+elif mode == "ragged":
+    out["vectors"][-1] = vectors[-1][:-1]
+elif mode == "dimension_says":
+    out["dimension"] = dim + 1
+elif mode == "nan":
+    out["vectors"][0][0] = float("nan")
+elif mode == "inf":
+    out["vectors"][0][0] = float("inf")
+elif mode == "ints":
+    out["vectors"] = [[1, 2, 3, 4] for _ in texts]
+elif mode == "sleep":
+    import time
+    time.sleep(5)
+elif mode == "huge":
+    out["vectors"][0][0] = 1e300
+elif mode == "tiny":
+    out["vectors"][0] = [1e-200] * dim
+elif mode == "bigint":
+    out["vectors"][0][0] = 10 ** 400
+elif mode == "zero":
+    out["vectors"][0] = [0.0] * dim
+elif mode == "bool":
+    out["vectors"][0][0] = True
+elif mode == "text":
+    out["vectors"][0][0] = "0.5"
+elif mode == "null":
+    out["vectors"][0][0] = None
+elif mode == "not_list":
+    out["vectors"][0] = "abc"
+elif mode == "nomodel":
+    del out["model"]
+elif mode == "badmodel":
+    out["model"] = "a b"
+elif mode == "othermodel":
+    out["model"] = "other:1"
+elif mode == "notok":
+    out = {{"contract": 1, "ok": False, "vendor": "ollama", "error": "model_unavailable", "detail": "no such model"}}
+elif mode == "contract2":
+    out["contract"] = 2
+elif mode == "vendor":
+    out["vendor"] = "other"
+elif mode == "nodim":
+    del out["dimension"]
+elif mode == "text_out":
+    sys.stdout.write("not json")
+    sys.exit(0)
+elif mode == "exit":
+    sys.exit(3)
+elif mode == "flood":
+    sys.stdout.write("x" * 3000000)
+    sys.exit(0)
+sys.stdout.write(json.dumps(out))
+"""
+
+
+def fake_vector(text, dim=4):
+    base = sum(map(ord, text))
+    return [((base * (i + 3)) % 97 + 1) / 97.0 for i in range(dim)]
+
+
+class EmbedBase(Base):
+    def setUp(self):
+        super().setUp()
+        with open(self.launcher, "w") as f:
+            f.write(FAKE_EMBED.format(python=sys.executable))
+        os.chmod(self.launcher, 0o700)
+        self.plan()
+        self.cfg = config(emb=embedding())
+
+    def calls(self):
+        path = os.path.join(self.dir, "calls.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f]
+
+    def embed(self, texts, cfg=None, name="emb"):
+        return models.embed(cfg or self.cfg, name, texts, launcher=self.launcher, root=self.root)
+
+    def refused(self, texts, message=None, cfg=None):
+        with self.assertRaises(KbError) as cm:
+            self.embed(texts, cfg=cfg)
+        if message:
+            self.assertIn(message, str(cm.exception))
+        return str(cm.exception)
+
+
+class EmbedCallTest(EmbedBase):
+    def test_a_good_call_sends_the_argument_list_and_the_texts_as_one_object_on_standard_input(self):
+        got = self.embed(["first text", "café ☃"])
+        (call,) = self.calls()
+        self.assertEqual(call["args"], ["run", "ask-ollama", "embed", "--server", "srv", "--model", "bge-m3:latest"])
+        self.assertEqual(json.loads(call["stdin"]), {"texts": ["first text", "café ☃"]})
+        self.assertEqual(got["model"], "bge-m3:latest")
+        self.assertEqual(got["dimension"], 4)
+        self.assertEqual(got["vectors"], [fake_vector("first text"), fake_vector("café ☃")])
+        self.assertTrue(all(type(x) is float for v in got["vectors"] for x in v))
+
+    def test_the_texts_are_never_an_argument(self):
+        self.embed(["secret-words-in-the-text"])
+        self.assertNotIn("secret-words-in-the-text", " ".join(self.calls()[0]["args"]))
+
+    def test_the_timeout_becomes_an_option(self):
+        self.embed(["x"], cfg=config(emb=embedding(timeout=90)))
+        args = self.calls()[0]["args"]
+        self.assertEqual(args[args.index("--timeout") + 1], "90")
+
+    def test_whole_numbers_in_a_vector_are_accepted_and_returned_as_floats(self):
+        self.plan(mode="ints")
+        got = self.embed(["x", "y"])
+        self.assertEqual(got["vectors"], [[1.0, 2.0, 3.0, 4.0]] * 2)
+        self.assertTrue(all(type(x) is float for v in got["vectors"] for x in v))
+
+    def test_many_texts_go_in_several_calls_in_order_and_none_is_dropped_or_repeated(self):
+        texts = [f"text number {n}" for n in range(250)]
+        got = self.embed(texts)
+        sent = [t for c in self.calls() for t in json.loads(c["stdin"])["texts"]]
+        self.assertEqual(sent, texts)
+        self.assertEqual([len(json.loads(c["stdin"])["texts"]) for c in self.calls()], [100, 100, 50])
+        self.assertEqual(got["vectors"], [fake_vector(t) for t in texts])
+
+    def test_long_texts_are_batched_by_size_so_that_no_input_is_over_the_bridges_limit(self):
+        texts = [("long text %d " % n) + "x" * 20000 for n in range(30)]
+        got = self.embed(texts)
+        sizes = [len(c["stdin"].encode("utf-8")) for c in self.calls()]
+        self.assertLessEqual(max(sizes), 200_000)
+        self.assertGreater(len(sizes), 1)
+        self.assertEqual([t for c in self.calls() for t in json.loads(c["stdin"])["texts"]], texts)
+        self.assertEqual(len(got["vectors"]), 30)
+
+    def test_the_batches_for_a_large_dimension_are_small_enough_for_the_reply_to_be_read(self):
+        self.assertLessEqual(max(len(g) for g in models._batches(["x"] * 500, 8192)), 7)
+        self.assertEqual(max(len(g) for g in models._batches(["x"] * 500, 1024)), 56)
+        self.assertEqual(max(len(g) for g in models._batches(["x"] * 500, 4)), 100)
+        for dim in (1, 4, 768, 1024, 4096, 8192):
+            groups = models._batches([f"t{n}" for n in range(333)], dim)
+            self.assertEqual([t for g in groups for t in g], [f"t{n}" for n in range(333)])
+            self.assertTrue(all(g for g in groups))
+
+    def test_a_text_over_the_bridges_limit_is_refused_by_its_place_before_anything_is_sent(self):
+        message = self.refused(["fine", "x" * 40000, "fine"], "text 2 ")
+        self.assertEqual(self.calls(), [])
+        self.assertNotIn("xxxx", message)
+        self.assertEqual(len(self.embed(["é" * 16384])["vectors"]), 1)  # exactly 32768 bytes
+        self.refused(["é" * 16385])
+
+    def test_texts_that_are_not_a_list_of_texts_are_refused_before_anything_is_sent(self):
+        for bad in ([], "text", None, 5, ("a",), ["a", 5], ["a", None], ["a", ""], ["a", "  \n"], [b"a"], ["a\ud800"], {"a": 1}):
+            with self.subTest(bad=bad):
+                self.refused(bad)
+        self.assertEqual(self.calls(), [])
+
+    def test_too_many_texts_in_one_call_are_refused(self):
+        self.refused(["x"] * 100_001)
+        self.assertEqual(self.calls(), [])
+
+    def test_a_call_whose_vectors_would_not_fit_in_memory_is_refused_before_anything_is_sent(self):
+        cfg = config(emb=embedding(dimension=8192))
+        self.refused(["x"] * 2000, "memory", cfg=cfg)  # 2000 * 8192 numbers is over the limit
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(models.MAX_EMBED_NUMBERS // 8192 >= 1000, True)  # a thousand texts of the longest vectors are allowed
+
+    def test_a_chat_entry_a_missing_entry_and_model_work_off_are_refused_before_anything_is_sent(self):
+        with self.assertRaises(KbError):
+            models.embed(config(local=entry()), "local", ["x"], launcher=self.launcher, root=self.root)
+        with self.assertRaises(KbError):
+            models.embed(self.cfg, "nowhere", ["x"], launcher=self.launcher, root=self.root)
+        with self.assertRaises(KbError):
+            models.embed(self.cfg, 5, ["x"], launcher=self.launcher, root=self.root)
+        with self.assertRaises(KbError):
+            models.embed(dict(self.cfg, models_on=False), "emb", ["x"], launcher=self.launcher, root=self.root)
+        with self.assertRaises(KbError):
+            models.embed(self.cfg, "emb", ["x"], launcher=os.path.join(self.dir, "nope"), root=self.root)
+        self.assertEqual(self.calls(), [])
+
+
+class EmbedReplyTest(EmbedBase):
+    """Every way a reply can be wrong is a refusal, and a refusal on any batch gives no vectors at all."""
+
+    def test_each_wrong_reply_is_refused(self):
+        wrong = {"short": "vectors", "extra": "vectors", "ragged": "dimension", "dimension_says": "dimension", "nan": "JSON", "inf": "JSON",
+                 "huge": "range", "bigint": "range", "tiny": "range", "zero": "zeros", "bool": "number", "text": "number", "null": "number", "not_list": "vector",
+                 "nomodel": "model", "badmodel": "model", "notok": "could not answer", "contract2": "contract", "vendor": "shape",
+                 "nodim": "dimension", "text_out": "JSON", "exit": "exit", "flood": "too much"}
+        for mode, text in wrong.items():
+            with self.subTest(mode=mode):
+                self.plan(mode=mode)
+                self.refused(["one", "two", "three"], text)
+
+    def test_the_dimension_of_the_reply_must_be_the_dimension_of_the_entry(self):
+        self.plan(dim=5)
+        self.refused(["x"], "dimension")
+        self.plan(dim=4)
+        self.refused(["x"], "dimension", cfg=config(emb=embedding(dimension=5)))
+
+    def test_a_vector_of_zeros_is_refused_as_a_vector_with_no_direction(self):
+        self.plan(mode="zero")
+        self.refused(["x"], "zeros")
+
+    def test_a_refusal_quotes_no_text_of_the_reply(self):
+        self.plan(mode="notok")
+        self.assertNotIn("0.", self.refused(["x"]))
+
+    def test_a_wrong_second_batch_gives_no_vectors_at_all(self):
+        self.plan(bad_call=2, bad_mode="short")
+        with self.assertRaises(KbError):
+            self.embed([f"t{n}" for n in range(150)])
+        self.assertEqual(len(self.calls()), 2)
+
+    def test_a_change_of_model_between_batches_is_refused(self):
+        self.plan(bad_call=2, bad_mode="othermodel")
+        self.refused([f"t{n}" for n in range(150)], "model")
+
+    def test_a_reply_that_times_out_is_refused(self):
+        with mock.patch.object(models, "GRACE", 0), mock.patch.object(models, "DEFAULT_TIMEOUT", 0.3):
+            self.plan(mode="sleep")
+            self.refused(["x"], "time limit")
+
+
 class CommandTest(Base):
     """The two commands, run as the owner runs them, with the fake launcher first on the path."""
 

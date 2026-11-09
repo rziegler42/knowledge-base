@@ -183,6 +183,12 @@ rules, which this spec depends on.
   used in the early experiments. Both descriptions of a card and a theme are embedded (`theme.md`).
 - **[proposed]** An embedding job needs no stronger class. It is cheap next to a language model pass, so a change of model is
   affordable, and the texts, which are the costly part, are kept.
+- **[proposed]** Built in the engine (`kb.models.embed`): an entry of the owner's config with `kind` `embedding` and the
+  `dimension` of its vectors, and the kind of work `card-embed` that names it. The engine calls the bridge's `embed` command as a
+  separate program, batches the texts within the bridge's limits and the size of a reply it can read, checks every reply (the model
+  the bridge reported, the number of vectors, the dimension of the entry, finite numbers, no vector of zeros) and refuses the whole
+  call if one is wrong. The pinning of one model per library, the record of the model on each vector and the rebuild on a change
+  of model are not built yet (`docs/plans/2026-11-09-search-the-neutral-descriptions-by-meaning.md`, Increment C).
 
 ### Privacy of what is sent
 
