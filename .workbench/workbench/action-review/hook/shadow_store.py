@@ -97,7 +97,8 @@ FORMATS = {
                      "reviewed": _flag, "no_review_reason": _or_none(_one_of(*OUTCOMES))},
         "optional": {"rule": _or_none(_match(_RULE)), "facts_sha256": _or_none(_match(_SHA)),
                      "rubric_sha256": _or_none(_match(_SHA)), "bridge": _or_none(_text(200)),
-                     "model": _or_none(_text(200)), "effort": _or_none(_text(20)), "format": _whole},
+                     "model": _or_none(_text(200)), "effort": _or_none(_text(20)), "format": _whole,
+                     "answer": _or_none(_one_of("allow"))},
     },
     "collected.jsonl": {
         "line": 512 * 1024,
@@ -151,6 +152,8 @@ def check_row(name, row):
                 return "a reviewed row does not hold a whole verdict"
         elif row["no_review_reason"] != row["outcome"] or row["verdict"] is not None or row["failed_checks"]:
             return "a row that was not reviewed holds a verdict or a wrong reason"
+        if row.get("answer") is not None and (row["outcome"] != "reviewed" or row["verdict"] != "approve"):
+            return "an answer on a row that is not a reviewed approve"
     elif name == "collected.jsonl":
         if not _verdict_is_consistent(row):
             return "an approve names a failed check or a decline names none"

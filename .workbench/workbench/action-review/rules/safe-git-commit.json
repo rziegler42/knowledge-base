@@ -25,6 +25,9 @@
     },
     "--leave-other-staged": {
       "type": "boolean"
+    },
+    "--state-digest": {
+      "type": "value"
     }
   },
   "positionals": {
@@ -42,7 +45,8 @@
     "paths_not_credentials",
     "paths_regular",
     "facts_complete",
-    "no_secret_lines"
+    "no_secret_lines",
+    "state_digest_matches"
   ],
   "rubric": "commit",
   "questions": [

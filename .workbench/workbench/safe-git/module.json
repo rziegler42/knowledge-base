@@ -25,6 +25,11 @@
         "commit",
         "push"
       ],
+      "levels": {
+        "commit": [
+          "delegated"
+        ]
+      },
       "asks": [
         "remove"
       ]

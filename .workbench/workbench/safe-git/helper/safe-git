@@ -17,6 +17,7 @@ global and system Git configuration is trusted. It never reads or writes the gua
 
 import difflib
 import errno
+import hashlib
 import json
 import os
 import re
@@ -233,6 +234,7 @@ def _head_blob(argument):
 
 
 _CONVERTING = ("filter", "ident", "working-tree-encoding")
+_LINE_ENDINGS = ("text", "eol", "crlf")
 
 
 def _literal(path):
@@ -251,9 +253,17 @@ def _commit_shape(rest):
     return tail == [] or (tail[:2] == ["--only", "--"] and _paths_ok(tail[2:]))
 
 
+def _attr_shape(rest):
+    """``check-attr -z`` of one of the two fixed attribute lists, then ``--`` and paths."""
+    for names in (_CONVERTING, _LINE_ENDINGS):
+        if rest[:1 + len(names)] == ["-z"] + list(names) and _after_dashes(rest, 1 + len(names)):
+            return True
+    return False
+
+
 _SHAPES = {
     "rev-parse": lambda rest: rest in (["--show-toplevel"], ["--absolute-git-dir"], ["--git-common-dir"],
-                                       ["HEAD"], ["--verify", "HEAD"], ["HEAD^@"])
+                                       ["HEAD"], ["--verify", "HEAD"], ["HEAD^@"], ["--show-object-format"])
     or (len(rest) == 3 and rest[:2] == ["--verify", "-q"] and _branch_ref(rest[2])),
     "diff": _diff_shape,
     "show-ref": lambda rest: len(rest) == 3 and rest[:2] == ["--verify", "--hash"] and _readable_ref(rest[2]),
@@ -271,8 +281,8 @@ _SHAPES = {
     or (rest[:2] == ["-z", "--"] and _paths_ok(rest[2:])),
     "cat-file": lambda rest: len(rest) == 2 and ((rest[0] in ("-s", "blob") and _head_blob(rest[1]))
                                                  or (rest[0] == "commit" and _HEX40.match(rest[1]) is not None)),
-    "check-attr": lambda rest: rest[:1 + len(_CONVERTING)] == ["-z"] + list(_CONVERTING)
-    and _after_dashes(rest, 1 + len(_CONVERTING)),
+    "check-attr": _attr_shape,
+    "ls-tree": lambda rest: rest[:4] == ["-r", "-z", "HEAD", "--"] and _paths_ok(rest[4:]),
     "check-ignore": lambda rest: len(rest) == 3 and rest[:2] == ["-q", "--"] and _paths_ok(rest[2:])
     and _literal(rest[2]),
     "add": lambda rest: _after_dashes(rest, 0),
@@ -540,7 +550,7 @@ def _script(char):
     and Han count as one, so a sentence that mixes them is not a mix."""
     first = unicodedata.name(char, "?").split(" ")[0]
     return "CJK" if first in ("CJK", "HIRAGANA", "KATAKANA", "HANGUL", "BOPOMOFO") else first
-_COMMIT_OPTIONS = ("--expected-head", "--subject", "--body", "--trailer", "--leave-other-staged")
+_COMMIT_OPTIONS = ("--expected-head", "--subject", "--body", "--trailer", "--leave-other-staged", "--state-digest")
 
 
 class Request:
@@ -552,6 +562,7 @@ class Request:
         self.body = None
         self.trailers = []
         self.leave_other_staged = False
+        self.state_digest = None
         self.paths = []
 
 
@@ -578,6 +589,8 @@ def parse_commit(argv):
         index += 2
         if option == "--expected-head":
             request.expected = value
+        elif option == "--state-digest":
+            request.state_digest = value
         elif option == "--subject":
             request.subject = value
         elif option == "--body":
@@ -586,13 +599,18 @@ def parse_commit(argv):
             request.trailers.append(value)
     if index >= len(argv):
         raise Refused("usage: safe-git commit --expected-head <hash> --subject <text> [--body <text>] "
-                      "[--trailer 'Key: value']... [--leave-other-staged] -- <path>...", code="usage")
+                      "[--trailer 'Key: value']... [--leave-other-staged | --state-digest <64 hex>] -- <path>...", code="usage")
     request.paths = argv[index + 1:]
     for required, label in ((request.expected, "--expected-head"), (request.subject, "--subject")):
         if required is None:
             raise Refused("%s is required" % label, code="usage")
     if not request.paths:
         raise Refused("name at least one path after --", code="usage")
+    if request.state_digest is not None:
+        if _STATE_DIGEST.fullmatch(request.state_digest) is None:
+            raise Refused("--state-digest must be 64 lowercase hexadecimal characters", code="usage")
+        if request.leave_other_staged:
+            raise Refused("--state-digest cannot be used with --leave-other-staged", code="usage")
     if len(request.paths) > MAX_PATHS:
         raise Refused("more than %d paths" % MAX_PATHS, code="usage")
     return request
@@ -825,6 +843,17 @@ def _expect_head(root, expected, when, note=None):
                       code="head_mismatch")
 
 
+def _expect_staged_set(root, expected, when=None):
+    """Refuse unless the index holds exactly the paths expected: those already staged and the named ones. `git commit` takes the whole
+    index, and the digest covers only the named paths, so this is what keeps another staged path out of the commit. It is made after
+    staging and again as the last check before `git commit`."""
+    found = names(root, cached=True)
+    if found != expected:
+        missing, extra = sorted(expected - found), sorted(found - expected)
+        raise Refused("staging did not give exactly the named paths%s (no change: %s; extra: %s)"
+                      % (" " + when if when else "", shown(", ".join(missing), 120) or "none", shown(", ".join(extra), 120) or "none"))
+
+
 def _unstage(root, paths, expected):
     """Take the named paths out of the index again, but only while HEAD is still where it was expected."""
     try:
@@ -878,6 +907,118 @@ def refuse_converting_attributes(root, paths):
                           % (shown(path, 80), shown(attribute, 30), shown(value, 40)), code="path_converts_on_add")
 
 
+# --- the state digest ---------------------------------------------------------------------------
+# A digest of what a commit would record, so that an approval of the command can be tied to the state it was given for (plan
+# `2026-11-08-safe-git-commit-state-digest`; spec: "The state digest"). `describe commit` computes it from the work tree before anything
+# is staged; `commit --state-digest` computes it from the staged entries after `git add` and again just before `git commit`, and from the
+# commit afterwards. The head, and for each named path its mode and blob id, or nothing for a deletion; the message is not part of it,
+# because the command that carries it is what is approved.
+
+STATE_FORMAT = 1
+_STATE_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def state_digest(head, entries):
+    """The digest of `head` (the 40-digit hash, or None for a branch with no commit) and `entries`, ``(path, mode, blob)`` for
+    each named path, with None and None for a path whose deletion is staged. The order of `entries` does not matter."""
+    ordered = sorted(([path, mode, blob] for path, mode, blob in entries), key=lambda item: item[0].encode("utf-8", "surrogateescape"))
+    text = json.dumps({"format": STATE_FORMAT, "head": head or "none", "entries": ordered}, sort_keys=True,
+                      separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
+
+
+def _blob_id(data):
+    """The id git gives a blob of `data` in a SHA-1 repository, worked out here: nothing is written."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _entries_of(listing, fields_count, paths, what):
+    """``{path: (mode, blob)}`` of a ``-z`` listing of the index (``mode blob stage``) or of a tree (``mode type blob``), for the
+    named `paths` only. A listing that is not in that form, names a path that was not asked for, or lists one twice is refused."""
+    found, wanted = {}, set(paths)
+    for entry in listing.split("\0"):
+        if not entry:
+            continue
+        meta, _, path = entry.partition("\t")
+        fields = meta.split(" ")
+        if len(fields) != 3 or path not in wanted or path in found:
+            raise Refused("git listed %s in a form this helper does not read" % what, code="index_unreadable")
+        if fields_count == "index":
+            if fields[2] != "0":
+                raise Refused("git listed %s with a conflict stage" % what, code="index_unreadable")
+            found[path] = (fields[0], fields[1])
+        else:
+            if fields[1] != "blob":
+                raise Refused("git listed %s with an entry that is not a file" % what, code="index_unreadable")
+            found[path] = (fields[0], fields[2])
+    return found
+
+
+def staged_state(root, expected, paths):
+    """The digest of the named paths as the index holds them now."""
+    listing = run(["git", "ls-files", "-s", "-z", "--"] + list(paths), root).stdout
+    found = _entries_of(listing, "index", paths, "the staged entries")
+    return state_digest(expected, [(path,) + found.get(path, (None, None)) for path in paths])
+
+
+def committed_state(root, expected, paths):
+    """The digest of the named paths as HEAD holds them now, for the check after the commit."""
+    listing = run(["git", "ls-tree", "-r", "-z", "HEAD", "--"] + list(paths), root).stdout
+    found = _entries_of(listing, "tree", paths, "the committed entries")
+    return state_digest(expected, [(path,) + found.get(path, (None, None)) for path in paths])
+
+
+def _config_last(root):
+    """``{key: (has_value, value)}`` of the effective Git configuration, the last setting of a key winning, or None when git cannot
+    list it. Section and variable names are lower-cased by git."""
+    listing = run(["git", "config", "--list", "-z"], root, check=False)
+    if listing.returncode:
+        return None
+    found = {}
+    for entry in listing.stdout.split("\0"):
+        if entry:
+            key, separator, value = entry.partition("\n")
+            found[key.lower()] = (bool(separator), value)
+    return found
+
+
+def digest_unsupported(root):
+    """Why the digest is not offered in this repository, else None. The mode that `git add` stages is the work tree's executable bit
+    only when ``core.fileMode`` is true, and the blob ids are worked out for SHA-1 repositories."""
+    named = run(["git", "rev-parse", "--show-object-format"], root, check=False)
+    if named.returncode == 0 and named.stdout.strip() != "sha1":
+        return "the repository does not use SHA-1 object names"
+    config = _config_last(root)
+    if config is None:
+        return "git could not list the configuration"
+    if "core.filemode" in config and not git_bool_is_true(*config["core.filemode"]):
+        return "core.fileMode is not true, so the mode git stages is not the one of the work tree"
+    return None
+
+
+def conversion_possible(root, paths):
+    """Whether `git add` could store other bytes than the work tree holds for a file with a carriage return in the named `paths`:
+    ``core.autocrlf`` is on, or a ``text``, ``eol`` or ``crlf`` attribute is set. Anything git cannot tell is a yes."""
+    config = _config_last(root)
+    if config is None:
+        return True
+    if "core.autocrlf" in config:
+        has_value, value = config["core.autocrlf"]
+        if value.strip().lower() == "input" or git_bool_is_true(has_value, value):
+            return True
+    found = run(["git", "check-attr", "-z"] + list(_LINE_ENDINGS) + ["--"] + list(paths), root, check=False)
+    fields = found.stdout.split("\0")
+    if found.returncode or fields[-1:] != [""] or len(fields) - 1 != 3 * len(_LINE_ENDINGS) * len(paths):
+        return True
+    return any(fields[index + 2] not in ("unspecified", "unset") for index in range(0, len(fields) - 1, 3))
+
+
+def _expect_digest(root, request, when):
+    """With ``--state-digest``, refuse unless the named paths are staged exactly as the digest says."""
+    if request.state_digest is not None and staged_state(root, request.expected, request.paths) != request.state_digest:
+        raise Refused("the staged state is not the one the state digest names (checked %s)" % when, code="state_changed")
+
+
 class Checked:
     """What the checks of `commit` established: the request, the repository root, the staged paths, the index listing
     the commit will be compared with and the index as ``{path: (mode, stage)}``."""
@@ -901,11 +1042,16 @@ def check_commit(argv, cwd, note=None):
     told("subject", request.subject)
     told("trailers", list(request.trailers))
     told("body", request.body)
+    told("given_state_digest", request.state_digest)
     given = request.expected
     request.expected = validate_expected(given)
     told("expected_head", given)
     validate_message(request)
     root = git_root(cwd)
+    if request.state_digest is not None:
+        reason = digest_unsupported(root)
+        if reason is not None:
+            raise Refused("--state-digest is not supported here: %s" % reason, code="state_digest_unsupported")
     allowed = attribution_allowed(root)
     told("attribution_allowed", allowed)
     if not allowed:
@@ -951,18 +1097,16 @@ def command_commit(argv, cwd, out, err):
         _expect_head(root, request.expected, "before staging")
         run(["git", "add", "--"] + paths, root)
         _expect_head(root, request.expected, "while staging")
-        after_add = names(root, cached=True)
-        if after_add != staged | named:
-            missing = sorted((staged | named) - after_add)
-            extra = sorted(after_add - staged - named)
-            raise Refused("staging did not give exactly the named paths (no change: %s; extra: %s)"
-                          % (shown(", ".join(missing), 120) or "none", shown(", ".join(extra), 120) or "none"))
+        _expect_staged_set(root, staged | named)
+        _expect_digest(root, request, "after staging")
         checked = run(["git", "diff", "--cached", "--check", "--no-ext-diff", "--no-textconv", "--"] + paths,
                       root, check=False)
         if checked.returncode:
             raise Refused("git diff --cached --check finds whitespace errors: %s"
                           % display.ascii_text(checked.stdout.strip())[:300])
         _expect_head(root, request.expected, "just before the commit")
+        _expect_digest(root, request, "just before the commit")
+        _expect_staged_set(root, staged | named, "just before the commit")
         command = ["git", "commit", "--cleanup=whitespace"]
         for paragraph in message_paragraphs(request):
             command += ["-m", paragraph]
@@ -992,6 +1136,8 @@ def verify_commit(root, request, named, before, out):
         changed = {item for item in run(listing, root).stdout.split("\0") if item}
         if changed != named:
             raise Refused("the commit %s holds %s, not the named paths" % (made[:12], shown(", ".join(sorted(changed)), 120)))
+        if request.state_digest is not None and committed_state(root, request.expected, sorted(named)) != request.state_digest:
+            raise Refused("the commit %s holds a state other than the one the state digest names" % made[:12])
         _, after = indexed(root)
         if _others(after, named) != _others(before, named):
             raise Refused("the commit %s was made but the rest of the index is not as it was" % made[:12])
@@ -1510,7 +1656,7 @@ MAX_SIDE = 262144         # bytes of one side of a diff that are read (the appro
 _CHANGE_LISTS = ("new_paths", "modified_paths", "deleted_paths", "unchanged_paths", "binary_paths", "not_regular_paths")
 _COMMIT_FACTS = ("head", "expected_head", "leave_other_staged", "path_count", "subject", "trailers", "body",
                  "attribution_allowed", "program_findings", "staged_paths", "requested_paths", "paths") \
-    + _CHANGE_LISTS + ("diff",)
+    + _CHANGE_LISTS + ("diff", "state_digest", "given_state_digest")
 
 
 def _read_work(root_fd, parts):
@@ -1689,6 +1835,7 @@ def _change_facts(checked, facts):
     in_head = checked.request.expected is not None
     lists = {name: [] for name in _CHANGE_LISTS}
     pieces, length, left_out = [], 0, False
+    digest_entries, digest_ok, carriage = [], True, []     # for the state digest; a path it cannot cover turns it off
     deadline = time.monotonic() + DIFF_BUDGET
     intent = _intent_to_add(checked.before)
     try:
@@ -1707,9 +1854,19 @@ def _change_facts(checked, facts):
                 raise Refused("path refused: %s" % display.ascii_text(exc.strerror or "error"), code="path_refused")
             if new[0] == "irregular":
                 lists["not_regular_paths"].append(path)
+                digest_ok = False
                 continue
             if old[0] == "absent" and new[0] == "absent":
+                digest_ok = False      # a named path with nothing on either side: no digest can speak for it
                 continue      # gone from both sides since the checks: there is nothing to say of it
+            if new[0] == "absent":
+                digest_entries.append((path, None, None))
+            elif new[0] == "large":
+                digest_ok = False      # not read, so its blob id is not known
+            else:
+                digest_entries.append((path, new[2], _blob_id(new[1])))
+                if b"\r" in new[1]:
+                    carriage.append(path)
             old_mode = entries[path][0] if old[0] != "absent" else None
             new_mode = new[2] if new[0] != "absent" else None
             if new[0] == "absent":
@@ -1740,6 +1897,11 @@ def _change_facts(checked, facts):
                 length += len(piece)
     finally:
         os.close(root_fd)
+    if digest_ok and checked.request.leave_other_staged:
+        digest_ok = False      # `commit` refuses --state-digest with that option, so none is offered
+    if digest_ok:
+        digest_ok = digest_unsupported(root) is None and not (carriage and conversion_possible(root, carriage))
+    facts["state_digest"] = state_digest(checked.request.expected, digest_entries) if digest_ok else None
     facts.update(lists)
     facts["diff"] = OMIT if left_out else "".join(pieces)
 
@@ -1766,7 +1928,7 @@ def describe_commit(argv, cwd):
     facts = {"head": None, "expected_head": None, "leave_other_staged": leave,
              "path_count": len(given), "subject": None, "trailers": [], "body": None,
              "attribution_allowed": None, "program_findings": [], "staged_paths": [],
-             "requested_paths": given, "paths": [], "diff": None}
+             "requested_paths": given, "paths": [], "diff": None, "state_digest": None, "given_state_digest": None}
     facts.update((name, []) for name in _CHANGE_LISTS)
     errors = []
     try:

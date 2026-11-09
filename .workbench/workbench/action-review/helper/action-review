@@ -42,14 +42,14 @@ RULES_DIR = ".workbench/workbench/action-review/rules"
 # schema that differs, and a rule file that was not shipped, are refused. A new or changed shipped file means a new
 # entry here, which `test_actionreview_pins` checks against the files in the package.
 PINS = {
-    "rules/safe-git-commit.json": "41870b2e6b9d5b822c284fde8ccad43c549f11cb2f7785a83f9be45e46abf482",
+    "rules/safe-git-commit.json": "aadf535a427596c4e1d47a7a1794343d6ef8cbf08f77ef016d72fbbacb309fee",
     "rules/safe-git-remove.json": "dd1ce89e628c0eaef5967aa01202f9f2e94da3490b89c3887f87160aec3af917",
     "rubric/rubric.md": "5ac359f2eaf51fa3895b57f41d51f932c2fa810db508320db9580aef17c4ddbe",
     "reply-schema.json": "ead8d9b7c80e962ad890685ef6c0c054bf10bb5b0796374c02cc59e336d3570a",
     # Not read by the review: the owner's shadow hook, which is copied out of the project, and the owner compares the copy's
     # hash with this one (plan `2026-10-29-action-review-shadow-hook`).
-    "hook/shadow_store.py": "a61c458dbab72a65150739a60c7f724e77ea755347766e3af34550b8dc15f722",
-    "hook/shadow_hook.py": "3931a57cd38d9dc4a9ac8273f6dbea163bec11f5678868aac64778f80466965a",
+    "hook/shadow_store.py": "6462423fd35e57ee9fd4d95add8b8f749e2eb6669694993ea79514549b9f2b62",
+    "hook/shadow_hook.py": "4393bcde20073b496732848f0a578df929f23774705c4a4e9fdc41befc2181ad",
 }
 MAX_RULE = 16384
 MAX_RULES = 64
@@ -62,7 +62,7 @@ OPTIONAL = frozenset(("lists",))
 # The engine's fixed list of code checks. A rule may name only these; the functions arrive with the checks.
 CHECKS = ("head_matches", "repo_config_safe", "staging_state_ok", "paths_valid", "message_valid",
           "paths_not_credentials", "paths_regular", "facts_complete", "no_secret_lines", "confirm_present",
-          "removal_valid", "ignore_status_known", "preview_matches_arguments", "no_git_metadata")
+          "removal_valid", "ignore_status_known", "preview_matches_arguments", "no_git_metadata", "state_digest_matches")
 LIST_NAMES = ("credential_names", "reviewer_facing_paths")
 FLAG_TYPES = ("value", "multi", "boolean")
 SPELLING_WORD = re.compile(r"[A-Za-z0-9._/:=@%+,-]{1,64}")
@@ -590,6 +590,16 @@ TEST_DIRECTORIES = frozenset(("tests", "test", "__tests__"))
 # directly under `workbench/shipped_approvals/packages/`. Only the entropy check is skipped for them.
 HASH_RECORD_MANIFEST = ".workbench/manifest.json"
 HASH_RECORD_PATH = re.compile(r"workbench/shipped_approvals/packages/[0-9a-f]{64}/approval\.json")
+# A review's state file, which the review engine keeps in a directory named by the kind of the document and the first 16 hex
+# characters of the SHA-256 of its path, and which holds the document hashes and the seal (plan
+# `2026-11-08-secret-scan-skips-review-state`). Exact path, only `state.json`: the rounds and the ledger are scanned in full.
+REVIEW_STATE_PATH = re.compile(r"\.workbench/workbench/review-engine/(?:plan|spec|roadmap|adr)-[0-9a-f]{16}/state\.json")
+# Any of the four files the review engine keeps in a review directory (plan `2026-11-08-secret-scan-skips-review-file-paths`). The directory
+# name `<kind>-<16 hex>` can read as a random token, so the two header lines of a diff section with such a path are scanned with the entropy
+# test off (`diff_secret_kind`); the content of the file is scanned under its own options. `round-<n>.json` runs from 1 to the engine's
+# `MAX_ROUNDS`, 1000, without a leading zero. The only free part of the path is 16 hex characters and a number.
+REVIEW_FILE_PATH = re.compile(r"\.workbench/workbench/review-engine/(?:plan|spec|roadmap|adr)-[0-9a-f]{16}/"
+                              r"(?:state\.json|ledger\.md|schema\.json|round-(?:[1-9][0-9]{0,2}|1000)\.json)")
 PERCENT_RUN = re.compile(r"(?:%[0-9A-Fa-f]{2})+")
 HUNK = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 NO_NEWLINE = "\\ No newline at end of file"
@@ -684,11 +694,13 @@ def secret_kind(text, entropy=True, relaxed=False):
 
 def _scan_options(path):
     """How to scan one file's diff. A lock file carries hashes and long names by design, so only its entropy check is
-    skipped; so is the install manifest and a release record, which hold the package hashes (`HASH_RECORD_MANIFEST` and
-    `HASH_RECORD_PATH`, exact paths: a look-alike is scanned in full); a test directory carries fixture credentials, so only
+    skipped; so is the install manifest and a release record, which hold the package hashes, and a review's state file, which
+    holds the document hashes and the seal (`HASH_RECORD_MANIFEST`, `HASH_RECORD_PATH` and `REVIEW_STATE_PATH`, exact paths: a
+    look-alike is scanned in full); a test directory carries fixture credentials, so only
     the generic assignment patterns are relaxed. The 15 patterns run on every file."""
     parts = path.split("/")
-    hash_record = path == HASH_RECORD_MANIFEST or HASH_RECORD_PATH.fullmatch(path) is not None
+    hash_record = (path == HASH_RECORD_MANIFEST or HASH_RECORD_PATH.fullmatch(path) is not None
+                   or REVIEW_STATE_PATH.fullmatch(path) is not None)
     return {"entropy": parts[-1] not in LOCKFILES and not hash_record,
             "relaxed": any(part in TEST_DIRECTORIES for part in parts[:-1])}
 
@@ -749,7 +761,15 @@ def diff_secret_kind(diff):
     if sections is None:
         return secret_kind(diff)
     for path, text in sections:
-        kind = secret_kind(text) if path is None else secret_kind(text, **_scan_options(path))
+        if path is None:
+            kind = secret_kind(text)
+        elif REVIEW_FILE_PATH.fullmatch(path):
+            # The first two lines of a section with a path are its header (`--- HEAD/<path>`, `+++ work/<path>`): the patterns read them,
+            # the entropy test does not, since the name of a review directory can read as a random token. The rest is the file's own.
+            first, second, rest = text.split("\n", 2)
+            kind = secret_kind(first + "\n" + second + "\n", entropy=False) or secret_kind(rest, **_scan_options(path))
+        else:
+            kind = secret_kind(text, **_scan_options(path))
         if kind:
             return kind
     return None
@@ -786,6 +806,7 @@ ERROR_CHECKS = {"commit": dict(
     + [(code, "message_valid") for code in (
         "subject_invalid", "body_invalid", "trailer_invalid", "message_character_refused", "attribution_refused",
         "setting_invalid")]
+    + [("state_digest_unsupported", "state_digest_matches")]
     + [(code, "facts_complete") for code in ("repository_unreadable", "index_unreadable")]),
     "remove": dict(
         [(code, "removal_valid") for code in (
@@ -887,6 +908,18 @@ def _no_git_metadata(rule, document, positionals):
     return not any(segment.casefold() == ".git" for path in paths for segment in path.split("/"))
 
 
+_STATE_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def _state_digest_matches(rule, document, positionals):
+    """Whether the digest given with the command, if any, is the one `describe` computed for the same arguments. No digest given
+    is nothing to bind and passes (the hook that decides is what requires one); a digest given when none could be computed, one
+    that differs, and one that is not 64 lowercase hexadecimal characters fail, whatever the other fact says. Both facts are read
+    first, so that either one missing or mistyped fails the check."""
+    given, computed = _fact(document, "given_state_digest", "text?"), _fact(document, "state_digest", "text?")
+    return given is None or (_STATE_DIGEST.fullmatch(given) is not None and given == computed)
+
+
 def _errors_decide(rule, document, positionals):
     return True
 
@@ -899,6 +932,7 @@ CHECK_FUNCTIONS = {
     "paths_regular": _paths_regular, "facts_complete": _facts_complete, "no_secret_lines": _no_secret_lines,
     "confirm_present": _confirm_present, "removal_valid": _errors_decide, "ignore_status_known": _ignore_status_known,
     "preview_matches_arguments": _preview_matches_arguments, "no_git_metadata": _no_git_metadata,
+    "state_digest_matches": _state_digest_matches,
 }
 
 

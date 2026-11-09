@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The action-review shadow hook: records what the engine would say about a command that raised a prompt, and says nothing.
+"""The action-review hook: records what the engine says about a command that raised a prompt, and answers `allow` only when every
+condition of ``decide`` holds; otherwise it answers nothing.
 
 The owner copies this file and ``shadow_store.py`` out of the project to a directory of their own and registers the hook for
 the ``PermissionRequest`` event, matcher ``Bash``, with a time limit of 30 seconds and no ``onFailure`` setting:
@@ -11,11 +12,15 @@ site, and the variables that load code into a process): a script cannot defend i
 notes a missing ``-I`` and does nothing; it takes the home directory from the account database and not from ``HOME``, and has no
 default launcher (``docs/specs/action-review.md``, "The shadow hook"). For each prompt it runs ``wb run action-review review --log-row
 --collect '<command>'`` from the directory the command will run in, reads the lines the engine prints on standard error, and
-writes a row to ``~/.config/project-workbench/action-review/`` through ``shadow_store``. It writes nothing to standard output
-and exits 0 in every case: the prompt stays the owner's, whatever the engine said and whatever went wrong here. A failure of the
-hook is noted on standard error, with fixed text that never quotes the command.
+writes a row to ``~/.config/project-workbench/action-review/`` through ``shadow_store``. It exits 0 in every case. It writes to
+standard output only through ``emit``, once, and only for a command that ``decide`` accepts: the engine reviewed the exact command
+and approved it, the digest of the state it reviewed is the digest the command carries, and ``wb settings`` says that the key of the
+action is at the level the owner set for a decision by a bridge. It never answers a denial, never sends a rewritten command, and
+writes the verdict row first. In every other case the prompt stays the owner's, whatever the engine said and whatever went wrong
+here. A failure of the hook is noted on standard error, with fixed text that never quotes the command.
 
-What it does not do: parse the command (the engine's own parse and exit path give the reason), find ``wb`` through ``PATH`` or
+What it does not do: parse the command beyond three plain tests of its text (``command_carries``; the engine's own parse and exit
+path give the reason), find ``wb`` through ``PATH`` or
 inside the command's own directory, pass its environment on, or trust a line of standard error that is not the last line of its
 kind. The ``wb`` launcher is given a clean environment. Standard library only, apart from the store beside it.
 """
@@ -36,6 +41,7 @@ import json  # noqa: E402
 import os  # noqa: E402
 import pwd  # noqa: E402
 import re  # noqa: E402
+import selectors  # noqa: E402
 import signal  # noqa: E402
 import stat  # noqa: E402
 import struct  # noqa: E402
@@ -59,6 +65,15 @@ REASONS = ("reviewed", "no_rule", "unreviewable", "refused", "failed", "timeout"
 EXIT_OF = {"reviewed": (0,), "no_rule": (1,), "unreviewable": (1,), "refused": (1,), "failed": (2,), "timeout": (1, 2)}
 ENGINE_FIELDS = ("rule", "facts_sha256", "rubric_sha256", "bridge", "model", "effort", "format")
 ENVIRONMENT = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"}
+# The one answer the hook gives, as the harness took it when it was tested (docs/specs/action-review.md, "What the harness does, tested on
+# a copy"): no rewritten command and nothing else in the object.
+ANSWER = json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}},
+                    separators=(",", ":")) + "\n"
+SETTINGS_SECONDS = 3  # the most time `wb settings` is given
+DECIDE_BEFORE = 28.0  # seconds into the run after which the hook asks nothing more: the harness stops it at 30
+_DIGEST = re.compile(r"[0-9a-f]{64}")
+_ACTION = re.compile(r"[a-z][a-z0-9-]{0,31}")
+_COMMAND = re.compile(r"[a-z][a-z0-9-]{0,63}")
 # A command the engine declined because of one of these checks holds a secret or touches a credential-named path, and the redactor
 # below is a list of patterns that cannot tell what the engine's own scan can: nothing of the text of such a command is collected (its
 # verdict row stays, with the redacted reason). Plan `2026-11-04-shadow-hook-security-review-fixes`, increment A. What is kept of it is
@@ -213,33 +228,72 @@ def usable_launcher(wb, cwd):
 
 # -- the engine ---------------------------------------------------------------------------------------------------------
 
-def run_engine(wb, command, cwd, home_dir):
-    """``(exit code, standard output, standard error, timed out)`` of the engine, run in its own process group."""
+def _launch(wb, arguments, cwd, home_dir, wait, second):
+    """``(exit code, standard output, standard error, timed out)`` of ``wb`` with `arguments`, run in its own process group."""
     # The engine finds `wb` by name in the trusted entries of the PATH it inherits, so the launcher's own directory comes first.
     environment = dict(ENVIRONMENT, HOME=home_dir, PATH=os.pathsep.join([os.path.dirname(wb), ENVIRONMENT["PATH"]]))
-    proc = subprocess.Popen([wb, "run", "action-review", "review", "--log-row", "--collect", command], cwd=cwd,
-                            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            start_new_session=True, close_fds=True)
+    proc = subprocess.Popen([wb] + arguments, cwd=cwd, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, start_new_session=True, close_fds=True)
+    deadline = time.monotonic() + wait
+    held = {proc.stdout: bytearray(), proc.stderr: bytearray()}
+    selector = selectors.DefaultSelector()
+    for stream in held:
+        selector.register(stream, selectors.EVENT_READ)
+    timed_out = over = False
     try:
-        out, err = proc.communicate(timeout=WAIT_SECONDS)
-        timed_out = False
-    except subprocess.TimeoutExpired:
+        while selector.get_map() and not over:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                timed_out = True
+                break
+            for key, _ in selector.select(left):
+                chunk = os.read(key.fd, 1 << 16)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                held[key.fileobj] += chunk
+                if len(held[key.fileobj]) > MAX_STREAM:  # the cap is passed: the caller sees more than the cap and stops reading
+                    over = True
+        if not (timed_out or over):
+            try:
+                proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+    finally:
+        selector.close()
+        if timed_out or over or proc.returncode is None:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
+            proc.wait(timeout=second)  # a program that left the group still holds the pipes: they are closed, not waited for
+        except subprocess.TimeoutExpired:
             pass
-        try:
-            out, err = proc.communicate(timeout=SECOND_WAIT)
-        except subprocess.TimeoutExpired:  # a program that left the group still holds the pipes: do not wait for it
-            out, err = b"", b""
-        timed_out = True
-    return proc.returncode, out, err, timed_out
+        for stream in held:
+            stream.close()
+    if timed_out:
+        return proc.returncode, b"", b"", True
+    return proc.returncode, bytes(held[proc.stdout]), bytes(held[proc.stderr]), False
+
+
+def run_engine(wb, command, cwd, home_dir):
+    """``(exit code, standard output, standard error, timed out)`` of the engine, run in its own process group."""
+    return _launch(wb, ["run", "action-review", "review", "--log-row", "--collect", command], cwd, home_dir,
+                   WAIT_SECONDS, SECOND_WAIT)
 
 
 def last_line(lines, prefix):
     for line in reversed(lines):
         if line.startswith(prefix):
             return line[len(prefix):]
+    return None
+
+
+def last_position(lines, prefix):
+    for position in range(len(lines) - 1, -1, -1):
+        if lines[position].startswith(prefix):
+            return position
     return None
 
 
@@ -293,9 +347,95 @@ def classify(code, out, err, timed_out):
     if verdict is None:
         return "failed", None, None, None
     row, facts = last_line(lines, "log-row: "), last_line(lines, "facts: ")
+    # The engine prints the log row and then the facts. A facts line that comes before the row is text of some other line's, not the
+    # engine's: it is not believed (the decision rests on this line).
+    if facts is not None and row is not None and last_position(lines, "facts: ") < last_position(lines, "log-row: "):
+        facts = None
     row = parse_json(row) if row is not None else None
     facts = parse_json(facts) if facts is not None else None
     return "reviewed", verdict, row if isinstance(row, dict) else None, facts if isinstance(facts, dict) else None
+
+
+# -- the decision ------------------------------------------------------------------------------------------------------
+# `decide` is the only place that says yes, and every test in it can only say no. The answer is given for the engine's own approve and
+# nothing else, with a second line made of plain tests of what the engine's `facts:` line (the describe object) and the command's text
+# hold (`docs/specs/action-review.md`, "The enforcement point"). It does not parse the command.
+
+def bound_digest(document):
+    """The digest that the engine's describe object holds twice, as `given_state_digest` (the one the command carries) and
+    `state_digest` (the one it computed): 64 lowercase hexadecimal characters, the same in both, in an object that is ok, whole and
+    has no error, for a commit that leaves no other staged path. None otherwise. Two nulls are not a digest."""
+    if not isinstance(document, dict) or document.get("ok") is not True or document.get("truncated") is not False \
+            or document.get("errors") != []:
+        return None
+    facts = document.get("facts")
+    if not isinstance(facts, dict) or facts.get("leave_other_staged") is not False:
+        return None
+    given, computed = facts.get("given_state_digest"), facts.get("state_digest")
+    if isinstance(given, str) and given == computed and _DIGEST.fullmatch(given):
+        return given
+    return None
+
+
+def action_key(rule, document):
+    """``wb run <command> <action>``, the key of the action the engine reviewed, for a rule named ``<command>-<action>`` and the describe
+    object's `action`; None for any other rule or form. The key is worked out from what the engine reported, not from the command."""
+    action = document.get("action") if isinstance(document, dict) else None
+    if not isinstance(rule, str) or not isinstance(action, str) or not _ACTION.fullmatch(action) \
+            or not rule.endswith("-" + action):
+        return None
+    command = rule[:-(len(action) + 1)]
+    return "wb run %s %s" % (command, action) if _COMMAND.fullmatch(command) else None
+
+
+def command_carries(command, digest):
+    """The second line, three plain tests of the text: the option, that digest, and no ``--leave-other-staged``."""
+    return "--state-digest" in command and digest in command and "--leave-other-staged" not in command
+
+
+def read_level(wb, cwd, home_dir, key, wait):
+    """The level ``wb settings`` prints for `key` in the project that holds `cwd`, as the word after the colon of the one line
+    ``level <key>: <level>``; None when it fails, is slow, is large, is not ASCII, or does not print that line exactly once."""
+    try:
+        code, out, err, timed_out = _launch(wb, ["settings"], cwd, home_dir, wait, 1)
+    except (OSError, ValueError):
+        return None
+    if timed_out or code != 0 or len(out) > MAX_STREAM or len(err) > MAX_STREAM:
+        return None
+    try:
+        text = out.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    if "\0" in text:
+        return None
+    prefix = "level %s: " % key
+    found = [line[len(prefix):] for line in text.split("\n") if line.startswith(prefix)]
+    return found[0] if len(found) == 1 else None
+
+
+def decide(wb, cwd, home_dir, command, outcome, verdict, log_row, facts, started):
+    """True only for a whole approve that the owner has delegated: the engine's outcome is ``reviewed`` with an approve and no failed
+    check, the object it printed binds a digest that the command carries, and the level of the key is exactly ``delegated``."""
+    if outcome != "reviewed" or verdict is None or verdict[0] != "approve" or verdict[1]:
+        return False
+    if not isinstance(log_row, dict) or not isinstance(facts, dict):
+        return False
+    digest, key = bound_digest(facts), action_key(log_row.get("rule"), facts)
+    if digest is None or key is None or not command_carries(command, digest):
+        return False
+    left = DECIDE_BEFORE - (time.monotonic() - started)
+    if left < 1:
+        return False
+    return read_level(wb, cwd, home_dir, key, min(SETTINGS_SECONDS, left)) == "delegated"
+
+
+def emit(out, err):
+    """Write the one answer to `out`. A stream that cannot be written leaves the prompt as it is."""
+    try:
+        out.write(ANSWER)
+        out.flush()
+    except Exception:
+        note(err, "the answer could not be written; the prompt is unchanged")
 
 
 # -- the handle of a declined secret -----------------------------------------------------------------------------------
@@ -539,11 +679,11 @@ def redacted_text(err, command, verdict, facts):
         return None, None, None
 
 
-def record(err, home, outcome, command, verdict=None, log_row=None, facts=None, cwd=None):
+def record(err, home, outcome, command, verdict=None, log_row=None, facts=None, cwd=None, answer=None):
     """Write the verdict row for one prompted command and, for a reviewed command with its facts, the collected row. The reason,
     the command and the facts are stored redacted ("redaction"); the command's hash is of the command as it was. For a command
     declined for a secret the collected row is a handle instead ("the handle of a declined secret"), built from the facts and from
-    `cwd`, the directory the command ran in."""
+    `cwd`, the directory the command ran in. `answer` is ``allow`` for a command the hook answered, and the row then says so."""
     reviewed = outcome == "reviewed"
     digest = sha256(command) if command is not None else None
     rule = log_row.get("rule") if log_row else None
@@ -553,19 +693,25 @@ def record(err, home, outcome, command, verdict=None, log_row=None, facts=None, 
     row = {"ts": store.now(), "command_sha256": digest, "outcome": outcome,
            "verdict": verdict[0] if verdict else None, "failed_checks": list(verdict[1]) if verdict else [],
            "reason": reason, "reviewed": reviewed, "no_review_reason": None if reviewed else outcome}
+    if answer is not None:
+        row["answer"] = answer
     plain = dict(row)
     if reviewed and log_row:
         row.update({field: log_row[field] for field in ENGINE_FIELDS if field in log_row})
-    write(err, "verdicts.jsonl", row, home, plain if row != plain else None)
-    if collecting and shown is not None:
-        write(err, "collected.jsonl", {
-            "id": store.new_id(), "ts": row["ts"], "rule": rule, "command_sha256": digest, "command": shown,
-            "facts": kept, "verdict": verdict[0], "failed_checks": list(verdict[1]), "reason": reason}, home)
-    elif reviewed and declined_for_a_secret and isinstance(rule, str):
-        keep_handle(err, home, row["ts"], digest, rule, verdict, facts, cwd)
+    written = write(err, "verdicts.jsonl", row, home, plain if row != plain else None)
+    try:
+        if collecting and shown is not None:
+            write(err, "collected.jsonl", {
+                "id": store.new_id(), "ts": row["ts"], "rule": rule, "command_sha256": digest, "command": shown,
+                "facts": kept, "verdict": verdict[0], "failed_checks": list(verdict[1]), "reason": reason}, home)
+        elif reviewed and declined_for_a_secret and isinstance(rule, str):
+            keep_handle(err, home, row["ts"], digest, rule, verdict, facts, cwd)
+    except Exception:  # the verdict row is on disk: whether the hook answers depends on that row alone
+        note(err, "the hook could not record the collected row")
+    return written
 
 
-def run(argv, stdin, err, home):
+def run(argv, stdin, err, home, out=None):
     home_dir = home if home is not None else account_home()
     if home_dir is None:
         note(err, "the hook could not find the account's home directory; nothing was reviewed or recorded")
@@ -587,25 +733,40 @@ def run(argv, stdin, err, home):
         record(err, home_dir, "failed", command)
         return
     try:
-        code, out, errb, timed_out = run_engine(wb, command, cwd, home_dir)
+        code, output, errb, timed_out = run_engine(wb, command, cwd, home_dir)
     except (OSError, ValueError):
         note(err, "the engine could not be started")
         record(err, home_dir, "failed", command)
         return
-    outcome, verdict, log_row, facts = classify(code, out, errb, timed_out)
+    outcome, verdict, log_row, facts = classify(code, output, errb, timed_out)
+    allowed = False
+    if out is not None:  # with no stream to answer on, nothing is asked and nothing is allowed
+        try:
+            allowed = decide(wb, cwd, home_dir, command, outcome, verdict, log_row, facts, started)
+        except Exception:
+            note(err, "the decision stopped; the prompt is unchanged")
     late = time.monotonic() - started > LATE_SECONDS  # no time is left to read an index: the paths are counted as left out
-    record(err, home_dir, outcome, command, verdict, log_row, facts, cwd=None if late else cwd)
-
-
-def main(argv, stdin, err, home=None):
-    """Record one prompted command and return 0. Nothing is written to standard output, and an error of any kind, an
-    interrupt included, is noted and does not change the return value: the hook answers nothing."""
+    wrote = False
     try:
-        run(argv, stdin, err, home)
+        wrote = record(err, home_dir, outcome, command, verdict, log_row, facts, cwd=None if late else cwd,
+                       answer="allow" if allowed else None) is True
+    except Exception:  # the engine's approve stands whatever the log does, but the hook does not skip the prompt without a record
+        note(err, "the hook could not record the row")
+    if allowed and not wrote:
+        note(err, "no answer was given: the row that would have recorded it could not be written; the prompt is unchanged")
+    if allowed and wrote:
+        emit(out, err)
+
+
+def main(argv, stdin, err, home=None, out=None):
+    """Record one prompted command, answer it when ``decide`` allows and `out` is given, and return 0. An error of any kind, an
+    interrupt included, is noted and does not change the return value or add an answer."""
+    try:
+        run(argv, stdin, err, home, out)
     except BaseException as exc:
         note(err, "the hook stopped on %s; the prompt is unchanged" % type(exc).__name__)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:], sys.stdin.buffer, sys.stderr))
+    sys.exit(main(sys.argv[1:], sys.stdin.buffer, sys.stderr, out=sys.stdout))
