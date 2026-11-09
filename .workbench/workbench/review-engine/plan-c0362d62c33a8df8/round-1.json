@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Goal and Scope; Increment B, steps 1–2",
+      "problem": "The plan limits clause checking to sentences in the summary and five neutral fields, and explicitly leaves topics, key ideas, and caveats checked as before. The referenced roadmap candidate promises that an \"item\" is marked stated only when each of its clauses is supported, with an in-scope boundary of splitting an item into clauses. This narrower implementation does not deliver that candidate outcome.",
+      "severity": "major",
+      "suggestion": "Either extend the clause check and its tests to every grounded card item, or narrow/split the roadmap candidate with the owner’s direction and make this plan reference the candidate whose outcome is specifically sentence fields."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan is otherwise detailed, but its scope materially narrows the referenced roadmap candidate.",
+  "verdict": "changes_needed"
+}
