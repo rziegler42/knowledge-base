@@ -346,3 +346,35 @@ nothing wider is named, since no other module reads the grounding record.
   kept as marked inferences, was put to the owner and not taken.
 - **Provenance.** Run on the owner's configured servers at commit 2c082cd; the queue's run name is kept outside the repository; the
   probe and diagnosis scripts and logs are held outside the repository.
+
+### Increment C
+
+- **Done** (uncommitted until the owner says to commit). A sentence of the summary or a neutral part is paired with up to two
+  verified notes that it cites (`SENTENCE_NOTES`), in the order written; the check prompt shows each note with its point and quote
+  under the sentence and tells the check model to read them together; one verdict confirms the sentence. The entry that is kept lists
+  the notes that were shown (never one that is not verified or not cited) and has the quote of the first. A topic, key idea or
+  caveat is checked as before (one note, a shared word). The card is asked for up to three sentences for each neutral part, each
+  saying one thing, and for the notes that together state a sentence, the best first. The card job is `v6` and the check job `v2`,
+  so a journal made before is stale. The clause of the card spec on pairing and the engine README say the same.
+- **Verification run:** `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_cardstate
+  engine.tests.test_cardqueue engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample`, 650 tests OK;
+  `wb run code-work check`, no problems. Tests were written first and seen to fail. Seventeen deliberate one-line breaks of the new
+  code were each caught in the end; four were first missed (the cap of two notes was never tested with three verified notes, and a
+  phrase of the prompt that the test looked for also stood elsewhere in the prompt), and tests were added. Not run: `test_setup` and
+  the other engine modules.
+- **Diagnosis again (step 3; read-only, nothing filed, three books, one run each).** No part ended empty in any of the three books
+  (the two diagnosis runs before had 1, 2 and 2 empty parts for Amdahl, MPI and Prisoner's dilemma, and then 4, 3 and 4), and every
+  sentence the model wrote was kept: the `partly` and `no` verdicts that remain (MPI 4 and 2, Prisoner 1 and 2) fell on list items.
+  The model still wrote one sentence for each neutral part although it was told up to three. This is one run of three books, and
+  the runs of this model differ a great deal, so it shows that the mechanical causes are fixed and not by how much.
+- **Limits recorded, from the review.** (1) The quote shown under a `[stated]` sentence is the first note's, though the check read
+  two notes together and its verdict may rest on the second; the card lists both notes. (2) Reading two notes together makes it
+  easier to confirm a sentence, because the card model chooses the second note and a loosely related one can fill a gap in the
+  first; only `supports` confirms. How often the two-note check wrongly says `supports` is not tested: the probe of increment B
+  tested the one-note check on 26 pairs. The labelled comparison of increment D is the test, and its Result must say what the check
+  of whole sentences let through.
+- **Review:** the `reviewer` agent, one exchange. No blocking findings; seven points, all not blocking and all evaluated: the two
+  limits above are recorded here; the rule that a sentence is stated only if the check confirmed a verified cited note holds; the
+  entry fits the card record; the check prompt cannot be broken by a note or quote that looks like an item line, since text is
+  cleaned to one line and the verdicts are counted by position; the journal is stale for older versions and replay rechecks; and
+  topics, key ideas and caveats and the non-goals are untouched. The reviewer did not run the tests, read the tests or see the diff.

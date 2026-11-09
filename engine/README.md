@@ -507,9 +507,10 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   for a support for each topic, key idea and caveat: the one or two notes that best state it (such as
   `1.1 3.2`), or `inferred` if it is the model's own inference, or `none`. The summary and the five neutral fields are asked for as
   sentences, in three lists of the same length: the part each belongs to (`summary`, `problem`, `approach`, `needs`, `provides` or
-  `limits`), the sentence, and the notes that state it. The prompt asks for at most 5 sentences of the summary and 2 of each other
-  part, a reply with more than 8 and 4 is refused, and only the first 5 and 3 are put to the check (the card call is version `v5`,
-  so a journal made with the earlier prompt is stale). Only a sentence of `limits` may say `inferred`; every other sentence must cite
+  `limits`), the sentence, and the notes that state it. The prompt asks for at most 5 sentences of the summary and 3 of each other
+  part, each saying one thing (the first live run found that a part for which the model wrote one sentence was emptied by one
+  refusal), a reply with more than 8 and 4 is refused, and only the first 5 and 3 are put to the check (the card call is version
+  `v6` and the check `v2`, so a journal made with the earlier prompts is stale). Only a sentence of `limits` may say `inferred`; every other sentence must cite
   notes, and `none` for a sentence is refused, except for `limits`, where it is accepted and the sentence is dropped. A support in any other form refuses the answer, and so does a list of supports or
   of sentences of the wrong length. The engine then marks each item: `stated` if its checks confirmed it (the next
   bullet; the card keeps the confirmed note and its quote, up to 240 characters), which the model's word alone cannot make it;
@@ -532,8 +533,9 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   marks of the sentences with the others, and `card-sample` takes a sentence as an item. The card call makes this form.
 - **Is the note about the item? The check (task `card-check`).** A verified quote shows that a claim is in the book, not that the
   note it belongs to supports the item that cites it: in the first live run one note was cited for nearly every item. So each item
-  that cites notes is paired (a sentence of the summary or a neutral field is paired with the first verified note it cites, with no
-  word in common required, since a neutral description is written without the words of a field; the rest of this paragraph is the
+  that cites notes is paired (a sentence of the summary or a neutral field is paired with the first two verified notes it cites, which
+  the check reads together and which the card then lists (with the quote of the first), with no word in common required, since a
+  neutral description is written without the words of a field; the rest of this paragraph is the
   pairing of a topic, key idea or caveat) with the verified note it cites that shares most content words with it (words of four letters or
   more, compared by their first five letters; the first cited on a tie; an item with no content word of its own is paired with the
   first verified note and left to the model). An item with no such note is dropped. The pairs go ten to a call to the model that

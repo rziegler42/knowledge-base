@@ -32,7 +32,7 @@ for name, job in (("down_card", "card.json"), ("down_notes", "card-notes.json"))
         sys.stdout.write(json.dumps({"contract": 2, "ok": False, "vendor": "ollama", "error": "unreachable", "detail": "no answer"}))
         sys.exit(1)
 if kind == "card-check.json":
-    answer = {"verdicts": ["supports"] * sum(1 for line in prompt.splitlines() if line.startswith("   note "))}
+    answer = {"verdicts": ["supports"] * sum(1 for line in prompt.splitlines() if re.match(r"\\d+\\. \\[", line))}
 elif kind == "card-notes.json":
     answer = dict(plan["notes"])
     left = plan.get("bad_notes", {}).get(title, 0)

@@ -349,7 +349,7 @@ class MakeTest(Base):
         notes_record, record = out["records"]
         self.assertEqual((notes_record["task"], notes_record["registry"], notes_record["prompt_version"]), ("card-notes", "notes", "v3"))
         self.assertEqual((record["task"], record["registry"], record["prompt_version"], record["input_tokens"], record["output_tokens"]),
-                         ("card", "cardm", "v5", 10, 5))
+                         ("card", "cardm", "v6", 10, 5))
         self.assertEqual(record["model"], "m1:latest")
 
     def test_a_longer_book_gets_notes_for_each_piece_and_then_one_card(self):
@@ -627,6 +627,32 @@ class PairTest(unittest.TestCase):
         self.assertEqual(got[("neutral_problem", 0)], "2.1")  # 9.9 does not exist and 1.2 is not verified; the first verified one is taken
         self.assertEqual(got[("neutral_approach", 1)], "1.1")  # the first cited, though 2.1 shares no more words with it
 
+    def test_a_sentence_is_paired_with_up_to_two_verified_notes_it_cites_in_the_order_written(self):
+        values = answer(**parts(("problem", "Zebras migrate.", "1.2 2.1 1.1"), ("approach", "Quokkas jump.", "1.1 2.1 9.9"),
+                                ("needs", "Wombats dig.", "2.1"), ("provides", "Emus run.", "1.1 2.1 1.1")))
+        got = {p["index"]: p for p in cardmake.pairs(values, POINTS) if p["field"] != "topics" and p["field"] != "key_ideas"}
+        self.assertEqual([n["ref"] for n in [got[0], *got[0]["also"]]], ["2.1", "1.1"])   # 1.2 is not verified
+        self.assertEqual([n["ref"] for n in [got[1], *got[1]["also"]]], ["1.1", "2.1"])   # 9.9 does not exist
+        self.assertEqual(got[2]["also"], [])
+        self.assertEqual([n["ref"] for n in [got[3], *got[3]["also"]]], ["1.1", "2.1"])   # a note cited twice is shown once
+        self.assertEqual((got[1]["ref"], got[1]["point"], got[1]["quote"]), ("1.1", POINTS["1.1"]["point"], POINTS["1.1"]["quote"]))
+        self.assertEqual(got[1]["also"], [{"ref": "2.1", "point": POINTS["2.1"]["point"], "quote": POINTS["2.1"]["quote"]}])
+
+    def test_of_three_verified_notes_only_the_first_two_are_shown(self):
+        points = {**POINTS, "3.1": {"point": "a third point", "quote": "a third quote", "verified": True}}
+        values = answer(**parts(("problem", "Zebras migrate.", "3.1 1.1 2.1"), ("approach", "Quokkas jump.", "1.1 3.1 2.1 1.2")))
+        got = {p["index"]: p for p in cardmake.pairs(values, points) if p["field"] == "neutral_problem" or p["field"] == "neutral_approach"}
+        self.assertEqual([got[0]["ref"]] + [n["ref"] for n in got[0]["also"]], ["3.1", "1.1"])
+        self.assertEqual([got[1]["ref"]] + [n["ref"] for n in got[1]["also"]], ["1.1", "3.1"])
+        self.assertEqual(cardmake.SENTENCE_NOTES, 2)
+
+    def test_no_more_than_two_notes_are_shown_for_a_sentence_and_a_list_item_has_none_besides_its_pair(self):
+        values = answer(**parts(("problem", "Zebras migrate.", "1.1 2.1 1.1")), topics=["early stopping rule", "tight bound"], topics_support=["1.1 2.1", "2.1 1.1"])
+        pairs = cardmake.pairs(values, POINTS)
+        sentence = next(p for p in pairs if p["field"] == "neutral_problem")
+        self.assertEqual(len(sentence["also"]), 1)
+        self.assertTrue(all("also" not in p for p in pairs if p["field"] in ("topics", "key_ideas")))
+
     def test_a_sentence_that_cites_no_verified_note_has_no_pair_and_an_inference_or_none_has_none(self):
         got = self.pairs(**parts(("problem", "Zebras migrate.", "1.2"), ("approach", "Quokkas jump.", "9.9"), ("needs", "Wombats dig.", "none"),
                                  ("limits", "Emus run.", "inferred"), ("provides", "Kiwis hide.", "2.1")))
@@ -660,6 +686,18 @@ class CheckTest(unittest.TestCase):
         for word in ("supports", "partly", "no", "paper", "same length"):
             self.assertIn(word, prompt)
 
+    def test_a_sentence_with_two_notes_is_shown_with_both_under_it_and_is_still_one_item(self):
+        pairs = [{"field": "neutral_problem", "index": 0, "item": "Zebras migrate.", "ref": "1.1", "point": "first point", "quote": "first quote",
+                  "also": [{"ref": "2.1", "point": "second point", "quote": "second quote"}]},
+                 {"field": "neutral_needs", "index": 1, "item": "Emus run.", "ref": "1.2", "point": "third point", "quote": "third quote", "also": []}]
+        prompt = cardmake.check_prompt("A title", pairs)
+        shown = {label: body for label, _, body in any_sections(prompt)}["ITEMS"].splitlines()
+        self.assertEqual(shown, ["1. [problem sentence] Zebras migrate.", "   note 1.1: first point", '   quote: "first quote"',
+                                 "   note 2.1: second point", '   quote: "second quote"',
+                                 "2. [needs sentence] Emus run.", "   note 1.2: third point", '   quote: "third quote"'])
+        self.assertIn("together", prompt)   # the notes are judged together
+        self.assertEqual(sum(1 for line in shown if line[0].isdigit()), 2)
+
     def test_a_sentence_is_shown_to_the_check_under_the_name_of_its_part(self):
         pairs = cardmake.pairs(full(), POINTS)
         prompt = cardmake.check_prompt("A title", [p for p in pairs if p["field"] not in ("topics", "key_ideas")])
@@ -679,7 +717,7 @@ class CheckTest(unittest.TestCase):
 
     def test_the_job_wants_one_verdict_for_each_pair_and_only_the_three_words(self):
         job = cardmake.check_job(2)
-        self.assertEqual((job.name, job.prompt_version, job.schema), ("card-check", "v1", "card-check.json"))
+        self.assertEqual((job.name, job.prompt_version, job.schema), ("card-check", "v2", "card-check.json"))
         job.check({"verdicts": ["supports", "no"]})
         job.check({"verdicts": ["Supports", "PARTLY"]})
         for bad in (["supports"], ["supports", "no", "no"], ["supports", "maybe"], ["supports", "supports."], ["yes", "no"]):
@@ -790,6 +828,17 @@ class GroundTest(unittest.TestCase):
         self.assertEqual(got["grounding"]["sentences"]["neutral_approach"], {"kept": [], "dropped": 0})
         self.assertEqual(got["model"]["neutral_approach"], "")
         self.assertEqual(got["sentences"]["summary"], {"asked": 2, "kept": 2, "dropped": {"over": 0, "none": 0, "unpaired": 0, "not_confirmed": 0, "repeat": 0}})
+
+    def test_a_confirmed_sentence_lists_the_notes_that_were_shown_and_the_quote_of_the_first(self):
+        values = answer(**parts(("summary", "The rule stops early.", "2.1 1.1"), ("problem", "Zebras migrate.", "1.1")))
+        pairs = cardmake.pairs(values, POINTS)
+        shown = {(p["field"], p["index"]): [p["ref"]] + [n["ref"] for n in p["also"]] for p in pairs if "also" in p}
+        self.assertEqual(shown, {("summary", 0): ["2.1", "1.1"], ("neutral_problem", 1): ["1.1"]})
+        got = cardmake.ground(values, POINTS, keyed(pairs), shown)
+        self.assertEqual(got["grounding"]["sentences"]["summary"]["kept"],
+                         [{"text": "The rule stops early.", "mark": "stated", "notes": ["2.1", "1.1"], "quote": POINTS["2.1"]["quote"]}])
+        self.assertEqual(got["grounding"]["sentences"]["neutral_problem"]["kept"][0]["notes"], ["1.1"])
+        card.validate({**self.mechanical_card(), "model": got["model"], "grounding": got["grounding"], "partial": True, "partial_reasons": got["reasons"]})
 
     def test_the_result_is_a_card_that_the_card_module_accepts(self):
         got = self.sentences(("summary", "The rule stops early.", "1.1"), ("problem", "Deciding when to stop.", "1.1"),
@@ -964,7 +1013,7 @@ class GroundedCardTest(Base):
         out = self.make(many, verdicts(*["supports"] * 10), verdicts(*["supports"] * 10), verdicts(*["supports"] * 6))
         calls = self.calls()
         self.assertEqual(len(calls), 6)  # two notes, the card, three checks
-        sizes = [sum(1 for line in any_sections(prompt)[-1][2].splitlines() if line.startswith("   note ")) for _, prompt in calls[3:]]
+        sizes = [sum(1 for line in any_sections(prompt)[-1][2].splitlines() if re.match(r"\d+\. \[", line)) for _, prompt in calls[3:]]
         self.assertEqual(sizes, [10, 10, 6])
         self.assertEqual(out["checks"], {"checked": 26, "supports": 26, "partly": 0, "no": 0, "unpaired": 0})
 
@@ -1628,7 +1677,7 @@ class JobTest(unittest.TestCase):
         self.assertEqual({cardmake.CARD_JOB.name, cardmake.NOTES_JOB.name, cardmake.check_job(1).name, cardmake.MORE_JOB.name}, set(models.TASKS))
 
     def test_each_job_has_a_prompt_version(self):
-        self.assertEqual((cardmake.CARD_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v5", "v3"))
+        self.assertEqual((cardmake.CARD_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v6", "v3"))
 
     def test_the_prompts_ask_for_fewer_items_than_the_limits_so_a_small_overshoot_still_passes(self):
         shape = cardmake.CARD_JOB.shape
@@ -1647,6 +1696,10 @@ class JobTest(unittest.TestCase):
         self.assertIn("never more", prompt.lower())
         self.assertIn(f"up to {cardmake.SENTENCE_ASKED['summary']} sentences", prompt)
         self.assertIn(f"each up to {cardmake.SENTENCE_ASKED['neutral_problem']} sentences", prompt)
+        self.assertEqual((cardmake.SENTENCE_ASKED["summary"], cardmake.SENTENCE_ASKED["neutral_problem"]), (5, 3))
+        self.assertIn("together", prompt)   # the notes a sentence cites are checked together
+        self.assertIn("says one thing that the notes state", prompt)
+        self.assertIn("each one thing", prompt)
         notes = cardmake.notes_prompt("T", "t", 1, 2)
         self.assertIn(f"up to {cardmake.ASKED_POINTS} ", notes)
         self.assertIn("never more", notes.lower())
@@ -1827,7 +1880,7 @@ class JoinTest(LibraryCase):
         book, version = self.converted_book(blocks=[block("the text studies one stopping rule and it proves a bound on regret " + "filler " * 200)])
         card_reply = dict(CARD, topics=["stopping rule", "regret bound"], topics_support=["1.1", "1.2"],
                           key_ideas=["one stopping rule studied", "a bound on regret", "a third idea"], key_ideas_support=["1.1", "1.2", "inferred"],
-                          **parts(("summary", "The text studies one stopping rule.", "1.1"), ("problem", "Deciding when to stop.", "1.1"),
+                          **parts(("summary", "The text studies one stopping rule.", "1.1"), ("problem", "Deciding when to stop.", "1.1 1.2"),
                                   ("approach", "Compare a score with a threshold.", "1.1"), ("needs", "A stream of observations.", "1.2"),
                                   ("provides", "A bound on regret.", "1.2"), ("limits", "a bound on regret only", "1.2")))
         self.script(reply(NOTES), reply(card_reply), verdicts(*["supports"] * 10))
@@ -1846,6 +1899,9 @@ class JoinTest(LibraryCase):
         self.assertEqual(filed["grounding"]["sentences"]["neutral_limits"]["kept"],
                          [{"text": "a bound on regret only", "mark": "stated", "notes": ["1.2"], "quote": "proves a bound on regret"}])
         self.assertEqual(filed["model"]["summary"], "The text studies one stopping rule.")
+        self.assertEqual(filed["grounding"]["sentences"]["neutral_problem"]["kept"],
+                         [{"text": "Deciding when to stop.", "mark": "stated", "notes": ["1.1", "1.2"], "quote": "studies one stopping rule"}])
+        self.assertEqual(filed["grounding"]["sentences"]["summary"]["kept"][0]["notes"], ["1.1"])
         notes_record, card_record, check_record = filed["made"]["records"]
         self.assertEqual((notes_record["task"], notes_record["points"], notes_record["verified"]), ("card-notes", 2, 2))
         self.assertEqual((check_record["task"], check_record["registry"], check_record["checked"], check_record["supported"]),
@@ -2049,7 +2105,7 @@ class RefusedAnswerTest(LibraryCase):
         self.assertEqual(self.kept_files(), [report["kept"]])
         doc = self.read_kept(report["kept"])
         self.assertEqual((doc["book_id"], doc["version_id"], doc["job"], doc["registry"], doc["prompt_version"]),
-                         (book, version, "card", "cardm", "v5"))
+                         (book, version, "card", "cardm", "v6"))
         self.assertEqual(json.loads(doc["answer"])["topics"][19], "topic 19")
         self.assertIn("topics", doc["reason"])
         self.assertEqual(card.generations(self.store, book, version), [])

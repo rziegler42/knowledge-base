@@ -58,9 +58,10 @@ _SPLIT = re.compile(r"[\s,;]+")
 # belongs to, the sentence, and the notes that state it. The sentences kept for a part, joined with a space, are that part.
 SENTENCE_NAMES = {"summary": "summary", "problem": "neutral_problem", "approach": "neutral_approach", "needs": "neutral_needs",
                   "provides": "neutral_provides", "limits": "neutral_limits"}
-SENTENCE_ASKED = {field: (5 if field == "summary" else 2) for field in card.SENTENCE_FIELDS}      # what the prompt asks for
+SENTENCE_ASKED = {field: (5 if field == "summary" else 3) for field in card.SENTENCE_FIELDS}      # what the prompt asks for
 SENTENCE_CHECKED = {field: (5 if field == "summary" else 3) for field in card.SENTENCE_FIELDS}    # the first of these are put to the check
 SENTENCE_CEILING = {field: (8 if field == "summary" else 4) for field in card.SENTENCE_FIELDS}    # a reply with more for a part is refused
+SENTENCE_NOTES = 2   # the notes a sentence is checked against: the first verified ones that it cites, taken together
 INFERRED_FIELDS = ("neutral_limits",)   # the only part whose sentences may be the model's own inference: every other must cite notes
 _TOTAL_SENTENCES = sum(SENTENCE_CEILING.values())
 SENTENCE_SHAPE = {"sentence_fields": {"type": "strings", "max_items": _TOTAL_SENTENCES, "max": 20},
@@ -128,7 +129,7 @@ def _check_support(values):
 
 CARD_SHAPE = {**{k: card.MODEL_SHAPE_GROUNDED[k] for k in ("useful_for", "topics", "adjacent_topics", "key_ideas", "caveats")},
               **SUPPORT_SHAPE, **SENTENCE_SHAPE}
-CARD_JOB = models.Job("card", "v5", CARD_SHAPE, schema="card.json", check=_check_support)
+CARD_JOB = models.Job("card", "v6", CARD_SHAPE, schema="card.json", check=_check_support)
 
 MORE_FIELDS = ("topics", "key_ideas")   # the lists that a second round serves
 MORE_ASKED = {"topics": 8, "key_ideas": 4}   # the most items the second round is asked for, for a list (and never more than its free places)
@@ -175,7 +176,7 @@ def check_job(count):
             if verdict.strip().casefold() not in VERDICTS:
                 raise KbError(f"a verdict is one of {', '.join(VERDICTS)}: {textutil.literal(verdict, 20)}")
 
-    return models.Job("card-check", "v1", CHECK_SHAPE, schema="card-check.json", check=check)
+    return models.Job("card-check", "v2", CHECK_SHAPE, schema="card-check.json", check=check)
 
 
 def _prefixes(text):
@@ -189,11 +190,12 @@ def pairs(values, notes):
     caveat is checked against the verified note that it cites and that shares most content words with it (the first cited on a tie);
     one that cites no verified note, or none that shares a word, has no pair and so is dropped; an item with no content word of its
     own has a pair, and a model decides. A sentence of the summary or a neutral field, among the first of its part that are checked
-    (`SENTENCE_CHECKED`), is checked against the first verified note that it cites, with no word in common required, since a
-    neutral description is written without the words of a field; one that cites no verified note has no pair. An item that is an
-    inference, or that cites nothing, has none. Returns [{"field", "index", "item", "ref", "point", "quote"}], in the order topics,
-    key ideas, caveats, then the sentences in the order written (a sentence's `field` is its part of the card, such as
-    `neutral_problem`, and its `index` its place among all the sentences of the reply)."""
+    (`SENTENCE_CHECKED`), is checked against the first two verified notes that it cites (SENTENCE_NOTES), taken together, with no
+    word in common required, since a neutral description is written without the words of a field; one that cites no verified note
+    has no pair. An item that is an inference, or that cites nothing, has none. Returns [{"field", "index", "item", "ref", "point",
+    "quote"}], in the order topics, key ideas, caveats, then the sentences in the order written (a sentence's `field` is its part of
+    the card, such as `neutral_problem`, and its `index` its place among all the sentences of the reply); a sentence's pair also has
+    "also", the further notes shown with the first ({"ref", "point", "quote"}, none or one)."""
     items = [(field, index, item, values[f"{field}_support"][index]) for field in card.GROUNDED_LISTS
              for index, item in enumerate(values[field])]
     out = []
@@ -215,10 +217,12 @@ def pairs(values, notes):
         kind, refs = parse_support(s["support"])
         if kind != "refs" or not s["checked"]:
             continue
-        ref = next((r for r in refs if notes.get(r) and notes[r]["verified"]), None)
-        if ref:
-            out.append({"field": s["field"], "index": s["index"], "item": s["text"], "ref": ref, "point": notes[ref]["point"],
-                        "quote": notes[ref]["quote"]})
+        shown = [r for r in refs if notes.get(r) and notes[r]["verified"]][:SENTENCE_NOTES]
+        if shown:
+            first = shown[0]
+            out.append({"field": s["field"], "index": s["index"], "item": s["text"], "ref": first, "point": notes[first]["point"],
+                        "quote": notes[first]["quote"],
+                        "also": [{"ref": r, "point": notes[r]["point"], "quote": notes[r]["quote"]} for r in shown[1:]]})
     return out
 
 
@@ -358,10 +362,12 @@ def card_prompt(title, outline_text, parts, kind="book"):
              f"the {w} addresses), \"approach\" (its approach in general terms), \"needs\" (what it needs), \"provides\" (what it "
              f"provides) and \"limits\" (where it would not work), each up to {SENTENCE_ASKED['neutral_problem']} sentences, written without "
              f"the name of any field, game, product or person. Write each sentence so that it can be understood on its own, and so that "
-             "it says one thing that a note states. The support of a sentence is the one or two notes that best state it, separated by "
-             "spaces, such as \"1.1 3.2\"; cite only a note that is marked verified and that bears on the sentence, since a sentence is "
-             "kept only if a check of the first verified note you cite and the sentence confirms it, and the first note you cite should "
-             "be the one that states it best. Only a sentence of the part \"limits\" may have the word \"inferred\" in place of notes, "
+             "it says one thing that the notes state; prefer two or three short sentences, each one thing, to one long sentence that "
+             "says several, since a sentence that is not confirmed is left out and a part with no sentence left is empty. The support "
+             "of a sentence is the one or two notes that, together, state it, separated by spaces, such as \"1.1 3.2\", with the one "
+             "that states it best first; cite only a note that is marked verified and that bears on the sentence, since a sentence is "
+             "kept only if a check of the first two verified notes you cite, taken together, and the sentence confirms it. "
+             "Only a sentence of the part \"limits\" may have the word \"inferred\" in place of notes, "
              "when no note states it and it is your own inference from them; every other sentence must cite notes, so leave out a "
              "sentence that no note states. Never write \"none\" for a sentence.\n"
              f"In the text of the card never mention notes, pieces, numbers of notes or this message: write about the {w} itself.\n{_NO_MORE}")
@@ -385,13 +391,16 @@ def check_prompt(title, found, kind="book"):
     lines = []
     for n, p in enumerate(found, start=1):
         lines += [f"{n}. [{_CHECK_LABEL[p['field']]}] {p['item']}", f"   note {p['ref']}: {p['point']}", f"   quote: \"{p['quote']}\""]
+        for other in p.get("also", []):
+            lines += [f"   note {other['ref']}: {other['point']}", f"   quote: \"{other['quote']}\""]
     rules = (f"You are checking part of the catalog entry (the card) of a {w}. Below are two sections of data: the {w}'s title, and "
-             f"numbered items of its card. A model wrote each item and cited a note on the {w}, with a quote from it, as its support.\n"
-             f"{_DATA}\nFor each item decide whether the point and the quote of the note it cites support it. Judge only by the point and "
-             f"the quote shown, not by what you know of the {w}.\nReply with one JSON object with the single key \"verdicts\": a list "
-             "with one word for each item, in order, of the same length as the list of items: \"supports\" if the point and the quote "
-             "state the item or clearly lead to it, \"partly\" if they support only part of it, or \"no\" if they do not bear on it. "
-             f"{_NO_MORE}")
+             f"numbered items of its card. A model wrote each item and cited one or two notes on the {w}, each with a quote from it, "
+             f"as its support.\n"
+             f"{_DATA}\nFor each item decide whether the points and the quotes of the notes it cites, taken together, support it. Judge "
+             f"only by the points and the quotes shown, not by what you know of the {w}.\nReply with one JSON object with the single "
+             "key \"verdicts\": a list with one word for each item, in order, of the same length as the list of items: \"supports\" if "
+             "the points and the quotes state the item or clearly lead to it, \"partly\" if they support only part of it, or \"no\" if "
+             f"they do not bear on it. {_NO_MORE}")
     return _prompt(rules, [("TITLE", title), ("ITEMS", "\n".join(lines))])
 
 
@@ -410,13 +419,17 @@ def ground(values, notes, confirmed, paired=None):
     a sentence is dropped if it is cut (past the first few of its part), cites no note, has no pair, is not confirmed, repeats a
     sentence kept before it, or would make the part longer than the card allows; a part that keeps none is empty."""
 
-    def judge(field, index, support):
+    def judge(field, index, support, shown=None):
+        """The entry of an item: `shown`, for a sentence, are the notes that the check was shown (a dict in `paired` gives them); the
+        entry lists them and has the quote of the first, which the check confirmed together with the others."""
         kind, refs = parse_support(support)
         if kind == "inferred":
             return {"mark": "inferred", "notes": [], "quote": None}
         ref = confirmed.get((field, index))
         if kind == "refs" and ref in refs and notes.get(ref, {}).get("verified"):
-            return {"mark": "stated", "notes": [ref], "quote": notes[ref]["quote"]}
+            listed = [r for r in (shown or [ref]) if r in refs and notes.get(r, {}).get("verified")]
+            if ref in listed:
+                return {"mark": "stated", "notes": listed, "quote": notes[ref]["quote"]}
         return None
 
     model = {k: v for k, v in values.items() if k in ("useful_for", "adjacent_topics")}
@@ -442,7 +455,8 @@ def ground(values, notes, confirmed, paired=None):
         elif kind == "refs" and paired is not None and (field, sentence["index"]) not in paired:
             reason = "unpaired"
         else:
-            entry = judge(field, sentence["index"], sentence["support"])
+            entry = judge(field, sentence["index"], sentence["support"],
+                          paired.get((field, sentence["index"])) if isinstance(paired, dict) else None)
             if entry is None:
                 reason = "not_confirmed"
         if entry is not None:
@@ -721,7 +735,8 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
     todo, confirmed = pairs(values, found), {}
     tally = {"checked": 0, "supports": 0, "partly": 0, "no": 0, "unpaired": unpaired(values, todo)}
     check_all(todo, tally, confirmed)
-    grounded = ground(values, found, confirmed, paired={(p["field"], p["index"]) for p in todo})
+    grounded = ground(values, found, confirmed,
+                      paired={(p["field"], p["index"]): [p["ref"]] + [o["ref"] for o in p.get("also", [])] for p in todo})
     more = {"status": "off", "reason": "no model is set for card-more", "fields": {}}
     if more_model:
         wanted = triggers(values, grounded["model"])
