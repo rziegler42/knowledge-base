@@ -1,6 +1,6 @@
 # Search the neutral descriptions by meaning
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-09
 Candidate: cross-field-discovery#meaning-search
 Specs: docs/specs/card.md, docs/specs/models.md
