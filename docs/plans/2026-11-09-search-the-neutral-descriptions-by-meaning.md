@@ -367,4 +367,46 @@ unchanged in D and again at the end.
   did not read the tests, the README or the spec; it could not check the bridge's real behaviour or the real size of a reply at
   dimension 8192, which Increment E shows.
 - **Not done / for the owner.** A security review has not been run: this increment starts a subprocess and parses output from a model
-  server, so it is a place to look; the reviewer named no concrete exposure. It runs only if the owner asks.
+  server, so it is a place to look; the reviewer named no concrete exposure. It runs only if the owner asks. (Committed as `13deae4`.)
+
+### Increment C — Store the vectors of the searched fields (done; not committed)
+
+- **What was built.** `engine/kb/vectors.py` and the command `python3 -m kb card-vectors [--again]`. `vectors.sqlite` in the index
+  root has a `meta` table (format, the model the bridge reported, the name the config gave the model, the dimension, the date) and a
+  `vectors` table (book, version, generation, field, SHA-256 of the text, the vector as little-endian 32-bit floats; one row for each
+  of `neutral_problem`, `neutral_approach` and `neutral_provides` of the newest card of each version of each active book; never
+  `neutral_needs` or `neutral_limits`). A build reads the cards through `card.read`, keeps the vector of a row whose text hash and
+  model are unchanged (and takes the generation from the card), sends the other texts through `models.embed` in chunks that fit in
+  memory, and writes a new file beside the old one, made private before it holds anything, renamed into place under the catalog's
+  lock (taken only to write, not during the model calls). Old files of another format, with other tables, a trigger, a view, an
+  odd meta table, a link, or for another model name or dimension are not reused and are replaced (`replaced` in the counts); a
+  damaged vector is made again; a bridge that reports another model than the one that made the kept vectors refuses the build and
+  asks for `--again`. `connect`, `check_entry` and `read_rows` are the checks a search will use in Increment D. The counts are true:
+  cards, no model part, left out, vectors, kept, made, texts sent, model, dimension, replaced. The card spec ("Where it is stored")
+  and the README ("Searching the cards") say what is built.
+- **Tests first** (the module did not exist: the new test file failed to import), then `python3 -W error::ResourceWarning -m
+  unittest engine.tests.test_vectors engine.tests.test_catalog engine.tests.test_models engine.tests.test_card engine.tests.test_setup
+  engine.tests.test_cardmake engine.tests.test_cardqueue` gave 674 tests, OK; `wb run code-work check` found no problems. The plan names
+  the first three; the others were run because the registry and the cards are read through the same code. No call was made to the
+  owner's server (a fake bridge answers). The library of the owner and its index root were not touched.
+- **Deliberate breaks**, each from green: 38 changes (the six the plan names, a vector stored for the wrong field, the text hash not
+  checked, a foreign model or dimension accepted, a half-built file left, a non-finite or zero vector stored, the length not
+  checked, a kept row not reused, `needs` embedded, no lock, a file not private (also if made private only after the insert), a
+  model change not refused, stale journal files kept, a row's field not checked when read, no chunking, a link followed, a trigger,
+  view or extra table allowed, the format not checked, `replaced` never said, `--again` keeping old rows, inactive books included,
+  the library not guarded at the start or before the swap, unreadable cards not counted, blank text embedded, the generation not
+  taken from the card, odd meta values, an unsendable text kept) were each caught. One is not caught and is redundant: the range of
+  the dimension in the meta table, because a dimension outside 1 to 8192 can never equal the entry's, which is checked as well.
+- **Review.** The read-only `reviewer` agent, a second exchange of six: no blocking finding. Applied: (a) the meta table of the file
+  is not trusted (a value that is not text, a dimension that is not ASCII digits, a model name that is not a valid name or a date that
+  is too long made `build` raise a `ValueError` or crash on bytes; now they are an unusable file, replaced by a build and refused by
+  `check_entry`); (b) the new file is made private as soon as it exists and not after the insert; (c) a text that cannot be encoded
+  (a lone surrogate) leaves its card out and counts it, though a card made by the engine has none (its cleaning drops it, which I
+  tried) and an edited card fails its payload hash; (d) the docstring says that the cards and the old file are read before the model
+  calls and the lock is taken only to write, so a card made meanwhile, or a second build, gives a file that is valid for the cards that
+  were read, and a search treats a vector whose text no longer matches as stale. Not applied: the reviewer suggested removing the old
+  file's journal, WAL and SHM files after the replace; they are removed before it on purpose, so that a hot journal of the old
+  file can never be replayed into the new one (the catalog does the same); the edge it names (the replace failing after they are
+  removed) leaves the old file readable and complete.
+- **Not done / for the owner.** No security review was run; I recommend one after Increment D, which is the first increment in which
+  an agent's query and the stored vectors meet. The reviewer did not read the tests, README or spec text, and could not run anything.

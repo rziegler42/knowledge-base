@@ -63,6 +63,13 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   root with its keyword index and vectors, and it can be rebuilt from the book folders.
 - **[agreed]** The canonical text sits with the book because that is where the costly model output goes. The card still points to
   the book by id, and the catalog is still the thing an agent searches. `knowledge-base.md` is updated to say the same.
+- **[proposed]** The vectors are a second derived file in the index root (`vectors.sqlite`), apart from the keyword catalog. It
+  holds one vector for each of three neutral fields of a card (what the book is about, its approach and what it provides; the needs
+  and the limits are not embedded, because a sample found most of their sentences not in the book), the SHA-256 of the text each
+  was made from, and the model and dimension that made them. It is built from the cards alone, can be thrown away and rebuilt,
+  keeps a vector while its text and model are unchanged, and is never reused for another model or dimension. Built in the engine as
+  `card-vectors`; the search that uses it is Increment D of the plan
+  `2026-11-09-search-the-neutral-descriptions-by-meaning`.
 
 ### What a card holds
 

@@ -745,6 +745,20 @@ python3 -m kb card-search 'stopping rule' [--in all|summary|neutral] [--book BOO
 - **A damaged catalog.** A file of another format, with other tables, a trigger or a view, a stored card that is not a valid card
   (or is nested too deeply to read), or a row whose citation, date, generation or version flag is not what its card gives, is
   refused with the command to run (`card-index`). Nothing in the catalog is run.
+- **The vectors** (for a search by meaning, not built yet). `python3 -m kb card-vectors [--again]` makes a vector for three of the
+  five neutral fields of the newest card of each version of each active book (problem, approach and provides; **not needs or
+  limits**, most of whose sentences a sample found were not in the book), with the embedding model that your config sets for
+  `card-embed` (see [Calling a model](#calling-a-model)), and writes them to `vectors.sqlite` in the index root. **The text of those
+  fields goes to that model**, over the link the registry names, when you run it. The file is built beside the old one and renamed
+  into place under the catalog's lock; it is private to you, is derived from the cards alone, and can be deleted. A vector is kept
+  while the text it was made from (its SHA-256 is stored with it) and the model are the same, so a second run sends nothing; a
+  card that changed has its vector made again. `--again` makes every vector again. The file says which model made the vectors (the
+  name the bridge reported, and the name in your config) and their dimension; a file of another format, with other tables, a
+  trigger or a view, a link, or made for another model or dimension than the one set, is **not reused: the run replaces it**, and
+  the counts say `replaced`. If the bridge reports another model than the one that made the vectors that are kept, the run is
+  refused and asks for `--again`, so vectors of two models are never mixed. The counts printed are the cards read, the cards with no
+  model part, those that could not be read (`left_out`; the exit is 1), the vectors, those `kept` and `made`, the texts sent, the
+  model and the dimension. Nothing leaves your network except to the server of the embedding entry.
 
 ### The trial: do the cards help?
 

@@ -7,6 +7,7 @@ from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardqueue
 from . import cardsample
+from . import vectors
 from .store import Store
 
 
@@ -89,6 +90,9 @@ def main(argv=None):
     sw.add_argument("--version", help="the version (default: the book's current version)")
     sw.add_argument("--generation", type=int, help="the card to show (default: the newest)")
     sub.add_parser("card-index", help="build the catalog of cards again from the book folders (cards are not added to it as they are made)")
+    cv = sub.add_parser("card-vectors", help="make the vectors of the cards (three neutral fields of each) with the embedding model that the config "
+                                             "sets for card-embed; a vector whose text has not changed is kept; the text of those fields goes to that model")
+    cv.add_argument("--again", action="store_true", help="make every vector again")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -155,6 +159,13 @@ def main(argv=None):
             print(json.dumps(counts))
             if counts["failed"]:
                 print(f"{counts['failed']} book or card could not be read and is not in the catalog", file=sys.stderr)
+                return 1
+            return 0
+        if args.command == "card-vectors":
+            counts = vectors.build(Store.open(), config.load(), again=args.again)
+            print(json.dumps(counts))
+            if counts["left_out"]:
+                print(f"{counts['left_out']} book or card could not be read and has no vectors", file=sys.stderr)
                 return 1
             return 0
         if args.command == "card-search":
