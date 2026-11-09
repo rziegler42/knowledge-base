@@ -609,4 +609,107 @@ unchanged in D and again at the end.
   embedding models as a non-goal. The owner chose to amend the plan (the non-goal, completion criterion 5, Increment E, Risks and
   Deferred work), so E now repeats its build and the same eight searches for each model the owner has listed, shows what each
   returns, and records the owner's choice of the model the library keeps. It still measures no accuracy and ranks no model. The plan
-  was committed and approved again before E.
+  was committed and approved again before E. (Committed as `a283ccb`.)
+
+### Increment E — Build over the library and look at what it returns (done; no tracked code besides this plan)
+
+- **The eight searches** (agreed by the owner, the same for every model): (1) test whether an item belongs to a huge set with very
+  little memory, when a small chance of a wrong "yes" is acceptable; (2) act when the other side's information is hidden and it may
+  bluff; (3) find a good design in an enormous space when every trial is expensive; (4) speed up a big computation by splitting it
+  across workers when one part must run in sequence; (5) allow random jumps at first and make them rarer so the search settles; (6)
+  play many random games to the end, note which first moves win most often, and spend more trials on those; (7) replace a table lookup
+  with a model that predicts where the item sits; (8) break a task into overlapping pieces, solve each once and reuse the answers.
+  Each is paired with two plain words for the keyword side (`membership memory`, `hidden information`, `expensive evaluation`, `split
+  workers`, `random jumps`, `random trials`, `predict lookup`, `reuse pieces`), since a keyword search needs every word in one card.
+  The books I expected to see for each are my own judgment and are not a measured truth.
+- **Round 1: `bge-m3:latest` (`embed-bge`, dimension 1024), on the owner's word.** `card-vectors` read 79 cards (one with no model
+  part, none left out) and made 230 vectors from 230 texts in 6.3 s, in one pass; a second run kept all 230 and sent no text. The 230
+  equal the number of non-empty searched fields in the catalog. A search covered 78 cards with 0 stale and 0 without a vector. The
+  results of a live search carry the untrusted-text markers and a citation. Sent to `ned`, in the clear: the 230 texts, then the eight
+  query sentences (twice, because I ran the searches again to record the rank of the expected books, and one of them a third time to
+  check the markers).
+- **What came back** (the first five by meaning; "kw" is the keyword search on the neutral side). (1) Bloom filter first (0.78), then
+  four unrelated books; kw: Bloom filter. (2) Mechanism design, Minimax, Mastering Atari/Go/Chess/Shogi by planning, Dota 2, Genetic
+  algorithm; DeepStack at rank 11 and the imperfect-information paper at 14; kw: Mastering Atari/Go/Chess/Shogi. (3) LoRA, Simulated
+  annealing, Computer-aided design, 3D modeling, Genetic algorithm; DeepCAD at 47; kw: none. (4) OpenMP first, Asynchronous Methods
+  for deep RL, ZeRO, a FreeCAD scripting page, Computer-aided manufacturing; Amdahl's law at 12, Horovod 13, Megatron 9, Message
+  Passing Interface beyond 50; kw: none. (5) Alpha-beta pruning, A*, Dijkstra, Simulated annealing (4th), PPO; kw: none. (6) Mechanism
+  design, Evolutionary game theory, Dijkstra, Mastering Chess and Shogi by self-play, Dynamic programming; Monte Carlo tree search at
+  21; kw: none. (7) five books about language and vision models and game agents; The Case for Learned Index Structures beyond 50;
+  kw: none. (8) Dynamic programming first (0.69), OpenMP, DeepStack, GPT-3, ResNet; FlashAttention at 17, Fast Fourier transform
+  beyond 50; kw: none.
+- **A plain reading.** `bge-m3` puts the book that states the idea first when the card says it plainly (Bloom filter, Dynamic
+  programming, OpenMP), and finds Simulated annealing and Genetic algorithm in the top five for the search problem. It misses
+  books a person would expect for the others (Monte Carlo tree search, the learned index, Amdahl's law, DeepStack), and the top five
+  often hold books of a similar kind of text (Wikipedia pages on algorithms, or deep-learning papers) that have little to do with
+  the query. The keyword search found something for two of the eight. The result cannot say whether the misses come from the model,
+  from the neutral descriptions (the sample of Increment A found them partly unsupported), or from the query wording.
+- **Round 2: `qwen3-embedding:4b` (`embed-qwen`, dimension 2560), on the owner's word.** `card-vectors` made 230 vectors from 230
+  texts in 27.6 s (`replaced: true`: the `bge-m3` file was replaced, nothing mixed); a second run kept all 230 and sent no text. A
+  search covered 78 cards with 0 stale and 0 without a vector, and the live results carry the markers and a citation (the script
+  asserts this on every result of a search; for this round one search was also checked by hand). Sent to `ned`, in the clear: 230
+  texts, the eight query sentences, and the first query a second time for the check. No instruction was put before a query: the
+  model is made to take one, so it ran without its best form.
+- **Where the books I expected ranked, `bge-m3` then `qwen3-embedding:4b`** (my own expectations; rank among 78; lower is better):
+  1 Bloom filter 1 → 1 (closeness 0.78 → 0.86); 2 DeepStack 11 → 3, the imperfect-information paper 14 → 5; 3 Simulated annealing
+  2 → 1, Genetic algorithm 5 → 5, DeepCAD 47 → 19; 4 OpenMP 1 → 1, Horovod 13 → 3, Amdahl's law 12 → 5, ZeRO 3 → 11, Megatron 9 → 10,
+  Message Passing Interface beyond 50 → 23; 5 Simulated annealing 4 → 1; 6 Monte Carlo tree search 21 → 9; 7 The Case for Learned
+  Index Structures beyond 50 → 25; 8 Dynamic programming 1 → 1, Fast Fourier transform beyond 50 → 13, FlashAttention 17 → 16.
+  `qwen3-embedding:4b` put the expected book higher in 12 of the 18 comparisons, the same in 4 and lower in 2 (ZeRO and Megatron
+  in search 4). The top five of its search 1 held The Case for Learned Index Structures second, which `bge-m3` did not.
+- **A plain reading.** On these eight searches `qwen3-embedding:4b`, with no instruction, found more of the books I expected, and
+  higher, than `bge-m3`; both missed Monte Carlo tree search and the learned index in the top five, and neither is a measurement of
+  accuracy. The keyword results are the same as in round 1.
+- **Round 3: `mxbai-embed-large:latest` (`embed-mxbai`, dimension 1024), on the owner's word.** `card-vectors` made 230 vectors from
+  230 texts in 5.6 s (`replaced: true`; no text was refused for its length); a second run kept all 230 and sent no text. A search
+  covered 78 cards with 0 stale and 0 without a vector, and the script asserted the markers and a citation on every result. Sent to
+  `ned`, in the clear: 230 texts and the eight query sentences. No prefix was put before a query, though the model is made to take one.
+- **Where the books I expected ranked, in all three rounds** (my own expectations; rank among 78; `bge-m3` / `qwen3-embedding:4b` /
+  `mxbai-embed-large`): 1 Bloom filter 1 / 1 / 1; 2 DeepStack 11 / 3 / 3, imperfect-information paper 14 / 5 / 12; 3 Simulated
+  annealing 2 / 1 / 1, Genetic algorithm 5 / 5 / 3, DeepCAD 47 / 19 / 12; 4 OpenMP 1 / 1 / 1, Amdahl's law 12 / 5 / 6, Horovod 13 / 3 /
+  21, ZeRO 3 / 11 / 4, Megatron 9 / 10 / 5, Message Passing Interface beyond 50 / 23 / 31; 5 Simulated annealing 4 / 1 / 1; 6 Monte Carlo
+  tree search 21 / 9 / 2; 7 The Case for Learned Index Structures beyond 50 / 25 / 25; 8 Dynamic programming 1 / 1 / 1, Fast Fourier
+  transform beyond 50 / 13 / 15, FlashAttention 17 / 16 / 32. Over the 18 comparisons (a rank beyond 50 counted as 51) the mean rank was
+  17.4 / 8.4 / 9.8, and the expected book was in the top five 7 / 10 / 10 times. These are descriptive figures on eight searches and
+  my own expectations; they are not a ranking of the models.
+- **Side by side.** Only a few books were returned in the top five by all three models for the same search: Bloom filter (1);
+  Mechanism design and Minimax (2); Simulated annealing and Genetic algorithm (3); OpenMP (4); A* and Simulated annealing (5);
+  Evolutionary game theory (6); two papers on vision-language and game-playing agents (7); Dynamic programming (8). The rest of each
+  top five differed between the models. `qwen3-embedding:4b` alone found Amdahl's law, CUDA and Horovod for search 4; `mxbai-embed-large`
+  alone found Monte Carlo tree search for searches 5 and 6 (second in 6, where `bge-m3` had it 21st and `qwen3` 9th) and Megatron-LM
+  for 4. Each model also returned a few books that seem unrelated to the search (for example the Hello world page from `bge-m3` in
+  search 1 and from `mxbai-embed-large` in search 8, and the SQLite page from `qwen3-embedding:4b` in searches 1 and 7); I did not
+  count them. All three
+  missed The Case for Learned Index Structures in the top five of search 7 (25th for both newer models), and all three put an
+  unrelated book or two in most top fives.
+- **What could not be concluded.** Eight searches and my own idea of the right books cannot show how often search finds a transfer or
+  which model is better in general; the differences between `qwen3-embedding:4b` and `mxbai-embed-large` are small and go both ways.
+  The misses may come from the neutral descriptions (Increment A found them partly unsupported) as well as from the models. Both
+  newer models are made to take an instruction or a prefix before the query, which the engine does not send, so they may do better
+  than shown. That, and a trial on problems with known answers, is where the models should be compared; it is the candidate
+  `cross-field-discovery#cross-field-trial`.
+- **Cost and size** (one build of 230 texts, on `ned`): `bge-m3` 6.3 s, 1024 numbers a vector; `qwen3-embedding:4b` 27.6 s, 2560 numbers
+  (the vectors are about 2.5 times larger); `mxbai-embed-large` 5.6 s, 1024 numbers, and a limit of 512 tokens a text (the cards' fields
+  are at most 500 characters, so none was refused, but a longer field would be).
+- **Recommendation (for the owner's decision).** Keep `qwen3-embedding:4b` as the library's model. On these searches it did as well
+  as `mxbai-embed-large` and better than `bge-m3`, it has far more room in its window, and it has an upside once the engine can send
+  the instruction it is made for. Its costs are a longer build (27.6 s for the library) and larger vectors, which are small at this
+  size. `mxbai-embed-large` is a reasonable second choice if a short build or a small file matters more. The file of vectors on disk
+  now holds `mxbai-embed-large`: if the owner keeps `qwen3-embedding:4b`, the owner sets `card-embed` back to `embed-qwen` and the
+  library is built again with it (230 texts to `ned`, about half a minute).
+- **The owner's decision** (2026-11-09, on my recommendation): the library keeps `qwen3-embedding:4b`. The owner set `card-embed` to
+  `embed-qwen`, and I built the library again with it: 230 vectors from 230 texts in 27.7 s (`replaced: true`, the `mxbai-embed-large`
+  file replaced, nothing mixed). The file of vectors on disk now says `model` and `configured` `qwen3-embedding:4b`, dimension 2560,
+  230 rows; a further build kept all 230 and sent no text. The config keeps the three embedding entries (`embed-bge`, `embed-qwen`,
+  `embed-mxbai`), so another model can be tried by changing the one word of `card-embed` and building again.
+- **Verification of the plan as a whole** (run once after the last increment): `python3 -W error::ResourceWarning -m unittest
+  engine.tests.test_models engine.tests.test_catalog engine.tests.test_vectors engine.tests.test_card engine.tests.test_cardsample`
+  gave 478 tests, OK. No code changed in this increment, so the recorded verification of A to D-A stands. `wb run code-work check`
+  finds no problems. Sent to `ned` during E, in the clear: four builds of 230 texts (`bge-m3`, `qwen3-embedding:4b`,
+  `mxbai-embed-large`, and `qwen3-embedding:4b` again), about 38 query sentences (the eight searches for each model, the eight again
+  for `bge-m3` to record ranks, and two single searches to check the markers), and the three one-word probes of the dimensions.
+- **What is left, for the owner.** The cross-field trial (`cross-field-discovery#cross-field-trial`) is where the models and the
+  search are compared on problems with known answers, and `problem-search` is the candidate that would use this search. Not done and
+  recorded as deferred: a prefix or instruction before a query (which `qwen3-embedding` is made for); the fixed-name gap of
+  `catalog.rebuild`; caps on reading the files; embedding `needs` and `limits`; the roadmap's out-of-date "Current state"; the
+  calibration subset of Increment A, still unlabelled by the owner.
