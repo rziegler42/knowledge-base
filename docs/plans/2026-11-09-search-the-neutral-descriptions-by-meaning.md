@@ -40,8 +40,10 @@ over the library has been made, and the owner has seen what a few searches retur
 - Embedding the summary side of a card (the summary, uses, topics, key ideas), and embedding the neutral fields `needs` and
   `limits`: the sample of Increment A found 14% and 7% of their sentences supported by the book. Only problem, approach and provides
   are embedded. Adding the other two later is a change of one constant and a rebuild.
-- Comparing embedding models, and choosing one by measurement. The owner lists the model; the plan does not decide which is best. The
-  trial of the candidate `cross-field-discovery#cross-field-trial` is where search is compared.
+- Choosing an embedding model by measurement. The owner lists the models; the plan does not decide which is best. Increment E may be
+  repeated for each embedding model the owner has listed, and then shows, for the same eight searches, what each returns, so that the
+  owner can see the differences before choosing; it measures no accuracy and ranks no model. The trial of the candidate
+  `cross-field-discovery#cross-field-trial` is where search is compared against problems with known answers.
 - A vector index (approximate nearest neighbour) or a new dependency. The library has about eighty books and three searched fields each, so the
   closeness is computed in plain Python over every vector.
 - Posing a problem as sub-problems and setting aside results from the problem's own field (`cross-field-discovery#problem-search`).
@@ -90,8 +92,9 @@ over the library has been made, and the owner has seen what a few searches retur
 4. `card-search QUERY --meaning` returns results in the shape of a keyword result, with the closeness as the score and the field that
    matched, and refuses a store made by another model, a store of another format, and a query that is empty; a vector whose text no
    longer matches its card is not used and is counted in the reply.
-5. A live build over the library made a vector for each searched field (problem, approach, provides) of each card that has one, and the owner has seen the results
-   of the searches of Increment E and recorded a decision.
+5. A live build over the library made a vector for each searched field (problem, approach, provides) of each card that has one, with
+   each embedding model the owner chose to try; the owner has seen the results of the same eight searches for each, and recorded a
+   decision, including which model the library keeps.
 6. `wb run code-work check` finds no problems, and the specs and the README state what is built.
 7. The findings F1, F2 and F5 of the security review of commit `4e93147` (the end of Increment D) are fixed, each with a regression
    test that failed before the fix, and a second look has found them fixed; the other findings (F3, F4, F6) are stated in the README
@@ -251,21 +254,32 @@ No call to the owner's server is made in this increment.
 
 **Outcome:** the library has vectors for its searched fields, and the owner has seen what a few searches by meaning return next to
 what a keyword search returns, and decides what to do.
-**Dependencies:** D-A, the owner's setting of the embedding entry and of `card-embed` in the config, and the owner's word to run.
-**Affected areas:** the index root (`vectors.sqlite`); this plan's Result. No tracked code.
+**Dependencies:** D-A, the owner's setting of one or more embedding entries and of `card-embed` in the config, and the owner's word to
+run (and to switch to the next model).
+**Affected areas:** the index root (`vectors.sqlite`); this plan's Result. No tracked code. The owner edits the config; I never do.
 **Steps:**
-1. Run `wb run ask-ollama check` to see that the embedding model is listed, and `python3 -m kb card-vectors` over the library. The
-   texts sent are the three searched fields of the current cards (about 240), to the owner's server; say so before the run.
-2. Run the build again: it makes no new vector.
-3. Run a set of searches by meaning, and the same words as a keyword search on the neutral side. The owner gives the queries, or
-   agrees to a set of eight that I propose: four written as a problem of one field and four as a plain description of a mechanism.
-   Record for each the first five books of each search with the field that matched.
-4. Record the counts of the build, its time, any text refused, and a plain reading of the searches: which books surfaced that the
-   keyword search did not, which keyword results were lost, and which results are from the same field as the query. No claim of how
-   often search finds a transfer is made: that is the trial (`cross-field-discovery#cross-field-trial`).
-5. Recommend, and record the owner's decision.
-**Verification:** the second build makes no new vector; every search's results have a citation and the markers; the counts of the
-build agree with the number of non-empty searched fields in the catalog; `wb run code-work check`.
+1. Agree with the owner, once, the models to try (each an embedding entry of the config, with its section in the endpoint record) and a
+   set of eight searches that is used for every model: the owner gives the queries, or agrees to eight that I propose, four written as
+   a problem of one field and four as a plain description of a mechanism.
+2. For each model in turn, with `card-embed` set by the owner to its entry: run `wb run ask-ollama check` to see that the model is
+   listed, and `python3 -m kb card-vectors` over the library. The texts sent are the three searched fields of the current cards
+   (about 240), to the owner's server; say so before each run. A change of model replaces the file of vectors and mixes nothing.
+3. Run the build again: it makes no new vector.
+4. Run the eight searches by meaning, and the same words as a keyword search on the neutral side. Record for each the first five
+   books of each search with the field that matched.
+5. Record for each model the counts of the build, its time, its dimension, any text refused, and a plain reading of the searches:
+   which books surfaced that the keyword search did not, which keyword results were lost, and which results are from the same field
+   as the query. After the last model, set side by side what each returned (which books every model returned, which only one) and say
+   what could not be concluded. Two models listed by the owner are made to take an instruction before the query (`qwen3-embedding`)
+   or a short prefix (`mxbai-embed-large`), and the engine sends none (see Deferred work), so they may do worse here than they
+   could; this is said in the Result. No claim of how often search finds a transfer, and no ranking of the models, is made: that is
+   the trial (`cross-field-discovery#cross-field-trial`).
+6. Recommend, and record the owner's decision, including which model the library keeps. If the last model built is not the one the
+   owner keeps, the owner sets `card-embed` to it and the library is built again with it, so that the file of vectors on disk is the
+   chosen model's.
+**Verification:** for each model, the second build makes no new vector; every search's results have a citation and the markers; the
+counts of the build agree with the number of non-empty searched fields in the catalog; at the end, the file of vectors on disk
+names the model the owner chose; `wb run code-work check`.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-search-the-neutral-descriptions-by-meaning#E`, holding the
 Result and the owner's decision.
 
@@ -280,7 +294,7 @@ unchanged in D and again at the end.
 ## Risks and sensitive actions
 
 - **Text leaves the machine in A and E.** In A, passages of books and sentences of cards go to cloud labelling subagents (allowed by
-  the owner, started on the owner's word). In E, the three searched fields and the queries go in the clear to the owner's server on the
+  the owner, started on the owner's word). In E, for each model tried, the three searched fields and the queries go in the clear to the owner's server on the
   owner's network, as every card call does.
 - **A vector that does not match its card.** A stale or foreign vector would rank a book by text it no longer has. The text hash,
   the model and the dimension are checked at every search, and a failure is a refusal or a counted omission.
@@ -313,7 +327,9 @@ unchanged in D and again at the end.
 
 - Embedding the summary side of a card, and the choice between one vector for the searched fields together and one for each.
 - Embedding `needs` and `limits`, if a later measurement (a better card form or a person's labels) shows them to be reliable.
-- Comparing the two embedding models on a held-out set of queries (`models.md` says the evaluation decides).
+- Comparing the embedding models on a held-out set of queries with known right answers (`models.md` says the evaluation decides);
+  Increment E only shows what each returns for eight searches. A prefix or instruction for a query, which `qwen3-embedding` and
+  `mxbai-embed-large` are made for, is the item below.
 - A vector index, if the library grows far beyond a few hundred books.
 - Prefixes that a model may want for a query and for a document: a model that needs them is not supported by this plan.
 - Marked inferences or "not stated" for empty neutral parts, and the other open items of `cards`.
@@ -574,4 +590,23 @@ unchanged in D and again at the end.
   is complete, as the catalog's build also does. Noted: `catalog.rebuild` has the same fixed-name gap (already deferred). The
   reviewer could not run anything and did not read the Result or all of the README.
 - **Not done / for the owner.** F3, F4 and F6 are known limits, stated in the README. The `catalog.rebuild` gap is deferred for the
-  owner to decide.
+  owner to decide. (Committed as `ab32df3` and pushed.)
+
+### Before Increment E: the models to try, and an amendment of E (2026-11-09)
+
+- **The models.** The owner pulled `qwen3-embedding:4b` and `mxbai-embed-large` onto `ned`, besides `bge-m3`, and added a section for
+  each to the endpoint record (`wb run ask-ollama check` lists them with `kind=embedding`, `context=8192` and `512`). The config holds
+  three embedding entries, `embed-bge`, `embed-qwen` and `embed-mxbai`, and `card-embed` names `embed-bge` (`python3 -m kb models`
+  loads it). A probe that sent the word "test" to each model (three calls, on the owner's word) found the dimensions 1024, 2560 and
+  1024; each reply was finite, of length one, with its largest number under 0.34 and its smallest above 1e-6, so all three are
+  inside the limits of `models.embed`.
+- **Why these models.** A search of recent write-ups (blogs repeating MTEB scores, not primary benchmarks) put Qwen3-Embedding first
+  for quality, `bge-m3` as the multilingual workhorse, and `mxbai-embed-large` as a good English model; none of that was checked on
+  this library. The cards' fields are short English text (at most 500 characters), so the languages and the long window of `bge-m3`
+  count for little here. Qwen3-Embedding is trained for an instruction before the query (`Instruct: …` then `Query: …`) and
+  `mxbai-embed-large` for a short prefix; the engine sends neither, so both start at a disadvantage against `bge-m3`.
+- **A correction.** I told the owner that comparing the models "fits inside Increment E". It did not: the plan listed comparing
+  embedding models as a non-goal. The owner chose to amend the plan (the non-goal, completion criterion 5, Increment E, Risks and
+  Deferred work), so E now repeats its build and the same eight searches for each model the owner has listed, shows what each
+  returns, and records the owner's choice of the model the library keeps. It still measures no accuracy and ranks no model. The plan
+  was committed and approved again before E.
