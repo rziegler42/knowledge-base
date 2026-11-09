@@ -33,7 +33,10 @@ _NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _SERVER = _NAME
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9._:-]*"
 _MODEL = re.compile(_SEGMENT + "(?:/" + _SEGMENT + ")*")  # the bridge's rule for a model name: segments joined by a slash
-_KEYS = ("bridge", "server", "model", "max_output", "thinking", "timeout", "kind", "dimension")
+_KEYS = ("bridge", "server", "model", "max_output", "thinking", "timeout", "kind", "dimension", "query_prefix", "document_prefix")
+PREFIXES = ("query_prefix", "document_prefix")  # text that goes in front of a query, and of a stored text, when an embedding model makes its vector
+MAX_PREFIX = 400
+EMBED_KINDS = ("document", "query")  # what a text given to `embed` is
 KINDS = ("chat", "embedding")
 _REQUIRED = ("bridge", "server", "model")
 MAX_MAX_OUTPUT = 200000
@@ -66,6 +69,14 @@ def _valid_model(value):
     return isinstance(value, str) and 0 < len(value) <= MAX_MODEL and ".." not in value and _MODEL.fullmatch(value) is not None
 
 
+def _prefix_ok(value):
+    """True for text of 1 to MAX_PREFIX characters that are printable, or a line break: no control character, no zero-width, direction or
+    other format character, no lone surrogate, no private-use or unassigned character and no separator other than the plain space.
+    A combining mark, a variation selector, a filler and a letter that looks like another are allowed (they are in text of many
+    languages), so this does not make the text sure to be what it looks like; it is the owner's own text, sent to the owner's server."""
+    return isinstance(value, str) and 0 < len(value) <= MAX_PREFIX and all(c == "\n" or c.isprintable() for c in value)
+
+
 def _entry(name, e):
     if not isinstance(e, dict):
         raise KbError(f"the config entry models.{name} is not an object")
@@ -85,9 +96,13 @@ def _entry(name, e):
     if not isinstance(kind, str) or kind not in KINDS:
         raise KbError(f"models.{name}.kind must be one of {', '.join(KINDS)}")
     if kind == "chat":
-        if "dimension" in e:
-            raise KbError(f"models.{name}.dimension belongs to an embedding entry")
+        for key in ("dimension",) + PREFIXES:
+            if key in e:
+                raise KbError(f"models.{name}.{key} belongs to an embedding entry")
     else:
+        for key in PREFIXES:
+            if key in e and not _prefix_ok(e[key]):
+                raise KbError(f"models.{name}.{key} must be text of 1 to {MAX_PREFIX} printable characters (a line break is allowed)")
         if not _count(e.get("dimension"), 1, MAX_DIMENSION):
             raise KbError(f"models.{name}.dimension must be a whole number from 1 to {MAX_DIMENSION}")
         for key in ("max_output", "thinking"):
@@ -511,12 +526,17 @@ def _check_embed(code, out, err, count, dimension):
     return model, [_vector(v, dimension) for v in vectors]
 
 
-def embed(cfg, name, texts, launcher=None, root=None):
+def embed(cfg, name, texts, launcher=None, root=None, kind="document"):
     """Turn `texts` into vectors with the embedding entry listed as `name` and return {"model", "dimension", "vectors"}: the model as
     the bridge reported it, the dimension of the entry, and one vector of floats for each text, in order. The texts go to the bridge
     in as many calls as it needs (`_batches`). Every reply is checked: the same model each time, the number of vectors, the dimension
     of the entry for each, finite numbers of a sensible size, no vector of zeros. One reply that is wrong refuses the whole call and
-    gives no vectors. The vectors are model output and untrusted data; this only checks their shape."""
+    gives no vectors. The vectors are model output and untrusted data; this only checks their shape. `kind` says what the texts are,
+    `"document"` (a stored text, the default) or `"query"`: the entry's `document_prefix` or `query_prefix`, if it has one, is put in
+    front of each text before its size is checked and it is sent, so that the vector is made from the text with its prefix; an entry
+    with no prefix for the kind sends the text as it is."""
+    if not isinstance(kind, str) or kind not in EMBED_KINDS:
+        raise KbError(f"the kind of text to embed is {' or '.join(EMBED_KINDS)}")
     entries = registry(cfg)
     if cfg.get("models_on") is not True:
         raise KbError("model work is off: set models_on to true in the config to turn it on")
@@ -527,15 +547,20 @@ def embed(cfg, name, texts, launcher=None, root=None):
         raise KbError(f"the model {textutil.clean(name, 40)!r} is a chat entry; texts are embedded with an embedding entry")
     if not isinstance(texts, list) or not texts or len(texts) > MAX_EMBED_TEXTS:
         raise KbError(f"the texts to embed are a list of 1 to {MAX_EMBED_TEXTS} texts")
+    prefix = entry.get(f"{kind}_prefix", "")
+    sent = []
     for n, text in enumerate(texts, start=1):
         if not isinstance(text, str) or not text.strip():
             raise KbError(f"text {n} to embed is not text with a character that is not white space")
+        whole = prefix + text
         try:
-            size = len(text.encode("utf-8"))
+            size = len(whole.encode("utf-8"))
         except UnicodeEncodeError:
             raise KbError(f"text {n} to embed holds a character that cannot be sent") from None
         if size > MAX_TEXT:
-            raise KbError(f"text {n} to embed is larger than the bridge takes ({MAX_TEXT} bytes)")
+            raise KbError(f"text {n} to embed is larger than the bridge takes ({MAX_TEXT} bytes{', with its prefix' if prefix else ''})")
+        sent.append(whole)
+    texts = sent
     if len(texts) * entry["dimension"] > MAX_EMBED_NUMBERS:
         raise KbError(f"the vectors of {len(texts)} texts of {entry['dimension']} numbers would not fit in memory; embed fewer texts at a time")
     root = root or _project_root()

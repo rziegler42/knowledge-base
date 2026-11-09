@@ -210,4 +210,33 @@ until `card-vectors` is run once; the plan says so before it happens.
 
 ## Result
 
-Empty until work starts.
+### Increment A — Prefixes for the texts the engine embeds (done; not committed)
+
+- **What was built** (`engine/kb/models.py`): an embedding entry may have `query_prefix` and `document_prefix`, each text of 1 to 400
+  characters that are printable or a line break (`_prefix_ok`: `str.isprintable` plus `\n`); a chat entry refuses both, and the listing
+  does not show them. `models.embed` has a new last argument `kind` (`"document"` by default, or `"query"`; anything else is refused
+  before anything is sent). It puts the entry's prefix for the kind in front of each text after the raw text is checked (text, not
+  blank) and before the size is checked, so the size limit applies to the prefixed text and the vector is made from it; an entry with
+  no prefix for the kind sends the text as before. The prefix goes in the JSON on standard input and never in the command. The models
+  spec and the README say what is built.
+- **Tests first**, and seen to fail (21 errors and a failure before any code; two refusal tests passed at first only because the keys
+  were unknown and were shown to bite by the breaks). Then `python3 -W error::ResourceWarning -m unittest engine.tests.test_models
+  engine.tests.test_setup engine.tests.test_vectors` gave 282 tests, OK; `wb run code-work check` found no problems. The plan names the
+  first two; `test_vectors` was added because the build and the search call `embed`. No call was made to the owner's server (a fake
+  bridge answers and records the texts it is sent).
+- **Deliberate breaks**, each from green: 16 (the query prefix put on a document, the document prefix put on a query, both on both,
+  the prefix put on after the size is checked, the prefix not sent, a chat entry accepting a prefix, a control character, a
+  zero-width character, a prefix of 401 characters, an empty prefix, a value that is not text, a kind that is neither, the kind not
+  checked first, the default kind a query, the prefix passed on the command line, a prefix shown in the listing) were each caught.
+- **Review.** The read-only `reviewer` agent, no blocking finding. Applied: (1) the README said "nothing in the engine uses these keys
+  yet", which was false, because `build` and `search` call `embed` with the default kind, so a `document_prefix` in the config would
+  be put in front of a search's query too and the file of vectors does not record it; the README and the spec now say "do not set
+  either prefix yet" until Increment B; (2) "nothing hidden" claimed more than `isprintable` checks (it still allows combining marks,
+  variation selectors, fillers such as U+3164 and the braille blank, and look-alike letters), so the docstring, the README and the spec
+  now say what is refused and that the check does not make the text sure to be what it looks like. The plan's Risks section says a
+  prefix "cannot hide text", which overstates this; the approved text is not changed, and the limit is stated here and in the docs.
+  Not applied: refusing combining marks and the fillers (combining marks are in text of many languages, and the prefix is the owner's
+  own text sent to the owner's server). Noted for Increment B: the document-prefix hash must cover the exact string, since no
+  normalization is applied, and a `str` subclass with its own methods could make `embed` raise a different error, which a JSON config
+  value cannot be. The reviewer ran nothing and read no bridge source.
+- **Not asked yet:** the question about a security review comes at the end of Increment B, as the plan says.

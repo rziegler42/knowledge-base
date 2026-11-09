@@ -453,6 +453,20 @@ hand; nothing in the engine writes it:
   reply refuses the whole call. A call whose vectors (texts times the dimension) would be more than 10 million numbers is
   refused before anything is sent. The vectors are model output and
   are untrusted data; this only checks their shape.
+- **A prefix for an embedding entry.** Some embedding models are made to take text in front of a query, or of a stored text, and give
+  better vectors with it. An embedding entry may therefore have `"query_prefix"` and `"document_prefix"`, each text of 1 to 400
+  printable characters (a line break is written `\n`; a control character, a zero-width or direction character, a lone surrogate, a
+  private-use character and a non-breaking space are refused; a combining mark, a variation selector or a letter that looks like another
+  is allowed, so the check does not make a prefix certain to be what it looks like). A chat entry may not have either. In code, `kb.models.embed(cfg,
+  name, texts, kind="query")` (or `"document"`, the default) puts the entry's prefix for that kind in front of each text before its
+  size is checked, so a text that fits alone may be refused with its prefix, and the vector is made from the text with its prefix. An
+  entry with no prefix for the kind sends the text as it is, as before. The prefix is your own text in the config: it goes on standard
+  input as part of the text and is never an argument of the command, and `python3 -m kb models` does not print it. As an example of the
+  form (not checked at its source), `qwen3-embedding` is described as trained for `Instruct: <a task>`, a line break and `Query: <the
+  query>` before a query and for a plain document. A change of the document prefix means the vectors must be made again. **Until the
+  build and the search of the vectors pass the kind (a later change of the plan `2026-11-09-query-prefix-for-embedding-models`), they
+  call `embed` with the default kind, so a `document_prefix` in the config would be put in front of a search's query too and the file of
+  vectors would not record it: do not set either prefix yet.**
 - `printf '<prompt>' | python3 -m kb model-try <name>` sends the prompt (at most 256 KB of UTF-8) and prints the answer. The answer
   is the model's text, so it is printed between the untrusted-text markers, with a record of the model the server reported, the
   registry name, the prompt version, the UTC date and the token counts. If the answer holds the words of a marker it is withheld.

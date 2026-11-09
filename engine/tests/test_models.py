@@ -894,6 +894,44 @@ class EmbeddingRegistryTest(Base):
         with self.assertRaises(KbError):
             models.choose(off, "card-embed")
 
+    def test_an_embedding_entry_may_have_a_query_prefix_a_document_prefix_or_both(self):
+        for over in ({"query_prefix": "Q: "}, {"document_prefix": "D: "}, {"query_prefix": "Q: ", "document_prefix": "D: "}):
+            with self.subTest(over=over):
+                entry = models.registry(config(emb=embedding(**over)))["emb"]
+                for key, value in over.items():
+                    self.assertEqual(entry[key], value)
+        plain = models.registry(config(emb=embedding()))["emb"]
+        self.assertNotIn("query_prefix", plain)
+        self.assertNotIn("document_prefix", plain)
+
+    def test_a_prefix_of_400_characters_with_line_breaks_and_non_ascii_letters_is_accepted(self):
+        head = "Instruct: écrire à Zoë – naïve café\nQuery: "
+        text = head + "x" * (400 - len(head))  # exactly 400 characters
+        self.assertEqual(len(text), 400)
+        for key in ("query_prefix", "document_prefix"):
+            self.assertEqual(models.registry(config(emb=embedding(**{key: text})))["emb"][key], text)
+        self.assertEqual(models.registry(config(emb=embedding(query_prefix="Query: ")))["emb"]["query_prefix"], "Query: ")  # a trailing space is kept
+
+    def test_a_prefix_that_is_not_text_of_1_to_400_printable_characters_is_refused(self):
+        bad = ["", "x" * 401, None, 5, True, 1.5, ["x"], {"a": 1}, b"x",
+               "a\tb", "a\rb", "a\x00b", "a\x1bb", "a\x7fb", "a\x85b",      # control characters, only the line break is allowed
+               "a\ud800b",                                                     # a lone surrogate
+               "a\u200bb", "a\u200fb", "a\u202eb", "a\ufeffb", "a\u2028b",   # zero-width, right-to-left, a bidirectional override, a mark, a line separator
+               "a\u00adb", "a\u2066b"]                                        # a soft hyphen, an isolate
+        for key in ("query_prefix", "document_prefix"):
+            for value in bad:
+                with self.subTest(key=key, value=value):
+                    self.refused_registry(config(emb=embedding(**{key: value})))
+
+    def test_a_chat_entry_refuses_a_prefix(self):
+        for key in ("query_prefix", "document_prefix"):
+            self.refused_registry(config(local=entry(**{key: "Q: "})))
+            self.refused_registry(config(local=entry(kind="chat", **{key: "Q: "})))
+
+    def test_the_listing_does_not_show_the_text_of_a_prefix(self):
+        listing = models.listing(config(emb=embedding(query_prefix="a-secret-query-prefix", document_prefix="a-secret-document-prefix")))
+        self.assertNotIn("secret", json.dumps(listing))
+
     def test_a_chat_call_to_an_embedding_entry_is_refused_before_anything_runs(self):
         with self.assertRaises(KbError):
             models.call(config(emb=embedding()), "emb", "q", launcher=self.launcher, root=self.root)
@@ -1007,12 +1045,12 @@ class EmbedBase(Base):
         with open(path) as f:
             return [json.loads(line) for line in f]
 
-    def embed(self, texts, cfg=None, name="emb"):
-        return models.embed(cfg or self.cfg, name, texts, launcher=self.launcher, root=self.root)
+    def embed(self, texts, cfg=None, name="emb", **kw):
+        return models.embed(cfg or self.cfg, name, texts, launcher=self.launcher, root=self.root, **kw)
 
-    def refused(self, texts, message=None, cfg=None):
+    def refused(self, texts, message=None, cfg=None, **kw):
         with self.assertRaises(KbError) as cm:
-            self.embed(texts, cfg=cfg)
+            self.embed(texts, cfg=cfg, **kw)
         if message:
             self.assertIn(message, str(cm.exception))
         return str(cm.exception)
@@ -1032,6 +1070,77 @@ class EmbedCallTest(EmbedBase):
     def test_the_texts_are_never_an_argument(self):
         self.embed(["secret-words-in-the-text"])
         self.assertNotIn("secret-words-in-the-text", " ".join(self.calls()[0]["args"]))
+
+    def sent_texts(self):
+        return [t for c in self.calls() for t in json.loads(c["stdin"])["texts"]]
+
+    def test_a_query_gets_the_query_prefix_and_a_document_the_document_prefix(self):
+        cfg = config(emb=embedding(query_prefix="Q: ", document_prefix="D: "))
+        got = self.embed(["alpha", "beta"], cfg=cfg, kind="query")
+        self.assertEqual(self.sent_texts(), ["Q: alpha", "Q: beta"])
+        self.assertEqual(got["vectors"], [fake_vector("Q: alpha"), fake_vector("Q: beta")])  # the vectors are made from the prefixed text
+        got = self.embed(["alpha"], cfg=cfg, kind="document")
+        self.assertEqual(self.sent_texts()[2:], ["D: alpha"])
+        self.assertEqual(got["vectors"], [fake_vector("D: alpha")])
+
+    def test_the_kind_is_a_document_when_it_is_not_said(self):
+        cfg = config(emb=embedding(query_prefix="Q: ", document_prefix="D: "))
+        self.embed(["alpha"], cfg=cfg)
+        self.assertEqual(self.sent_texts(), ["D: alpha"])
+
+    def test_a_kind_with_no_prefix_sends_the_text_unchanged_even_when_the_other_kind_has_one(self):
+        self.embed(["alpha"], cfg=config(emb=embedding(query_prefix="Q: ")), kind="document")
+        self.embed(["beta"], cfg=config(emb=embedding(document_prefix="D: ")), kind="query")
+        self.embed(["gamma"], kind="query")
+        self.embed(["delta"], kind="document")
+        self.assertEqual(self.sent_texts(), ["alpha", "beta", "gamma", "delta"])
+
+    def test_a_prefix_with_line_breaks_is_sent_whole_in_front_of_the_text(self):
+        prefix = "Instruct: find the matching method\nQuery: "
+        self.embed(["a problem"], cfg=config(emb=embedding(query_prefix=prefix)), kind="query")
+        self.assertEqual(self.sent_texts(), [prefix + "a problem"])
+
+    def test_every_text_of_every_batch_gets_the_prefix(self):
+        cfg = config(emb=embedding(document_prefix="D: "))
+        texts = [f"text number {n}" for n in range(250)]
+        got = self.embed(texts, cfg=cfg)
+        self.assertEqual(self.sent_texts(), ["D: " + t for t in texts])
+        self.assertEqual(got["vectors"], [fake_vector("D: " + t) for t in texts])
+        self.assertGreater(len(self.calls()), 1)
+
+    def test_a_kind_that_is_neither_is_refused_before_anything_is_sent(self):
+        for bad in ("passage", "", "Query", None, 5, ["query"], True):
+            with self.subTest(kind=bad):
+                with self.assertRaises(KbError):
+                    self.embed(["x"], kind=bad)
+        self.assertEqual(self.calls(), [])
+
+    def test_the_prefix_is_never_an_argument_of_the_command(self):
+        cfg = config(emb=embedding(query_prefix="a-secret-query-prefix: ", document_prefix="a-secret-document-prefix: "))
+        self.embed(["x"], cfg=cfg, kind="query")
+        self.embed(["x"], cfg=cfg, kind="document")
+        for call in self.calls():
+            self.assertNotIn("secret", " ".join(call["args"]))
+
+    def test_the_size_limit_applies_to_the_text_with_its_prefix(self):
+        cfg = config(emb=embedding(document_prefix="D: ", query_prefix="Q: "))
+        fits = "x" * (models.MAX_TEXT - 2)  # fits alone, and with a prefix of two characters and a space it does not
+        self.embed([fits])  # no prefix: fine
+        self.embed([fits], cfg=config(emb=embedding(query_prefix="Q: ")), kind="document")  # the other kind's prefix does not count
+        before = len(self.calls())
+        message = self.refused(["fine", fits], "text 2 ", cfg=cfg)
+        self.assertEqual(len(self.calls()), before)
+        self.assertNotIn("xxxx", message)
+        self.embed(["x" * (models.MAX_TEXT - 3)], cfg=cfg)  # exactly the limit with its prefix
+        self.refused(["é" * 16384], cfg=config(emb=embedding(document_prefix="D")))  # two-byte letters: the prefix tips it over
+
+    def test_a_blank_text_is_refused_whatever_the_prefix(self):
+        cfg = config(emb=embedding(query_prefix="Q: "))
+        for bad in ("", "   ", "\n\t"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(KbError):
+                    self.embed([bad], cfg=cfg, kind="query")
+        self.assertEqual(self.calls(), [])
 
     def test_the_timeout_becomes_an_option(self):
         self.embed(["x"], cfg=config(emb=embedding(timeout=90)))

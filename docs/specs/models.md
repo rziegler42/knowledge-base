@@ -187,8 +187,18 @@ rules, which this spec depends on.
   `dimension` of its vectors, and the kind of work `card-embed` that names it. The engine calls the bridge's `embed` command as a
   separate program, batches the texts within the bridge's limits and the size of a reply it can read, checks every reply (the model
   the bridge reported, the number of vectors, the dimension of the entry, finite numbers, no vector of zeros) and refuses the whole
-  call if one is wrong. The pinning of one model per library, the record of the model on each vector and the rebuild on a change
-  of model are not built yet (`docs/plans/2026-11-09-search-the-neutral-descriptions-by-meaning.md`, Increment C).
+  call if one is wrong. The file of vectors (`card.md`, "Where it is stored") records the model and the dimension that made it, holds
+  one model at a time, and is replaced, never mixed, when the model changes.
+- **[proposed]** Built in the engine: an embedding entry may carry a `query_prefix` and a `document_prefix`, each text of 1 to 400
+  printable characters (a line break is allowed; no control, format or private-use character, which does not make the text sure to be
+  what it looks like), and `kb.models.embed` puts the one for the kind of text (a query,
+  or a document, the default) in front of every text before its size is checked and it is sent. They are for models that are made to
+  take such text: for example `qwen3-embedding` is described as trained for an `Instruct: <task>` line and a `Query: <the query>` line
+  before a query, and for a plain document (read in summaries of its card, not checked at the source). An entry with no prefix sends
+  the text as it is. The prefix is the owner's own text in the config, goes on standard input as part of the text, and is never an
+  argument of the command. A document prefix changes the vectors of the stored texts; the vectors must be made again after it changes.
+  Until the build and the search of the vectors pass the kind (`docs/plans/2026-11-09-query-prefix-for-embedding-models.md`, Increment
+  B, which also records the document prefix in the file of vectors), both call `embed` with the default kind: do not set a prefix yet.
 
 ### Privacy of what is sent
 
