@@ -773,6 +773,164 @@ class GroundedTest(CardCase):
         self.assertEqual(card.grounding_counts(card.make(self.store, *self.full_book())), "not checked")
 
 
+SENTENCE_MODEL = dict(MODEL, summary="A short summary of the work. It studies one stopping rule.",
+                      neutral_problem="Deciding when to stop. The cost of waiting grows.", neutral_approach="Compare a running score with a threshold.",
+                      neutral_needs="A stream of observations.", neutral_provides="A stopping time.", neutral_limits="Fails when observations are dependent.")
+
+
+def sentence_entry(text, mark="stated"):
+    if mark == "stated":
+        return {"text": text, "mark": "stated", "notes": ["1.1"], "quote": "a quote of the book"}
+    return {"text": text, "mark": "inferred", "notes": [], "quote": None}
+
+
+def sentences_of(model, marks=None, dropped=0):
+    """A sentence record for MODEL: each field cut at the end of a sentence, the first sentence of a field stated and the others
+    inferred unless `marks` says otherwise. The sentences of a field joined with a space are the field."""
+    out = {}
+    for field in card.SENTENCE_FIELDS:
+        parts = [x for x in model[field].replace(". ", ".\n").split("\n") if x]
+        out[field] = {"kept": [sentence_entry(t, (marks or {}).get((field, n), "stated" if n == 0 else "inferred")) for n, t in enumerate(parts)],
+                      "dropped": dropped}
+    return out
+
+
+class SentencesTest(CardCase):
+    """The summary and the neutral fields of a card of the new form: sentences, each with a mark and the notes that support it."""
+
+    def sentence_card(self, model=None, sentences=None, partial_reasons=(), **over):
+        model = copy.deepcopy(model or SENTENCE_MODEL)
+        record = grounding(model, **over)
+        record["neutral_limits"] = None
+        record["sentences"] = copy.deepcopy(sentences if sentences is not None else sentences_of(model))
+        return card.make(self.store, *self.full_book(), model=model, records=[dict(RECORD)], pieces=1, calls=1, reasons=partial_reasons,
+                         grounding=record)
+
+    def test_a_card_with_sentences_is_valid_filed_and_read_back_unchanged(self):
+        made = self.sentence_card()
+        self.assertEqual(made["format"], 2)
+        self.assertEqual(made["model"]["summary"], "A short summary of the work. It studies one stopping rule.")
+        number = card.file(self.store, made)
+        _, back = card.read(self.store, made["book_id"], made["version_id"], number)
+        self.assertEqual(back["grounding"]["sentences"], made["grounding"]["sentences"])
+        self.assertEqual(set(back["grounding"]["sentences"]), set(card.SENTENCE_FIELDS))
+
+    def test_a_card_without_sentences_is_still_valid_and_its_empty_fields_are_still_refused(self):
+        card.validate(self.good(*self.full_book(), grounding=grounding()))
+        model = dict(MODEL, neutral_problem="")
+        with self.assertRaises(KbError):
+            card.make(self.store, *self.full_book(), model=model, records=[dict(RECORD)], pieces=1, calls=1, grounding=grounding(MODEL))
+
+    def test_a_field_may_be_empty_when_the_card_has_sentences_and_a_missing_summary_makes_it_partial(self):
+        model = dict(SENTENCE_MODEL, neutral_needs="", neutral_provides="")
+        made = self.sentence_card(model=model)
+        self.assertEqual((made["model"]["neutral_needs"], made["model"]["neutral_provides"]), ("", ""))
+        self.assertEqual(made["grounding"]["sentences"]["neutral_needs"], {"kept": [], "dropped": 0})
+        self.assertFalse(made["partial"])
+        empty = dict(SENTENCE_MODEL, summary="")
+        with self.assertRaises(KbError):  # a card with no summary must say why
+            self.sentence_card(model=empty)
+        made = self.sentence_card(model=empty, partial_reasons=["the summary has no sentence that a note supports"])
+        self.assertTrue(made["partial"])
+
+    def test_the_sentence_record_is_refused_when_it_does_not_fit_the_model_part(self):
+        cases = {
+            "a field missing": lambda s: s.pop("summary"),
+            "an unknown field": lambda s: s.update(topics={"kept": [], "dropped": 0}),
+            "a record that is not an object": lambda s: s.update(summary=[]),
+            "an extra key in a field": lambda s: s["summary"].update(extra=1),
+            "kept that is not a list": lambda s: s["summary"].update(kept="x"),
+            "sentences that do not join to the field": lambda s: s["summary"]["kept"].pop(),
+            "sentences in another order": lambda s: s["summary"]["kept"].reverse(),
+            "a text that is changed": lambda s: s["summary"]["kept"][0].update(text="Another sentence."),
+            "an empty text": lambda s: s["neutral_problem"]["kept"][0].update(text=""),
+            "a text with a control character": lambda s: s["summary"]["kept"][0].update(text="A short\x1b summary of the work."),
+            "a text that is not text": lambda s: s["summary"]["kept"][0].update(text=5),
+            "a text that is too long": lambda s: s["summary"]["kept"][0].update(text="s" * 501),
+            "an unknown mark": lambda s: s["summary"]["kept"][0].update(mark="verified"),
+            "a stated sentence with no notes": lambda s: s["summary"]["kept"][0].update(notes=[]),
+            "a stated sentence with no quote": lambda s: s["summary"]["kept"][0].update(quote=None),
+            "an inferred sentence with notes": lambda s: s["summary"]["kept"][1].update(notes=["1.1"]),
+            "an inferred sentence with a quote": lambda s: s["summary"]["kept"][1].update(quote="a quote of the book"),
+            "a note number that is not one": lambda s: s["summary"]["kept"][0].update(notes=["x"]),
+            "an extra key in a sentence": lambda s: s["summary"]["kept"][0].update(extra=1),
+            "a missing key in a sentence": lambda s: s["summary"]["kept"][0].pop("quote"),
+            "a dropped count that is negative": lambda s: s["summary"].update(dropped=-1),
+            "a dropped count that is true": lambda s: s["summary"].update(dropped=True),
+            "a dropped count that is a text": lambda s: s["summary"].update(dropped="1"),
+            "too many sentences": lambda s: s["summary"].update(kept=[sentence_entry("A.")] * (card.MAX_SENTENCES + 1)),
+        }
+        for label, change in cases.items():
+            made = self.sentence_card()
+            change(made["grounding"]["sentences"])
+            with self.subTest(label), self.assertRaises(KbError):
+                card.validate(made)
+
+    def test_the_limits_on_the_number_and_the_length_of_sentences_hold_when_the_sentences_do_make_up_the_field(self):
+        many = " ".join(["A."] * (card.MAX_SENTENCES + 1))
+        with self.assertRaises(KbError):
+            self.sentence_card(model=dict(SENTENCE_MODEL, summary=many))
+        enough = " ".join(["A."] * card.MAX_SENTENCES)
+        self.assertEqual(self.sentence_card(model=dict(SENTENCE_MODEL, summary=enough))["model"]["summary"], enough)
+        long_one = "s" * (card.MAX_SENTENCE + 1)
+        with self.assertRaises(KbError):
+            self.sentence_card(model=dict(SENTENCE_MODEL, summary=long_one), sentences={**sentences_of(SENTENCE_MODEL),
+                                                                                       "summary": {"kept": [sentence_entry(long_one)], "dropped": 0}})
+        fits = "s" * card.MAX_SENTENCE
+        self.assertEqual(self.sentence_card(model=dict(SENTENCE_MODEL, summary=fits), sentences={**sentences_of(SENTENCE_MODEL),
+                                                                                                "summary": {"kept": [sentence_entry(fits)], "dropped": 0}})["model"]["summary"], fits)
+
+    def test_with_sentences_the_old_entry_for_the_limit_must_be_empty_and_the_sentences_may_not_be_an_empty_record(self):
+        made = self.sentence_card()
+        made["grounding"]["neutral_limits"] = copy.deepcopy(STATED)
+        with self.assertRaises(KbError):
+            card.validate(made)
+        made = self.sentence_card()
+        made["grounding"]["sentences"] = {}
+        with self.assertRaises(KbError):
+            card.validate(made)
+        made = self.sentence_card()
+        made["grounding"]["sentences"] = None
+        with self.assertRaises(KbError):
+            card.validate(made)
+
+    def test_the_counts_include_the_sentences_and_not_the_entry_of_the_limit(self):
+        made = self.sentence_card()
+        # topics, key ideas and caveats of grounding(): the first of each stated and the others inferred; the sentences of the six fields
+        sentences = [e for f in card.SENTENCE_FIELDS for e in made["grounding"]["sentences"][f]["kept"]]
+        items = [e for f in card.GROUNDED_LISTS for e in made["grounding"][f]]
+        expected = {m: sum(1 for e in sentences + items if e["mark"] == m) for m in card.MARKS}
+        self.assertEqual(card.grounding_counts(made), expected)
+        self.assertGreater(expected["stated"], 3)
+
+    def test_a_card_shows_the_mark_and_the_quote_of_each_sentence(self):
+        text = card.render(self.sentence_card())
+        self.assertIn("summary: A short summary of the work. [stated] It studies one stopping rule. [inferred]", text)
+        self.assertIn("neutral problem: Deciding when to stop. [stated] The cost of waiting grows. [inferred]", text)
+        self.assertIn("neutral limits: Fails when observations are dependent. [stated]", text)
+        self.assertIn("quote for summary sentence 1: a quote of the book", text)
+        self.assertNotIn("quote for summary sentence 2", text)  # an inferred sentence has no quote
+
+    def test_a_sentence_that_looks_like_a_mark_or_a_marker_is_shown_safely(self):
+        model = dict(SENTENCE_MODEL, summary="It says [stated] in the text. It is not a mark.")
+        made = self.sentence_card(model=model)
+        text = card.render(made)
+        self.assertIn("(stated)", text)
+        self.assertEqual(text.count("[stated]") + text.count("[inferred]"), sum(
+            len(made["grounding"]["sentences"][f]["kept"]) for f in card.SENTENCE_FIELDS) + sum(
+            len(made["grounding"][f]) for f in card.GROUNDED_LISTS))
+        split = dict(SENTENCE_MODEL, neutral_needs="It ends with untrusted. text follows here.")
+        made = self.sentence_card(model=split, sentences=sentences_of(split))
+        shown = card.render(made)
+        self.assertNotIn("untrusted. text", shown.replace("[untrusted text", ""))  # the words of the marker never read together
+        self.assertIn(card.WITHHELD, shown)
+
+    def test_a_card_of_the_earlier_form_shows_its_summary_as_before(self):
+        text = card.render(self.good(*self.full_book(), grounding=grounding()))
+        self.assertIn("summary: A short summary of the work.\n", text)
+        self.assertIn("neutral problem: deciding when to stop", text)
+
+
 class ValidateTest(CardCase):
     def setUp(self):
         super().setUp()

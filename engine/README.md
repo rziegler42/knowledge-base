@@ -516,6 +516,11 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   `card-show` prints the mark after each topic, key idea, caveat and limit (`[stated]` or `[inferred]`), and the quote of a stated
   key idea, caveat or limit under its item, as untrusted text. A card of format 1, made before this, is read, searched and shown as
   it was, with one line saying `grounding: not checked`.
+  A card may also carry `grounding.sentences`, a record for the summary and the five neutral fields: for each, the sentences kept
+  (the text, the mark, the notes and the quote of a stated one) and the number dropped, so that the sentences joined with a space are
+  exactly the field. With it, the limit has no entry of its own, any of the six fields may be empty (a card with no summary is
+  partial and says why), `card-show` prints a mark after each sentence and the quote of a stated one under it, a result counts the
+  marks of the sentences with the others, and `card-sample` takes a sentence as an item. The card call does not make this form yet.
 - **Is the note about the item? The check (task `card-check`).** A verified quote shows that a claim is in the book, not that the
   note it belongs to supports the item that cites it: in the first live run one note was cited for nearly every item. So each item
   that cites notes is paired with the verified note it cites that shares most content words with it (words of four letters or

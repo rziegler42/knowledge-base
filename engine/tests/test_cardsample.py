@@ -337,6 +337,26 @@ def stated_grounding(model, added=None):
     return out
 
 
+class SentenceItemsTest(unittest.TestCase):
+    def test_a_sentence_is_an_item_whichever_form_the_card_has(self):
+        model = model_for("x", neutral_problem="x problem one. x problem two.")
+        old = cardsample._items_of(model)
+        self.assertIn(("neutral_problem", 0, "x problem one. x problem two."), old)
+        self.assertEqual([i for i in old if i[0] == "summary"], [("summary", 0, "x first sentence."), ("summary", 1, "x second sentence.")])
+
+        def entry(text):
+            return {"text": text, "mark": "stated", "notes": ["1.1"], "quote": "q"}
+        record = {"summary": {"kept": [entry("x first sentence."), entry("x second sentence.")], "dropped": 0},
+                  "neutral_problem": {"kept": [entry("x problem one."), entry("x problem two.")], "dropped": 1},
+                  "neutral_approach": {"kept": [], "dropped": 2}, "neutral_needs": {"kept": [entry("x needs")], "dropped": 0},
+                  "neutral_provides": {"kept": [entry("x provides")], "dropped": 0}, "neutral_limits": {"kept": [], "dropped": 0}}
+        new = cardsample._items_of(model, {"sentences": record})
+        self.assertEqual([i for i in new if i[0] == "neutral_problem"], [("neutral_problem", 0, "x problem one."), ("neutral_problem", 1, "x problem two.")])
+        self.assertEqual([i[0] for i in new if i[0].startswith("neutral")], ["neutral_problem", "neutral_problem", "neutral_needs", "neutral_provides"])
+        self.assertEqual([i for i in new if i[0] == "summary"], old and [i for i in old if i[0] == "summary"])
+        self.assertEqual([i for i in new if i[0] in ("topics", "key_ideas", "caveats")], [i for i in old if i[0] in ("topics", "key_ideas", "caveats")])
+
+
 class AddedTest(SampleCase):
     """Generation 3 of two books is a grounded card in which a second round added three items."""
 

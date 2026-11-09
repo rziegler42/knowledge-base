@@ -258,6 +258,24 @@ class MarkInResultTest(GroundedCardsTest):
         self.assertIn("grounding: not checked", results[old]["text"])
         self.assertIn("marker topic [inferred]", results[new]["text"])
 
+    def test_a_result_counts_the_sentences_of_the_summary_and_the_neutral_fields_and_finds_a_card_by_them(self):
+        model = dict(MODEL, topics=["marker topic"], summary="Sentence zebra one. Sentence two.", neutral_needs="")
+        book, version = self.carded(title="Sentences", filed=False)
+        entry = lambda text, mark: {"text": text, "mark": mark, "notes": ["1.1"] if mark == "stated" else [], "quote": "q" if mark == "stated" else None}
+        sentences = {"summary": {"kept": [entry("Sentence zebra one.", "stated"), entry("Sentence two.", "inferred")], "dropped": 0}}
+        for f in ("neutral_problem", "neutral_approach", "neutral_provides", "neutral_limits"):
+            sentences[f] = {"kept": [entry(model[f], "stated")], "dropped": 1}
+        sentences["neutral_needs"] = {"kept": [], "dropped": 2}
+        inferred = {"mark": "inferred", "notes": [], "quote": None}
+        g = {f: [dict(inferred) for _ in model[f]] for f in ("topics", "key_ideas", "caveats")}
+        g.update(neutral_limits=None, dropped={"topics": 0, "key_ideas": 0, "caveats": 0, "neutral_limits": 0}, sentences=sentences)
+        card.file(self.store, card.make(self.store, book, version, model=copy.deepcopy(model), records=[], grounding=g))
+        results = self.find("zebra")
+        self.assertEqual([r["book_id"] for r in results], [book])
+        # sentences: 1 + 1 stated for the summary, 4 neutral fields stated; items: topics 1, key ideas 3 and caveats 0 inferred
+        self.assertEqual(results[0]["grounding"], {"stated": 5, "inferred": 1 + 4})
+        self.assertIn("Sentence zebra one. [stated] Sentence two. [inferred]", results[0]["text"])
+
     def test_the_marks_change_neither_the_score_nor_the_order_nor_what_is_found(self):
         same = dict(MODEL, summary="marker summary about stopping")
         old, _ = self.carded(title="Same card", model=same)

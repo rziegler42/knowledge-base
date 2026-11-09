@@ -37,6 +37,11 @@ _COUNT_PAIRS = (("points", "verified"), ("checked", "supported"))   # a record m
 # (points, and how many have a quote that occurs) or a call that checks the support of items (items checked, and how many were supported)
 GROUNDED_LISTS = ("topics", "key_ideas", "caveats")
 MARKS = ("stated", "inferred")
+# the fields of the model part that a card of the new form writes as sentences, each marked and backed by notes; the sentences of a
+# field joined with a space are the field
+SENTENCE_FIELDS = ("summary", "neutral_problem", "neutral_approach", "neutral_needs", "neutral_provides", "neutral_limits")
+MAX_SENTENCES = 12
+MAX_SENTENCE = 500
 MAX_QUOTE = 240
 MAX_REFS = 6
 _UNMARK = re.compile(r"\[\s*(stated|inferred)\s*\]", re.I)   # text that looks like the mark of an item is shown with round brackets
@@ -170,10 +175,14 @@ def _record(r, grounded=False):
     return {k: r[k] for k in _RECORD + (present[0] if present else ())}
 
 
-def _checked_model(part, grounded=False):
-    """The model part, checked against the shape of a card and cleaned, or a refusal. In a grounded card the limit may be empty."""
-    if grounded and isinstance(part, dict) and part.get("neutral_limits") == "":
-        return {**_checked_model({**part, "neutral_limits": "-"}, True), "neutral_limits": ""}
+def _checked_model(part, grounded=False, sentences=False):
+    """The model part, checked against the shape of a card and cleaned, or a refusal. In a grounded card the limit may be empty; in
+    a card with sentences each of the fields written as sentences may be, since a field with no sentence left is empty."""
+    fields = SENTENCE_FIELDS if sentences else ("neutral_limits",)
+    empty = [f for f in fields if grounded and isinstance(part, dict) and part.get(f) == ""]
+    if empty:
+        checked = _checked_model({**part, **{f: "-" for f in empty}}, True, sentences)
+        return {**checked, **{f: "" for f in empty}}
     try:
         text = json.dumps(part)
     except (TypeError, ValueError):
@@ -201,14 +210,17 @@ def _grounding(g, model):
     """The grounding record of a card of format 2, checked against its model part."""
     bad = lambda what: KbError(f"the card is not valid: grounding, {what}")
     keys = set(GROUNDED_LISTS) | {"neutral_limits", "dropped"}
-    if not isinstance(g, dict) or set(g) not in (keys, keys | {"added"}):
+    if not isinstance(g, dict) or not keys <= set(g) or not set(g) - keys <= {"added", "sentences"}:
         raise bad("its keys")
     for field in GROUNDED_LISTS:
         if not isinstance(g[field], list) or len(g[field]) != len(model[field]):
             raise bad(f"{field} has not one entry for each item")
         for n, e in enumerate(g[field], start=1):
             _entry(e, f"{field} {n}")
-    if model["neutral_limits"] == "":
+    if "sentences" in g:
+        if g["neutral_limits"] is not None:
+            raise bad("an entry for the limit in a card whose limit is written as sentences")
+    elif model["neutral_limits"] == "":
         if g["neutral_limits"] is not None:
             raise bad("a mark for a limit that is not there")
     else:
@@ -217,8 +229,29 @@ def _grounding(g, model):
     if not isinstance(dropped, dict) or set(dropped) != set(GROUNDED_LISTS) | {"neutral_limits"} \
             or not all(_count(v, 1000) for v in dropped.values()):
         raise bad("the counts of what was dropped")
+    if "sentences" in g:
+        _sentences(g["sentences"], model, bad)
     if "added" in g:
         _added(g["added"], g, model, bad)
+
+
+def _sentences(record, model, bad):
+    """The sentences of the summary and the neutral fields: for each, those kept (each with its text, mark, notes and the quote of
+    the first note) and how many were dropped. The sentences of a field joined with a space are exactly the field."""
+    if not isinstance(record, dict) or set(record) != set(SENTENCE_FIELDS):
+        raise bad("the sentences are not given for the summary and the five neutral fields")
+    for field, part in record.items():
+        if not isinstance(part, dict) or set(part) != {"kept", "dropped"} or not _count(part["dropped"], 1000):
+            raise bad(f"the sentences of {field}")
+        kept = part["kept"]
+        if not isinstance(kept, list) or len(kept) > MAX_SENTENCES:
+            raise bad(f"the sentences of {field} are not a short list")
+        for n, e in enumerate(kept, start=1):
+            if not isinstance(e, dict) or set(e) != {"text", "mark", "notes", "quote"} or not e["text"] or not _clean(e["text"], MAX_SENTENCE):
+                raise bad(f"{field} sentence {n}")
+            _entry({k: e[k] for k in ("mark", "notes", "quote")}, f"{field} sentence {n}")
+        if " ".join(e["text"] for e in kept) != model[field]:
+            raise bad(f"the sentences of {field} do not make up the field")
 
 
 ADDED_LISTS = ("topics", "key_ideas")   # the lists that a second round may add to
@@ -247,7 +280,7 @@ def make(store, book_id, version_id, model=None, records=(), pieces=0, calls=0, 
     if model is not None:
         if not isinstance(model, dict):
             raise KbError("the model part of a card is not an object")
-        model = _checked_model(model, grounding is not None)
+        model = _checked_model(model, grounding is not None, isinstance(grounding, dict) and "sentences" in grounding)
     else:
         base["partial_reasons"].append("built from the metadata alone: the card has no model part")
     if not isinstance(records, (list, tuple)) or len(records) > MAX_RECORDS:
@@ -313,6 +346,7 @@ def validate(card):
         raise bad("partial")
     if card["partial"] and not card["partial_reasons"]:
         raise bad("a partial card must say why")
+    sentences = grounded and isinstance(card["grounding"], dict) and "sentences" in card["grounding"]
     model = card["model"]
     if model is None:
         if grounded:
@@ -323,7 +357,7 @@ def validate(card):
         if not isinstance(model, dict):
             raise bad("model")
         try:
-            same = _checked_model(model, grounded) == model
+            same = _checked_model(model, grounded, sentences) == model
         except KbError:
             same = False
         if not same:
@@ -332,6 +366,8 @@ def validate(card):
             _grounding(card["grounding"], model)
             if len(model["key_ideas"]) < 3 and not card["partial"]:
                 raise bad("a card with fewer than three key ideas must be partial and say why")
+            if sentences and not model["summary"] and not card["partial"]:
+                raise bad("a card with no summary must be partial and say why")
     made = card["made"]
     if not (isinstance(made, dict) and set(made) == {"pieces", "calls", "records"} and _count(made["pieces"], 1_000_000)
             and _count(made["calls"], 1_000_000) and isinstance(made["records"], list) and len(made["records"]) <= MAX_RECORDS):
@@ -354,26 +390,28 @@ def _shown(value):
     return _UNMARK.sub(r"(\1)", shown) if shown else WITHHELD
 
 
-def _shown_list(items, marks=None):
+def _shown_list(items, marks=None, sep="; "):
     """A list of texts as one line. Each item is withheld on its own if it holds the words of a marker; and if the items hold them
     only together (one item ends with 'untrusted' and the next begins with 'text'), the whole line is withheld. `marks` gives the
     mark of each item (a card of format 2), shown after it."""
     shown = [_shown(x) for x in items]
-    joined = "; ".join(items)
+    joined = sep.join(items)
     if WITHHELD not in shown and joined and not textutil.title(joined, len(joined)):
         return WITHHELD
     if marks:
         shown = [f"{x} [{m['mark']}]" for x, m in zip(shown, marks)]
-    return "; ".join(shown)
+    return sep.join(shown)
 
 
 def grounding_counts(card):
     """How many items of a card are marked `stated` and how many `inferred`, as {"stated": n, "inferred": n}, or "not checked" for
-    a card of format 1 or one with no model part. The items are the topics, key ideas, caveats and the neutral limit if it is kept."""
+    a card of format 1 or one with no model part. The items are the topics, key ideas, caveats and the neutral limit if it is kept, and,
+    in a card with sentences, the sentences of the summary and the neutral fields."""
     g = card.get("grounding")
     if not isinstance(g, dict):
         return "not checked"
     entries = [e for field in GROUNDED_LISTS for e in g[field]] + ([g["neutral_limits"]] if g["neutral_limits"] else [])
+    entries += [e for part in (g.get("sentences") or {}).values() for e in part["kept"]]
     return {mark: sum(1 for e in entries if e["mark"] == mark) for mark in MARKS}
 
 
@@ -406,7 +444,21 @@ def render(card):
     marks = card.get("grounding") or {}
     if "grounding" not in card:
         lines.append("grounding: not checked (a card of the earlier form, whose items are not marked)")
-    add("summary", model["summary"])
+    sentences = marks.get("sentences") or {}
+
+    def written(field, label):
+        """The line of a field written as sentences, each with its mark, and the quote of each stated one."""
+        kept = sentences[field]["kept"]
+        if kept:
+            lines.append(f"{label}: " + _shown_list([e["text"] for e in kept], kept, " "))
+        for number, e in enumerate(kept, start=1):
+            if e["mark"] == "stated":
+                add(f"quote for {label} sentence {number}", e["quote"])
+
+    if sentences:
+        written("summary", "summary")
+    else:
+        add("summary", model["summary"])
     for key, label in (("useful_for", "useful for"), ("topics", "topics"), ("adjacent_topics", "adjacent topics")):
         if model[key]:
             lines.append(f"{label}: " + _shown_list(model[key], marks.get(key)))
@@ -420,6 +472,9 @@ def render(card):
         add(f"key idea {number}", idea, entry)
         quote_of(entry, f"key idea {number}")
     for key in ("problem", "approach", "needs", "provides", "limits"):
+        if sentences:
+            written(f"neutral_{key}", f"neutral {key}")
+            continue
         entry = marks.get("neutral_limits") if key == "limits" else None
         add(f"neutral {key}", model[f"neutral_{key}"], entry)
         if key == "limits" and model["neutral_limits"]:

@@ -231,4 +231,23 @@ nothing wider is named, since no other module reads the grounding record.
 
 ## Result
 
-Empty until work starts.
+### Increment A
+
+- **Done** (uncommitted until the owner says to commit). A card of format 2 may carry `grounding.sentences`: for the summary and the
+  five neutral fields, the sentences kept (text, mark, notes, quote of a stated one) and the number dropped. The sentences joined with
+  a space are exactly the field; with the record the limit has no entry of its own, any of the six fields may be empty, and a card
+  with no summary must be partial. `make` and `validate` (so `read` too) refuse any record that does not fit, `grounding_counts`
+  counts the sentences, `render` shows a mark after each sentence and the quote of a stated one, and `card-sample` takes a kept
+  sentence as an item. A card of format 1, and one of format 2 with no sentence record, behave as before. The `catalog.py` file named in
+  the plan needed no change: it uses `grounding_counts` and `render`. The card spec (three statements) and the engine README were
+  updated; the card call does not make the form yet.
+- **Verification run:** `python3 -m unittest engine.tests.test_card engine.tests.test_catalog engine.tests.test_cardsample`, 233 tests
+  OK; `wb run code-work check`, no problems. Tests were written first and seen to fail (the missing `SENTENCE_FIELDS`). Sixteen
+  deliberate one-line breaks of the new code were each caught; two (the limit on the number of sentences and on their length) were
+  first missed because the tests changed the text and failed on the join, so a test was added that keeps the join true. Not run:
+  other test modules; nothing outside the three modules reads the new record.
+- **Review:** the `reviewer` agent, one exchange. No blocking findings. Three not blocking, all evaluated: a field that loses all its
+  sentences is not tied to a reason on the card (completion criterion 3), which only the card call can supply, so it is done in
+  increment B with the thin reasons; repeated sentences and a quote not compared with its notes are not checked on read (repeats are
+  B's, and the quote is checked as for the other items); the spec statements run ahead of the code until B, and are marked proposed.
+  The reviewer could not run tests or read the new tests.

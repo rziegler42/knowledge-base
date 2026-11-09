@@ -26,8 +26,10 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 - **[proposed]** What the engine does check: that a key idea, topic, caveat or limit is supported by a verbatim quote that occurs
   in the piece of the book it names, that the note the quote belongs to bears on the item (they share a content word), and that a
   second model, given the item with the note's point and quote, says that they support it. An item that fails any of these is kept
-  only if the model says it is an inference, and is otherwise dropped; each item kept is marked stated or inferred. A verified
-  quote shows that a claim is in the book, and the second model's word that it supports the item, not that the claim is right, so
+  only if the model says it is an inference, and is otherwise dropped; each item kept is marked stated or inferred. In a card
+  whose summary and neutral fields are written as sentences the same holds for each sentence of them, except that a sentence is
+  paired with a note it cites without the requirement of a shared word, since a neutral description is written in words of no field.
+  A verified quote shows that a claim is in the book, and the second model's word that it supports the item, not that the claim is right, so
   the card stays a lead.
 - **[proposed]** Replacing the book or the theme. A card helps choose a book. A theme finds a passage inside one.
 - **[proposed]** Browsing by hand. The owner does not expect to browse cards, so the card is written for an agent to search and
@@ -71,8 +73,12 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   words whatever the length of the book.
 - **[proposed]** A card of the grounded form (format 2) marks each topic, key idea, caveat and neutral limit it keeps as `stated`
   (the note it cites has a quote that was found in the book, and a second model confirmed that the note supports it) or `inferred` (the model says it is its own inference), keeps the
-  quote that supports a stated item, and records how many of each kind it dropped. Adjacent topics, "useful for", the summary and
-  the other neutral fields carry no mark. A limit that is dropped leaves its field empty. A card with fewer than three key ideas
+  quote that supports a stated item, and records how many of each kind it dropped. Adjacent topics and "useful for" carry no mark. In
+  a card whose summary and neutral fields are written as sentences (`grounding.sentences`), each sentence of the summary and of the
+  five neutral fields is marked and backed in the same way, the sentences kept for a field joined with a space are the field, and a
+  field that keeps no sentence is empty, as a limit that is dropped is; a card with no summary left is partial and says why. In a
+  card that has no sentence record the summary and the neutral fields other than the limit carry no mark. A limit that is dropped
+  leaves its field empty. A card with fewer than three key ideas
   left is partial and says why; it is not padded. Cards of the earlier form (format 1) stay valid and are read as before.
 - **[agreed]** The card keeps a domain-neutral description alongside its summary, even though themes carry one too. The card is the
   coarse step that picks books, and a cross-field search on themes alone would have to scan far more entries.
@@ -152,7 +158,8 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 
 - **[proposed]** The catalog is searched by keyword and by meaning. A result gives the card, a score, the date the book was added,
   and how complete its source was, for example that the shelf is still being seeded.
-- **[proposed]** The card as shown to a reader marks each kept topic, key idea, caveat and neutral limit `[stated]` or `[inferred]`,
+- **[proposed]** The card as shown to a reader marks each kept topic, key idea, caveat and neutral limit, and each sentence of the
+  summary and the neutral fields of a card that has them, `[stated]` or `[inferred]`,
   and a result says how many items of each mark its card has, or that the card was not checked (a card of the earlier form). The
   marks are shown and take no part in ranking or filtering, and they are not searchable. Card text that looks like a mark is shown
   with round brackets, so that only the engine's marks read as marks.

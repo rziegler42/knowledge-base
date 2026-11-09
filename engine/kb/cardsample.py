@@ -60,15 +60,23 @@ def _sha(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _items_of(model):
-    """The items of a card's model part that can be sampled: `(field, position, text)`."""
+def _items_of(model, grounding=None):
+    """The items of a card's model part that can be sampled: `(field, position, text)`. A sentence is an item: in a card of the earlier
+    form the sentences of the summary, and in a card with sentences (its grounding record names them) the sentences it kept for the
+    summary and for each neutral field. Any other field is one item, or one for each entry of its list."""
+    sentences = (grounding or {}).get("sentences") or {}
     out = []
-    out += [("summary", n, s) for n, s in enumerate(x for x in _SENTENCE.split(model["summary"].strip()) if x.strip())]
+    if sentences:
+        for field in card.SENTENCE_FIELDS:
+            out += [(field, n, e["text"]) for n, e in enumerate(sentences[field]["kept"])]
+    else:
+        out += [("summary", n, s) for n, s in enumerate(x for x in _SENTENCE.split(model["summary"].strip()) if x.strip())]
     for field in ("topics", "key_ideas", "caveats"):
         out += [(field, n, text) for n, text in enumerate(model[field]) if text.strip()]
-    for key in ("problem", "approach", "needs", "provides", "limits"):
-        if model[f"neutral_{key}"].strip():
-            out.append((f"neutral_{key}", 0, model[f"neutral_{key}"]))
+    if not sentences:
+        for key in ("problem", "approach", "needs", "provides", "limits"):
+            if model[f"neutral_{key}"].strip():
+                out.append((f"neutral_{key}", 0, model[f"neutral_{key}"]))
     return out
 
 
@@ -161,7 +169,7 @@ def _draw(rng, cards, quota, skip=frozenset()):
     pools = []
     for book_id, version_id, made, number in order:
         by_field = {}
-        for field, position, text in _items_of(made["model"]):
+        for field, position, text in _items_of(made["model"], made.get("grounding")):
             if (book_id, version_id, number, field, position) not in skip:
                 by_field.setdefault(field, []).append((position, text))
         names = sorted(by_field)
