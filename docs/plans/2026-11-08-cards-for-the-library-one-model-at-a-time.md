@@ -1,6 +1,6 @@
 # Cards for the library, one model at a time
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-08
 Candidate: cross-field-discovery#neutral-cards-for-the-library
 Specs: docs/specs/card.md
@@ -338,7 +338,7 @@ since no other module reads the state of a run.
   first; the queue is also where the journal's trust statement and the lock belong in the security review that is offered to the owner.
 - Next: increment D.
 
-### Increment D — Plan and run a queue over the library (built; not committed)
+### Increment D — Plan and run a queue over the library (committed as 8cb532d)
 
 - Built: `engine/kb/cardqueue.py` and the command `cards-queue plan | run | status` (no option names a model, a server, an address or a
   path). `plan` makes a snapshot of the active books whose version is converted and has no card (with `--again` those with one too; with
@@ -404,4 +404,52 @@ since no other module reads the state of a run.
 - Verification after the review: the same seven test modules plus `test_cardqueue` gave 644 tests, OK; `wb run code-work check` found
   no problems; the deliberate breaks of the queue and its state are 41 conditions, all caught except two equivalent edits (a redundant
   check in `plan`, and a directory read as a journal that the read error refuses anyway).
-- Next: the owner's word to commit increment D; then increment E, the live run over the library.
+- Next: increment E, the live run over the library.
+
+### Increment E — A live run over the library (run; decided; not committed)
+
+- **What was run** (the owner's word, after the plan was shown): `cards-queue plan` and `cards-queue run` over the library on
+  2026-11-08 and 2026-11-09, at commit `8cb532d`, with the models of the owner's config (`gemma4:12b` for the notes, `gpt-oss:20b` for
+  the card, `phi4` for the checks, `qwen3:14b` for the second round) on the owner's server, their `keep_alive` set to 10 minutes. The
+  plan listed 66 books (14 were left out: 13 had a card and 1 is the empty record of a page that was not found). The first pass made
+  the cards; a second pass tried again the books whose first attempt had failed. Book text, notes and items went only to the owner's
+  models; no cloud model was used.
+- **Result:** 64 books done (63 with a card from the models, 1 tiny page with a card from the metadata), 2 failed, none dropped. 53
+  books were done at the first attempt and 11 at the second; 2 failed at both. The two that failed: a Wikipedia page whose notes call
+  came back with points and quotes of different lengths, and a Wikipedia page whose card call came back with support lists of the wrong
+  length (the same slip as in the earlier runs); both were kept aside, tried twice, and are in the report with their reasons. Their
+  journals were left in the run's folder. The catalog was rebuilt by the queue: 77 cards of 77 versions in 80 books, none failed.
+- **Calls and time** (read from the dates in the records of the cards made): 495 calls in the 63 cards (208 notes, 63 card, 165 check
+  and 59 second-round calls), against the 500 or so that the plan had estimated; the calls of the attempts that failed are not in the
+  cards and are not counted. The first call was at 23:55:37 and the last at 00:39:44, so the run took 44 minutes (about 5 seconds a
+  call). **The models changed 9 times in those 495 calls** (4 in the first pass, 4 in the second, and 1 between them), which is the
+  number of the order of the stages and does not depend on the number of books. The measurement of increment A had predicted about
+  34 minutes through a queue and 60 one by one; the run took 44. The two are not a controlled comparison: the measurement's prompts
+  were short, the run's calls were real, and the second pass and the retries are in the 44 minutes. At the 13 seconds a call of the
+  earlier runs, which had no `keep_alive`, the same 495 calls would have taken about 107 minutes.
+- **Quality figures, as recorded by the cards themselves:** 708 of 840 note quotes were found in their pieces (84 percent), above the
+  plan's stop line of half; one card, of a short page, had 1 of 4 (the stop rule is not built into the queue, so it was checked at the
+  end, not before). 8 of the 63 cards made with the models are marked thin or partial. The second round was offered to 59 of the 63 cards
+  (the lists so often reach the number asked) and added 74 items. **Nothing in this run measured whether those 74 items, or the cards
+  as a whole, are accurate**; the earlier measurement found 5 of 8 added items supported and cards of about 45 to 65 percent supported.
+- **Limits:** one run; the figures for time are of this library, this server and this day; the accuracy of the new cards was not
+  labelled; the two failures are of the card model's wrong-length lists and are not fixed.
+- **Recommendation:** (1) make the cards of the two books that failed with a new `plan` and `run`, which would take a few minutes and
+  may well succeed, since the slip is intermittent; (2) the queue worked as designed (an unattended run of 44 minutes, resumable,
+  reporting), so use it for any further bulk carding; (3) before trusting the new cards for search by meaning, label a sample of their
+  items as in the grounding plan and the plan before this one, including the 74 round-added items, since the roadmap candidate that
+  follows (`cross-field-discovery#meaning-search`) will search the neutral descriptions of these cards; (4) the wrong-length lists
+  (13 of 65 books needed a second attempt, 2 failed at both) are what `cards#card-format-resilience` is for.
+- **The two that failed, tried again** (the owner's word, on my recommendation): a new `plan` listed exactly those two books (77 books
+  had a card), and a `run` of one pass, 13 calls counted at the plan, made both cards at the first attempt. The library now has a card
+  for each of its 66 books that was planned (65 from the models and 1 from the metadata), and the catalog, rebuilt by the queue,
+  holds 79 cards of 79 versions in 80 books (the 80th book is the empty record of the page that was not found). So the slip of the
+  card model was intermittent for these two books.
+- **The owner's decision** (2026-11-09, on my recommendation): the two failures are retried (done, above); the queue is to be used
+  for any further bulk carding; and the accuracy of the new cards is to be sampled and labelled before search by meaning is built on
+  them, which is a separate decision and is not part of this plan.
+- Provenance: run at commit `8cb532d` on 2026-11-08 and 2026-11-09 in the owner's library, with the local models through the owner's
+  bridge; the report and the run's folder are held outside the repository. Verification as run: `python3 -W error::ResourceWarning
+  -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_cardstate engine.tests.test_cardqueue
+  engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample engine.tests.test_setup` gave 644 tests, OK, after
+  the run; `wb run code-work check` found no problems.
