@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Non-goals; Increment A Dependencies; roadmap candidate cards#card-ground-the-rest",
+      "problem": "The plan explicitly defers card-clause-check and starts Increment A with no dependencies, but the named roadmap candidate requires card-clause-check as a dependency because these fields contain clauses.",
+      "severity": "major",
+      "suggestion": "Make completion of card-clause-check a prerequisite for this plan, or obtain and record an owner-approved roadmap change before proceeding."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Goal, Completion criteria 1–4, and Increments A–B; docs/specs/card.md, “What a card holds” and “Searching the catalog”",
+      "problem": "The plan changes the current card spec’s behavior: the spec says summaries and neutral fields other than limits carry no marks, while the plan adds per-sentence marks, support records, checking, display, and counts for all of them. Merely listing the spec as an affected area does not identify this directional spec change or its required owner checkpoint.",
+      "severity": "major",
+      "suggestion": "State the precise proposed spec revision and include the required change-direction/owner checkpoint before implementing it."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Increment C, steps 1, 3, and 4",
+      "problem": "The proposed blind sample is drawn only from new cards, yet the comparison treats the earlier aggregate 44 neutral-field and 15 summary items as a baseline for the selected books. The plan neither samples nor labels the old-form cards for those same books, so differences in book selection and item mix can be mistaken for an effect of the new form.",
+      "severity": "major",
+      "suggestion": "Draw and label blinded samples from both generations for the same selected books, with a defined stratification and comparison method; otherwise describe the result as non-comparable exploratory evidence."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has an unmet roadmap dependency, an uncheckpointed directional conflict with the current card spec, and an invalidly matched comparison design.",
+  "verdict": "changes_needed"
+}

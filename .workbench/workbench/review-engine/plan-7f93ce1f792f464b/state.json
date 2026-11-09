@@ -1,0 +1,74 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-09T01:12:55Z",
+      "choice": "rejected",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The roadmap treats dependencies as hints and the owner chose to go on without the clause check. The plan now records the choice, the reasons and what a sentence-level check may let through, and the approval stands as the owner acknowledgement. Whether to wait for the clause check is put to the owner as a question."
+    },
+    {
+      "at": "2026-11-09T01:12:55Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "The plan changes what the spec says about marks, empty fields and what is checked. The scope now names those statements and says the owner approval is the word for the revision, with no spec text changed before approval. It also records that the roadmap and the grounding plan had left this grounding in scope if the sample showed it paid."
+    },
+    {
+      "at": "2026-11-09T01:12:55Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F3",
+      "reason": "Correct: the old-form items of the evidence were from other books and a different item mix. Increment C now draws one blind sample from both forms of the same books with equal numbers of items, and the decision is a rise form against form, with the earlier figure only as a reference."
+    }
+  ],
+  "format": 1,
+  "generation": 5,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-09-ground-the-summary-and-neutral-fields.md",
+  "rounds": [
+    {
+      "at": "2026-11-09T01:11:41Z",
+      "bridge": "ask-codex",
+      "document_sha256": "0911e8a97c234eaf5cae3f98d81e9a49c2bf76c9ce96027e8b83b40baaf12121",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F3",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "f00eb6a827e0da3e6d2f1ca4440eacad17db71804660395af0071e45d496a65f",
+      "usage": {
+        "input_tokens": 162111,
+        "output_tokens": 2633,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "8974a3af08d05ae4dad47ab942ed71cd6f1c1bf2a5650e16a2354745a4b5b387",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
