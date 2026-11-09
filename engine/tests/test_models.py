@@ -886,7 +886,10 @@ with open(os.path.join(here, "calls.jsonl"), "a") as f:
     f.write(json.dumps({{"args": args, "stdin": data.decode("utf-8")}}) + "\\n")
 texts = json.loads(data)["texts"]
 dim = plan.get("dim", 4)
+table = plan.get("table", {{}})
 def vec(t):
+    if t in table:
+        return table[t]
     base = sum(map(ord, t))
     return [((base * (i + 3)) % 97 + 1) / 97.0 for i in range(dim)]
 vectors = [vec(t) for t in texts]

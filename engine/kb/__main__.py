@@ -96,7 +96,10 @@ def main(argv=None):
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
-    cx.add_argument("--in", dest="within", choices=list(catalog.SIDES), default="all",
+    cx.add_argument("--meaning", action="store_true", help="search by meaning: the query is any text (a sentence or two about a problem), turned "
+                    "into a vector by the embedding model that the config sets for card-embed (the query goes to that model), and the cards are "
+                    "ranked by the closeness of their vectors; needs `card-vectors` run first; takes no --in and no --book")
+    cx.add_argument("--in", dest="within", choices=list(catalog.SIDES), default=None,
                     help="where to look: all, summary (the card in the words of its source) or neutral (the five neutral fields)")
     cx.add_argument("--limit", type=int, default=catalog.DEFAULT_LIMIT, help=f"at most this many results (1 to {catalog.MAX_LIMIT})")
     tr = sub.add_parser("trial", help="run a corpus of questions against the library and write a report of what the search of the cards and "
@@ -169,7 +172,14 @@ def main(argv=None):
                 return 1
             return 0
         if args.command == "card-search":
-            found = catalog.search(config.load()["index_root"], args.query, limit=args.limit, book_id=args.book, within=args.within)
+            if args.meaning:
+                if args.within is not None or args.book is not None:
+                    raise KbError("a search by meaning takes no --in and no --book")
+                cfg = config.load()
+                found = vectors.search(cfg["index_root"], cfg, args.query, limit=args.limit)
+            else:
+                found = catalog.search(config.load()["index_root"], args.query, limit=args.limit, book_id=args.book,
+                                       within=args.within or "all")
             print(json.dumps(found, indent=1))
             return 0
         if args.command == "cards":

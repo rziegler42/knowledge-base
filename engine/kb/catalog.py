@@ -231,6 +231,34 @@ def _matched(conn, row_id, words, columns):
             and conn.execute("SELECT 1 FROM cards_fts WHERE cards_fts MATCH ? AND rowid = ?", ("{" + field + "} : (" + any_word + ")", row_id)).fetchone()]
 
 
+def damaged():
+    return KbError(f"the catalog holds a card that is not valid or does not belong to its row: run `{COMMAND}` to build it again")
+
+
+def result_of(row, score, matched, pick):
+    """One result from a row of the catalog `(id, book_id, version_id, generation, is_current, added, citation, card)`: the keyword
+    search and the search by meaning both build theirs here, so that a result has the same keys, the same checks and the same markers
+    whichever found it. Everything printed comes from the checked card, or is checked against it: a row altered after the build is
+    refused. `score` is the search's own; `matched` lists the fields that matched; `pick(card)` gives the field the excerpt is from
+    and the excerpt, as text with no marker (or `None` and an empty one)."""
+    row_id, row_book, row_version, generation, current, added, cite, stored = row
+    try:
+        made = json.loads(stored)
+        card.validate(made)
+        if (made["book_id"] != row_book or made["version_id"] != row_version or cite != citation_of(made)
+                or not (added == "" or card._ISO.fullmatch(added)) or type(generation) is not int or generation < 1
+                or current not in (0, 1)):
+            raise damaged()
+        excerpt_field, excerpt = pick(made)
+        return {"book_id": row_book, "version_id": row_version, "generation": generation, "is_current": bool(current),
+                "added": added, "score": score, "matched": matched, "excerpt_field": excerpt_field,
+                "partial": made["partial"], "grounding": card.grounding_counts(made), "citation": cite, "untrusted": True,
+                "excerpt": f"{fulltext.MARKER}\n{excerpt}",
+                "text": f"{fulltext.MARKER}\n{card.render(made)}\n{citation.END_MARKER}"}
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, KbError):
+        raise damaged() from None
+
+
 def search(index_root, query, limit=DEFAULT_LIMIT, book_id=None, within="all"):
     """Ranked results for a query, at most `limit` (1 to 50): the cards whose text holds every word. `within` is `all`, `summary` (the card
     in the vocabulary of its source: title, summary, uses, topics, adjacent topics, key ideas, caveats) or `neutral` (the five neutral
@@ -257,25 +285,14 @@ def search(index_root, query, limit=DEFAULT_LIMIT, book_id=None, within="all"):
         if time.monotonic() > end:
             raise KbError(f"the search took too long (more than {SEARCH_SECONDS} seconds) and was stopped") from None
         raise KbError(f"the catalog cannot be read ({e}): run `{COMMAND}` to build it again") from None
-    damaged = KbError(f"the catalog holds a card that is not valid or does not belong to its row: run `{COMMAND}` to build it again")
     results = []
     for row_id, row_book, row_version, generation, current, added, cite, stored, rank in rows:
-        try:
-            made = json.loads(stored)
-            card.validate(made)
-            # everything printed comes from the checked card, or is checked against it: a row altered after the build is refused
-            if (made["book_id"] != row_book or made["version_id"] != row_version or cite != citation_of(made)
-                    or not (added == "" or card._ISO.fullmatch(added)) or type(generation) is not int or generation < 1
-                    or current not in (0, 1)):
-                raise damaged
-            fields = matched[row_id]
-            excerpt = card._shown(fulltext.excerpt_of(_fields(made)[FIELDS.index(fields[0])], words)) if fields else ""
-            results.append({"book_id": row_book, "version_id": row_version, "generation": generation, "is_current": bool(current),
-                            "added": added, "score": float(rank),  # the score is computed by the query, not stored: nothing to check
-                            "matched": fields, "excerpt_field": fields[0] if fields else None,
-                            "partial": made["partial"], "grounding": card.grounding_counts(made), "citation": cite, "untrusted": True,
-                            "excerpt": f"{fulltext.MARKER}\n{excerpt}",
-                            "text": f"{fulltext.MARKER}\n{card.render(made)}\n{citation.END_MARKER}"})
-        except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError, KbError):
-            raise damaged from None
+        fields = matched[row_id]
+
+        def pick(made, fields=fields):
+            if not fields:
+                return None, ""
+            return fields[0], card._shown(fulltext.excerpt_of(_fields(made)[FIELDS.index(fields[0])], words))
+
+        results.append(result_of((row_id, row_book, row_version, generation, current, added, cite, stored), float(rank), fields, pick))
     return results

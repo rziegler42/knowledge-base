@@ -410,3 +410,46 @@ unchanged in D and again at the end.
   removed) leaves the old file readable and complete.
 - **Not done / for the owner.** No security review was run; I recommend one after Increment D, which is the first increment in which
   an agent's query and the stored vectors meet. The reviewer did not read the tests, README or spec text, and could not run anything.
+  (Committed as `24c1a8e`.)
+
+### Increment D — Search by meaning (done; not committed)
+
+- **What was built.** `python3 -m kb card-search QUERY --meaning [--limit N]` (`vectors.search`). The query is any text of up to 2000
+  characters. It is refused before anything is sent if it is not text or is blank, if the limit is not 1 to 50, if there is no file of
+  vectors or no catalog, if the file of vectors is of another format, has a trigger, a view or an odd meta table, or was made for
+  another model name or dimension than the one set, or has a row that is not what the engine writes. The query is then turned into a
+  vector by the embedding model of the config (`models.embed`); a reply from another model than the one that made the vectors is
+  refused. Each vector is used only if its card is in the catalog, the field's text there is non-empty and hashes to the stored hash,
+  and the vector is of the entry's dimension, finite and not all zero; any other is left out and counted in `stale` (stored vectors,
+  not cards), and a card with no vector that can be used is counted in `without_vector`. The vectors are scaled to length one and a
+  card is ranked by the cosine to the closest of its three vectors (ties: problem, approach, provides; between cards: book and
+  version), the score rounded to 12 places, larger being closer. The reply is `{"meaning", "model", "cards_searched", "stale",
+  "without_vector", "results"}`. A result is built by the same function as a keyword result (`catalog.result_of`, moved out of
+  `catalog.search` without a change of its output: the 81 catalog tests pass unchanged), so it has the same keys, the same checks of
+  the row against its card, the same markers and the same citation; its `score` is the cosine, `matched` and `excerpt_field` name the
+  field, and the excerpt is the start of that field's text. `--meaning` takes no `--in` and no `--book`. The card spec ("Searching the
+  catalog") and the README ("Searching the cards") say what is built, and that a larger score is closer.
+- **Tests first** (the search tests failed with 59 errors because `vectors.search` did not exist), then `python3 -W
+  error::ResourceWarning -m unittest engine.tests.test_vectors engine.tests.test_catalog engine.tests.test_card engine.tests.test_models
+  engine.tests.test_setup engine.tests.test_cardmake engine.tests.test_cardqueue engine.tests.test_trial` gave 752 tests, OK;
+  `wb run code-work check` found no problems. The plan names the first four; the others were run because the refactor of
+  `catalog.search` and the `--in` default of the command are read by them. No call was made to the owner's server (a fake bridge
+  answers with vectors chosen by hand, so the order a query must give is known).
+- **Deliberate breaks**, each from green: 22 (the wrong sign of the ranking, a stale vector used in two ways, a foreign model accepted
+  for the query and a foreign store accepted, a limit not applied or not checked, a card returned twice, the query's length not
+  checked, stale vectors or cards without a vector not counted, a tie going to the later field, the wrong catalog name for a field, a
+  score that is not the cosine, vectors not scaled, a result without its marker, a damaged vector refusing the search instead of
+  being counted, a row of the catalog not checked against its card) were each caught. Three are not caught and are equivalent in
+  effect: a blank query is also refused inside `models.embed` before anything is sent; and a vector of zeros cannot reach the scaling,
+  because it is left out as damaged when the rows are read and a zero query vector is refused by `models.embed`.
+- **Review.** The read-only `reviewer` agent, a third exchange of six: no blocking finding. Applied: the command read the config
+  twice and now reads it once; the README says `stale` counts stored vectors (not cards), `cards_searched` counts cards with at least
+  one vector that can be used, and that, as in the keyword search, a card is checked against its row only when it is in the results.
+  Noted, not changed: the stored hash binds a vector to its text and not the other way, so a person who can write the private file
+  could put any vector under a correct hash and change the ranking (card text is only ever taken from the validated catalog row);
+  the search has no time cap like the keyword search's ten seconds, which the size of this library does not need (about 80 cards),
+  and a card larger than a card may be is refused when the catalog is built. The reviewer could not run anything, had no diff of
+  `catalog.py`, and did not read the tests, README or spec text.
+- **Not done / for the owner.** No security review was run. This is the increment in which an agent's query goes to a model server, its
+  reply is parsed, and a file in the index root that may have been altered is read, so I recommend one now, before Increment E. It
+  runs only if the owner asks.

@@ -17,6 +17,7 @@ vectors of two models: it refuses such a file (`connect`, `check_entry`).
 Vectors are model output, so they are checked when they are made and again when they are read: the right length, finite numbers and
 not all zeros."""
 import hashlib
+import json
 import math
 import os
 import re
@@ -27,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import KbError, card, catalog, models, textutil
+from . import search as fulltext  # the limits of a result and the excerpt: the same as the search of the text
 
 INDEX_FILE = "vectors.sqlite"
 FORMAT = 1
@@ -124,10 +126,11 @@ def check_entry(conn, entry):
     return rows
 
 
-def read_rows(conn, dimension):
+def read_rows(conn, dimension, lenient=False):
     """The rows of the file, each checked: `[{book_id, version_id, generation, field, text_sha256, vector}]`, vector as a list of floats.
-    A row that is not what this engine writes (a field that is not embedded, a hash that is not a hash, a vector that is not a vector of
-    `dimension` finite numbers that are not all zero) is a refusal."""
+    A row that is not what this engine writes (a field that is not embedded, a hash that is not a hash) is a refusal. So is a vector
+    that is not a vector of `dimension` finite numbers that are not all zero, unless `lenient`: then its `vector` is `None`, and the
+    caller leaves the row out and counts it."""
     again = f"run `{COMMAND}` to build it again"
     out = []
     try:
@@ -139,8 +142,14 @@ def read_rows(conn, dimension):
         if (not isinstance(book_id, str) or not isinstance(version_id, str) or type(generation) is not int or generation < 1
                 or field not in FIELDS or not isinstance(sha, str) or len(sha) != 64 or set(sha) - _HEX):
             raise KbError(f"the file of vectors holds a row that is not what this engine writes: {again}")
+        try:
+            vector = unpack(blob, dimension)
+        except KbError:
+            if not lenient:
+                raise
+            vector = None
         out.append({"book_id": book_id, "version_id": version_id, "generation": generation, "field": field, "text_sha256": sha,
-                    "vector": unpack(blob, dimension)})
+                    "vector": vector})
     return out
 
 
@@ -293,3 +302,102 @@ def _remove(path, what):
             os.remove(path)
         except OSError as e:
             raise KbError(f"{what} is in the way and cannot be removed ({e.strerror}): {path}") from None
+
+
+CATALOG_NAMES = {"neutral_problem": "n_problem", "neutral_approach": "n_approach", "neutral_provides": "n_provides"}  # as the catalog names them
+
+
+def _query(query):
+    if not isinstance(query, str):
+        raise KbError("a query must be text")
+    if len(query) > fulltext.MAX_QUERY_CHARS:
+        raise KbError(f"a query is at most {fulltext.MAX_QUERY_CHARS} characters")
+    query = query.strip()
+    if not query:
+        raise KbError("the query has no text to look for")
+    try:
+        query.encode("utf-8")
+    except UnicodeEncodeError:
+        raise KbError("the query holds a character that cannot be sent") from None
+    return query
+
+
+def _field_text(stored, field):
+    """The text of an embedded field of a card as the catalog holds it, or `None` if the card holds none that can be hashed."""
+    try:
+        text = json.loads(stored)["model"][field]
+        text.encode("utf-8")
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError, UnicodeEncodeError):
+        return None
+    return text if isinstance(text, str) and text.strip() else None
+
+
+def _unit(vector):
+    """The vector scaled to length one, or `None` if it has no length that can be divided by."""
+    length = math.hypot(*vector)
+    if not length or not math.isfinite(length):
+        return None
+    return [x / length for x in vector]
+
+
+def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, root=None):
+    """Search by meaning. The query is turned into a vector by the embedding model that the config sets for `card-embed`, and each card
+    is ranked by the cosine between it and the closest of the card's vectors (problem, approach, provides), larger being closer. Returns
+    `{"meaning", "model", "cards_searched", "stale", "without_vector", "results"}`; a result is a keyword result of the catalog with the
+    cosine for its score, the field that matched, and that field's text for its excerpt. A vector is used only if its text still hashes
+    to the card's text in the catalog and it is a vector of the entry's dimension: any other is left out and counted in `stale`, and a
+    card with no vector that can be used is counted in `without_vector`. Refused before the query is sent: a query that is not text, a
+    limit out of range, no file of vectors or catalog, a file of vectors for another model or dimension, a row that is not what this
+    engine writes. Refused after it: a reply for the query from another model than the one that made the vectors. Reads the two files
+    read-only and writes nothing; only the query goes to the model."""
+    if type(limit) is not int or not 1 <= limit <= fulltext.MAX_LIMIT:
+        raise KbError(f"the limit must be a whole number from 1 to {fulltext.MAX_LIMIT}")
+    query = _query(query)
+    name, _ = models.choose(cfg, "card-embed")
+    entry = models.registry(cfg)[name]
+    with closing(connect(path_of(index_root), readonly=True)) as vconn:
+        meta = check_entry(vconn, entry)
+        stored = read_rows(vconn, entry["dimension"], lenient=True)
+    try:
+        with closing(catalog.connect(catalog.path_of(index_root), readonly=True)) as cconn:
+            rows = cconn.execute("SELECT id, book_id, version_id, generation, is_current, added, citation, card FROM cards "
+                                 "ORDER BY book_id, version_id").fetchall()
+    except sqlite3.Error as e:
+        raise KbError(f"the catalog cannot be read ({e}): run `{catalog.COMMAND}` to build it again") from None
+    got = models.embed(cfg, name, [query], launcher=launcher, root=root)
+    if got["model"] != meta["model"]:
+        raise KbError(f"the model that answered for the query ({textutil.clean(got['model'], 60)}) is not the one that made the vectors; "
+                      f"run `{COMMAND}` to build them again")
+    q = _unit(got["vectors"][0])
+    if q is None:
+        raise KbError("the vector for the query has no length")
+    by_card = {(row[1], row[2]): row for row in rows}
+    usable, stale = {}, 0
+    for v in stored:
+        key = (v["book_id"], v["version_id"])
+        row = by_card.get(key)
+        text = _field_text(row[7], v["field"]) if row is not None and v["vector"] is not None else None
+        unit = _unit(v["vector"]) if text is not None and sha256(text) == v["text_sha256"] else None
+        if unit is None:
+            stale += 1
+        else:
+            usable.setdefault(key, {})[v["field"]] = unit
+    without_vector = sum(1 for key, row in by_card.items() if key not in usable and any(_field_text(row[7], f) for f in FIELDS))
+    ranked = []
+    for key, fields in usable.items():
+        best, best_field = None, None
+        for field in FIELDS:  # in this order, so that a tie goes to the first
+            if field in fields:
+                cosine = max(-1.0, min(1.0, math.fsum(a * b for a, b in zip(q, fields[field]))))
+                if best is None or cosine > best:
+                    best, best_field = cosine, field
+        ranked.append((round(best, 12), key, best_field))
+    ranked.sort(key=lambda r: (-r[0], r[1]))
+    results = []
+    for score, key, field in ranked[:limit]:
+        def pick(made, field=field):
+            return CATALOG_NAMES[field], card._shown(fulltext.excerpt_of(made["model"][field], []))
+
+        results.append(catalog.result_of(by_card[key][:8], score, [CATALOG_NAMES[field]], pick))
+    return {"meaning": True, "model": meta["model"], "cards_searched": len(usable), "stale": stale, "without_vector": without_vector,
+            "results": results}

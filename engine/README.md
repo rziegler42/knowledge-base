@@ -710,6 +710,7 @@ python3 -m kb cards-queue status RUN
 ```sh
 python3 -m kb card-index                       # build the catalog from the book folders
 python3 -m kb card-search 'stopping rule' [--in all|summary|neutral] [--book BOOK_ID] [--limit N]
+python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N]
 ```
 
 - **The catalog.** `cards.sqlite` in the index root holds the newest card of each version of each active book, the whole card as
@@ -745,7 +746,7 @@ python3 -m kb card-search 'stopping rule' [--in all|summary|neutral] [--book BOO
 - **A damaged catalog.** A file of another format, with other tables, a trigger or a view, a stored card that is not a valid card
   (or is nested too deeply to read), or a row whose citation, date, generation or version flag is not what its card gives, is
   refused with the command to run (`card-index`). Nothing in the catalog is run.
-- **The vectors** (for a search by meaning, not built yet). `python3 -m kb card-vectors [--again]` makes a vector for three of the
+- **The vectors** (for the search by meaning, below). `python3 -m kb card-vectors [--again]` makes a vector for three of the
   five neutral fields of the newest card of each version of each active book (problem, approach and provides; **not needs or
   limits**, most of whose sentences a sample found were not in the book), with the embedding model that your config sets for
   `card-embed` (see [Calling a model](#calling-a-model)), and writes them to `vectors.sqlite` in the index root. **The text of those
@@ -759,6 +760,26 @@ python3 -m kb card-search 'stopping rule' [--in all|summary|neutral] [--book BOO
   refused and asks for `--again`, so vectors of two models are never mixed. The counts printed are the cards read, the cards with no
   model part, those that could not be read (`left_out`; the exit is 1), the vectors, those `kept` and `made`, the texts sent, the
   model and the dimension. Nothing leaves your network except to the server of the embedding entry.
+- **A search by meaning** (`card-search QUERY --meaning`) turns the query, which is any text of up to 2000 characters (a sentence or two
+  about a problem, not keywords), into a vector with the same embedding model, and ranks the cards by the cosine between it and the
+  closest of each card's three vectors (problem, approach, provides). **The query goes to that model**, and nothing else does. It
+  needs `card-vectors` and `card-index` run first, and takes no `--in` and no `--book`. It prints one object:
+  `{"meaning": true, "model", "cards_searched", "stale", "without_vector", "results"}`. A result is a keyword result (the same keys,
+  the same card text between the untrusted-text markers, the same citation, grounding counts and checks of the row against its card),
+  except that `score` is the cosine, **larger being closer** (a keyword score is smaller for a better match), `matched` and
+  `excerpt_field` name the field whose vector was closest (`n_problem`, `n_approach` or `n_provides`), and the excerpt is the start of
+  that field's text. At most 50 results (10 by default); ties are broken by the order problem, approach, provides for a card and by
+  book and version between cards. **A vector is used only if it is still the card's:** its stored text hash must equal the hash of the
+  field's text in the catalog, and it must be a vector of the entry's dimension, finite and not all zero. Any other is left out and
+  counted in `stale` (a count of stored vectors, not of cards: a card changed since `card-vectors`, a book no longer in the catalog, a
+  damaged vector), and a card with no vector that can be used is counted in `without_vector` and not searched. `cards_searched` is the
+  number of cards with at least one vector that can be used, so the reply says how much of the library the search covered. As in the
+  keyword search, a card is checked against its row only when it is in the results, so a damaged row of a card that is ranked below
+  the limit goes unnoticed, and one in the results stops the search with the command to run. The
+  search is refused, before the query is sent, for a file of vectors made for another model or dimension than the one set, of another
+  format, with a trigger or a view, or with a row that is not what the engine writes; and refused if the model that answers for the
+  query is not the one that made the vectors. It reads both files read-only and writes nothing. A closeness says how near a field is
+  to the query and nothing of whether the field is right: see the `grounding` counts of the result.
 
 ### The trial: do the cards help?
 

@@ -167,6 +167,12 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 
 - **[proposed]** The catalog is searched by keyword and by meaning. A result gives the card, a score, the date the book was added,
   and how complete its source was, for example that the shelf is still being seeded.
+- **[proposed]** Built in the engine: `card-search QUERY --meaning` searches by meaning over the three embedded neutral fields of a
+  card (problem, approach, provides). The query is turned into a vector by the embedding model of the config, each card is ranked by
+  the cosine to its closest field (larger is closer), and a result is a keyword result with that cosine as its score and the field
+  that matched. A vector is used only while its text still hashes to the card's text, and the model and dimension are those set;
+  anything else is left out and counted in the reply (`stale`, `without_vector`), and a file made for another model is refused, so
+  vectors of two models are never mixed. It takes no shelf or book filter yet.
 - **[proposed]** The card as shown to a reader marks each kept topic, key idea, caveat and neutral limit, and each sentence of the
   summary and the neutral fields of a card that has them, `[stated]` or `[inferred]`,
   and a result says how many items of each mark its card has, or that the card was not checked (a card of the earlier form). The
