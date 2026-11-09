@@ -93,6 +93,9 @@ over the library has been made, and the owner has seen what a few searches retur
 5. A live build over the library made a vector for each searched field (problem, approach, provides) of each card that has one, and the owner has seen the results
    of the searches of Increment E and recorded a decision.
 6. `wb run code-work check` finds no problems, and the specs and the README state what is built.
+7. The findings F1, F2 and F5 of the security review of commit `4e93147` (the end of Increment D) are fixed, each with a regression
+   test that failed before the fix, and a second look has found them fixed; the other findings (F3, F4, F6) are stated in the README
+   as known limits.
 
 ## Increments
 
@@ -206,11 +209,49 @@ missing its markers or its citation, a limit not applied, a card returned twice;
 server is made in this increment.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-search-the-neutral-descriptions-by-meaning#D`.
 
+### Increment D-A — Fix the findings of the security review of Increments B to D
+
+**Outcome:** three findings of the security review of commit `4e93147` are fixed, each with a regression test that failed before the
+fix: (F2) the file of vectors is built in a private temporary folder and not through a fixed name that a link could take the place
+of; (F1) a damaged file of vectors is refused with the command to run and never ends in a raw SQLite error; (F5) text from the error
+object of the bridge cannot carry the words of an untrusted-text marker into a refusal. The other findings are stated as known limits.
+**Dependencies:** D.
+**Affected areas:** `engine/kb/vectors.py`, `engine/kb/models.py` (`_why_failed`), `engine/tests/test_vectors.py`,
+`engine/tests/test_models.py`, `engine/README.md`, this plan's Result.
+**Steps:**
+1. Write the tests first and see each fail for the right reason: (a) a link planted at the old fixed name `vectors.sqlite.new`, and at
+   `vectors.sqlite.new-journal`, before and during a build (a test makes the timing certain by planting it after the leftover files
+   are removed) is not followed: the file it leads to, an empty one made world-writable and a foreign SQLite file with a table of its
+   own, is unchanged in content, mode and tables; the file of vectors is built and put in place; (b) the file is private from the
+   moment it exists, and a folder or file left by a build that was killed is removed by the next build, under the lock, and nothing
+   but such a leftover is removed; (c) a damaged file of vectors (the page that holds the `meta` table zeroed, a connection that raises
+   a SQLite error on that table) is refused by `check_entry`, by `search` and by the command with a message that names `card-vectors`,
+   and a build replaces it; (d) the error text of a bridge reply that holds the words of a marker is withheld in the refusal of
+   `models.embed` and of `models.call`.
+2. (F2) Build the file in a folder made by `tempfile.mkdtemp` inside the index root (mode 0700, a random name), under the lock; make the
+   file private by its path inside that folder; put it in place with `os.replace`; remove the folder whatever happens. Before it
+   makes a new folder the build removes, under the lock, the folders and files that an earlier killed build left (names of the
+   pattern the build uses, real folders and files only, never a link's target).
+3. (F1) Make `_meta` (and any other read of the file of vectors that is not already inside the checks of `connect`) turn a SQLite
+   error into a refusal that names the command to run.
+4. (F5) Make `_why_failed` pass the error and the detail of the bridge through `textutil.title`, and show a fixed text when the
+   words of a marker are found.
+5. State in the README the known limits: a person who can write the private file of vectors can put any vector under a correct
+   text hash, and `card-vectors --again` makes every vector again from the cards (F4); a file of vectors or a catalog is read whole
+   into memory, so its size is the bound (F3); the time limit of a build is for each batch and not for the whole build (F6).
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_vectors engine.tests.test_models engine.tests.test_catalog`;
+deliberate breaks, each from a green baseline: the old fixed name used, the file private only after it holds data, a leftover not
+removed, a leftover removed that is not one, the folder left behind after a failure, a SQLite error left to escape from `_meta`, the
+words of a marker shown from the bridge's error text; a second look by the read-only `reviewer` agent on the fix (it is given the
+paths and the findings, and asked to try the planted-link case by reading and to say what it could not check); `wb run code-work check`.
+No call to the owner's server is made in this increment.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-search-the-neutral-descriptions-by-meaning#D-A`.
+
 ### Increment E — Build over the library and look at what it returns
 
 **Outcome:** the library has vectors for its searched fields, and the owner has seen what a few searches by meaning return next to
 what a keyword search returns, and decides what to do.
-**Dependencies:** D, the owner's setting of the embedding entry and of `card-embed` in the config, and the owner's word to run.
+**Dependencies:** D-A, the owner's setting of the embedding entry and of `card-embed` in the config, and the owner's word to run.
 **Affected areas:** the index root (`vectors.sqlite`); this plan's Result. No tracked code.
 **Steps:**
 1. Run `wb run ask-ollama check` to see that the embedding model is listed, and `python3 -m kb card-vectors` over the library. The
@@ -250,8 +291,8 @@ unchanged in D and again at the end.
 - **Misleading ranking.** Closeness says nothing of accuracy: a neutral sentence that Increment A finds unsupported ranks like any
   other. The result says how many of a card's items were checked (the grounding counts), as a keyword result does.
 - **Security review.** The change touches a subprocess (the bridge call), a parsing of untrusted model output and a file in the index
-  root. The owner is asked once whether to run a security review with the installed module before Increment B is committed; it runs
-  only if the owner asks.
+  root. The owner asked for a security review at the end of Increment D (commit `4e93147`); its findings are in the Result, and
+  Increment D-A fixes the three worth a change now. A fix is new attack surface, so D-A has its own regression tests and a second look.
 
 ## Review record
 
@@ -276,6 +317,12 @@ unchanged in D and again at the end.
 - A vector index, if the library grows far beyond a few hundred books.
 - Prefixes that a model may want for a query and for a document: a model that needs them is not supported by this plan.
 - Marked inferences or "not stated" for empty neutral parts, and the other open items of `cards`.
+- `catalog.rebuild` builds its file through a fixed name `cards.sqlite.new` in the same way that Increment D-A stops doing for the
+  vectors (the security review of `4e93147` found the gap and noted that it predates this plan). It is a change to code that this
+  plan does not otherwise touch, so it is for the owner to decide whether to fix it, in a plan of its own or with an amendment.
+- A size cap, a row cap and a time limit for reading a file of vectors or the catalog (F3), a time limit for a whole build (F6), and
+  a signature that would bind a vector to its text (F4): not done, because the files are the owner's own, private to the owner and
+  small (about 80 cards); the limits are stated in the README.
 
 ## Result
 
@@ -452,4 +499,36 @@ unchanged in D and again at the end.
   `catalog.py`, and did not read the tests, README or spec text.
 - **Not done / for the owner.** No security review was run. This is the increment in which an agent's query goes to a model server, its
   reply is parsed, and a file in the index root that may have been altered is read, so I recommend one now, before Increment E. It
-  runs only if the owner asks.
+  runs only if the owner asks. (Committed as `4e93147`.)
+
+### Security review of Increments B to D (run on the owner's word, on commit `4e93147`)
+
+- **What was run.** The `security-reviewer` agent (a read-only agent that runs experiments on a copy), on a copy made with `git
+  archive 4e93147`, with fake bridges and no network. It traced the inputs an attacker controls (a query, card text, the bridge's reply,
+  the files in the index root, the config names) to their privileged uses and ran about forty probes. The test files
+  `test_vectors` and `test_models` passed in its copy (223 tests; it ignored resource warnings). The tree under review was unchanged
+  (`git status` empty, HEAD `4e93147`, no stash). It disclosed that its first run executed an older script that was already in the
+  shared scratch folder and touched only an old scratch folder, not the repository. It could not check by experiment: what `main`
+  prints for a SQLite error (it did not call `main`, which reads the real config), a grandchild process that keeps the pipe open, and
+  whether the `wb` launcher itself reads `--server`, `--model` or `--timeout`.
+- **Findings.** No Critical or High. **Medium F2:** `build` removes the fixed name `vectors.sqlite.new`, creates it through SQLite and
+  then makes it private, so someone who can write in the index root and recreates a link in that gap makes SQLite write the vectors
+  schema into a file outside the index root and sets it to 0600 (shown with an empty file and with a foreign SQLite file, which gained
+  two tables and kept its own); `catalog.rebuild` has the same pattern and predates this plan. **Low F1:** a file of vectors whose
+  `meta` page is damaged makes `search` raise a raw SQLite error (a traceback at the command). **Low F5:** text from the error object
+  of the bridge reaches a refusal without the guard against marker words (the older chat call has the same pattern). **Low F3:** a
+  file of vectors or the catalog is read whole into memory (150 MB for a 150 MB cell) with no cap and no time limit. **Low F4:** the
+  text hash does not bind a vector to its text, so a person who can write the file can put any vector under a correct hash and it
+  survives a rebuild until `--again`. **Low F6:** the time limit of a build is for each batch, not for the whole build.
+- **Found sound** (tested): the arguments of the bridge command (names restricted, no shell, texts only on standard input); the strict
+  checks of the bridge's reply (duplicate keys, NaN, 1e999, a 5000-digit integer, a boolean as a number, wrong types, odd model names,
+  a flood of output, a hang, bad UTF-8, exit codes that lie); the lock file and its link check; read-only opening; stale journals; marker
+  words in card text (withheld, one genuine end marker in a result); the text-hash staleness; links and directories at the file of
+  vectors; odd cells in the meta and vector tables. Read only: no code from a SQLite file is reachable from its data; the batching
+  limits fit the bridge's.
+- **My evaluation.** F1 and F2 confirmed against the code (`vectors.py:112` has no guard for a SQLite error; `vectors.py:274-278`
+  removes, creates and then makes private). The index root belongs to the owner, so F2 and F3 need a writer there who is the owner or
+  runs as the owner; in practice they are Low, and the fix for F2 is small and standard. F4 is inherent to the design.
+- **The owner's decision** (2026-11-09, on my recommendation): fix F1, F2 and F5 in a new Increment D-A, which needs the owner's new
+  approval of the plan; state F3, F4 and F6 as known limits in the README; note the same gap in `catalog.rebuild` as deferred. The
+  plan was amended (Completion criteria, Increment D-A, the dependency of Increment E, Risks, Deferred work).
