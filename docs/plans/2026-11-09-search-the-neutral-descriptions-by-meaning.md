@@ -7,9 +7,10 @@ Specs: docs/specs/card.md, docs/specs/models.md
 
 ## Goal
 
-An agent can search the library by meaning. The five neutral fields of each card (problem, approach, needs, provides, limits) are
+An agent can search the library by meaning. Three of the five neutral fields of each card (problem, approach and provides; the
+owner decided on 2026-11-09, on the figures of Increment A, to leave out needs and limits) are
 turned into vectors by an embedding model that the owner lists in the config, and `card-search` with a new `--meaning` option returns
-books ranked by how close a field of their card is to the query. A result has the same citation, the same facts about how complete
+books ranked by how close one of those fields of their card is to the query. A result has the same citation, the same facts about how complete
 the source is, the same marks of the grounding and the same untrusted-text markers as a keyword result. The vectors can be rebuilt
 from the cards alone, each is marked with the model that made it and with the hash of the text it was made from, and a vector that
 is stale or from another model is refused, never used.
@@ -25,7 +26,8 @@ over the library has been made, and the owner has seen what a few searches retur
 - An embedding entry in the registry of the config (a `kind` of `embedding`), a kind of work for it, and a call in the engine to the
   bridge's existing `embed` command (`wb run ask-ollama embed`), with batches that stay inside the bridge's limits.
 - A store of vectors in its own file in the index root (`vectors.sqlite`), built from the cards, marked with the model and the
-  dimension, one vector for each neutral field of each card, kept when the text it came from has not changed.
+  dimension, one vector for each of the three searched fields (problem, approach, provides) of each card, kept when the text it
+  came from has not changed.
 - A command that builds the store, and the search by meaning in `card-search`: the query is embedded by the same model, the closeness
   is a cosine, a card is ranked by its closest field, and the result says which field matched.
 - A live build over the library with the owner's embedding model and a few searches whose results are shown to the owner.
@@ -35,10 +37,12 @@ over the library has been made, and the owner has seen what a few searches retur
 
 - Themes, search over the full text by meaning, a cloud embedding service, and ranking by anything but closeness (all named out of
   scope by the candidate).
-- Embedding the summary side of a card (the summary, uses, topics, key ideas). Only the five neutral fields are embedded.
+- Embedding the summary side of a card (the summary, uses, topics, key ideas), and embedding the neutral fields `needs` and
+  `limits`: the sample of Increment A found 14% and 7% of their sentences supported by the book. Only problem, approach and provides
+  are embedded. Adding the other two later is a change of one constant and a rebuild.
 - Comparing embedding models, and choosing one by measurement. The owner lists the model; the plan does not decide which is best. The
   trial of the candidate `cross-field-discovery#cross-field-trial` is where search is compared.
-- A vector index (approximate nearest neighbour) or a new dependency. The library has about eighty books and five fields each, so the
+- A vector index (approximate nearest neighbour) or a new dependency. The library has about eighty books and three searched fields each, so the
   closeness is computed in plain Python over every vector.
 - Posing a problem as sub-problems and setting aside results from the problem's own field (`cross-field-discovery#problem-search`).
 - Any change to a card, to how it is made, or to the keyword search. Editing the owner's config file (the owner does that).
@@ -51,7 +55,7 @@ over the library has been made, and the owner has seen what a few searches retur
   on the owner's server, `nomic-embed-text` (context 2048) and `bge-m3` (context 8192, multilingual). The engine calls the bridge as
   `models.py` calls `ask`: as a separate program, with an argument list and no shell. Increment B reads the bridge's limits
   (`MAX_TEXTS`, `MAX_TEXT`, `MAX_INPUT`) from the helper and stays inside them.
-- Text sent to the embedding model (the neutral fields of cards, and the query) goes to the owner's server over plain HTTP on the
+- Text sent to the embedding model (the three searched fields of cards, and the query) goes to the owner's server over plain HTTP on the
   owner's network, in the clear, as every card call does today. Nothing leaves the owner's network.
 - The 79 cards of the catalog are of two forms. A neutral field of a card made in the grounded-sentence form (generation 3, nine
   books) is a few sentences; in the earlier form it is a short text. Both are plain text in the card's model part, as
@@ -71,8 +75,8 @@ over the library has been made, and the owner has seen what a few searches retur
   any shelf's books may go to a cloud model (`models.md`, "Privacy of what is sent"). It starts only on the owner's word.
 - The owner edits the config (the entry and the kind of work). The engine and the agent never write the config file.
 - This plan is narrower than the candidate's outcome in one place: the candidate says "the neutral descriptions"; the plan embeds
-  each of the five fields as its own vector (as `card.md` and `theme.md` say, "each is embedded separately") and ranks a book by its
-  closest field. Whether one vector for all five fields would do better is not tested here.
+  each of three fields (problem, approach, provides) as its own vector (as `card.md` and `theme.md` say, "each is embedded
+  separately") and ranks a book by its closest field. Whether one vector for the fields together would do better is not tested here.
 
 ## Completion criteria
 
@@ -86,7 +90,7 @@ over the library has been made, and the owner has seen what a few searches retur
 4. `card-search QUERY --meaning` returns results in the shape of a keyword result, with the closeness as the score and the field that
    matched, and refuses a store made by another model, a store of another format, and a query that is empty; a vector whose text no
    longer matches its card is not used and is counted in the reply.
-5. A live build over the library made a vector for each neutral field of each card that has one, and the owner has seen the results
+5. A live build over the library made a vector for each searched field (problem, approach, provides) of each card that has one, and the owner has seen the results
    of the searches of Increment E and recorded a decision.
 6. `wb run code-work check` finds no problems, and the specs and the README state what is built.
 
@@ -144,7 +148,7 @@ different length, a length that differs from the entry's `dimension`, a non-fini
 name, `ok` false, and a batch split that drops or repeats a text are all caught; `wb run code-work check`. No call to the owner's server is made in this increment.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-search-the-neutral-descriptions-by-meaning#B`.
 
-### Increment C — Store the vectors of the neutral fields
+### Increment C — Store the vectors of the searched fields
 
 **Outcome:** `python3 -m kb card-vectors` builds a file of vectors from the cards, marked with the model, and builds it again
 cheaply when nothing changed.
@@ -153,18 +157,19 @@ cheaply when nothing changed.
 `docs/specs/card.md` ("Where it is stored"), `engine/README.md`.
 **Steps:**
 1. Write the tests first, with the fake bridge: the store is built from the cards of a fixture library; building twice makes the same
-   rows; a card whose neutral field text changed gets a new vector and the others keep theirs (the fake bridge counts the texts it
-   was sent); a card with no model part, and an empty neutral field, make no row; a store of another format number, a store with a
+   rows; a card whose text of a searched field changed gets a new vector and the others keep theirs (the fake bridge counts the
+   texts it was sent); a card with no model part, an empty searched field, and the fields `needs` and `limits` (never embedded),
+   make no row; a store of another format number, a store with a
    table or trigger the engine did not put there, and a store whose model or dimension differs from the configured one, are refused
    as the catalog's checks refuse them; a half-built store is never left in place.
 2. The file `vectors.sqlite` in the index root holds a `meta` table (format, the model as the bridge named it, the dimension, the
-   date of the build) and a `vectors` table: the book, the version, the generation, the field (one of the five), the SHA-256 of the
+   date of the build) and a `vectors` table: the book, the version, the generation, the field (one of the three searched), the SHA-256 of the
    field's text, and the vector as 32-bit floats. It is built beside the old file and renamed into place under the writers' lock, as
    the catalog is, and it has mode 600. It reads the cards through `card.read`, so a card that fails its checks is left out and
    counted.
 3. `card-vectors` reads the cards, keeps a row whose text hash and model match, sends the other texts through `models.embed` in
    batches, and prints the counts: cards, vectors kept, vectors made, cards left out, and texts sent. `--again` makes every vector
-   again. It refuses when `card-embed` is not set or model work is off. Nothing but the neutral fields is sent.
+   again. It refuses when `card-embed` is not set or model work is off. Nothing but the text of the three searched fields is sent.
 4. Update `card.md` ("Where it is stored": the vectors are a second derived file that can be thrown away and rebuilt) and the README.
 **Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_vectors engine.tests.test_catalog engine.tests.test_models`;
 deliberate breaks, each from a green baseline: a vector stored for the wrong field, a text hash not checked, a foreign model accepted,
@@ -174,7 +179,7 @@ a half-built file left in place, a non-finite number stored, a kept row not reus
 
 ### Increment D — Search by meaning
 
-**Outcome:** `python3 -m kb card-search QUERY --meaning` ranks books by the closeness of the query to a neutral field of their card
+**Outcome:** `python3 -m kb card-search QUERY --meaning` ranks books by the closeness of the query to a searched field (problem, approach or provides) of their card
 and returns what a keyword result returns.
 **Dependencies:** C.
 **Affected areas:** `engine/kb/vectors.py`, `engine/kb/catalog.py` (the building of one result, shared with the keyword search),
@@ -191,7 +196,7 @@ and returns what a keyword result returns.
 2. Move the building of one result (the checks against the stored card, the rendering between the markers) out of `catalog.search`
    into a function that both searches call, without changing the keyword search's output (its existing tests pass unchanged).
 3. Add the search by meaning: embed the query through `models.embed`, read the vectors and the cards of the catalog in one read-only
-   connection each, compute the cosine in plain Python, rank, and build the results. `--meaning` takes the neutral fields only and
+   connection each, compute the cosine in plain Python, rank, and build the results. `--meaning` searches the three embedded fields only and
    refuses `--in`. The excerpt is the text of the field that matched.
 4. Update `card.md` ("Searching the catalog": the search by meaning is built; the marks and the citation are those of a keyword
    result; the neutral side only) and the README.
@@ -203,13 +208,13 @@ server is made in this increment.
 
 ### Increment E — Build over the library and look at what it returns
 
-**Outcome:** the library has vectors for its neutral fields, and the owner has seen what a few searches by meaning return next to
+**Outcome:** the library has vectors for its searched fields, and the owner has seen what a few searches by meaning return next to
 what a keyword search returns, and decides what to do.
 **Dependencies:** D, the owner's setting of the embedding entry and of `card-embed` in the config, and the owner's word to run.
 **Affected areas:** the index root (`vectors.sqlite`); this plan's Result. No tracked code.
 **Steps:**
 1. Run `wb run ask-ollama check` to see that the embedding model is listed, and `python3 -m kb card-vectors` over the library. The
-   texts sent are the neutral fields of the current cards (about 400), to the owner's server; say so before the run.
+   texts sent are the three searched fields of the current cards (about 240), to the owner's server; say so before the run.
 2. Run the build again: it makes no new vector.
 3. Run a set of searches by meaning, and the same words as a keyword search on the neutral side. The owner gives the queries, or
    agrees to a set of eight that I propose: four written as a problem of one field and four as a plain description of a mechanism.
@@ -219,7 +224,7 @@ what a keyword search returns, and decides what to do.
    often search finds a transfer is made: that is the trial (`cross-field-discovery#cross-field-trial`).
 5. Recommend, and record the owner's decision.
 **Verification:** the second build makes no new vector; every search's results have a citation and the markers; the counts of the
-build agree with the number of neutral fields in the catalog; `wb run code-work check`.
+build agree with the number of non-empty searched fields in the catalog; `wb run code-work check`.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-search-the-neutral-descriptions-by-meaning#E`, holding the
 Result and the owner's decision.
 
@@ -234,7 +239,7 @@ unchanged in D and again at the end.
 ## Risks and sensitive actions
 
 - **Text leaves the machine in A and E.** In A, passages of books and sentences of cards go to cloud labelling subagents (allowed by
-  the owner, started on the owner's word). In E, the neutral fields and the queries go in the clear to the owner's server on the
+  the owner, started on the owner's word). In E, the three searched fields and the queries go in the clear to the owner's server on the
   owner's network, as every card call does.
 - **A vector that does not match its card.** A stale or foreign vector would rank a book by text it no longer has. The text hash,
   the model and the dimension are checked at every search, and a failure is a refusal or a counted omission.
@@ -259,11 +264,14 @@ unchanged in D and again at the end.
   - R1-F3 (major): zero-norm vectors are refused from the bridge, the store and the query, with tests and a deliberate break.
   - R1-F4 (minor): Increment A and the first completion criterion report by book as well.
 - **Rejected:** none.
+- **After the review:** the plan was amended once, on the figures of Increment A (three searched fields instead of five). The
+  amendment was not reviewed by the second model.
 - **Left for the owner:** a second round was not asked for; the roadmap's out-of-date "Current state" is not changed.
 
 ## Deferred work
 
-- Embedding the summary side of a card, and the choice between one vector for all five neutral fields and one for each.
+- Embedding the summary side of a card, and the choice between one vector for the searched fields together and one for each.
+- Embedding `needs` and `limits`, if a later measurement (a better card form or a person's labels) shows them to be reliable.
 - Comparing the two embedding models on a held-out set of queries (`models.md` says the evaluation decides).
 - A vector index, if the library grows far beyond a few hundred books.
 - Prefixes that a model may want for a query and for a document: a model that needs them is not supported by this plan.
@@ -271,4 +279,55 @@ unchanged in D and again at the end.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The accuracy of the neutral descriptions (run; not committed)
+
+- **Tool change** (step 1): `card-sample` could not be limited to the neutral fields (they are about a fifth of a card's items), so
+  it gained `--field` (repeat for several; `fields=` in `cardsample.sample`), which also limits the items a second round added.
+  Tests written first and seen to fail (`engine.tests.test_cardsample.FieldsTest` and one test in `AddedTest`; 12 errors and a
+  failure before). `python3 -W error::ResourceWarning -m unittest engine.tests.test_cardsample` gave 64 tests, OK. Deliberate breaks,
+  each from green: no filter in the draw, added items not filtered, the fields not passed to the draw, a repeated field accepted, a
+  field name not checked and a string accepted for the list were all caught; accepting an empty list is not caught by a test because
+  it still ends in a refusal (an empty pool). The README describes the option.
+- **The sample** (step 2): `card-sample ... --items 180 --calibration 15 --seed 20261109` with the five neutral fields, over the
+  newest card of every version: 180 items from 78 cards, 2 or 3 per card; by generation 132 of generation 1, 14 of 2, 24 of 3, 8 of 4
+  and 2 of 6 (the cards are of several generations because books were carded again at different times; the sample is of the newest
+  card of each book, not of one form). Files are held outside the repository.
+- **The labels** (step 3, on the owner's word to start the increment): six cloud subagents (Claude Opus), one for each batch of 30,
+  blind to the generation of an item, with the rubric of the earlier samples; each saw only the top five passages of the book shown
+  with each item. One labeller cut a passage short when writing its file (item i007); the original passages were restored and its
+  label kept. **The labels are a model's alone: the calibration subset of 15 has not been labelled by the owner, so the agreement
+  with a person is not known.**
+- **The figures** (step 4; `card-accuracy` for generation and field, a script in the scratchpad for book and card). 179 items judged,
+  1 skipped. Supported 66 (37%), inference 22 (12%), unsupported 91 (51%).
+
+  | field | items | supported | inference | unsupported |
+  |---|---|---|---|---|
+  | problem | 41 | 59% | 22% | 20% |
+  | approach | 37 | 54% | 16% | 30% |
+  | provides | 37 | 41% | 3% | 57% |
+  | needs | 36 | 14% | 17% | 69% |
+  | limits | 28 | 7% | 0% | 93% |
+
+  By generation: 1: 34% supported, 51% unsupported (131 items); 2: 43% and 57% (14); 3: 50% and 38% (24); 4: 38% and 63% (8); 6: 0%
+  and 100% (2). The groups after generation 1 are small. By book: 78 books with 2 or 3 items each; 61 of 78 cards have at least one
+  unsupported sampled sentence, and in 21 books every sampled sentence is unsupported. Per-book figures rest on 2 or 3 items each and
+  are only indications.
+- **Limits.** The labels are those of one model and are of support within five passages, which can miss support elsewhere in the book.
+  `needs` and `limits` are written to say what an idea requires and where it fails, which a book often does not state, so a low
+  share there is partly the nature of those fields and not only error; the same rubric was used in the earlier samples.
+- **Reading and recommendation.** The neutral description is least reliable exactly where it would mislead a search by meaning least
+  often, and most reliable in `problem` and `approach`, which say what the book is about. Search by meaning on `problem`, `approach`
+  and `provides` is worth building; embedding `needs` and `limits` (14% and 7% supported) would put sentences that mostly are not
+  in the book into the vectors, and a match on them would look as good as any other. I recommend going on, and changing the plan's
+  scope so that the vectors are made for `problem`, `approach` and `provides` only, with `needs` and `limits` left out and
+  recorded as deferred. That is a change of the approved text of the plan (its scope, steps and completion criteria) and needs the
+  owner's new approval. The alternative is to go on as written with all five fields and to rely on the result showing the field that
+  matched. The decision is the owner's, and so is the labelling of the calibration subset, which would show whether these labels
+  agree with a person.
+- **The owner's decision** (2026-11-09, on my recommendation): go on, with the vectors made for `problem`, `approach` and `provides`
+  only. The plan was amended accordingly (Goal, Scope, Non-goals, Assumptions, completion criterion 5, Increments C, D and E,
+  Risks, Deferred work; Increment A's text is unchanged because it measured all five fields) and waits for the owner's new
+  approval before Increment B. The calibration subset is still the owner's to label.
+- Provenance: sample drawn and labelled on 2026-11-09 at commit `aa58cc8` plus the uncommitted change to `engine/kb/cardsample.py`,
+  `engine/kb/__main__.py`, `engine/tests/test_cardsample.py` and `engine/README.md`; the labelling model was Claude Opus through
+  subagents; the sample files are `trial/sampleF` in the owner's data folder (untracked). `wb run code-work check`: see below.

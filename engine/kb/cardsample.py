@@ -161,16 +161,16 @@ def passages(blocks, text):
     return out
 
 
-def _draw(rng, cards, quota, skip=frozenset()):
+def _draw(rng, cards, quota, skip=frozenset(), fields=None):
     """`quota` items from `cards`: `[(book_id, version_id, card, generation, field, position, text)]`, none of which is in `skip`, a set
-    of `(book_id, version_id, generation, field, position)`."""
+    of `(book_id, version_id, generation, field, position)`, and, when `fields` is given, only of those fields."""
     order = sorted(cards, key=lambda c: (c[0], c[1]))
     rng.shuffle(order)
     pools = []
     for book_id, version_id, made, number in order:
         by_field = {}
         for field, position, text in _items_of(made["model"], made.get("grounding")):
-            if (book_id, version_id, number, field, position) not in skip:
+            if (book_id, version_id, number, field, position) not in skip and (fields is None or field in fields):
                 by_field.setdefault(field, []).append((position, text))
         names = sorted(by_field)
         rng.shuffle(names)
@@ -252,16 +252,20 @@ def _added_items(pool):
     return out
 
 
-def sample(store, outdir, items=80, calibration=15, seed=None, generations=None, books=None, added=0):
+def sample(store, outdir, items=80, calibration=15, seed=None, generations=None, books=None, added=0, fields=None):
     """Draw the sample and write its files in `outdir`; returns a summary of numbers. Refuses a folder inside the project or one that
     holds files, a sample larger than the cards hold, a calibration larger than the sample, a generation no card has, and a book
     whose converted text cannot be read. With `added`, that many of the items are drawn from those that a second round added to the
     cards (`cards#card-grounding`), marked in the key and counted in the sample; it is refused if the cards hold fewer, or if a
-    generation would have more of them than its share of the sample. Changes nothing in the library."""
+    generation would have more of them than its share of the sample. With `fields`, a non-empty list of names from FIELDS, only items of
+    those fields are drawn (the added items too). Changes nothing in the library."""
     if type(added) is not int or not 0 <= added <= MAX_ITEMS:
         raise KbError(f"the number of added items is a whole number from 0 to {MAX_ITEMS}")
     if type(items) is not int or not 1 <= items <= MAX_ITEMS or type(calibration) is not int or not 0 <= calibration <= items:
         raise KbError(f"the sample is from 1 to {MAX_ITEMS} items and its calibration subset from 0 to as many as the sample")
+    if fields is not None and (not isinstance(fields, (list, tuple)) or not fields or len(set(fields)) != len(fields)
+                               or not all(isinstance(f, str) and f in FIELDS for f in fields)):
+        raise KbError(f"the fields are a list of different names from {', '.join(FIELDS)}")
     if seed is None:
         seed = secrets.randbelow(10 ** 9)
     if type(seed) is not int or not 0 <= seed < 10 ** 12:
@@ -282,7 +286,7 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
     numbers = sorted(pool)
     drawn = []
     if added:
-        candidates = _added_items(pool)
+        candidates = [e for e in _added_items(pool) if fields is None or e[4] in fields]
         if added > len(candidates):
             raise KbError(f"the cards hold only {len(candidates)} items that a second round added, and the sample asks for {added}")
         drawn = random.Random(f"{seed}:added").sample(candidates, added)
@@ -293,7 +297,7 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
         have = sum(1 for e in drawn if (0 if wanted is None else e[3]) == group)
         if have > quota:
             raise KbError("a generation would hold more added items than its share of the sample")
-        picked += _draw(random.Random(f"{seed}:{group}"), pool[group], quota - have, skip)
+        picked += _draw(random.Random(f"{seed}:{group}"), pool[group], quota - have, skip, fields)
     random.Random(f"{seed}:order").shuffle(picked)
     cache = {}
     listed, key = [], {}

@@ -778,7 +778,7 @@ questions from your own projects must not be committed. It reports numbers and n
 ### How accurate are the cards? A sample to label
 
 ```sh
-python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...] [--book BOOK_ID ...] [--added N]
+python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...] [--book BOOK_ID ...] [--added N] [--field FIELD ...]
 python3 -m kb card-accuracy ITEMS KEY
 python3 -m kb card-agreement FIRST SECOND
 ```
@@ -795,7 +795,9 @@ are held **outside the repository** (a folder inside the project's folder, links
   `--added N` draws N of the items from those that a second round added (see the task `card-more`), counts them in the sample and
   in the share of their generation, and marks them in the key; it is refused if the cards hold fewer, or if a generation would
   have more of them than its share. `card-accuracy` then counts them apart as well, under `added`. The items file does not say
-  which they are.
+  which they are. `--field` (repeat it for several; one of `summary`, `topics`, `key_ideas`, `caveats`, `neutral_problem`,
+  `neutral_approach`, `neutral_needs`, `neutral_provides`, `neutral_limits`) draws only items of the fields named, and the items that
+  a second round added only if they are of those fields; the sample is refused if those fields hold fewer items than it asks for.
   The same `--seed` gives the same sample. `OUTDIR` is
   new or empty, and four files are written, all private:
   - `items.json`: the items, shuffled, each with an id, the book, the field, the text, up to five passages of the book that share

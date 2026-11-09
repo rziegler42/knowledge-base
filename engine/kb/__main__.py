@@ -112,6 +112,8 @@ def main(argv=None):
     cs.add_argument("--book", action="append", help="a book to draw from; repeat for several (default: every book that has a card)")
     cs.add_argument("--generation", type=int, action="append", help="a card generation to draw from; repeat for several "
                                                                     "(default: the newest card of each version)")
+    cs.add_argument("--field", action="append", choices=list(cardsample.FIELDS), help="a field to draw from; repeat for several "
+                                                                                  "(default: every field)")
     ca = sub.add_parser("card-accuracy", help="count the labels of a sample by generation and field")
     ca.add_argument("items", help="the labelled items file")
     ca.add_argument("key", help="the key file of the sample")
@@ -122,7 +124,7 @@ def main(argv=None):
     try:
         if args.command == "card-sample":
             print(json.dumps(cardsample.sample(Store.open(write=False), args.outdir, items=args.items, calibration=args.calibration,
-                                               seed=args.seed, generations=args.generation, books=args.book, added=args.added),
+                                               seed=args.seed, generations=args.generation, books=args.book, added=args.added, fields=args.field),
                              indent=1))
             return 0
         if args.command == "card-accuracy":

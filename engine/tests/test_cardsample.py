@@ -117,6 +117,45 @@ class DrawTest(SampleCase):
         self.assertIn("alphax second sentence.", texts)
 
 
+NEUTRAL = ("neutral_problem", "neutral_approach", "neutral_needs", "neutral_provides", "neutral_limits")
+
+
+class FieldsTest(SampleCase):
+    def test_a_sample_can_be_limited_to_the_fields_named(self):
+        cardsample.sample(self.store, self.out, items=12, calibration=3, seed=7, generations=(1, 2), fields=NEUTRAL)
+        self.assertEqual({e["field"] for e in self.load("key.json")["items"].values()} - set(NEUTRAL), set())
+        self.assertEqual({i["field"] for i in self.load("items.json")["items"]} - set(NEUTRAL), set())
+
+    def test_the_pool_is_only_the_fields_named(self):
+        cardsample.sample(self.store, self.out, items=6 * 5, calibration=0, seed=7, generations=(1, 2), fields=NEUTRAL)  # the whole pool
+        other = os.path.join(self.base, "other")
+        with self.assertRaises(KbError):
+            cardsample.sample(self.store, other, items=6 * 5 + 1, calibration=0, seed=7, generations=(1, 2), fields=NEUTRAL)
+        self.assertFalse(os.path.exists(other))
+
+    def test_one_field_can_be_named(self):
+        cardsample.sample(self.store, self.out, items=6, calibration=0, seed=7, generations=(1, 2), fields=("caveats",))
+        self.assertEqual({e["field"] for e in self.load("key.json")["items"].values()}, {"caveats"})
+
+    def test_a_field_the_cards_do_not_have_or_a_wrong_value_is_refused_and_writes_nothing(self):
+        for bad in (("use",), ("summary", "nope"), ("summary", "summary"), (), [], "summary", ("summary", 5), (None,), 5):
+            with self.subTest(bad=bad), self.assertRaises(KbError):
+                cardsample.sample(self.store, self.out, items=3, calibration=0, seed=7, generations=(1, 2), fields=bad)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_without_the_option_every_field_is_drawn_as_before(self):
+        self.sample(items=6 * PER_CARD, calibration=5)
+        self.assertEqual(len({e["field"] for e in self.load("key.json")["items"].values()}), 9)
+
+    def test_the_command_has_the_option(self):
+        env = dict(os.environ, KB_CONFIG_DIR=self.cfg)
+        r = subprocess.run([sys.executable, "-m", "kb", "card-sample", self.out, "--items", "6", "--calibration", "0", "--seed", "7",
+                            "--generation", "1", "--field", "neutral_needs", "--field", "neutral_limits"],
+                           cwd=ENGINE_DIR, env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(set(json.loads(r.stdout)["fields"]), {"neutral_needs", "neutral_limits"})
+
+
 class BlindTest(SampleCase):
     def test_an_item_in_the_file_says_nothing_of_its_generation(self):
         self.sample()
@@ -386,6 +425,16 @@ class AddedTest(SampleCase):
         self.assertEqual(sorted(texts[i] for i, e in key.items() if e.get("added")),
                          sorted(["alphaz topic two", "alphaz idea three", "bravoz idea two"]))
         self.assertEqual(len({(e["book_id"], e["field"], e["position"]) for e in key.values()}), 12)  # no item twice
+
+    def test_the_added_items_can_be_limited_to_the_fields_named(self):
+        with self.assertRaises(KbError):  # three items were added, two of them to key ideas
+            self.sample3(items=4, added=3, fields=("key_ideas",))
+        self.assertFalse(os.path.exists(self.out))
+        self.sample3(items=4, added=2, fields=("key_ideas",))
+        key = self.load("key.json")["items"]
+        self.assertEqual({(e["book_id"], e["field"], e["position"]) for e in key.values() if e.get("added")},
+                         {(self.books["alpha"], "key_ideas", 2), (self.books["bravo"], "key_ideas", 1)})
+        self.assertEqual({e["field"] for e in key.values()}, {"key_ideas"})
 
     def test_some_of_the_added_items_can_be_drawn(self):
         self.sample3(added=2)
