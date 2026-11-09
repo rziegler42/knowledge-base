@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Candidate / Increment A dependencies (lines 5, 93)",
+      "problem": "The roadmap candidate depends on `neutral-cards-for-the-library`, but this plan declares no such dependency and does not create neutral cards. The roadmap says only twelve books currently have grounded neutral descriptions, so this plan can build the requested search before its prerequisite and cannot deliver the candidate's library-wide outcome.",
+      "severity": "major",
+      "suggestion": "Make the neutral-cards candidate an explicit prerequisite and require its completion before the vector build, or obtain and record an intentional roadmap change."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment B, steps 1–3; Increment C, step 1 (lines 121–130, 147–151)",
+      "problem": "The proposed embedding registry entry has no dimension, although `models.md` requires an embedding entry to record it. The plan nevertheless requires refusing a store whose dimension differs from the configured one, which is impossible with this schema.",
+      "severity": "major",
+      "suggestion": "Add a validated dimension to embedding entries, verify every bridge response against it, and include mismatch tests."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Assumptions and constraints / Increments B–D (lines 59–62, 125–130, 175–186)",
+      "problem": "The plan requires finite vectors but does not reject zero-norm vectors. Cosine similarity is undefined for one, so a valid-looking bridge response can cause division by zero or an undefined ranking.",
+      "severity": "major",
+      "suggestion": "Require positive finite norms for stored and query vectors, define the refusal/omission behavior, and test zero vectors."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Scope and Increment A reporting (lines 23–24, 102–104)",
+      "problem": "Scope promises the accuracy sample will be reported by field and by book, but Increment A only reports by field and generation; the completion criteria also omit the promised per-book report.",
+      "severity": "minor",
+      "suggestion": "Add per-book reporting to Increment A and its completion/verification criteria, or narrow the scope statement."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "Changes are needed: the plan bypasses its roadmap prerequisite and has gaps in embedding-dimension and cosine validation.",
+  "verdict": "changes_needed"
+}

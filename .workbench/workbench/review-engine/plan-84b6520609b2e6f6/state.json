@@ -1,0 +1,85 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-09T16:26:56Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The prerequisite is met (the library plan is Completed with 79 cards), so no new dependency is needed; the plan now states that and says the roadmap sentence is out of date."
+    },
+    {
+      "at": "2026-11-09T16:26:56Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Correct: the embedding entry now carries a validated dimension that every bridge reply is checked against, with mismatch tests."
+    },
+    {
+      "at": "2026-11-09T16:26:56Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F3",
+      "reason": "Correct: zero-norm vectors are now refused from the bridge, the store and the query, with tests and a deliberate break."
+    },
+    {
+      "at": "2026-11-09T16:26:57Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F4",
+      "reason": "Per-book reporting added to Increment A and to the first completion criterion."
+    }
+  ],
+  "format": 1,
+  "generation": 6,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-09-search-the-neutral-descriptions-by-meaning.md",
+  "rounds": [
+    {
+      "at": "2026-11-09T16:26:32Z",
+      "bridge": "ask-codex",
+      "document_sha256": "9cb1cb43e3b3160818c6bff8805b41176b4f61adbc539a7b6d58723dcd14d127",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F3",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F4",
+          "severity": "minor"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "40b9de5a606aa0ab6a074771258d0a18d8ad4f7a228f869b1a79114151834a71",
+      "usage": {
+        "input_tokens": 371658,
+        "output_tokens": 3577,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "61337dc9c84acea3f5c4c7ccf64b14e522da66a4625aa6e65d9664368b307f61",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
