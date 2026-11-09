@@ -378,3 +378,47 @@ nothing wider is named, since no other module reads the grounding record.
   entry fits the card record; the check prompt cannot be broken by a note or quote that looks like an item line, since text is
   cleaned to one line and the verdicts are counted by position; the journal is stale for older versions and replay rechecks; and
   topics, key ideas and caveats and the non-goals are untouched. The reviewer did not run the tests, read the tests or see the diff.
+- **Committed** by the owner's word as 503d46c, with the trailer `Plan: 2026-11-09-ground-the-summary-and-neutral-fields#C`.
+
+### Increment D
+
+- **Step 1.** The owner's earlier word covered the same ten books and the send of a blind sample to cloud labellers; the owner said
+  "Start d" after being told that the run would rebuild the catalog and would send nothing, and said to go on to the labelling after
+  the empty-parts rule stopped the run.
+- **Step 2, the run (generation 3, same ten books, `cards-queue plan --again` and `run`, two passes).** Nine cards made, one book
+  failed: the paper whose card answer twice had `topics` and `topics_support` of different lengths; it keeps its generation 2 card.
+  From the nine cards (read back from the cards; the queue does not save the reasons for drops, so only counts exist): the model
+  wrote 74 sentences for the summary and the neutral parts, 62 were kept (58 stated, 4 inferred) and 12 dropped (generation 2: 93
+  asked, 62 kept, 31 dropped); six of the nine cards are partial (generation 2: nine of ten). The model still wrote one sentence for
+  almost every neutral part although it was told up to three. Cards with an empty part, of nine: needs 4, problem 2, limits 2,
+  provides 1, approach 0, summary 0 (generation 2, of ten: 5, 3, 2, 5, 4, 0). **The rule of this increment (stop if a part ends empty
+  on more than a fifth of the cards) fired for needs, problem and limits.** The catalog was rebuilt by the queue: search shows
+  generation 3 for nine of the books and generation 2 for the failed one; earlier generations are untouched.
+- **Step 3, the sample.** The owner said to go on to the labelling although the rule had fired. One blind sample with `card-sample`
+  (seed 7, 180 items, 90 from generation 1 and 90 from generation 3, over the nine books that have both, 15 for calibration) was
+  labelled by a cloud model (Opus, six batches of 30, without the generation or the form; the key was not shown). The batches were
+  merged and checked against the original items: the book, field, text and passages of all 180 items are unchanged and every label
+  is one of the four. **The owner did not label the calibration items**, so the agreement is not measured: by the plan's rule the
+  comparison is the model's labels alone and no decision on replacing the old form is supported by the data.
+- **Step 4, the comparison (summary and the five neutral fields, nine books; the model's labels).** Old form, 57 items judged:
+  supported 21 (36.8 percent), inference 10 (17.5), unsupported 26 (45.6). New form, 47 judged (2 skipped): supported 21 (44.7),
+  inference 8 (17.0), unsupported 18 (38.3). The supported share rose by about 8 points, against the 20 the replace rule asks for, and
+  against about 12 points between two runs of the same form in the earlier measurement, so the rise is not a finding. All nine kinds
+  of item together: supported 45 of 89 (50.6 percent) for the old form and 45 of 83 (54.2) for the new. The six fields hold 984 words
+  in the new form and 1,209 in the old on the nine books (19 percent less); the new form has 62 sentences there.
+- **What the check of whole sentences let through.** Of the 45 sentences of the six fields that the new form kept as `stated`, the
+  labeller judged 21 supported, 8 inference and 16 unsupported (36 percent); the 2 kept as `inferred` limits were judged skip and
+  unsupported. The labeller sees only the five best passages of a book, and the check saw whole notes, so some of the 16 may be
+  supported elsewhere in the book; the figure still shows that the check is lenient, and it bears on `cards#card-clause-check`.
+- **Limits.** Small sample: about 50 items judged per form in the six fields, nine books, one labeller model, no measure of its
+  agreement with the owner. The old form's neutral field is one long item judged whole and the new form is judged by sentence, which
+  favours the new form, so the rise, if anything, overstates it. One book is missing from the comparison. The 43 percent of the earlier
+  evidence is a reference only.
+- **Recommendation (given before the owner's word).** Do not replace the old form: the supported share did not rise by 20 points, more
+  than a fifth of the cards have an empty neutral part, and the calibration was not made. Keep the new form as an option and do not
+  card the library again. A way on is a separate plan, either to keep neutral parts as marked inferences or `cards#card-clause-check`.
+- **Owner's decision.** The owner said to go with the recommendation: the old form is not replaced and the library is not carded again
+  with the new form. Which of the two ways on to plan, if either, is not decided.
+- **Provenance.** Run on 2026-11-09 at commit 503d46c on the owner's configured servers; the labelling was done by cloud Opus
+  subagents; the commands were `cards-queue plan --again`, `cards-queue run`, `card-sample`, `card-accuracy`; the counting scripts,
+  the labelled files and the run's name are held outside the repository.
