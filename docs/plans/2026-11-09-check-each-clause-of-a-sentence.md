@@ -211,4 +211,51 @@ nothing wider is named, since no other module reads the check.
 
 ## Result
 
-Empty until work starts.
+### Increment A (in progress: steps 1 and 2 done, step 3 waits for the owner's word)
+
+- **Step 1, the 16 unsupported sentences** (read from the labelled sample of the earlier plan, held outside the repository; the labels
+  are those of one cloud labeller who saw five passages; my reading of the quote of the first cited note). The labeller's note names a
+  specific part that is not stated in 15 of the 16, and says that no passage states the claim in the last. By my reading of the quote of
+  the first cited note: in 13 the part is not in that quote, 6 of them a member of a list ("A, B and C") and 7 a phrase or clause
+  hanging off the main clause; in 2 the cited note is a reference entry and the part the labeller found missing (a bibliography, links
+  to literature) is plausibly what that note shows, so the labeller's five passages were too few and the check may have been right;
+  in 1 the whole claim reaches beyond its note and has no part to cut. Seven of the 13 cite two notes, and the second note is not seen
+  here, so some of those may be supported by it.
+- **What this means for the design.** Thirteen of the 15 parts are list members or trailing phrases and not clauses in the grammar
+  sense, so the prompt of increment B must say that a clause is a part of the sentence that says one thing, such as a main clause, a
+  phrase that hangs off it or a member of a list; otherwise a check by clause would pass most of these as one clause.
+- **Step 2, the notes.** They cannot be had again: the journals of the nine books were removed when their cards were filed, and the
+  grounding record keeps the quote of the first cited note and the names of the notes, not the points. The probe of step 3 can show
+  the check the sentence and that one quote only, without the note's point and without the second note. That is less than the check
+  has in a real run, so it will reject more than a real run does; a control (below) is run on the same terms.
+- **Step 3, the probe (the owner's word was given; the owner's local check model; 45 sentences kept as `stated`, each with the quote of
+  its first cited note only; nothing left the machine).** Two forms of the by-part prompt were tried. The first, with no schema, was
+  not answered as one JSON object in 15 of 15 tries. The second put each part and its verdict in the one `verdicts` list that the
+  existing schema allows; it was answered with no failure.
+  - **Control (the check as it is now, on the same reduced evidence).** Of the 16 unsupported sentences it said `supports` to 10 (62
+    percent), `partly` to 4 and `no` to 2; of the 21 supported it said `supports` to 16 (76 percent), `partly` to 2 and `no` to 3.
+    So the check of whole sentences lets through most of what the labeller judged unsupported, even with less evidence than it has.
+  - **By part, as computed.** Of the 16 unsupported: 13 dropped, 3 kept whole, none cut. Of the 21 supported: 9 kept whole, 1 cut,
+    11 dropped (52 percent). By the stop rule of this increment (more than a quarter of the supported ones cut or dropped) the plan
+    stops here.
+  - **These numbers are not a test of the check by clause.** In the examples read, the model did not split the sentence: it gave
+    the whole sentence as the first part and the text of the quote as the second part, and gave a verdict to each. The mean number of
+    parts was 2.0, and in only 8 of 45 answers do the parts rebuild the sentence. The 3 unsupported sentences kept whole were kept
+    because the sentence as a whole was said to be supported and the quote was said to be supported by itself. So the rule fired on a
+    probe that did not do what it was meant to do; the result that stands is the control above, and that no form of the by-part prompt
+    that splits the sentence has yet been tried.
+  - **Third form (the one more probe, on the owner's word).** The prompt says that the quote is evidence and never a part, gives a
+    worked example, and a part not copied from the item is refused. Same 45 sentences, same quotes, same local model; the control is
+    that of the second form. The model now splits: mean 1.8 parts, and the parts rebuild the sentence in 34 of 45 answers. With the
+    copy rule 30 of 45 were answered (two batches of 10 and 5 failed the rule three times each); those two batches were run again
+    without the copy rule, so the copy rule alone does not hold on this model. Of the 16 unsupported: 12 cut or dropped (75 percent;
+    11 dropped, 1 cut), 4 kept whole. Of the 21 supported: 9 kept whole, 5 cut, 7 dropped (57 percent cut or dropped). Verdicts by
+    part: supported sentences got `supports` 22, `partly` 8, `no` 8; unsupported ones `supports` 7, `partly` 9, `no` 12.
+  - **Reading.** The check by part catches more (75 percent against 12 percent for the control, which let 10 of 16 pass as
+    `supports`), but it also cuts or drops more than half of the supported sentences, over the stop rule of a quarter. The cases read
+    are cut at trailing phrases and list members that the one quote does not state ("to achieve this", "and analyzes their
+    evolutionary stability"), which the labeller, with five passages, took as supported. The probe gave the model one quote and no
+    point; the real check gives up to two notes with their points, so the loss may be smaller there, but this probe cannot show it.
+    The first-part check of "whole" is also weak: some parts overlap or repeat ("and diverse representation schemes" appears twice).
+- **State.** The stop rule fired on a valid test. Stopped before increment B, as the rule says. No tracked file other than this plan
+  changed.
