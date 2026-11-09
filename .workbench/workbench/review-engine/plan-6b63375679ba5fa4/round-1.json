@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Risks and sensitive actions — Security review",
+      "problem": "The plan says a security review runs only if the owner asks, but the project policy requires asking the owner whether to run one when a change touches a subprocess or network boundary. This change adds owner-configured text that is forwarded to the embedding bridge and adds a checked field to the vector file.",
+      "severity": "major",
+      "suggestion": "Add an explicit pre-implementation security-review checkpoint that asks the owner whether to review this config-to-bridge/vector-file surface and records the response."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan is otherwise aligned with the named specs; it needs the required security-review decision checkpoint.",
+  "verdict": "changes_needed"
+}

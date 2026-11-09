@@ -1,0 +1,213 @@
+# A query prefix for embedding models
+
+Status: Proposed
+Created: 2026-11-09
+Candidate: none (an improvement that follows from Increment E of the completed plan 2026-11-09-search-the-neutral-descriptions-by-meaning, whose Result found that the models the owner chose from are made to take an instruction before a query and the engine sends none)
+Specs: docs/specs/models.md, docs/specs/card.md
+
+## Goal
+
+An embedding entry of the owner's config can say what text goes in front of a query, and what text goes in front of a stored text, when
+the engine turns them into vectors. Some embedding models are made to take such text: `qwen3-embedding` is trained for
+`Instruct: <a task>` and a line `Query: <the query>` before a query and for a plain document; others use a short prefix for each side.
+The engine sends none today, so the model the library keeps, `qwen3-embedding:4b`, runs without its best form.
+
+The plan is done when the config can hold a `query_prefix` and a `document_prefix` for an embedding entry; the engine puts the right
+one in front of the right kind of text and records the document prefix with the vectors it makes, so that vectors made one way are
+never searched with the other; and the owner has seen what the same eight searches of Increment E return for `qwen3-embedding:4b`
+with an instruction before the query, next to what they returned without one, and has decided what the config keeps.
+
+## Scope
+
+- Two optional keys of an embedding entry, `query_prefix` and `document_prefix`: text of at most 400 characters, printable
+  characters and line breaks only, refused on a chat entry.
+- `models.embed` takes the kind of text it is given (a query or a document) and puts the entry's prefix for that kind in front of every
+  text before it is checked for size and sent. With no prefix set, what is sent is what is sent today.
+- The file of vectors records a hash of the document prefix it was made with (a new format of the file); a build does not reuse
+  vectors made with another prefix, and a search refuses a file made with another one.
+- `card-vectors` makes documents and `card-search --meaning` makes a query; the reply of a search says whether a query prefix was used.
+- A live comparison for `qwen3-embedding:4b` of the eight searches of Increment E with an instruction before the query against the
+  ranks recorded without one, with at most two wordings, and the owner's decision about what the config keeps.
+- The specs and the README.
+
+## Non-goals
+
+- Trying `bge-m3`, `mxbai-embed-large` or `nomic-embed-text` with their own prefixes. The keys are general, and the live comparison is
+  for the model the library keeps.
+- A prefix for a chat entry, a different prefix for each kind of search, and a prefix chosen by the engine or by a model: the owner
+  writes it in the config.
+- Choosing the best wording by measurement. The comparison shows what two wordings return for eight searches; it measures no accuracy.
+  The trial of the candidate `cross-field-discovery#cross-field-trial` is where search is compared on problems with known answers.
+- Embedding the other two neutral fields, a second model for ranking, and any change to a card.
+- Editing the owner's config file (the owner does that).
+
+## Assumptions and constraints
+
+- The format that `qwen3-embedding` is trained on is an instruction line and a query line: `Instruct: <task>` then a line break and
+  `Query: <the query>`, with documents embedded without an instruction. This was read in summaries of the model's card in a web search
+  on 2026-11-09 and was not checked at the source or against the card itself; the live comparison is what shows whether it helps, so a
+  wrong assumption costs a comparison and not the library. A short prefix for `mxbai-embed-large` that the same search suggested is not
+  used by this plan.
+- A prefix is text from the owner's own config. It is sent to the owner's server on standard input as part of the text, as every text
+  is, and it never reaches the command line.
+- The longest stored text is 500 characters and a query is at most 2000, so a prefix of at most 400 characters keeps every text well
+  inside the 32768 bytes the bridge takes and the 8192 tokens of `qwen3-embedding:4b`. The size is checked on the text with its
+  prefix.
+- The vectors of the library today are in the format 1 file, made without a prefix. The new format means the file is replaced the
+  first time `card-vectors` is run after Increment B: 230 texts to the owner's server, about half a minute for `qwen3-embedding:4b`.
+  Until then a search is refused with the command to run.
+- A document prefix changes the vectors of the stored texts, so it is recorded; a query prefix changes only the query, so it needs no
+  rebuild and is not recorded in the file.
+- Tests use the fake bridge, which records the texts it is sent. The live comparison uses the owner's server and the owner's word.
+
+## Completion criteria
+
+1. An embedding entry accepts `query_prefix` and `document_prefix` as text of 1 to 400 printable characters (line breaks allowed) and
+   refuses anything else, and a chat entry refuses both.
+2. `models.embed` puts the prefix for the kind of text in front of every text it sends, checks the size of the text with its prefix,
+   and sends exactly what it sent before when the entry has no prefix.
+3. The file of vectors records a hash of the document prefix; `card-vectors` makes documents with the document prefix and keeps a
+   vector only if it was made with the same one; a search sends its query with the query prefix and refuses a file made with another
+   document prefix; a file of the earlier format is refused by a search and replaced by a build.
+4. The owner has seen the ranks of the books expected for the eight searches for `qwen3-embedding:4b` with an instruction before the
+   query, next to the ranks recorded without one, and has decided what the config keeps; the file of vectors on disk was made with the
+   prefix settings the config keeps.
+5. `wb run code-work check` finds no problems, and the specs and the README state what is built.
+
+## Increments
+
+### Increment A — Prefixes for the texts the engine embeds
+
+**Outcome:** an embedding entry can carry a `query_prefix` and a `document_prefix`, and `models.embed` puts the right one in front of
+each text it sends.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/models.py`, `engine/tests/test_models.py`, `docs/specs/models.md` ("The embedding model"),
+`engine/README.md` ("Calling a model").
+**Steps:**
+1. Write the tests first, with the fake bridge recording the texts it is sent: an embedding entry accepts each prefix alone and both;
+   text of 400 characters, with line breaks and non-ASCII letters, is accepted; an empty text, text of 401 characters, a character
+   that is not printable (a control character other than a line break, a lone surrogate, a hidden or look-alike control such as a
+   zero-width character or a right-to-left mark) and a value that is not text are refused; a chat entry with either key is refused;
+   `embed` with the kind `query` sends the query prefix followed by the text, with the kind `document` sends the document prefix, and
+   with no prefix set sends the text unchanged; the kind defaults to `document`; a kind that is neither is refused before anything is
+   sent; the size limit applies to the text with its prefix (a text that fits alone and not with the prefix is refused by its place);
+   the prefix is never an argument of the bridge command; the vectors returned are those the fake bridge makes from the prefixed text.
+2. Add the two keys to the accepted keys of an entry, with their checks, for the kind `embedding` only. Add the argument `kind` to
+   `models.embed` (`"document"` by default, or `"query"`), and put the prefix in front of each text after the text itself is checked
+   and before the size of the text is.
+3. Update `models.md` and the README: what the keys are, that the prefix is for the owner to write, the format
+   `Instruct: ...` + line break + `Query: ...` that one model is trained for (as an example, marked as not checked at its source), and
+   that a document prefix needs the vectors to be made again.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_models engine.tests.test_setup`; deliberate breaks,
+each from a green baseline: the query prefix put on a document, the document prefix put on a query, both prefixes put on both, the
+prefix put on after the size is checked, a chat entry accepting a prefix, a control character or a zero-width character accepted,
+a prefix of 401 characters accepted, an empty prefix accepted, a kind that is neither accepted, the prefix passed on the command
+line; `wb run code-work check`. No call to the owner's server is made in this increment.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-query-prefix-for-embedding-models#A`.
+
+### Increment B — Record the document prefix with the vectors and use the prefixes in the build and the search
+
+**Outcome:** `card-vectors` makes documents with the document prefix and records it, and `card-search --meaning` sends its query with the
+query prefix; vectors made one way are never used with the other.
+**Dependencies:** A.
+**Affected areas:** `engine/kb/vectors.py`, `engine/tests/test_vectors.py`, `docs/specs/card.md` ("Where it is stored" and "Searching
+the catalog"), `engine/README.md` ("Searching the cards").
+**Steps:**
+1. Write the tests first, with the fake bridge: a build sends each text with the document prefix, and a search sends its query with the
+   query prefix, never the other way; the file records the hash of the document prefix (that of an empty text when there is none) in
+   its meta table; a build keeps a vector only if the file was made with the same document prefix, and replaces the file otherwise
+   (counted as `replaced`, nothing reused); a search refuses a file made with another document prefix, and says which command to run;
+   a change of the query prefix alone needs no rebuild and changes only the query that is sent; with no prefix set, a build and a
+   search send what they sent before; a file of the earlier format is refused by a search and replaced by a build; the stored text
+   hash still covers the text without any prefix, so a text that changed is still found stale; the reply of a search says whether a
+   query prefix was used (`query_prefix`, true or false) and never holds the prefix; a meta table with a document-prefix hash that is
+   not a hash is refused.
+2. Raise the format of the file to 2 and add the document-prefix hash to its meta table; have `build` call `models.embed` with the
+   kind `document` and `search` with the kind `query`; compare the hash in `check_entry`, in the reuse of old vectors and in the
+   checks of a search.
+3. Update the card spec and the README: the new format and what it means (the first `card-vectors` after this change replaces the file),
+   what the prefixes do, and that the reply of a search says whether a query prefix was used.
+4. Before the increment is committed, name to the owner what the change exposes (text from the config reaching the bridge on standard
+   input as part of every text, and a new field in the file of vectors that a search compares), ask once whether to run a security
+   review of it with the installed module, and record the owner's answer in the Result. If the owner asks for one, it runs on the
+   committed code and its findings are handled as the earlier plan's were.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_vectors engine.tests.test_models engine.tests.test_catalog`;
+deliberate breaks, each from a green baseline: the document prefix not applied in a build, the query prefix applied in a build, the
+document prefix applied to a query, the hash not recorded, the hash not compared in a build, the hash not compared in a search, an
+old vector kept for a new prefix, the stored text hash made over the prefixed text, the format not raised, the prefix itself shown in the
+reply; the owner's answer about a security review is recorded in the Result; `wb run code-work check`. No call to the owner's server is made in this increment.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-query-prefix-for-embedding-models#B`.
+
+### Increment C — Try an instruction before the query for the model the library keeps
+
+**Outcome:** the owner has seen what the eight searches of Increment E return for `qwen3-embedding:4b` with an instruction before the
+query, next to the ranks recorded without one, and has decided what the config keeps.
+**Dependencies:** B, the owner's edit of the config, and the owner's word to run.
+**Affected areas:** the index root (`vectors.sqlite`); this plan's Result. No tracked code. The owner edits the config; I never do.
+**Steps:**
+1. Propose the wording and agree it with the owner: `qwen3-embedding` takes `Instruct: ` and a task, a line break, and `Query: ` before
+   the query. A task for these searches: `Given a description of a problem or of how something works, find descriptions of methods or
+   ideas that solve the same problem or work the same way, in any field`. The owner adds it as `query_prefix` of `embed-qwen` (the
+   value ends after `Query: `, and a line break is written `\n` in the config) and tells me; I check that the config loads
+   (`python3 -m kb models` makes no call).
+2. Run `python3 -m kb card-vectors`. The file on disk is of the earlier format and is replaced: 230 texts go to the owner's server, in
+   the clear, and nothing is reused; say so before the run. Run it again: it sends nothing.
+3. Run the eight searches of Increment E (the same sentences and the same script), which sends the eight query sentences, each with
+   the prefix, to the owner's server; say so before the run. Record the first five books of each and the rank of the books I expected,
+   next to the ranks recorded for `qwen3-embedding:4b` without a prefix in Increment E of the earlier plan, and say plainly what could not
+   be concluded (eight searches, my own idea of the right books).
+4. If the owner wants, try a second wording: the owner edits `query_prefix`, and I run the eight searches again. This needs no rebuild.
+   At most two wordings are tried.
+5. Recommend, and record the owner's decision on what the config keeps (a wording, or none). If it is none, the config has no prefix,
+   and the file of vectors on disk, made without a document prefix, still matches it. No accuracy is claimed.
+**Verification:** the file of vectors on disk names `qwen3-embedding:4b` and the hash of the document prefix the config has; the second
+build sends no text; every result of a search has the markers and a citation (the script asserts it); a search of the prefixed model
+reports that a query prefix was used; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-query-prefix-for-embedding-models#C`, holding the Result and the
+owner's decision.
+
+## Verification for the plan as a whole
+
+Each increment's recorded verification stands unless a later increment changed its inputs. At the end, rerun the tests of the modules
+that changed (`test_models`, `test_vectors`, `test_catalog`) once, and `wb run code-work check`. A wider run is not named: no increment
+changes a module outside the model and vector paths. What could break outside the tested area is any caller of `models.embed`, whose
+new argument has a default that keeps today's behaviour, and the owner's existing file of vectors, which Increment B makes unusable
+until `card-vectors` is run once; the plan says so before it happens.
+
+## Risks and sensitive actions
+
+- **The existing file of vectors stops working.** The new format of the file means a search is refused until `card-vectors` is run
+  once (230 texts to the owner's server, about half a minute for `qwen3-embedding:4b`). The refusal names the command.
+- **A prefix can make search worse.** A wrong or badly worded instruction may rank books lower. The comparison of Increment C shows it
+  against the ranks recorded without one, and the prefix is optional: with none, behaviour is today's.
+- **Text leaves the machine in C.** The 230 texts and the eight queries, with the prefix on the queries, go in the clear to the owner's
+  server on the owner's network, as every card call does, and the owner is told before each run.
+- **The prefix is config text.** It is the owner's own, it goes on standard input as part of the text and never to the command line,
+  and it is limited in length and in the characters it may hold, so it cannot hide text or break a line of the bridge's input.
+- **Security review.** The change adds a new input to a surface the security review of the earlier plan covered (a subprocess, the
+  parsing of a model's reply, and a file in the index root): text from the owner's config now reaches the bridge, on standard input,
+  and the file gains a field that is checked as before. Increment B ends with a checkpoint at which the owner is asked once whether to
+  run a security review of this config-to-bridge text and of the changed file, and the answer is recorded. A review runs only if the
+  owner asks.
+
+## Review record
+
+- **Reviewer:** the second model of the review engine (`gpt-5.6-terra`), asked by the owner. Round 1 of 3; verdict `changes_needed`;
+  one finding, decided.
+- **Applied:** R1-F1 (major): the change adds a new input (config text to the bridge, and a field in the file of vectors) to a surface
+  that the earlier security review covered, so the plan now has an explicit checkpoint at the end of Increment B that asks the owner
+  once whether to run a security review and records the answer.
+- **Rejected:** none.
+- **Left for the owner:** a second round was not asked for.
+
+## Deferred work
+
+- Trying the prefixes of `mxbai-embed-large`, `nomic-embed-text` and `bge-m3` (which takes none), if the library ever uses one of them.
+- A separate prefix for different kinds of search, once there is a second kind (`problem-search` in the roadmap would be one).
+- A comparison of wordings on problems with known answers (the cross-field trial).
+- The other items left over from the earlier plan: the fixed-name gap in `catalog.rebuild`, caps on reading the files, embedding
+  `needs` and `limits`, the roadmap's out-of-date "Current state", and the owner's unlabelled calibration items of Increment A.
+
+## Result
+
+Empty until work starts.
