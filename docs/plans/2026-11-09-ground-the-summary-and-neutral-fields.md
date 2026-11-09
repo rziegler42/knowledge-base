@@ -32,7 +32,7 @@ now, and the owner has decided.
   engine does check (it then names the sentences of the summary and the neutral fields); and the statement of what a search result
   counts (it then counts the marks of those sentences). The owner's approval of this plan is the owner's word for this revision,
   which changes what the spec says about the card and is the change-direction checkpoint. No text of the spec is changed before
-  the approval, and the revision is made in increments A and B and shown in the commit.
+  the approval, and the revision is made in increments A, B and C and shown in the commit.
 
 ## Non-goals
 
@@ -151,17 +151,48 @@ engine.tests.test_cardqueue engine.tests.test_models engine.tests.test_catalog e
 check`; the review of the `reviewer` agent is evaluated and recorded.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-ground-the-summary-and-neutral-fields#B`.
 
-### Increment C — A live run, the labelled sample and the comparison
+### Increment C — Check a sentence against every note it cites, and ask for more sentences
+
+**Outcome:** a sentence that the notes it cites state together is confirmed, and each neutral part is asked for up to three sentences,
+so that one refusal does not empty it. The first live run (see the Result) found that half of the neutral parts ended empty: the model
+wrote one sentence for each, the check refused it, and a sentence was checked against the first note it cited only, though the book
+states some of them in a second note.
+**Dependencies:** B.
+**Affected areas:** `engine/kb/cardmake.py` (the pairing of a sentence, the check prompt, `ground`, the card prompt, `SENTENCE_ASKED`, the
+version of the card job), its tests and the fake reply of the queue tests, `docs/specs/card.md` (the clause on pairing), `engine/README.md`.
+The record of a card needs no change: the notes of a stated entry are already a list.
+**Steps:**
+1. Write the tests first. A sentence is paired with up to two verified notes that it cites, in the order written; the check prompt shows
+   each note with its point and quote under the sentence; one `supports` verdict for the item confirms it; the entry that is kept lists
+   the notes that were shown and has the quote of the first. A sentence that cites one verified note is paired with it as before, and
+   one that cites none has no pair. The pairing of a topic, key idea or caveat is unchanged (one note, a shared word). The check job
+   has one verdict for each item whatever the number of notes. The card is asked for up to three sentences for each neutral part
+   (the checked caps and the ceilings stay, so the arithmetic of the records still holds), each saying one thing, preferring two or
+   three short sentences to one, and citing the notes that state it together with the one that states most first. The card job is
+   version `v6`, so a journal made with `v5` is stale.
+2. Make the change, update the clause of the card spec on pairing and the engine README, and make deliberate breaks of the new pairing,
+   the check prompt and the entry from a green baseline.
+3. Run the diagnosis of the first live run again on the same three books (the card model and the check model on the configured
+   servers, nothing filed, nothing sent elsewhere) and record in the Result how many parts end empty and why sentences were dropped.
+   This is information for the owner and is not a gate.
+**Verification:** `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_cardstate
+engine.tests.test_cardqueue engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample` and `wb run code-work
+check`; the review of the `reviewer` agent is evaluated and recorded.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-ground-the-summary-and-neutral-fields#C`.
+
+### Increment D — A live run, the labelled sample and the comparison
 
 **Outcome:** the owner has numbers on whether grounding the sentences makes the summary and the neutral fields more accurate, at what
 loss of content, and has decided.
-**Dependencies:** A and B, and the owner's word on the books, on sending the sample to a cloud model, and on the calibration labels.
+**Dependencies:** A, B and C, and the owner's word on the books, on sending the sample to a cloud model, and on the calibration labels.
 **Affected areas:** the owner's library (new card generations for the books named), files outside the repository, and the plan's
 Result. No tracked file other than the plan changes.
 **Steps:**
 1. Propose to the owner eight to ten books that have a card in the form now in use (generation 1 of the library queue), the cost in
-   calls and time, and that the labelling sends items and passages to a cloud model. Wait for the word.
-2. Make the cards of those books in the new form with `cards --again`, as the next generation, and record the calls, the sentences
+   calls and time, and that the labelling sends items and passages to a cloud model. Wait for the word. (The owner gave the word for
+   ten books and for the send of the sample before increment C; the books are named in the Result. If the books or the send change,
+   ask again; otherwise the same ten books are made again.)
+2. Make the cards of those books in the new form with `cards-queue` and `--again`, as the next generation, and record the calls, the sentences
    asked for, kept and dropped for each reason, the fields that ended empty, and every failure. If a field ends empty on more than a
    fifth of the cards, stop and report before the labelling.
 3. Draw one blind sample from both forms of the same books: `card-sample` over the two generations of the books named, with the same
@@ -181,13 +212,13 @@ Result. No tracked file other than the plan changes.
    least 20 points over the old form, no more than a fifth of the fields end empty, and the owner agrees with the labels; and say what the check of whole
    sentences let through, so that the owner can decide on `cards#card-clause-check`. Record the owner's decision, including whether the
    library is carded again with `cards-queue`.
-**Verification:** the runs of steps 2 to 4 read as written, and the tests of A and B once more.
-**Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-ground-the-summary-and-neutral-fields#C`, which holds the plan's
+**Verification:** the runs of steps 2 to 4 read as written, and the tests of A, B and C once more.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-09-ground-the-summary-and-neutral-fields#D`, which holds the plan's
 Result.
 
 ## Verification for the plan as a whole
 
-Each increment's recorded verification stands unless a later increment changed its inputs. After C, rerun
+Each increment's recorded verification stands unless a later increment changed its inputs. After D, rerun
 `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_cardstate engine.tests.test_cardqueue
 engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample engine.tests.test_setup` and `wb run code-work check`;
 nothing wider is named, since no other module reads the grounding record.
@@ -198,7 +229,7 @@ nothing wider is named, since no other module reads the grounding record.
   tested in increment B before it is trusted. A check that is too lenient would pass what it passes now; the labelled comparison
   measures the result.
 - **Content lost.** Dropping unsupported sentences may leave a field empty or thin, and the card shorter and less useful. Criterion 3 and
-  step 2 of increment C bound this: a field that ends empty is reported, and the run stops above a fifth.
+  step 2 of increment D bound this: a field that ends empty is reported, and the run stops above a fifth.
 - **The prompt asks for more.** Writing every sentence with support is a larger reply for the card model, whose replies already fail
   in their shape in about one attempt in five; the report counts the failures, and the queue retries once.
 - **A new shape for the card call changes the journal.** The prompt version is in the journal's header, so a journal made with the old
@@ -213,7 +244,7 @@ nothing wider is named, since no other module reads the grounding record.
   three findings, all of major severity.
 - Applied: (2) the spec revision is now named statement by statement in the scope, with the note that the owner's approval is the
   owner's word for it and that no spec text changes before the approval; the plan also records that the grounding plan and the roadmap
-  had left this grounding in scope if the labelled sample showed it paid; (3) increment C now draws one blind sample from both forms of
+  had left this grounding in scope if the labelled sample showed it paid; (3) increment D (then C) now draws one blind sample from both forms of
   the same books, with the same number of items from each, so that the book and the kind of item are matched by construction, and the
   threshold is a rise form against form; the 43 percent of the evidence is only a reference.
 - Rejected, with the reason recorded in the plan: (1) making `cards#card-clause-check` a prerequisite. The roadmap's rules call
@@ -272,7 +303,7 @@ nothing wider is named, since no other module reads the grounding record.
   machine): 26 pairs built from two cards' notes and from sentences of other books' cards, through the real check prompt. All 14
   unrelated sentence and note pairs were answered `no`; of 8 pairs known to hold, 6 were `supports` and 2 `partly`, none `no`; of
   4 pairs of a stated item with a note from another piece of the same book, 3 were `no` and 1 `partly`. So the check does not
-  answer yes to everything. The unrelated pairs are easy negatives; the labelled comparison in C is the test of the harder ones.
+  answer yes to everything. The unrelated pairs are easy negatives; the labelled comparison in D is the test of the harder ones.
 - **Verification run:** `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_cardstate
   engine.tests.test_cardqueue engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample`, 645 tests OK;
   `wb run code-work check`, no problems. The fake replies of the tests of the card call and of the queue were changed to the new
@@ -287,4 +318,31 @@ nothing wider is named, since no other module reads the grounding record.
   margin, which a test asserts) and is corrected; the README said `none` for a sentence is refused without the exception for the
   limit, corrected; the spec was looser than the code on which sentences may be inferred, one clause added; the schema file is
   stricter than the engine on the names of the parts, which is harmless and left. The reviewer did not run the tests, did not read
-  the new tests in full, and could not say how often a live model's replies are refused with the new prompt: that is for C.
+  the new tests in full, and could not say how often a live model's replies are refused with the new prompt: that is for D.
+
+### First live run (increment D begun, stopped by its own rule) and its diagnosis
+
+- **What was done, with the owner's word.** The owner approved ten books that have a card of the old form (generation 1): Prisoner's
+  dilemma, Nash equilibrium, Genetic algorithm, Amdahl's law, Message Passing Interface, OpenMP (web pages); The Case for Learned Index
+  Structures, Megatron-LM, DeepCAD (papers); Solid modeling (web page). They were made again as generation 2 with `cards-queue` and
+  `--again` (run planned for the ten books; two passes; ten done, none failed; two books needed one retry), and the owner approved
+  sending a blind sample of about 90 items from each form, with passages, to cloud labellers after the run. Nothing was sent: the run
+  stopped at its rule below.
+- **Correction of what the owner was told.** The owner was told that the catalog would not be rebuilt. The queue rebuilds it at the
+  end of a run, so it was: search shows the generation-2 card for these ten books. The generation-1 cards are untouched.
+- **Numbers (generation 2 of the ten books).** The model wrote 93 sentences and 62 were kept (58 stated, 4 inferred); the 31 dropped
+  were all sentences that the check did not confirm or that repeated another. Parts that ended empty, of ten cards: needs 5,
+  provides 5, approach 4, problem 3, limits 2, summary 0. Nine of the ten cards are partial; the summaries are 20 to 89 words. The
+  rule of increment D (stop if a part ends empty on more than a fifth of the cards) fired for four of the five neutral parts.
+- **Diagnosis (read-only, nothing filed; three books, twice).** Every dropped sentence had a pair and was judged `partly` or `no` by
+  the check; none was dropped for citing no note. The model wrote one sentence for each neutral part, so one refusal emptied it.
+  The refused sentences were of two kinds: invented ones that no note states ("readers require familiarity with parallel computing
+  basics"), and fair ones whose first cited note is a general one and not the one that states them (a sentence about how the law
+  models a task, checked against the note that only defines it). Only the first cited note was shown to the check. The runs differ a
+  great deal: the same book ended with 4, 1 and 4 empty parts in three runs, so ten books are a small sample.
+- **Consequence.** With only the limit allowed to be an inference, the new form cannot meet the plan's replace rule as it stands.
+  The owner chose to fix the two mechanical causes first (increment C: check against up to two cited notes, ask for up to three
+  sentences for each neutral part) and to run the ten books again before any labelling. A third option, to let the neutral parts be
+  kept as marked inferences, was put to the owner and not taken.
+- **Provenance.** Run on the owner's configured servers at commit 2c082cd; the queue's run name is kept outside the repository; the
+  probe and diagnosis scripts and logs are held outside the repository.
