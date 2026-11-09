@@ -504,12 +504,21 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   The report of `cards` gives `points` and `verified`, the counts over the notes of the book (none for a card made from the
   metadata).
 - **Marks on the card (format 2).** The card call is told the kind of source (paper, page, book) and uses its word, and is asked
-  for a support for each topic, key idea and caveat and for the neutral limit: the one or two notes that best state it (such as
-  `1.1 3.2`), or `inferred` if it is the model's own inference, or `none`. A support in any other form refuses the answer, and so
-  does a list of supports of the wrong length. The engine then marks each item: `stated` if its checks confirmed it (the next
+  for a support for each topic, key idea and caveat: the one or two notes that best state it (such as
+  `1.1 3.2`), or `inferred` if it is the model's own inference, or `none`. The summary and the five neutral fields are asked for as
+  sentences, in three lists of the same length: the part each belongs to (`summary`, `problem`, `approach`, `needs`, `provides` or
+  `limits`), the sentence, and the notes that state it. The prompt asks for at most 5 sentences of the summary and 2 of each other
+  part, a reply with more than 8 and 4 is refused, and only the first 5 and 3 are put to the check (the card call is version `v5`,
+  so a journal made with the earlier prompt is stale). Only a sentence of `limits` may say `inferred`; every other sentence must cite
+  notes, and `none` for a sentence is refused, except for `limits`, where it is accepted and the sentence is dropped. A support in any other form refuses the answer, and so does a list of supports or
+  of sentences of the wrong length. The engine then marks each item: `stated` if its checks confirmed it (the next
   bullet; the card keeps the confirmed note and its quote, up to 240 characters), which the model's word alone cannot make it;
   `inferred` if the model said so, which is its own word and is not checked; and an item with neither is dropped (a dropped limit
-  leaves its field empty). The prompts ask for at most 7 key ideas and 12 topics (the limits are 8 and 20). A card with fewer than
+  leaves its field empty). A sentence is kept when its check confirmed it and it does not repeat a sentence kept before it in its
+  part (the same rule as the second round's) and the part still fits the limit of its length; the sentences kept for a part, joined
+  with a space, are the part, and a part that keeps none is empty, which the card says in its reasons and so is partial. The
+  report of `cards` gives, for each of the six parts, the sentences asked for and kept and why the rest were dropped (cut past the
+  first few, `none`, no pair, not confirmed, a repeat, or too long), and `empty`, the parts that kept none. The prompts ask for at most 7 key ideas and 12 topics (the limits are 8 and 20). A card with fewer than
   three key ideas left is marked partial and says why, and nothing is added to make up the number. The card holds a `grounding`
   record with a mark, the notes and the quote for each kept item and the number dropped for each field, and its generation records
   carry the counts of points and verified points of each piece's notes, and of items checked and supported by each check call.
@@ -520,10 +529,12 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   (the text, the mark, the notes and the quote of a stated one) and the number dropped, so that the sentences joined with a space are
   exactly the field. With it, the limit has no entry of its own, any of the six fields may be empty (a card with no summary is
   partial and says why), `card-show` prints a mark after each sentence and the quote of a stated one under it, a result counts the
-  marks of the sentences with the others, and `card-sample` takes a sentence as an item. The card call does not make this form yet.
+  marks of the sentences with the others, and `card-sample` takes a sentence as an item. The card call makes this form.
 - **Is the note about the item? The check (task `card-check`).** A verified quote shows that a claim is in the book, not that the
   note it belongs to supports the item that cites it: in the first live run one note was cited for nearly every item. So each item
-  that cites notes is paired with the verified note it cites that shares most content words with it (words of four letters or
+  that cites notes is paired (a sentence of the summary or a neutral field is paired with the first verified note it cites, with no
+  word in common required, since a neutral description is written without the words of a field; the rest of this paragraph is the
+  pairing of a topic, key idea or caveat) with the verified note it cites that shares most content words with it (words of four letters or
   more, compared by their first five letters; the first cited on a tie; an item with no content word of its own is paired with the
   first verified note and left to the model). An item with no such note is dropped. The pairs go ten to a call to the model that
   the config names for `card-check`, as the item, the note's point and its quote in a section of data; it answers `supports`,

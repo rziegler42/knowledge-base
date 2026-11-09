@@ -28,7 +28,8 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   second model, given the item with the note's point and quote, says that they support it. An item that fails any of these is kept
   only if the model says it is an inference, and is otherwise dropped; each item kept is marked stated or inferred. In a card
   whose summary and neutral fields are written as sentences the same holds for each sentence of them, except that a sentence is
-  paired with a note it cites without the requirement of a shared word, since a neutral description is written in words of no field.
+  paired with a note it cites without the requirement of a shared word, since a neutral description is written in words of no field,
+  and that only a sentence of the limit may be kept as an inference: every other sentence is dropped unless a check confirmed it.
   A verified quote shows that a claim is in the book, and the second model's word that it supports the item, not that the claim is right, so
   the card stays a lead.
 - **[proposed]** Replacing the book or the theme. A card helps choose a book. A theme finds a passage inside one.

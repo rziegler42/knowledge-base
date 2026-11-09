@@ -50,10 +50,47 @@ def _same_length(values):
 NOTES_JOB = models.Job("card-notes", "v3", NOTES_SHAPE, schema="card-notes.json", check=_same_length)
 MIN_KEY_IDEAS = 3        # fewer supported key ideas than this make the card thin
 SUPPORT_CHARS = 60       # six note numbers of up to six characters, with the spaces between them
-SUPPORT_SHAPE = {**{f"{field}_support": {"type": "strings", "max_items": card.MODEL_SHAPE_GROUNDED[field]["max_items"], "max": SUPPORT_CHARS}
-                    for field in card.GROUNDED_LISTS},
-                 "neutral_limits_support": {"type": "string", "max": SUPPORT_CHARS}}
+SUPPORT_SHAPE = {f"{field}_support": {"type": "strings", "max_items": card.MODEL_SHAPE_GROUNDED[field]["max_items"], "max": SUPPORT_CHARS}
+                 for field in card.GROUNDED_LISTS}
 _SPLIT = re.compile(r"[\s,;]+")
+
+# The summary and the five neutral fields are asked for as sentences, three lists of the same length: the part of the card that each
+# belongs to, the sentence, and the notes that state it. The sentences kept for a part, joined with a space, are that part.
+SENTENCE_NAMES = {"summary": "summary", "problem": "neutral_problem", "approach": "neutral_approach", "needs": "neutral_needs",
+                  "provides": "neutral_provides", "limits": "neutral_limits"}
+SENTENCE_ASKED = {field: (5 if field == "summary" else 2) for field in card.SENTENCE_FIELDS}      # what the prompt asks for
+SENTENCE_CHECKED = {field: (5 if field == "summary" else 3) for field in card.SENTENCE_FIELDS}    # the first of these are put to the check
+SENTENCE_CEILING = {field: (8 if field == "summary" else 4) for field in card.SENTENCE_FIELDS}    # a reply with more for a part is refused
+INFERRED_FIELDS = ("neutral_limits",)   # the only part whose sentences may be the model's own inference: every other must cite notes
+_TOTAL_SENTENCES = sum(SENTENCE_CEILING.values())
+SENTENCE_SHAPE = {"sentence_fields": {"type": "strings", "max_items": _TOTAL_SENTENCES, "max": 20},
+                  "sentences": {"type": "strings", "max_items": _TOTAL_SENTENCES, "max": card.MAX_SENTENCE},
+                  "sentences_support": {"type": "strings", "max_items": _TOTAL_SENTENCES, "max": SUPPORT_CHARS}}
+
+
+def sentence_field(name):
+    """The field of the card (such as `neutral_problem`) that a part named in a reply stands for: `summary`, `problem`, `approach`,
+    `needs`, `provides` or `limits`, in any case, with or without the prefix `neutral_`; anything else is refused."""
+    key = str(name).strip().casefold()
+    if key.startswith("neutral_") and key != "neutral_summary":
+        key = key[len("neutral_"):]
+    if key not in SENTENCE_NAMES:
+        raise KbError(f"a part of the card named for a sentence is one of {', '.join(SENTENCE_NAMES)}: {textutil.literal(name, 30)}")
+    return SENTENCE_NAMES[key]
+
+
+def sentences_of(values):
+    """The sentences of a reply to the card call, in the order written: `[{"index", "field", "text", "support", "rank", "checked"}]`.
+    `rank` is the place of the sentence among those of its part, and `checked` says that it is among the first of them that are put
+    to the check (`SENTENCE_CHECKED`); the others are cut. A reply without sentences (the second round's) has none."""
+    seen, out = {}, []
+    for index, (name, text, support) in enumerate(zip(values.get("sentence_fields", []), values.get("sentences", []),
+                                                     values.get("sentences_support", []))):
+        field = sentence_field(name)
+        rank = seen.get(field, 0)
+        seen[field] = rank + 1
+        out.append({"index": index, "field": field, "text": text, "support": support, "rank": rank, "checked": rank < SENTENCE_CHECKED[field]})
+    return out
 
 
 def parse_support(text):
@@ -68,16 +105,30 @@ def parse_support(text):
 
 
 def _check_support(values):
-    """Each marked list has a support value for each item, in the same order, and every support value has a form that can be read."""
+    """Each marked list has a support value for each item, in the same order, and every support value has a form that can be read.
+    The three lists of sentences have the same length; each names one of the six parts, no part has more sentences than its ceiling,
+    and the support of a sentence can be read and is notes, except for a sentence of a part that may be an inference."""
     for field in card.GROUNDED_LISTS:
         if len(values[f"{field}_support"]) != len(values[field]):
             raise KbError(f"the answer's {field} and {field}_support are not lists of the same length")
         for text in values[f"{field}_support"]:
             parse_support(text)
-    parse_support(values["neutral_limits_support"])
+    if not len(values["sentence_fields"]) == len(values["sentences"]) == len(values["sentences_support"]):
+        raise KbError("the answer's sentence_fields, sentences and sentences_support are not lists of the same length")
+    counts = {}
+    for s in sentences_of(values):
+        counts[s["field"]] = counts.get(s["field"], 0) + 1
+        if counts[s["field"]] > SENTENCE_CEILING[s["field"]]:
+            raise KbError(f"the answer has more than {SENTENCE_CEILING[s['field']]} sentences for one part of the card")
+        kind = parse_support(s["support"])[0]
+        if kind != "refs" and s["field"] not in INFERRED_FIELDS:
+            raise KbError(f"the support of a sentence of this part is the numbers of notes; inferred and none are not allowed: "
+                          f"{textutil.literal(s['support'], 40)}")
 
 
-CARD_JOB = models.Job("card", "v4", {**card.MODEL_SHAPE_GROUNDED, **SUPPORT_SHAPE}, schema="card.json", check=_check_support)
+CARD_SHAPE = {**{k: card.MODEL_SHAPE_GROUNDED[k] for k in ("useful_for", "topics", "adjacent_topics", "key_ideas", "caveats")},
+              **SUPPORT_SHAPE, **SENTENCE_SHAPE}
+CARD_JOB = models.Job("card", "v5", CARD_SHAPE, schema="card.json", check=_check_support)
 
 MORE_FIELDS = ("topics", "key_ideas")   # the lists that a second round serves
 MORE_ASKED = {"topics": 8, "key_ideas": 4}   # the most items the second round is asked for, for a list (and never more than its free places)
@@ -106,7 +157,9 @@ MORE_JOB = models.Job("card-more", "v1", MORE_SHAPE, schema="card-more.json", ch
 CHECK_BATCH = 10         # the items that cite a note are checked this many to a call
 VERDICTS = ("supports", "partly", "no")
 CHECK_SHAPE = {"verdicts": {"type": "strings", "min_items": 1, "max_items": CHECK_BATCH, "max": 16}}
-_FIELD_WORD = {"topics": "topic", "key_ideas": "key idea", "caveats": "caveat", "neutral_limits": "limit"}
+_FIELD_WORD = {"topics": "topic", "key_ideas": "key idea", "caveats": "caveat", "summary": "summary sentence",
+               "neutral_problem": "problem sentence", "neutral_approach": "approach sentence", "neutral_needs": "needs sentence",
+               "neutral_provides": "provides sentence", "neutral_limits": "limit sentence"}
 _STOP_WORDS = frozenset("with from that this have using used based what when where which into about than their these those there been were "
                         "they them then also such other more most only over under between through while each both some many much very".split())
 _WORD = re.compile(r"\w+")
@@ -132,14 +185,17 @@ def _prefixes(text):
 
 
 def pairs(values, notes):
-    """The items of a reply to the card call that cite notes, each with the note it is to be checked against: the verified note that
-    it cites and that shares most content words with it (the first cited on a tie). An item that cites no verified note, or none that
-    shares a word, has no pair and so is dropped; an item with no content word of its own has a pair, and a model decides. An item
-    that is an inference, or that cites nothing, has none. Returns [{"field", "index", "item", "ref", "point", "quote"}], in the order
-    topics, key ideas, caveats, then the limit."""
+    """The items of a reply to the card call that cite notes, each with the note it is to be checked against. A topic, key idea or
+    caveat is checked against the verified note that it cites and that shares most content words with it (the first cited on a tie);
+    one that cites no verified note, or none that shares a word, has no pair and so is dropped; an item with no content word of its
+    own has a pair, and a model decides. A sentence of the summary or a neutral field, among the first of its part that are checked
+    (`SENTENCE_CHECKED`), is checked against the first verified note that it cites, with no word in common required, since a
+    neutral description is written without the words of a field; one that cites no verified note has no pair. An item that is an
+    inference, or that cites nothing, has none. Returns [{"field", "index", "item", "ref", "point", "quote"}], in the order topics,
+    key ideas, caveats, then the sentences in the order written (a sentence's `field` is its part of the card, such as
+    `neutral_problem`, and its `index` its place among all the sentences of the reply)."""
     items = [(field, index, item, values[f"{field}_support"][index]) for field in card.GROUNDED_LISTS
              for index, item in enumerate(values[field])]
-    items.append(("neutral_limits", 0, values["neutral_limits"], values["neutral_limits_support"]))
     out = []
     for field, index, item, support in items:
         kind, refs = parse_support(support)
@@ -155,6 +211,14 @@ def pairs(values, notes):
                 best, best_score = ref, score
         if best:
             out.append({"field": field, "index": index, "item": item, "ref": best, "point": notes[best]["point"], "quote": notes[best]["quote"]})
+    for s in sentences_of(values):
+        kind, refs = parse_support(s["support"])
+        if kind != "refs" or not s["checked"]:
+            continue
+        ref = next((r for r in refs if notes.get(r) and notes[r]["verified"]), None)
+        if ref:
+            out.append({"field": s["field"], "index": s["index"], "item": s["text"], "ref": ref, "point": notes[ref]["point"],
+                        "quote": notes[ref]["quote"]})
     return out
 
 
@@ -274,24 +338,33 @@ def card_prompt(title, outline_text, parts, kind="book"):
              "of the source.\nEach note is a line like \"- [2.1 verified] a point\": 2.1 is its number (the piece, then the point), "
              "and verified means that the quote behind the point was found in the text, unverified that it was not.\n"
              "Reply with one JSON object with exactly these keys and no others:\n"
-             f"- \"summary\": what the {w} is about, in about 80 words.\n"
              f"- \"useful_for\": up to {ASKED['useful_for']} short phrases naming situations or questions in which the {w} would help.\n"
              f"- \"topics\": up to {ASKED['topics']} short names for the ideas it covers, including other names an idea is known by.\n"
              f"- \"adjacent_topics\": up to {ASKED['adjacent_topics']} neighbouring topics that it does not cover but is close to.\n"
              f"- \"key_ideas\": up to {ASKED['key_ideas']} ideas from the {w} that a reader might not expect; give fewer if it holds fewer.\n"
-             "- \"neutral_problem\", \"neutral_approach\", \"neutral_needs\", \"neutral_provides\", \"neutral_limits\": the problem the "
-             f"{w} addresses, its approach in general terms, what it needs, what it provides, and where it would not work, each "
-             "in a sentence or two, written without the name of any field, game, product or person.\n"
              f"- \"caveats\": up to {ASKED['caveats']} short notes on limits of this {w} as a source, such as missing or garbled parts, "
              f"its date or its evidence. A caveat must be about this {w}; never write one that would hold for any {w}, such as that "
              "details are sparse.\n"
              "- \"topics_support\", \"key_ideas_support\" and \"caveats_support\": lists of the same length as topics, key_ideas and "
-             "caveats, in the same order. \"neutral_limits_support\": one value. Each value says what supports the item: the one or two "
+             "caveats, in the same order. Each value says what supports the item: the one or two "
              "notes that best state it, separated by spaces, such as \"1.1 3.2\" (do not cite a note that is only loosely related; an item "
              "is kept only if a verified note that bears on it supports it, and a check of the note and the item decides); or the word "
-             "\"inferred\" if no note states it and it is your own inference from them; "
-             f"or the word \"none\".\nIn the text of the card never mention notes, pieces, numbers of notes or this message: write "
-             f"about the {w} itself.\n{_NO_MORE}")
+             "\"inferred\" if no note states it and it is your own inference from them; or the word \"none\".\n"
+             f"- \"sentence_fields\", \"sentences\" and \"sentences_support\": three lists of the same length, in the same order, that "
+             f"together say what the {w} is about and what it would help with. Each place in them is one sentence: the item of "
+             "\"sentences\" is the sentence, the item of \"sentence_fields\" is the part of the entry it belongs to, and the item of "
+             "\"sentences_support\" is the notes that state it. Write the parts one after another, in this order: \"summary\" "
+             f"(what the {w} is about; up to {SENTENCE_ASKED['summary']} sentences, about 80 words in all), then \"problem\" (the problem "
+             f"the {w} addresses), \"approach\" (its approach in general terms), \"needs\" (what it needs), \"provides\" (what it "
+             f"provides) and \"limits\" (where it would not work), each up to {SENTENCE_ASKED['neutral_problem']} sentences, written without "
+             f"the name of any field, game, product or person. Write each sentence so that it can be understood on its own, and so that "
+             "it says one thing that a note states. The support of a sentence is the one or two notes that best state it, separated by "
+             "spaces, such as \"1.1 3.2\"; cite only a note that is marked verified and that bears on the sentence, since a sentence is "
+             "kept only if a check of the first verified note you cite and the sentence confirms it, and the first note you cite should "
+             "be the one that states it best. Only a sentence of the part \"limits\" may have the word \"inferred\" in place of notes, "
+             "when no note states it and it is your own inference from them; every other sentence must cite notes, so leave out a "
+             "sentence that no note states. Never write \"none\" for a sentence.\n"
+             f"In the text of the card never mention notes, pieces, numbers of notes or this message: write about the {w} itself.\n{_NO_MORE}")
     return _prompt(rules, [("TITLE", title), ("OUTLINE", outline_text), *parts])
 
 
@@ -301,7 +374,7 @@ _CHECK_LABEL = _FIELD_WORD
 def unpaired(values, found):
     """How many items cite notes and have no pair (so were dropped without a model being asked): `found` are the pairs."""
     cited = sum(1 for field in card.GROUNDED_LISTS for support in values[f"{field}_support"] if parse_support(support)[0] == "refs")
-    cited += parse_support(values["neutral_limits_support"])[0] == "refs"
+    cited += sum(1 for s in sentences_of(values) if s["checked"] and parse_support(s["support"])[0] == "refs")
     return cited - len(found)
 
 
@@ -322,12 +395,20 @@ def check_prompt(title, found, kind="book"):
     return _prompt(rules, [("TITLE", title), ("ITEMS", "\n".join(lines))])
 
 
-def ground(values, notes, confirmed):
-    """The model part, the grounding record and the reasons the card is thin, from the checked reply to the card call, the notes it
-    was made from (`notes` maps the number of a point, such as "1.1", to its quote and whether the quote occurs) and the items that
-    a check confirmed (`confirmed` maps (field, index) to the note that was confirmed). The marks come from the engine's checks and
-    never from the model: an item is stated if it was confirmed, inferred if the model says so, and dropped otherwise (an empty limit
-    has no mark). Fewer than MIN_KEY_IDEAS key ideas left makes the card thin; none is added."""
+_EMPTY_WORD = {"summary": "summary", "neutral_problem": "problem", "neutral_approach": "approach", "neutral_needs": "needs",
+               "neutral_provides": "provides", "neutral_limits": "limits"}
+
+
+def ground(values, notes, confirmed, paired=None):
+    """The model part, the grounding record, the reasons the card is thin and the account of the sentences, from the checked reply to
+    the card call, the notes it was made from (`notes` maps the number of a point, such as "1.1", to its quote and whether the quote
+    occurs) and the items that a check confirmed (`confirmed` maps (field, index) to the note that was confirmed; `paired` is the set
+    of (field, index) that were put to the check, so that an item with no pair is told from one the check refused). The marks come
+    from the engine's checks and never from the model: an item is stated if it was confirmed, inferred if the model says so (and
+    the part may be an inference), and dropped otherwise. Fewer than MIN_KEY_IDEAS key ideas left makes the card thin; none is
+    added. The summary and the neutral fields are built from the sentences that are kept, in the order written, joined with a space:
+    a sentence is dropped if it is cut (past the first few of its part), cites no note, has no pair, is not confirmed, repeats a
+    sentence kept before it, or would make the part longer than the card allows; a part that keeps none is empty."""
 
     def judge(field, index, support):
         kind, refs = parse_support(support)
@@ -338,29 +419,63 @@ def ground(values, notes, confirmed):
             return {"mark": "stated", "notes": [ref], "quote": notes[ref]["quote"]}
         return None
 
-    model = {k: v for k, v in values.items() if not k.endswith("_support")}
+    model = {k: v for k, v in values.items() if k in ("useful_for", "adjacent_topics")}
     grounding, dropped = {}, {}
     for field in card.GROUNDED_LISTS:
         marked = [(item, judge(field, index, support)) for index, (item, support) in enumerate(zip(values[field], values[f"{field}_support"]))]
         model[field] = [item for item, entry in marked if entry]
         grounding[field] = [entry for _, entry in marked if entry]
         dropped[field] = len(marked) - len(model[field])
-    entry = judge("neutral_limits", 0, values["neutral_limits_support"])
-    model["neutral_limits"] = values["neutral_limits"] if entry else ""
-    grounding["neutral_limits"], dropped["neutral_limits"] = entry, 0 if entry else 1
-    grounding["dropped"] = dropped
-    return {"model": model, "grounding": grounding, "reasons": thin_reason(model)}
+    record = {field: {"kept": [], "dropped": 0} for field in card.SENTENCE_FIELDS}
+    stats = {field: {"asked": 0, "kept": 0, "dropped": {"over": 0, "none": 0, "unpaired": 0, "not_confirmed": 0, "repeat": 0}}
+             for field in card.SENTENCE_FIELDS}
+    for sentence in sentences_of(values):
+        field, text = sentence["field"], sentence["text"]
+        kept, why = record[field]["kept"], stats[field]["dropped"]
+        stats[field]["asked"] += 1
+        kind = parse_support(sentence["support"])[0]
+        entry, reason = None, None
+        if not sentence["checked"]:
+            reason = "over"
+        elif kind == "none" or (kind == "inferred" and field not in INFERRED_FIELDS):
+            reason = "none"
+        elif kind == "refs" and paired is not None and (field, sentence["index"]) not in paired:
+            reason = "unpaired"
+        else:
+            entry = judge(field, sentence["index"], sentence["support"])
+            if entry is None:
+                reason = "not_confirmed"
+        if entry is not None:
+            if any(similar(text, other["text"]) for other in kept):
+                entry, reason = None, "repeat"
+            elif len(" ".join([x["text"] for x in kept] + [text])) > card.MODEL_SHAPE_GROUNDED[field]["max"]:
+                entry, reason = None, "over"
+        if entry is None:
+            why[reason] += 1
+        else:
+            kept.append({"text": text, **entry})
+    for field in card.SENTENCE_FIELDS:
+        model[field] = " ".join(x["text"] for x in record[field]["kept"])
+        stats[field]["kept"] = len(record[field]["kept"])
+        record[field]["dropped"] = stats[field]["asked"] - stats[field]["kept"]
+    grounding["neutral_limits"], dropped["neutral_limits"] = None, record["neutral_limits"]["dropped"]
+    grounding["dropped"], grounding["sentences"] = dropped, record
+    return {"model": model, "grounding": grounding, "reasons": thin_reason(model), "sentences": stats}
 
 
 def thin_reason(model, rounded=False):
-    """The reason, as a list, that the card is thin: fewer than MIN_KEY_IDEAS key ideas are left. `rounded` says that a second round
-    has added what it could."""
+    """The reasons, as a list, that the card is thin: fewer than MIN_KEY_IDEAS key ideas are left, and a part written as sentences
+    that kept none is empty. `rounded` says that a second round has added what it could."""
+    out = []
     left = len(model["key_ideas"])
-    if left >= MIN_KEY_IDEAS:
-        return []
-    what = "the ones without support were dropped" + (" and a second round added what it could" if rounded else "")
-    return [f"only {left} key {'idea was' if left == 1 else 'ideas were'} left after {what}, "
-            f"so the card holds fewer than {MIN_KEY_IDEAS}; none was added to make up the number"]
+    if left < MIN_KEY_IDEAS:
+        what = "the ones without support were dropped" + (" and a second round added what it could" if rounded else "")
+        out.append(f"only {left} key {'idea was' if left == 1 else 'ideas were'} left after {what}, "
+                   f"so the card holds fewer than {MIN_KEY_IDEAS}; none was added to make up the number")
+    for field in card.SENTENCE_FIELDS:
+        if model.get(field) == "":
+            out.append(f"no sentence of the {_EMPTY_WORD[field]} was left after the checks, so that part of the card is empty")
+    return out
 
 
 def triggers(values, model):
@@ -487,7 +602,8 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
     """Make the model part of a card for a converted book. Returns {"model": the checked values, "records": how each call was made,
     "pieces": pieces read, "calls": calls made, "reasons": why the card is partial, "notes": the number of points in the notes and
     how many of them have a quote that occurs in their piece, "checks": the number of items checked against the note they cite and
-    the verdicts}. Every piece gets notes, a book of one piece too, and a card of one
+    the verdicts, "sentences": for each of the summary and the five neutral fields, the sentences asked for and kept and why the
+    others were dropped}. Every piece gets notes, a book of one piece too, and a card of one
     piece is also given the text. The quotes are checked and then dropped: only the point and whether it is verified go on. Nothing is filed. The model of each job is the
     one the config sets for it, found before the first call, so a missing setting stops the card before anything is sent. A call
     that fails, or an answer of the wrong shape, stops the card.
@@ -551,8 +667,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
         model, grounding = grounded["model"], grounded["grounding"]
         got = ask(more_model, more_prompt(title, outline(conversion), parts, model, wanted, kind=kind), MORE_JOB)
         stats = {f: {**wanted[f], "added": 0, "dropped": {"unpaired": 0, "repeat": 0, "not_confirmed": 0, "over": 0}} for f in wanted}
-        candidates = {"topics": [], "topics_support": [], "key_ideas": [], "key_ideas_support": [], "caveats": [], "caveats_support": [],
-                      "neutral_limits": "", "neutral_limits_support": "none"}
+        candidates = {"topics": [], "topics_support": [], "key_ideas": [], "key_ideas_support": [], "caveats": [], "caveats_support": []}
         for field in wanted:
             for item, support in zip(got[field], got[f"{field}_support"]):
                 if any(similar(item, kept) for kept in model[field]):
@@ -606,7 +721,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
     todo, confirmed = pairs(values, found), {}
     tally = {"checked": 0, "supports": 0, "partly": 0, "no": 0, "unpaired": unpaired(values, todo)}
     check_all(todo, tally, confirmed)
-    grounded = ground(values, found, confirmed)
+    grounded = ground(values, found, confirmed, paired={(p["field"], p["index"]) for p in todo})
     more = {"status": "off", "reason": "no model is set for card-more", "fields": {}}
     if more_model:
         wanted = triggers(values, grounded["model"])
@@ -625,6 +740,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
         raise cardstate.Stale("the saved state of the card is stale: it holds calls that this card does not make")
     return {"model": grounded["model"], "grounding": grounded["grounding"], "records": records, "pieces": len(read), "book_pieces": total,
             "calls": len(records), "reasons": ([why] if why else []) + grounded["reasons"], "checks": tally, "more": more,
+            "sentences": grounded["sentences"],
             "notes": {"points": len(found), "verified": sum(1 for n in found.values() if n["verified"])}}
 
 
@@ -660,7 +776,8 @@ def keep_aside(store, refusal, book_id, version_id):
     return CardRefused(str(refusal), kept, note)
 
 
-def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None, checks=None, more=None, book_pieces=None):
+def _report(book_id, version_id, status, reason="", generation=None, made=None, kept=None, notes=None, checks=None, more=None, book_pieces=None,
+            sentences=None):
     used = []
     for r in (made or {}).get("made", {}).get("records", []):
         item = {"task": r["task"], "registry": r["registry"], "model": r["model"]}
@@ -672,7 +789,8 @@ def _report(book_id, version_id, status, reason="", generation=None, made=None, 
             "points": notes["points"] if notes else None, "verified": notes["verified"] if notes else None,
             "checked": checks["checked"] if checks else None, "supported": checks["supports"] if checks else None,
             "partly": checks["partly"] if checks else None, "no": checks["no"] if checks else None,
-            "unpaired": checks["unpaired"] if checks else None, "more": more, "book_pieces": book_pieces}
+            "unpaired": checks["unpaired"] if checks else None, "more": more, "book_pieces": book_pieces,
+            "sentences": sentences, "empty": [f for f in card.SENTENCE_FIELDS if made["model"][f] == ""] if sentences and made else None}
 
 
 def plan_version(store, cfg, book_id, version_id=None, again=False):
@@ -712,7 +830,7 @@ def file_model_card(store, book_id, version_id, part):
                      calls=part["calls"], reasons=part["reasons"], grounding=part["grounding"])
     number = card.file(store, made)
     return _report(book_id, version_id, "carded", generation=number, made=made, notes=part["notes"], checks=part["checks"],
-                   more=part["more"], book_pieces=part["book_pieces"])
+                   more=part["more"], book_pieces=part["book_pieces"], sentences=part["sentences"])
 
 
 def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):

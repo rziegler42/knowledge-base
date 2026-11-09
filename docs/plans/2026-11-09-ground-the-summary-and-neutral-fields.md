@@ -251,3 +251,40 @@ nothing wider is named, since no other module reads the grounding record.
   increment B with the thin reasons; repeated sentences and a quote not compared with its notes are not checked on read (repeats are
   B's, and the quote is checked as for the other items); the spec statements run ahead of the code until B, and are marked proposed.
   The reviewer could not run tests or read the new tests.
+
+### Increment B
+
+- **Done** (uncommitted until the owner says to commit). The card call is version `v5`: the summary and the five neutral fields are
+  asked for as sentences in three lists of the same length (the part, the sentence, the notes that state it). A sentence is paired
+  with the first verified note it cites, with no shared word required, and put to the check with the other pairs; a confirmed
+  sentence is kept with the mark `stated`, its note and its quote. Only a sentence of the limit may be the model's own inference
+  (`inferred`); a reply that gives `inferred` or `none` to a sentence of another part is refused and kept aside. A reply with more
+  than 8 sentences for the summary or 4 for another part is refused; only the first 5 and 3 of a part are checked. A sentence is also
+  dropped if it repeats one kept before it in its part or would make the part longer than the card allows, so a card made from any
+  accepted reply can be filed. A part that keeps no sentence is empty, the card says so in its reasons, and so is partial. The
+  report of `cards` gives, for each part, the sentences asked for and kept and why the others were dropped (`over`, `none`,
+  `unpaired`, `not_confirmed`, `repeat`), and `empty`. The schema file names the six parts. `docs/specs/card.md` gained one clause
+  (only the limit may be kept as an inference); `engine/README.md` describes the call.
+- **Deviation from the plan's wording, and why.** The plan says a reply is refused for `inferred` or `none` "for a field that may
+  not be inferred" and did not name the fields. On the owner's answer (only the limit sentences may be inferred) the job refuses both
+  for every other part; for the limit, `none` is accepted and the sentence is dropped.
+- **Live probe of the check, with the owner's word** (before the build, the check model on its configured server, nothing left the
+  machine): 26 pairs built from two cards' notes and from sentences of other books' cards, through the real check prompt. All 14
+  unrelated sentence and note pairs were answered `no`; of 8 pairs known to hold, 6 were `supports` and 2 `partly`, none `no`; of
+  4 pairs of a stated item with a note from another piece of the same book, 3 were `no` and 1 `partly`. So the check does not
+  answer yes to everything. The unrelated pairs are easy negatives; the labelled comparison in C is the test of the harder ones.
+- **Verification run:** `python3 -m unittest engine.tests.test_cardmake engine.tests.test_card engine.tests.test_cardstate
+  engine.tests.test_cardqueue engine.tests.test_models engine.tests.test_catalog engine.tests.test_cardsample`, 645 tests OK;
+  `wb run code-work check`, no problems. The fake replies of the tests of the card call and of the queue were changed to the new
+  shape; the default reply of those tests has one inferred limit sentence, so the other five parts are empty and the cards are
+  partial, and the tests that need all six parts use a reply with sentences for each. Twenty-eight deliberate one-line breaks of the
+  new code were each caught in the end. Six were first missed, because my test of a bad card reply sent it as the first call, which
+  is the notes call; tests were added that send it as the card call and test the job's check directly, and a test that tells a
+  sentence with no pair from one the check refused. One further break was an equivalent mutant and the code was simplified. Not run:
+  `test_setup` and the other engine modules; nothing outside these modules reads the card call.
+- **Review:** the `reviewer` agent, one exchange. No blocking findings. Four not blocking, all evaluated: the comment on
+  `MAX_RECORDS` was out of date (the worst case is exactly 30: 20 notes, the card, 6 checks, a round and 2 checks, so there is no
+  margin, which a test asserts) and is corrected; the README said `none` for a sentence is refused without the exception for the
+  limit, corrected; the spec was looser than the code on which sentences may be inferred, one clause added; the schema file is
+  stricter than the engine on the names of the parts, which is harmless and left. The reviewer did not run the tests, did not read
+  the new tests in full, and could not say how often a live model's replies are refused with the new prompt: that is for C.

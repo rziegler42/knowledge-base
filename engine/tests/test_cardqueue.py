@@ -54,12 +54,10 @@ sys.stdout.write(json.dumps({"contract": 2, "ok": True, "vendor": "ollama", "mod
 
 TEXT = "the text studies one stopping rule and it proves a bound on regret " + "filler " * 200
 NOTES = {"points": ["the text studies one stopping rule"], "quotes": ["studies one stopping rule"]}
-CARD = {"summary": "A short summary of the work.", "useful_for": ["finding a stopping rule"], "topics": ["stopping rule", "early rule"],
+CARD = {"useful_for": ["finding a stopping rule"], "topics": ["stopping rule", "early rule"],
         "adjacent_topics": ["search"], "key_ideas": ["stopping rule studied", "rule of stopping", "stopping early rule"],
-        "neutral_problem": "deciding when to stop", "neutral_approach": "compare a running score with a threshold",
-        "neutral_needs": "a stream of observations", "neutral_provides": "a stopping time", "neutral_limits": "stopping rule only",
         "caveats": [], "topics_support": ["1.1", "1.1"], "key_ideas_support": ["1.1", "1.1", "1.1"], "caveats_support": [],
-        "neutral_limits_support": "1.1"}
+        "sentence_fields": ["limits"], "sentences": ["stopping rule only"], "sentences_support": ["1.1"]}
 SERVERS = {"notes": "srv-n", "cardm": "srv-c", "checker": "srv-k", "morem": "srv-m"}
 
 
