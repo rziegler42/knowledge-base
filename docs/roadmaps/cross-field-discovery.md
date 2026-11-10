@@ -1,7 +1,7 @@
 # Cross-field discovery
 
 Status: Active
-Updated: 2026-11-08
+Updated: 2026-11-10
 
 ## Purpose
 
@@ -20,14 +20,18 @@ search by meaning and themes as out of scope.
 
 The library holds about eighty books on game theory, game players, learning models, algorithms, high performance computing, CAD and
 3D printing. A keyword search finds them and a read returns a passage with its citation, from the command line and, through the `kb`
-workbench package, from a project. Twelve books have a grounded card with a domain-neutral description; the rest have none. Models
-on the owner's server write cards and judge, and an embedding model is available there. Search by meaning is not built.
+workbench package, from a project. Of the 79 books that have a card, 78 have a domain-neutral description, and their problem,
+approach and what-it-provides fields are turned into 230 vectors by the embedding model `qwen3-embedding:4b` on the owner's
+server, with an instruction before the query. A search by meaning (`card-search --meaning`) ranks books by closeness and marks
+every result and citation as a keyword search does. The neutral fields are not all supported by the books (in a sample, 59% of
+problems, 54% of approaches and 41% of provides were), and a check of eight searches, with books the agent expected, showed
+13 of 18 of those books in the first five results and the rest lower. Posing a problem to the search, and a trial on the owner's problems, are not built.
 
 Earlier experiments (`docs/specs/knowledge-base.md`, evidence notes 10 and 15, and `docs/specs/weave.md`, "Evidence") found that a
 search over neutral descriptions finds the source field better than one over summaries or raw text, that the home field's own
 version of an idea can hide the source, and that a local model can judge whether a pair of ideas relate. They were run on
-another set of papers, and the first trial of the cards used easy questions, so what a search by meaning finds in this library is
-not yet known.
+another set of papers, and the first trial of the cards used easy questions, so how often a search by meaning finds a source from
+another field, on problems the owner chooses, is not yet known.
 
 ## Candidates
 
