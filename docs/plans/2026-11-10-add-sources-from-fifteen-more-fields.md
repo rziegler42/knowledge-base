@@ -485,4 +485,71 @@ A second round has not been asked for.
   calls a card, 10.3 against 6.85, follow the length of a paper.
 - **Verification as run:** `cards-queue plan` before; the run's report (counts above); the kept-file counts (64, 65); `card-marks` on
   the six; `card-show` of two; the snapshot comparison with the changed ids checked; `wb run code-work check` after this entry. No
-  tracked code changed.
+  tracked code changed. (Committed as `0c75048`.)
+
+### Increment F — The vectors and the fifteen searches again (run, 2026-11-10)
+
+- **Catalog and vectors (step 1).** `card-index`: 176 books, 175 versions with a card, 0 failed. Vectors before, read without sending:
+  168 cards searched, 0 stale, **6 without a vector**, the papers. The owner was told what `card-vectors` would send (the problem,
+  approach and provides fields of the six cards, up to 18 short texts, about 2 KB, to the embedding model on `ned` in the clear) and said
+  **yes**. `card-vectors` (20:45:53Z): 175 cards, 1 with no model fields, 518 vectors, **500 kept, 18 made, 18 texts sent**, nothing
+  replaced. A second run made 0, kept 518 and sent 0 texts. Coverage after: 174 cards searched, **0 stale, 0 without a vector**.
+- **The fifteen searches (step 2).** The owner was told what would be sent (the same 15 sentences, unchanged, 2,417 characters, one at a
+  time to the embedding model on `ned` in the clear) and said **yes**. `card-search '<sentence>' --meaning` for each, 20:46:43Z to
+  20:46:52Z at commit `0c75048`, by the driver of Increment C with each result also marked as a page or a paper (the sentences' file
+  unchanged: it was parsed once from this plan in Increment C). **15 sends, no failure.** Every search saw 174 cards, 0 stale, 0
+  without a vector. The file of the record has SHA-256 `e4a4cc4131e2f4c9c1a0bcd6e573423a3a5b306e1f4769b4e7d6d64e834d97cd`. The first
+  five of each (own = a page, own PAPER = a paper, of the sentence's field; new = another new field; older = a book already held):
+
+  1. Control: Control theory (own page, 0.686); PID controller (own page, 0.631); Ant colony optimization algorithms (older, 0.423); Kanban (new: Production, 0.407); Theory of constraints (new: Production, 0.391).
+  2. Information: Error detection and correction (own page, 0.706); Huffman coding (own page, 0.596); Information theory (own page, 0.590); Entropy (information theory) (own page, 0.484); Merkle tree (new: Cryptography, 0.425).
+  3. Statistical physics: Self-organization (new: Self-organisation, 0.574); Cellular automaton (new: Self-organisation, 0.551); Stigmergy (older, 0.535); Ising model (own page, 0.528); Swarm intelligence (new: Ecology and evolution, 0.504).
+  4. Inference: Bayesian inference (own page, 0.677); Kalman filter (new: Control, 0.632); Hidden Markov model (own page, 0.594); Expectation–maximization algorithm (own page, 0.509); Variational Inference: A Review for Statisticians (own PAPER, 0.475).
+  5. Ecology and evolution: Lotka–Volterra equations (own page, 0.672); Evolutionary game theory (older, 0.459); Optimal foraging theory (older, 0.447); Marginal value theorem (older, 0.433); Swarm intelligence (own page, 0.413).
+  6. Networks: Small-world network (own page, 0.597); Emergence of scaling in random networks (own PAPER, 0.589); Scale-free network (own page, 0.551); The structure and function of complex networks (own PAPER, 0.511); Network science (own page, 0.479).
+  7. Economics: Vickrey auction (own page, 0.757); Auction theory (own page, 0.595); Mechanism design (older, 0.581); Market design (own page, 0.545); Principal–agent problem (own page, 0.492).
+  8. Scheduling: Travelling salesman problem (own page, 0.686); Knapsack problem (own page, 0.526); Ant colony optimization algorithms (older, 0.520); Dynamic programming (older, 0.513); Dijkstra's algorithm (older, 0.452).
+  9. Distributed systems: Paxos (computer science) (own page, 0.702); Consensus (computer science) (own page, 0.675); CAP theorem (own page, 0.560); Stigmergy (older, 0.529); Conflict-free replicated data type (own page, 0.518).
+  10. Cryptography: Public-key cryptography (own page, 0.654); Zero-knowledge proof (own page, 0.560); Merkle tree (own page, 0.464); Information theory (new: Information, 0.452); Paxos (computer science) (new: Distributed systems, 0.448).
+  11. Learning in the brain: Hebbian theory (own page, 0.642); Neural coding (own page, 0.497); Emergence of scaling in random networks (new: Networks PAPER, 0.469); Artificial immune system (older, 0.462); The information bottleneck method (new: Information PAPER, 0.455).
+  12. Signals: Compressed sensing (own page, 0.683); Robust Uncertainty Principles: Exact Signal Reconstructio... (own PAPER, 0.650); Nyquist–Shannon sampling theorem (own page, 0.556); Wavelet (own page, 0.469); The information bottleneck method (new: Information PAPER, 0.460).
+  13. Optimisation: Gradient descent (own page, 0.646); Particle swarm optimization (new: Ecology and evolution, 0.453); Simulated annealing (older, 0.440); Newton's method (older, 0.432); Ant colony optimization algorithms (older, 0.426).
+  14. Production: Kanban (own page, 0.649); Theory of constraints (own page, 0.543); Lean manufacturing (own page, 0.521); Toyota Production System (own page, 0.513); Critical path method (new: Scheduling, 0.433).
+  15. Self-organisation: Self-organization (own page, 0.651); Stigmergy (older, 0.646); Swarm intelligence (new: Ecology and evolution, 0.642); Cellular automaton (own page, 0.623); Reaction–diffusion system (own page, 0.547).
+
+- **The comparison with Increment C, sentence by sentence.** Fields with a paper are Information, Inference, Networks and Signals (4);
+  **the other eleven have none**, statistical physics among them since its paper was dropped (the plan's "five and ten" became four and
+  eleven). A place is one of the 5 of a sentence.
+  - *Information (2):* **unchanged**; the information bottleneck paper did not enter the first five of its own sentence (which is about
+    codes and error correction).
+  - *Inference (4):* Sequential analysis (older) left; **Variational Inference: A Review for Statisticians entered, at 5 (0.475)**. The
+    Hamiltonian Monte Carlo paper did not enter.
+  - *Networks (6):* Percolation theory (older) and **PageRank (own page)** left; **both papers entered, "Emergence of scaling" at 2 (0.589)
+    and Newman at 4 (0.511)**.
+  - *Signals (12):* Fast Fourier transform (older) and **Matched filter (own page)** left; **the Candès paper entered at 2 (0.650)**; the
+    information bottleneck paper also entered, at 5 (0.460), a paper of another field.
+  - *Learning in the brain (11), a field without a paper:* **Predictive coding (own page)** and Neocognitron (older) left; the
+    "Emergence of scaling" paper (0.469) and the information bottleneck paper (0.455), both papers of other fields, entered.
+  - *The other ten sentences, all fields without a paper (control, statistical physics, ecology and evolution, economics, scheduling,
+    distributed systems, cryptography, optimisation, production, self-organisation) and Information:* **the first five did not change.**
+  - *Totals.* Four fields with papers: 20 places, **5 changed (25 percent)**: 4 are a paper of the sentence's own field (the
+    variational inference, scaling, Newman and Candès papers), 1 a paper of another field (information bottleneck, in Signals); 5 left, 2 of them pages
+    of the sentence's own field (PageRank, Matched filter), 3 older books. Eleven fields without a paper: 55 places, **2 changed (3.6
+    percent)**, both papers of other fields, in one sentence (11); 2 left, 1 of them an own page (Predictive coding). In every sentence
+    **the first book is the same as before** (0 of 15 changed). **A page of the sentence's own field is still among the first five for 15
+    of 15**, first for 14; the statistical physics sentence is as before (Ising model fourth). No miss existed, so no paper rescued one.
+    Own-field pages in the first five: 15 before and 13 after for the four fields with papers (papers took two places that pages held),
+    29 before and 28 after for the eleven without.
+- **Reading, with its limits.** The papers of a field **enter the first five of the sentences of their own field in three of four
+  fields (Inference, Networks, Signals), in the second to fifth place, and not above a page of the field in any**; where the paper
+  entered it replaced older books (3) and, in Networks and Signals, one page of the field each. The control is small: in eleven fields
+  without papers, the five places changed in one sentence, by papers of other fields, so some change of that size can occur without a
+  paper of the field (2 of 55 places against 5 of 20, with 4 of the 5 own-field papers). What this does not show: that a paper is better than a
+  page (the first book never changed), or that a paper helps a transfer between fields (the three entries from another field are a
+  paper of Networks and one of Information in the sentence of Learning in the brain, and the Information one in Signals; I did not read
+  them to judge whether the match is meaningful, and only 3 such places occurred). Four fields, one run of each sentence, one embedding
+  model, no test of chance; the sentences were written about the pages; the papers were chosen by me as the field's own, and the papers'
+  cards differ in kind from the pages' (six cards, one sampled, 11 percent `inferred` against 31).
+- **Verification as run:** the counts of `card-index` and `card-vectors` above (18 made, 500 kept, second run 0 sent, stale 0); the
+  fifteen searches recorded (15 sends); the comparison computed from the two records by script; `wb run code-work check` after this
+  entry. No tracked code changed.
