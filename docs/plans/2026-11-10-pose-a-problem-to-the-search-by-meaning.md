@@ -248,4 +248,62 @@ A second round has not been asked for.
   above; the size advice cannot help if even `--limit 1` were too large, which the bounded excerpt makes practically impossible.
   Noted for Increment B: `--launcher` names any absolute executable file that the engine then runs, which is acceptable for the owner at
   a terminal and must not take a value a caller can influence; the helper must take it only from the owner-only `helper.json`. The
-  reviewer ran nothing and read neither spec.
+  reviewer ran nothing and read neither spec. (Committed as `1388946`.)
+
+### Increment B — The helper argument and the launcher setting (done)
+
+- **What was built** (`package/kb/helper/kb`, `package/kb/module.json`): `wb run kb problem-search [--limit <1-10>] [--] <sub-problem> ...`
+  takes one to five sub-problems, each one line of 1 to 1000 characters with no control character (the same rule as a search query),
+  and starts `python -m kb problem-search --limit N -- SUB ...` with the helper's short environment, which is unchanged. The settings
+  file may hold a third key, `launcher`; `checked_launcher` accepts it only as a plain absolute path (no link, no `..`, no repeated slash)
+  to an executable file outside the project, owned by the user or root and not writable by its group or everyone. When there is one,
+  `query_engine` puts `--launcher <path>` ahead of `--limit`, for this argument only; no text of a caller can name it (`--launcher` as a
+  caller's option is refused as not an option), and it is hidden in the output like the other paths. `module.json` lists `problem-search`.
+  The helper's docstring now says that this argument alone sends anything out, and to what; the README has a bullet on it and on the key.
+- **Tests first:** in `engine/tests/test_package.py` (new `LauncherCase`, `ProblemSearchTests`, `LauncherSettingsTests`; the declaration
+  test changed): 18 failures and 6 errors before the code. The write-and-owner test was added after the review and seen to fail (a
+  group-writable launcher was accepted) before the fix. The helper tests are skipped unless `KB_WORKBENCH_CHECKOUT` names a workbench
+  checkout; the runs below used `/Users/rziegler/projects/project-workbench`.
+- **Verification as run:** `KB_WORKBENCH_CHECKOUT=… python3 -W error::ResourceWarning -m unittest engine.tests.test_package
+  engine.tests.test_problem engine.tests.test_vectors engine.tests.test_models engine.tests.test_catalog` gave 445 tests, OK;
+  `wb run code-work check` found no problems. No real engine, library or server was used (a fake engine records what it receives).
+- **Deliberate breaks, each from green:** 19 (the double dash left out, the link, project, executable, absolute, write and owner checks
+  of the launcher removed, the write check narrowed to everyone, a sixth sub-problem accepted, the environment widened, a caller allowed
+  to name a launcher, control characters and the length allowed, the launcher placed after the sub-problems, passed to every command,
+  not hidden in the output, the limit ceiling raised, any extra settings key allowed, a non-text launcher allowed). All 19 were caught.
+- **Review:** the read-only `reviewer` agent, one round, no blocking finding. Applied: the plan's step 1 lists "a file others can
+  write" and the code did not check the mode or the owner of the launcher; it now refuses a launcher that its group or everyone can write
+  or that is not owned by the user or root (the owner's `wb` is mode 755 and owned by the owner, so it passes), with a test. Recorded,
+  not changed: (1) a bad `launcher` key stops `search` and `read` too, because the settings are read as one whole; a test pins it. (2)
+  The launcher is checked by the helper and run later by the engine, which checks again that it is an absolute executable file; the
+  file could change in between. This is the trust level of the engine and python keys. (3) The folders above the launcher are not
+  examined, as for the engine and python keys. The reviewer ran nothing and did not read the engine side.
+- **Not done, and why:** the module and package versions are left at 0.1.0: the plan says "keep the module version rules", and I found
+  no rule in the project or the workbench's development notes; the owner decides whether the change to the argument list needs a new
+  version. The package must be installed again in the workbench before `wb run kb problem-search` exists (Increment D). Whether the
+  workbench launcher works under the helper's `PATH=/usr/bin:/bin` is seen only in Increment D.
+- **Security review (step 5).** Asked once of the owner, with the surface named (caller text becomes arguments of a subprocess; the
+  `launcher` key names a program that the engine runs with the sub-problems on standard input; the first helper argument that sends
+  anything out). My recommendation was yes. The owner's answer: **yes, run it.** The plan says to review the committed code; B was not
+  committed and committing needs the owner's word, so the `security-reviewer` agent was given the working-tree files that the commit
+  would hold, and worked only on a copy in the scratch folder, with fake programs; it used no real server, engine, `wb` or config.
+  Result: no Critical, High or Medium finding. Four Low findings. (1) A call that the helper stops at its 60 seconds kills only the
+  engine's process group; `models._run` starts the launcher in a session of its own (`start_new_session=True`, checked at
+  `engine/kb/models.py:254`), so `wb` and the bridge go on until the embedding entry's own timeout (600 s by default, plus a grace
+  period). Availability only: an agent that calls `problem-search` repeatedly can leave such calls running on the owner's machine and
+  server; nothing leaves the owner's server. Confirmed by the reviewer with a fake. Not fixed here, because the fix is in how the
+  engine starts its launcher (outside this increment); the cheapest mitigation is the owner's: a `timeout` on the `embed-qwen` entry of
+  the config, shorter than the helper's 60 seconds (it applies to every embedding call, the build included). Left for the owner: a
+  plan of its own if wanted (the engine would end the launcher's session when it is terminated, or the helper would wait for it).
+  This is written here and not under Deferred work because that section is part of the approved text.
+  (2) A bad `launcher` key stops `search` and `read` too, and a symlinked `wb` is refused (the owner must give the real path):
+  recorded above, fail-closed. (3) The sub-problems are sent in the clear over plain HTTP to the owner's server, and an agent can put
+  project text in them, with no cap on the number of calls: the accepted risk of the plan, unchanged. (4) The folders above the
+  launcher, the time between the helper's check and the engine's run, and what `wb run ask-ollama` reads are not examined: the trust
+  level of the engine and python keys, as the docstring says; with no `launcher` key the engine falls back to `shutil.which("wb")` on
+  `/usr/bin:/bin` and fails closed unless `/usr/bin/wb` exists. Checked and found sound, tested by the reviewer: no caller text becomes an
+  option, a program, a server or a path; the filters, the count and length limits and the `--limit` check run before anything starts;
+  the launcher validation (links, `..`, `//`, NUL, relative, missing, directory, not executable, in the project, group- or
+  other-writable); the engine's argparse keeps `--launcher`, `--limit=9`, `-h` and `--` positional after `--`. Not checked by the reviewer:
+  the real `wb` and bridge, the real `wbkit.jsonstrict` (stubbed), the tests, the body of `vectors.search`, and a Python older than the
+  3.15 tried.

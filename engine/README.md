@@ -823,6 +823,16 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   characters and a cut reply is not valid JSON. If the cards or the vectors change between two sub-problems the command is refused.
   `--launcher` is the absolute path of an executable file, for a caller whose `PATH` does not hold `wb`; without it `wb` is looked for
   on the `PATH` as for every model call.
+- **The same, from a project, through the `kb` helper** (`wb run kb problem-search [--limit 1-10] [--] SUB_PROBLEM ...`, one to five
+  sub-problems, each one line of at most 1000 characters). It starts the command above with a fixed argument shape and the helper's short
+  environment, and prints the reply between its marker lines with the paths of this machine hidden, within its 60-second limit.
+  **It is the one argument of the helper that sends anything out**: the sub-problems go to the embedding model of the config and to
+  nothing else (`search` and `read` send nothing). The helper's `PATH` does not hold `wb`, so you add a third key to the owner-only
+  `~/.config/knowledge-base/helper.json`: `"launcher": "<absolute path of wb>"`. It must be a plain absolute path (no link, no `..`) to an
+  executable file outside the project, owned by you or root and not writable by its group or everyone (the folders above it are not
+  examined, as for the engine and python keys); a settings file that holds a launcher which fails this stops every argument of the helper, and
+  the helper passes it as `--launcher`. No text of a caller names a program, a server or a path, and the helper never reads a launcher
+  from the project or the environment. The package must be installed again in the workbench before `wb run kb problem-search` exists.
 - **Limits of the vectors that are known and not fixed** (from a security review of the search by meaning; the files are private to you
   and small, and a person who could change them is you or a program run as you).
   - The text hash in `vectors.sqlite` binds a vector to the text it was made from, not the other way: a person who can write the file

@@ -1,20 +1,28 @@
 #!/usr/bin/env python3
-"""The kb helper: keyword search of the owner's library and reading a passage back, for an agent in a project.
+"""The kb helper: keyword search of the owner's library, reading a passage back and posing a problem by meaning, for an agent in a
+project.
 
 It is one file that imports the standard library and the workbench kit (``wbkit``); the launcher runs a
 private copy of it through the kit runner with nothing beside it.
 
     kb search [--limit <1-20>] [--] <query>
     kb read [--version v<N>] [--chars <100-20000>] <book> <locator-json>
+    kb problem-search [--limit <1-10>] [--] <sub-problem> ... (one to five)
 
-The helper starts the engine of the knowledge base (``python -m kb search`` or ``read``) on this machine, with no shell, a fixed
+``search`` and ``read`` change nothing and send nothing out. ``problem-search`` is the one exception, which the owner allowed for this
+argument alone: the sub-problems an agent wrote go, through the engine, to the embedding model that the owner's config names for
+``card-embed`` (on the owner's server, over plain HTTP) and to nothing else. To reach it the engine runs the workbench launcher, which it
+finds only through an optional key ``launcher`` of the owner-only settings (an absolute path, with no link in it, to an executable
+file outside the project); no caller's text names a program, a server or a path.
+
+The helper starts the engine of the knowledge base (``python -m kb search``, ``read`` or ``problem-search``) on this machine, with no shell, a fixed
 argument shape, a time limit, a cap on its output and an environment built here. It finds the engine and the interpreter only in the
 owner-only file ``~/.config/knowledge-base/helper.json`` (``{"engine": "<absolute folder>", "python": "<absolute file>"}``),
 never in the project, and refuses a file that others can read or write, a link, or a path that leads into the project. No argument
 is a path, an address or a token: a book is its 26-character identifier, a locator is a small JSON object that a search returned,
 and every option is one of those above. What the engine prints is data from outside: it is cleaned, cut to a bound, stripped of
 the paths of this machine that the helper knows, and printed between two marker lines that carry a random token. The helper never
-runs it or believes it. It changes nothing: the engine's search and read write no file.
+runs it or believes it. It writes no file: none of the three engine commands does.
 """
 
 import json
@@ -41,14 +49,18 @@ MAX_LOCATOR = 2000
 MAX_DEPTH = 6
 DEFAULT_LIMIT = 5
 CEILING_LIMIT = 20
+CEILING_PROBLEM_LIMIT = 10
+MAX_SUB_PROBLEMS = 5
 DEFAULT_CHARS = 4000
 SETTINGS = (".config", "knowledge-base", "helper.json")
-SETTINGS_FORM = '{"engine": "<absolute path of the engine folder>", "python": "<absolute path of python3>"}'
+SETTINGS_FORM = ('{"engine": "<absolute path of the engine folder>", "python": "<absolute path of python3>"} and, only for '
+                 '`problem-search`, a third key "launcher": "<absolute path of the workbench launcher wb>"')
 BOOK = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 VERSION = re.compile(r"^v[1-9][0-9]{0,5}$")
 NUMBER = re.compile(r"^[1-9][0-9]{0,4}$")
 USAGE = ("usage: wb run kb search [--limit <1-%d>] [--] <query> | wb run kb read [--version v<N>] [--chars <100-20000>] "
-         "<book> <locator-json>" % CEILING_LIMIT)
+         "<book> <locator-json> | wb run kb problem-search [--limit <1-%d>] [--] <sub-problem> ... (1 to %d)"
+         % (CEILING_LIMIT, CEILING_PROBLEM_LIMIT, MAX_SUB_PROBLEMS))
 
 
 class Refused(Exception):
@@ -138,15 +150,38 @@ def read_settings(home):
         os.close(descriptor)
 
 
+def checked_launcher(value, boundary):
+    """The launcher of the settings, if it is a plain absolute path (no link, no ``..``, no repeated slash) to an executable file
+    outside the project that no one but its owner can write and that the user or root owns, or a refusal. It is the one program the
+    engine runs to reach the embedding model. The folders above it are not examined (the same trust as the engine and python keys)."""
+    if not os.path.isabs(value) or "\0" in value:
+        raise Refused("the launcher in helper.json is not an absolute path")
+    real = os.path.realpath(value)
+    if real != value:
+        raise Refused("the launcher in helper.json is not a plain path: it holds a link, a .. or a repeated slash")
+    if is_inside(real, boundary):
+        raise Refused("the launcher in helper.json is inside the project; the launcher is not part of a project")
+    if not (os.path.isfile(real) and os.access(real, os.X_OK)):
+        raise Refused("the launcher in helper.json is not an executable file")
+    info = os.stat(real)
+    if info.st_mode & 0o022:
+        raise Refused("the launcher in helper.json can be written by others: its group or everyone has the right to write it")
+    if info.st_uid not in (os.getuid(), 0):
+        raise Refused("the launcher in helper.json is not owned by the user who runs the helper or by root")
+    return real
+
+
 def settings(cwd):
-    """``(python, engine)``: the interpreter and the engine folder as resolved paths, or a refusal."""
+    """``(python, engine, spellings, launcher)``: the interpreter and the engine folder as resolved paths, the spellings of the
+    paths to hide, and the launcher (or ``None`` if the settings name none), or a refusal."""
     data = read_settings(home_directory())
     try:
         values = jsonstrict.parse_object(data, MAX_SETTINGS)
     except ValueError as exc:
         raise Refused("helper.json is not usable: %s; it holds %s" % (display.ascii_text(str(exc))[:100], SETTINGS_FORM))
-    if sorted(values) != ["engine", "python"] or not all(isinstance(v, str) and v for v in values.values()):
-        raise Refused("helper.json must hold exactly the two keys engine and python, each a text: %s" % SETTINGS_FORM)
+    if (not {"engine", "python"} <= set(values) <= {"engine", "python", "launcher"}
+            or not all(isinstance(v, str) and v for v in values.values())):
+        raise Refused("helper.json must hold the keys engine and python, and may hold launcher, each a text: %s" % SETTINGS_FORM)
     for name in ("engine", "python"):
         if not os.path.isabs(values[name]) or "\0" in values[name]:
             raise Refused("the %s in helper.json is not an absolute path" % name)
@@ -159,7 +194,8 @@ def settings(cwd):
         raise Refused("the engine folder in helper.json holds no kb package")
     if not (os.path.isfile(python) and os.access(python, os.X_OK)):
         raise Refused("the python in helper.json is not an executable file")
-    return python, engine, [values["engine"], values["python"], engine, python]
+    launcher = checked_launcher(values["launcher"], boundary) if "launcher" in values else None
+    return python, engine, [values["engine"], values["python"], engine, python] + ([launcher] if launcher else []), launcher
 
 
 def environment(home):
@@ -256,11 +292,14 @@ def wrap(command, text, notes=""):
             % (token, command, text.strip("\n"), notes, token))
 
 
-def query_engine(command, tail, cwd):
-    """The cleaned text of one run of the engine, framed as data, or ``Failed`` / ``Refused``."""
-    python, engine, spellings = settings(cwd)
+def query_engine(command, tail, cwd, with_launcher=False):
+    """The cleaned text of one run of the engine, framed as data, or ``Failed`` / ``Refused``. With `with_launcher`, the launcher of
+    the owner's settings, if there is one, is passed as the option ``--launcher`` ahead of the rest of `tail`; no caller's text is."""
+    python, engine, spellings, launcher = settings(cwd)
     home = home_directory()
     hide = spellings + [home, os.path.realpath(home)]
+    if with_launcher and launcher:
+        tail = ["--launcher", launcher] + tail
     try:
         code, out, err, over, timed_out = run_program([python, "-m", "kb", command] + tail, engine, environment(home), TIMEOUT)
     except OSError:
@@ -318,6 +357,20 @@ def search(args, cwd):
     return query_engine("search", ["--limit", str(limit), "--", query], cwd)
 
 
+def problem_search(args, cwd):
+    """One to five sub-problems, each one line of text, searched by meaning by the engine. **This is the one argument of the helper that
+    sends anything out**: the sub-problems go, through the engine, to the embedding model that the owner's config names, and to nothing
+    else. No caller's text names a program, a server or a path."""
+    values, rest = options("problem-search", args, ("--limit",))
+    limit = whole_number(values["--limit"], 1, CEILING_PROBLEM_LIMIT, "--limit") if "--limit" in values else DEFAULT_LIMIT
+    if not 1 <= len(rest) <= MAX_SUB_PROBLEMS:
+        raise Refused("problem-search takes from 1 to %d sub-problems; %s" % (MAX_SUB_PROBLEMS, USAGE))
+    for sub in rest:
+        if not sub.strip() or len(sub) > MAX_QUERY or plain(sub) != sub:
+            raise Refused("a sub-problem is one line of text of 1 to %d characters, with no control character" % MAX_QUERY)
+    return query_engine("problem-search", ["--limit", str(limit), "--"] + rest, cwd, with_launcher=True)
+
+
 def depth(value, level=1):
     if isinstance(value, dict):
         return max([level] + [depth(v, level + 1) for v in value.values()])
@@ -350,9 +403,10 @@ def read(args, cwd):
 def main(argv, stdin, out, err, cwd):
     """Run one command from `cwd`. Returns the exit code. A refusal means nothing was started."""
     try:
-        if not argv or argv[0] not in ("search", "read"):
+        commands = {"search": search, "read": read, "problem-search": problem_search}
+        if not argv or argv[0] not in commands:
             raise Refused(USAGE)
-        text = search(argv[1:], cwd) if argv[0] == "search" else read(argv[1:], cwd)
+        text = commands[argv[0]](argv[1:], cwd)
         out.write(text)
         return 0
     except Refused as exc:

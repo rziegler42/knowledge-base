@@ -164,6 +164,150 @@ class SearchTests(HelperCase):
         self.refused(words="usage")
 
 
+class LauncherCase(HelperCase):
+    """A helper whose settings may name a launcher: an executable file outside the project."""
+
+    def setUp(self):
+        super().setUp()
+        base = os.path.dirname(self.home)
+        os.makedirs(os.path.join(base, "bin"))
+        self.launcher = os.path.join(base, "bin", "wb")
+        with open(self.launcher, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(self.launcher, 0o755)
+
+    def with_launcher(self, value=None):
+        self.write_settings({"engine": self.engine, "python": sys.executable, "launcher": value or self.launcher})
+
+
+class ProblemSearchTests(LauncherCase):
+    def test_problem_search_calls_the_engine_with_a_fixed_argument_list(self):
+        self.control({"stdout": '{"books": []}'})
+        code, out, err = self.run_helper("problem-search", "first idea", "second idea")
+        self.assertEqual((code, err), (0, ""))
+        (call,) = self.calls()
+        self.assertEqual(call["argv"], ["problem-search", "--limit", "5", "--", "first idea", "second idea"])
+        self.assertEqual(call["cwd"], self.engine)
+        self.assertRegex(out.splitlines()[0], r"^<<library-data [0-9a-f]{12} begin: kb problem-search>>$")
+        self.assertIn('{"books": []}', out)
+
+    def test_the_launcher_of_the_owners_settings_is_passed_before_the_double_dash_and_nothing_else_is_added(self):
+        self.with_launcher()
+        self.run_helper("problem-search", "--limit", "3", "--", "an idea")
+        self.assertEqual(self.calls()[0]["argv"], ["problem-search", "--launcher", self.launcher, "--limit", "3", "--", "an idea"])
+
+    def test_with_no_launcher_in_the_settings_none_is_passed(self):
+        self.run_helper("problem-search", "an idea")
+        self.assertNotIn("--launcher", self.calls()[0]["argv"])
+
+    def test_the_other_commands_never_get_a_launcher(self):
+        self.with_launcher()
+        self.run_helper("search", "x")
+        self.run_helper("read", BOOK, LOCATOR)
+        for call in self.calls():
+            self.assertNotIn("--launcher", call["argv"])
+
+    def test_the_limit_is_a_whole_number_from_one_to_ten(self):
+        for good in ("1", "10"):
+            self.run_helper("problem-search", "--limit", good, "--", "x")
+        self.assertEqual([c["argv"][2] for c in self.calls()], ["1", "10"])
+        for bad in ("0", "11", "20", "-1", "x", "5.0", " 5", "05", ""):
+            self.refused("problem-search", "--limit", bad, "--", "x", words="--limit")
+
+    def test_one_to_five_sub_problems_are_taken(self):
+        self.refused("problem-search", words="sub-problem")
+        self.refused("problem-search", "--", words="sub-problem")
+        self.refused("problem-search", *["x"] * 6, words="sub-problem")
+        self.run_helper("problem-search", *["x"] * 5)
+        self.assertEqual(self.calls()[0]["argv"][3:], ["--"] + ["x"] * 5)
+
+    def test_a_sub_problem_is_one_bounded_line_of_text(self):
+        for bad in ("", "   ", "a" * 1001, "a\x00b", "a\nb", "a\tb", "a\x1b[31mb", "bad \udcff byte", "bad \ud800", "a‮b", "a​b"):
+            self.refused("problem-search", "fine", bad, words="sub-problem")
+        self.run_helper("problem-search", "a" * 1000)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_a_sub_problem_that_starts_with_a_dash_is_text_after_the_double_dash(self):
+        self.run_helper("problem-search", "--", "--limit")
+        self.assertEqual(self.calls()[0]["argv"][-2:], ["--", "--limit"])
+        self.run_helper("problem-search", "-x", "--launcher")
+        self.assertEqual(self.calls()[1]["argv"][-3:], ["--", "-x", "--launcher"])
+
+    def test_a_caller_cannot_name_a_launcher_a_path_an_address_or_a_token(self):
+        for name in ("--launcher", "--path", "--root", "--url", "--address", "--token", "--config", "--library", "--index-root",
+                     "--host", "--server", "--model"):
+            self.refused("problem-search", name, "value", "--", "x", words="not an option")
+        self.refused("problem-search", "--launcher", self.launcher, "--", "x", words="not an option")
+        self.refused("problem-search", "--limit", "5", "--limit", "6", "--", "x", words="twice")
+
+    def test_a_sub_problem_without_the_double_dash_that_looks_like_an_option_is_refused(self):
+        self.refused("problem-search", "--x", words="not an option")
+
+    def test_a_sub_problem_is_never_an_environment_variable_a_path_or_part_of_the_program_name(self):
+        self.run_helper("problem-search", "$(touch /tmp/x)", "`id`", "a; b | c")
+        (call,) = self.calls()
+        self.assertEqual(call["argv"][:3], ["problem-search", "--limit", "5"])
+        self.assertEqual(call["argv"][4:], ["$(touch /tmp/x)", "`id`", "a; b | c"])
+
+    def test_the_engine_gets_the_same_short_environment_as_for_a_search(self):
+        os.environ["SOME_TOKEN"] = "secret"
+        os.environ["OLLAMA_HOST"] = "elsewhere"
+        self.addCleanup(os.environ.pop, "SOME_TOKEN", None)
+        self.addCleanup(os.environ.pop, "OLLAMA_HOST", None)
+        self.with_launcher()
+        self.run_helper("search", "x")
+        self.run_helper("problem-search", "x")
+        searched, posed = self.calls()[0]["env"], self.calls()[1]["env"]
+        self.assertEqual(posed, searched)
+        self.assertEqual(posed["PATH"], "/usr/bin:/bin")
+        for name in ("PYTHONPATH", "KB_CONFIG_DIR", "SOME_TOKEN", "OLLAMA_HOST", "WB_LAUNCHER"):
+            self.assertNotIn(name, posed)
+
+    def test_output_names_no_absolute_path_of_the_machine_the_launcher_included(self):
+        self.with_launcher()
+        self.control({"stdout": json.dumps({"x": "%s and %s and %s" % (self.launcher, self.engine, self.home)}),
+                      "stderr": "from %s" % self.launcher})
+        code, out, err = self.run_helper("problem-search", "x")
+        self.assertEqual(code, 0, err)
+        for secret in (self.launcher, self.engine, self.home):
+            self.assertNotIn(secret, out)
+            self.assertNotIn(secret, err)
+        self.assertIn("[path]", out)
+
+    def test_an_engine_that_fails_gives_a_failure_with_its_words_framed(self):
+        self.control({"stdout": "", "stderr": "refused: the vectors are not there\n", "code": 2})
+        code, out, err = self.run_helper("problem-search", "x")
+        self.assertEqual(code, 1)
+        self.assertTrue(err.startswith("failed: "), err)
+        self.assertIn("the vectors are not there", out)
+
+    def test_an_engine_that_does_not_finish_is_stopped(self):
+        self.control({"hang": True})
+        with unittest.mock.patch.object(self.helper, "TIMEOUT", 1):
+            code, out, err = self.run_helper("problem-search", "x")
+        self.assertEqual(code, 1)
+        self.assertIn("did not finish in 1 seconds", err)
+        with open(os.path.join(self.engine, "pid")) as handle:
+            pid = int(handle.read())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
+    def test_an_oversize_output_is_cut_and_a_program_that_prints_without_end_is_stopped(self):
+        self.control({"repeat": ["word ", 40000]})
+        code, out, err = self.run_helper("problem-search", "x")
+        self.assertEqual(code, 0)
+        self.assertIn("[cut at %d characters]" % self.helper.MAX_TEXT, out)
+        with unittest.mock.patch.object(self.helper, "MAX_OUTPUT", 100000):
+            self.control({"repeat": ["x" * 1000, 100000]})
+            code, out, err = self.run_helper("problem-search", "x")
+        self.assertEqual(code, 1)
+        self.assertIn("more than", err)
+
+    def test_a_settings_file_that_is_missing_or_wrong_stops_it_before_anything_is_started(self):
+        os.remove(self.settings)
+        self.refused("problem-search", "x", words="helper.json")
+
+
 class ReadTests(HelperCase):
     def test_read_calls_the_engine_with_a_fixed_argument_list(self):
         self.control({"stdout": '{"text": "a passage"}'})
@@ -376,8 +520,97 @@ class SettingsTests(HelperCase):
             self.refused("search", "x", words="not owned")
 
 
+class LauncherSettingsTests(LauncherCase):
+    def test_the_launcher_is_an_optional_third_key_and_no_other_key_is_taken(self):
+        self.with_launcher()
+        code, out, err = self.run_helper("search", "x")
+        self.assertEqual((code, err), (0, ""))
+        self.write_settings({"engine": self.engine, "python": sys.executable, "launcher": self.launcher, "extra": "x"})
+        self.refused("search", "x", words="helper.json")
+        self.write_settings({"engine": self.engine, "python": sys.executable, "extra": "x"})
+        self.refused("search", "x", words="helper.json")
+
+    def test_a_launcher_that_is_not_text_is_refused(self):
+        for bad in (1, None, "", ["wb"], {"a": 1}, True):
+            self.write_settings({"engine": self.engine, "python": sys.executable, "launcher": bad})
+            self.refused("problem-search", "x", words="helper.json")
+
+    def test_a_launcher_must_be_an_absolute_path_of_an_executable_file(self):
+        self.with_launcher("wb")
+        self.refused("problem-search", "x", words="launcher")
+        self.with_launcher("bin/wb")
+        self.refused("problem-search", "x", words="launcher")
+        self.with_launcher(os.path.join(os.path.dirname(self.launcher), "missing"))
+        self.refused("problem-search", "x", words="launcher")
+        self.with_launcher(os.path.dirname(self.launcher))
+        self.refused("problem-search", "x", words="launcher")
+        plain = os.path.join(os.path.dirname(self.launcher), "plain")
+        with open(plain, "w") as f:
+            f.write("x")
+        os.chmod(plain, 0o644)
+        self.with_launcher(plain)
+        self.refused("problem-search", "x", words="launcher")
+        self.with_launcher(self.launcher + "\0")
+        self.refused("problem-search", "x", words="launcher")
+
+    def test_a_launcher_that_others_can_write_or_that_another_user_owns_is_refused(self):
+        for mode in (0o775, 0o757, 0o777, 0o722, 0o702):
+            os.chmod(self.launcher, mode)
+            self.with_launcher()
+            self.refused("problem-search", "x", words="write")
+        os.chmod(self.launcher, 0o755)
+        self.with_launcher()
+        with unittest.mock.patch.object(self.helper.os, "getuid", return_value=os.getuid() + 1):
+            # the settings file would be refused first for the same reason, so the file check is made directly
+            with self.assertRaises(self.helper.Refused) as cm:
+                self.helper.checked_launcher(self.launcher, self.project)
+        self.assertIn("owned", str(cm.exception))
+        os.chmod(self.launcher, 0o700)  # the owner alone may write it, and the owner alone may run it: allowed
+        self.assertEqual(self.helper.checked_launcher(self.launcher, self.project), self.launcher)
+        os.chmod(self.launcher, 0o755)
+        self.assertEqual(self.helper.checked_launcher(self.launcher, self.project), self.launcher)
+
+    def test_a_launcher_with_a_link_in_its_path_is_refused(self):
+        base = os.path.dirname(self.launcher)
+        link = os.path.join(base, "wb-link")
+        os.symlink(self.launcher, link)
+        self.with_launcher(link)
+        self.refused("problem-search", "x", words="link")
+        folder = os.path.join(os.path.dirname(base), "bin-link")
+        os.symlink(base, folder)
+        self.with_launcher(os.path.join(folder, "wb"))
+        self.refused("problem-search", "x", words="link")
+
+    def test_a_launcher_inside_the_project_is_refused_whatever_leads_there(self):
+        inside = os.path.join(self.project, "wb")
+        with open(inside, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(inside, 0o755)
+        self.with_launcher(inside)
+        self.refused("problem-search", "x", words="inside the project")
+        link = os.path.join(os.path.dirname(self.launcher), "to-project")
+        os.symlink(inside, link)
+        self.with_launcher(link)
+        self.refused("problem-search", "x")
+        self.refused("search", "x")
+
+    def test_a_bad_launcher_stops_every_command_because_the_file_is_wrong(self):
+        self.with_launcher("wb")
+        self.refused("search", "x", words="launcher")
+        self.refused("read", BOOK, LOCATOR, words="launcher")
+
+    def test_the_launcher_is_never_taken_from_the_project_or_the_environment(self):
+        os.environ["WB_LAUNCHER"] = self.launcher
+        self.addCleanup(os.environ.pop, "WB_LAUNCHER", None)
+        with open(os.path.join(self.project, "helper.json"), "w") as f:
+            json.dump({"engine": self.engine, "python": sys.executable, "launcher": self.launcher}, f)
+        os.chmod(os.path.join(self.project, "helper.json"), 0o600)
+        self.run_helper("problem-search", "x")
+        self.assertNotIn("--launcher", self.calls()[0]["argv"])
+
+
 class DeclarationTests(unittest.TestCase):
-    def test_the_package_declares_one_module_with_the_two_commands(self):
+    def test_the_package_declares_one_module_with_the_three_commands(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "package")
         with open(os.path.join(root, "package.json")) as f:
             package = json.load(f)
@@ -386,7 +619,7 @@ class DeclarationTests(unittest.TestCase):
         self.assertEqual(package["name"], "kb")
         self.assertEqual(package["modules"], ["kb"])
         self.assertEqual(module["provides"], ["kb:knowledge-search"])
-        self.assertEqual(module["commands"]["kb"]["arguments"], ["search", "read"])
+        self.assertEqual(module["commands"]["kb"]["arguments"], ["search", "read", "problem-search"])
         self.assertNotIn("owner", module["commands"]["kb"])
         self.assertEqual(module["ships"], ["helper/kb"])
         mode = os.stat(os.path.join(root, "kb", "helper", "kb")).st_mode

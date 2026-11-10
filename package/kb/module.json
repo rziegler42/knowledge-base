@@ -16,7 +16,8 @@
       "kit": 1,
       "arguments": [
         "search",
-        "read"
+        "read",
+        "problem-search"
       ]
     }
   }
