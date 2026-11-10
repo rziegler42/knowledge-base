@@ -349,4 +349,38 @@ A second round has not been asked for.
   `module.json` description said "by keyword" only: changed. Recorded and not changed: (6) `docs/specs/library.md:40` repeats the rule
   that an agent may run only reads that send nothing out, with no exception. The plan names only `knowledge-base.md` and `card.md`, so
   it is left for the owner to decide whether `library.md` should carry the same sentence. The reviewer ran nothing and could not check
-  that the skill loads or that `wb run` passes `--` through (Increment D).
+  that the skill loads or that `wb run` passes `--` through (Increment D). (Committed as `d4a988a`. The point 6 was then done by the
+  owner's word as a separate commit, `bffbedc`, which adds the same exception sentence to `docs/specs/library.md`.)
+
+### Increment D — One live run through the helper (done)
+
+- **What had to be done first, and was not in the plan:** no project had the `kb` package installed (the scratch project of 2026-11-08
+  was gone), and the helper refuses to run from a project that holds the engine, so it cannot run from this repository. The owner, in a
+  terminal: approved the changed package (`wb approve package`, module tree `795befba550b`, after `wb verify package` accepted it);
+  installed it into a new scratch project, `/Users/rziegler/projects/kb-scratch`, with the modules `claude`, `ask-ollama`,
+  `groundwork`, `code-work`, `safe-git` and `kb` (111 paths; the skill `pose-a-problem` arrived in its `.claude/skills/`; the preview
+  was run by me first and showed no problem); and added the third key to `~/.config/knowledge-base/helper.json`, `"launcher"` with the
+  path of `wb`, kept at mode 600. I read the file after each step and did not write it. The launcher path passed the helper's rules
+  (plain path, executable, mode 755, owned by the owner, outside the project) when I checked them with a local script. I could not run
+  the call myself because the scratch project is outside this session's working folder; the owner ran it.
+- **What was sent:** told to the owner beforehand: two sub-problem sentences, each with the query prefix, to the owner's server `ned`,
+  over plain HTTP, and nothing else. The owner ran the command in a terminal in `kb-scratch` on 2026-11-10:
+  `wb run kb problem-search -- 'Speed up a big computation by splitting it across many workers when one part must still run in sequence'
+  'Break a task into overlapping pieces, solve each piece once, and reuse the answers'`.
+- **Result:** exit with a complete reply between the two marker lines of the helper, in **3.2 seconds** in all (1.06 s user), well
+  within the helper's 60. `query_prefix: true`, 78 cards searched, 0 stale, 0 without a vector. Eight merged books, ordered by best
+  score (0.681 to 0.408), each with a citation, `untrusted: true`, an excerpt behind the untrusted-text marker, and no `text` key; no path
+  of the machine in the output. Sub-problem 1: OpenMP, Amdahl's law, Dynamic programming, Horovod, CUDA (the order that the engine run
+  with the same prefix gave, so the helper changed nothing in the ranking). Sub-problem 2: Dynamic programming (0.68), The Case for
+  Learned Index Structures, FlashAttention, Bloom filter, Amdahl's law. Dynamic programming (ranks 3 and 1) and Amdahl's law (ranks 2
+  and 5) were found by both and appear once each with two `found_by` entries. The launcher of the settings works under the helper's
+  fixed `PATH=/usr/bin:/bin`, which the security review of Increment B could not check.
+- **What cannot be concluded:** one run, two sentences that I chose (the same as in the eight searches of the earlier plan), one warm
+  run on the owner's network; nothing about how often a source from another field is found on problems the owner chooses (that is
+  `cross-field-discovery#cross-field-trial`). The weak matches of sub-problem 2 (Learned Index, Bloom filter) show that the agent has to
+  judge each book, as the skill says. No agent used the skill in the scratch project (its settings need a restart of the session there),
+  and no failure path (a missing launcher, a time-out) was tried live. The optional `timeout` on the `embed-qwen` entry was not part of
+  this run: the owner set it to 45 seconds afterwards (the mitigation for Low 1 of the security review of Increment B), and
+  `python3 -m kb models` read the config and listed it, with no call made. Nothing has exercised it yet; if a rebuild of the vectors
+  reports a time-out, the owner can raise it (120 was suggested).
+- **Verification as run:** the reply as above; `wb run code-work check` found no problems.
