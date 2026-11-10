@@ -102,7 +102,8 @@ def plan(store, cfg, book_ids=None, again=False, form="sentences"):
     cardstate.write_manifest(index_root, run_id, cardstate.Manifest(run_id, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), again, items, form=form))
     return {"run": run_id, "books": len(items), "again": again, "form": form, "skipped": skipped, "order": order,
             "calls_known": {"notes": notes_calls, "card": model_items},
-            "calls_note": "the checks and the second round depend on the answers; about two calls for the checks for each card"}
+            "calls_note": "the checks and the second round depend on the answers; about two calls for the checks for each card; a call whose "
+                          "answer is refused is asked once more, so any call can be made twice"}
 
 
 def _counts(manifest):
@@ -198,6 +199,7 @@ def _serve(store, cfg, manifest, item, allow, launcher, root):
             journal.set_save(save)
         part = cardmake.make_model_part(cfg, loaded[1], mechanical["title"], launcher=launcher, root=root, kind=mechanical["kind"],
                                         journal=journal, allow=allow, form=manifest.form,
+                                        on_refused=lambda refusal: cardmake.keep_aside(store, refusal, book_id, version_id),
                                         identity={"book_id": book_id, "version_id": version_id, "conversion": loaded[0]})
     except cardmake.Pause:
         return "paused"

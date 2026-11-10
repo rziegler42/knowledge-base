@@ -617,8 +617,8 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 
 - **A card in the making can be stopped and taken up again (`kb/cardstate.py`).** A card is made by a fixed sequence of calls (the notes
   of each piece, the card, the checks, a second round and its checks), and what it is depends only on the answers and on the book. A
-  *journal* keeps the answer to each call that has succeeded: the job, the model entry, the checked answer and the record of how it was
-  made. `cardmake.make_model_part` can be given a journal (`cardmake.new_journal`): it adds each call as it is made, and a call that is
+  *journal* keeps the answer to each call that has succeeded (an answer that was refused is never kept in it, whether or not the call
+  was then asked again): the job, the model entry, the checked answer and the record of how it was made. `cardmake.make_model_part` can be given a journal (`cardmake.new_journal`): it adds each call as it is made, and a call that is
   already in the journal is not made again, its saved answer being checked again as a reply would be, so a card made again from a
   journal is the card it would have been, with the same records. With `allow`, a set of model entries that the caller is serving now,
   the next call that is for another entry and is not in the journal raises `cardmake.Pause` before anything is sent, so a caller
@@ -663,9 +663,16 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 - **`cards` reports** one line of JSON for each book: carded, skipped or failed, the generation, whether the card is partial, the
   pieces and calls, the model of each kind of work, the reason, and `kept` (see below). It never prints card text. One book failing
   does not stop the others, and the exit code is 1 if any failed.
-- **A refused answer is kept aside.** When a model answers and the answer is refused for its shape (a list longer than its limit, a
-  missing key, text that is not JSON), no card is made, and the answer is written to a file in the folder `refused` of the index
-  root, so you can read what the model wrote. The failed report names the file in `kept` (the name, not the folder). The file is
+- **A refused answer is asked for again once, and kept aside.** When a model answers and the answer is refused for its shape (a list
+  longer than its limit, lists of different lengths, a missing key, text that is not JSON), the call is made once more with the same
+  prompt and one more section, `LAST REFUSAL`, that holds the program's note on the fault: marked as data, cut at 300 characters and
+  written in ASCII only (any other character is an escape), with a token that neither the prompt nor the note holds. This is done for
+  the notes, the card, the checks and the second round, in both forms, and it costs one more call only when an answer is refused, so
+  any call can be made twice. A call that fails (no answer) is not asked again. If the second answer is refused too, no card is made.
+  Every refused answer, the first and the second, is written to a file in the folder `refused` of the index
+  root, so you can read what the model wrote. The failed report names the file of the second answer in `kept` (the name, not the folder);
+  a card that was made after a first refusal names none, but the first answer's file is there. The refused attempt is not one of the
+  card's calls: only the answer that was accepted is recorded, counted in `calls` and saved in a journal. The file is
   JSON with the book, version, job, the model entry and prompt version, the date, the reason and the answer; everything outside
   ASCII is escaped, so a control or escape character in the answer cannot reach your terminal when you read the file with `cat`; and
   an answer is cut at 256 K characters. It is written with mode 600 in a folder with mode 700, never over a file that exists, and
@@ -705,8 +712,9 @@ python3 -m kb cards-queue status RUN
   of books. A model stays loaded between its calls only if the `keep_alive` of its record in the workbench's endpoint file (see
   "Calling a model") is more than 0; the queue sets none of its own.
   A card is filed as a new generation as soon as its last call is made, so a run that is stopped leaves the cards already made. A
-  call that fails, an answer that is refused (which is kept aside as `cards` keeps it) and a card that cannot be filed are tried again
-  in the next pass, and the book is reported as failed after one more try; the other books go on. (The second round is an addition: if
+  call that fails, an answer that is refused twice (each call is first asked again at once, and both answers are kept aside as `cards`
+  keeps them) and a card that cannot be filed are tried again in the next pass, and the book is reported as failed after one more
+  try; the other books go on, so a card can be asked for up to four times at the one call before the book is reported failed. (The second round is an addition: if
   its call fails or is refused the card is filed without it, as with `cards`, and it is not tried again.) A book is dropped and
   reported if it is no longer active, if the conversion in use is not the one the plan saw (or has gone, or has less text than the
   cutoff now), if the book has a newer version than the plan saw, if its saved state cannot be read (it is left as it is, for you to look

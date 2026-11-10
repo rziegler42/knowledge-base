@@ -461,9 +461,9 @@ class MakeTest(Base):
                     {"points": ["a"], "quotes": ["q" * (cardmake.QUOTE_LIMIT + 1)]}):
             with self.subTest(bad=bad):
                 self.setUp()
-                self.script(reply(bad), reply(NOTES), reply(CARD))
+                self.script(reply(bad), reply(bad), reply(NOTES), reply(CARD))   # refused, asked again, refused again: the card stops
                 self.refused(conversion(*[block(f"piece {i} " + "word " * 3000) for i in range(2)]))
-                self.assertEqual(len(self.calls()), 1)
+                self.assertEqual(len(self.calls()), 2)
 
     def test_a_card_of_the_wrong_shape_is_refused(self):
         for bad in (dict(CARD, key_ideas=["only", "two"]), dict(CARD, key_ideas=["a"] * 6), dict(CARD, sentences=[5]), dict(CARD, extra="x"),
@@ -2102,13 +2102,26 @@ class RefusedAnswerTest(LibraryCase):
         (report,) = self.run_cards(book)
         self.assertEqual((report["status"], report["generation"]), ("failed", None))
         self.assertIn("topics", report["reason"])
-        self.assertEqual(self.kept_files(), [report["kept"]])
+        self.assertEqual(len(self.kept_files()), 2)   # the answer was asked for again once, and both refusals are kept
+        self.assertIn(report["kept"], self.kept_files())
         doc = self.read_kept(report["kept"])
         self.assertEqual((doc["book_id"], doc["version_id"], doc["job"], doc["registry"], doc["prompt_version"]),
                          (book, version, "card", "cardm", "v6"))
         self.assertEqual(json.loads(doc["answer"])["topics"][19], "topic 19")
         self.assertIn("topics", doc["reason"])
         self.assertEqual(card.generations(self.store, book, version), [])
+
+    def test_a_card_refused_once_is_made_at_the_second_asking_and_the_first_answer_is_kept_aside(self):
+        book, version = self.converted_book()
+        self.script(reply(NOTES), self.too_many_topics(), reply(CARD))
+        (report,) = self.run_cards(book)
+        self.assertEqual((report["status"], report["generation"]), ("carded", 1))
+        self.assertIsNone(report["kept"])   # the card was made: the report names no refused file
+        (name,) = self.kept_files()          # but the first answer is there for the owner to read
+        doc = self.read_kept(name)
+        self.assertEqual((doc["book_id"], doc["version_id"], doc["job"]), (book, version, "card"))
+        self.assertIn("topics", doc["reason"])
+        self.assertEqual(card.generations(self.store, book, version), [1])
 
     def test_a_refused_note_is_kept_too_and_names_its_job(self):
         book, _ = self.converted_book(blocks=[block(f"piece {i} " + "word " * 3000) for i in range(2)])
@@ -2136,13 +2149,13 @@ class RefusedAnswerTest(LibraryCase):
         self.assertNotIn(b"\x1b", raw)
         self.assertIn("I cannot do that", self.read_kept(report["kept"])["answer"])
 
-    def test_two_refusals_keep_two_files(self):
+    def test_two_failed_runs_keep_two_files_each_and_the_files_differ(self):
         book, _ = self.converted_book()
         self.script(reply(NOTES), self.too_many_topics())
         first, = self.run_cards(book)
         second, = self.run_cards(book)
         self.assertNotEqual(first["kept"], second["kept"])
-        self.assertEqual(len(self.kept_files()), 2)
+        self.assertEqual(len(self.kept_files()), 4)   # each run: the first answer and the answer to the second asking
 
     def test_every_other_report_has_kept_empty_and_leaves_no_file(self):
         carded, _ = self.converted_book(title="Carded")
@@ -2180,7 +2193,7 @@ class RefusedAnswerTest(LibraryCase):
     def test_a_refusal_in_one_book_does_not_stop_the_next(self):
         first, _ = self.converted_book(title="First")
         second, second_version = self.converted_book(title="Second")
-        self.script(reply(NOTES), self.too_many_topics(), reply(NOTES), reply(CARD))
+        self.script(reply(NOTES), self.too_many_topics(), self.too_many_topics(), reply(NOTES), reply(CARD))   # the first book: refused twice
         one, two = self.run_cards(first, second)
         self.assertEqual((one["status"], two["status"]), ("failed", "carded"))
         self.assertIsNotNone(one["kept"])

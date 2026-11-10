@@ -214,4 +214,45 @@ A second round has not been asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — Ask again once, with the reason
+
+- **Done.** In `engine/kb/cardmake.py`, the function that asks each call inside `make_model_part` asks a call once more when its answer is
+  refused for its shape (`models.AnswerRefused`): the same prompt and one more section, `LAST REFUSAL` (`retry_prompt`), that holds the
+  program's note on the fault, written in ASCII only (other characters as escapes), cleaned and cut at 300 characters (`MAX_REASON`), marked
+  with a token that neither the prompt nor the note holds, and said to be data. The first refusal is given to a new parameter
+  `on_refused`; `make_for_version` and the queue's `_serve` pass a callback that calls `keep_aside`, so both answers are kept aside. A
+  second refusal is raised as before; a call that failed (a plain `KbError`) is not asked again. Only the accepted answer gets a record and
+  a journal entry, so `calls` counts the accepted calls and the records stay aligned with the journal. It applies to the notes, card, check
+  and second-round calls, in both forms.
+- **Deviations.** (1) The plan's "the part's account of the refusals it kept" is a callback (`on_refused`), not a field of the part, so
+  that the part need not know the store. (2) `engine/README.md` and the `calls_note` text of `cardqueue.plan` are changed though A's
+  Affected areas do not list them: the README said that a refused answer fails the call at once and is tried again in the next pass, which
+  is no longer true, and the note on calls now says any call can be made twice. (3) Eight older tests that assumed a refusal fails the
+  call at once were changed to the new behaviour and keep their purpose: a note of the wrong shape still stops the card (now after two
+  askings, two calls); a failed card keeps two refused answers (one for each asking); in the queue a single refusal is absorbed in the same
+  pass and a book refused twice is tried again in the next pass (four askings in all before it is reported failed). (4) An error in the
+  callback is ignored, so that keeping an answer aside cannot stop the retry or hide the refusal (the reviewer's finding 1).
+- **Cost.** Every call of a card (a notes call for each piece, the card, each batch of checks, the second round and its checks) can now be
+  asked twice, and in the queue a book refused twice in a pass is asked again in the next pass: up to four askings at the failing call and
+  up to four files in `refused/` (it keeps at most 200). A card that is not refused costs what it did. Increment D must say this when it
+  asks the owner for the live run.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest` on `test_cardmake_earlier`, `test_cardmake`, `test_card`,
+  `test_cardstate`, `test_cardqueue`, `test_cardsample`, `test_catalog`: 725 tests, OK; `wb run code-work check`: no problems. The new
+  tests were seen to fail first (a TypeError for the missing `on_refused`, and for the two later ones the callback's error and a
+  non-ASCII body). 21 distinct deliberate breaks, each from green (the retry made twice, without the reason, with the reason outside a
+  marked section, uncleaned, uncut, with a token the reason or the prompt holds, escapes removed, the first refusal not kept by the
+  command or by the queue, the refused answer saved in the journal, a failed call asked again, the retry skipped for each of the four
+  jobs, the end line of the prompt lost, the callback's error not contained) were each caught; eight were first missed or were invalid
+  edits (four of the retry skipped for a job had a syntax error and were done again), and tests were added (direct tests of `retry_prompt` with a hostile reason, a prompt that holds a token, and a prompt with no
+  usual end). No call was made to a model server.
+- **Review.** Independent `reviewer`, one exchange, no blocking finding. Applied: the callback's error contained (finding 1); the
+  reason written in ASCII only, which closes the route by which an unknown key of the answer is quoted with characters outside ASCII
+  (finding 2, a surface the plan had not named: `models._check_answer` quotes a cleaned unknown key, `parse_support` and the verdict check
+  quote up to 40 and 20 characters); the README and `calls_note` brought up to date (finding 3). The cost (finding 4) is recorded above.
+  Not done: a test of `Pause` with a retry (the retry uses an entry that has already passed the `allow` check; the reviewer found the
+  logic clear by reading). The reviewer could not run anything or read the diff of the older tests; I judged those changes myself.
+- **Security review checkpoint.** Asked once, about feeding text derived from a model's answer into the next prompt. I recommended no
+  review for this increment: the text goes only to the model that wrote the answer, is at most 300 ASCII characters in a marked data
+  section, and the next answer passes the same checks as any other, so no new privileged use is reached; the reviewer rated the
+  exposure low and its one unnamed route was closed. The owner took the recommendation (2026-11-10): no security review; none was run.
+  The question is asked again in Increment B, which adds a reader for a nested reply.

@@ -326,17 +326,29 @@ class RunTest(QueueCase):
         self.assertEqual(report["items"][0]["generation"], 2)
         self.assertEqual(card.generations(self.store, book, version), [1, 2])
 
-    def test_a_refused_answer_is_kept_aside_and_the_stage_is_tried_again_in_the_next_pass(self):
+    def test_a_refused_answer_is_kept_aside_and_the_call_is_asked_again_in_the_same_pass(self):
         books = self.books(2)
         self.set_plan(bad_card={"Book 0": 1})
         report = self.run_queue(self.plan()["run"])
         self.assertEqual(self.states(report), {b: "done" for b in books})
+        self.assertEqual(report["passes"], 1)
+        self.assertEqual(len(os.listdir(os.path.join(self.index_root, "refused"))), 1)   # the first answer, kept by the callback
+        item = next(x for x in report["items"] if x["book_id"] == books[0])
+        self.assertEqual(item["attempts"], 0)
+        cards_of_book_0 = [c for c in self.log() if c["kind"] == "card.json" and c["title"] == "Book 0"]
+        self.assertEqual(len(cards_of_book_0), 2)   # refused, then asked again
+
+    def test_an_answer_refused_twice_is_kept_twice_and_the_stage_is_tried_again_in_the_next_pass(self):
+        books = self.books(2)
+        self.set_plan(bad_card={"Book 0": 2})
+        report = self.run_queue(self.plan()["run"])
+        self.assertEqual(self.states(report), {b: "done" for b in books})
         self.assertEqual(report["passes"], 2)
-        self.assertEqual(len(os.listdir(os.path.join(self.index_root, "refused"))), 1)
+        self.assertEqual(len(os.listdir(os.path.join(self.index_root, "refused"))), 2)   # both answers of the first pass
         item = next(x for x in report["items"] if x["book_id"] == books[0])
         self.assertEqual(item["attempts"], 1)
         cards_of_book_0 = [c for c in self.log() if c["kind"] == "card.json" and c["title"] == "Book 0"]
-        self.assertEqual(len(cards_of_book_0), 2)
+        self.assertEqual(len(cards_of_book_0), 3)   # two in the first pass, one in the second
 
     def test_a_call_that_fails_is_left_for_the_next_pass_and_not_tried_again_in_the_same_pass(self):
         books = self.books(2)
@@ -365,14 +377,14 @@ class RunTest(QueueCase):
         cfg["tasks"]["card-check"] = "notes"
         kbconfig.save(cfg)
         books = self.books(2)
-        self.set_plan(bad_notes={"Book 0": 1})
+        self.set_plan(bad_notes={"Book 0": 2})
         report = self.run_queue(self.plan()["run"])
         self.assertEqual(self.states(report), {b: "done" for b in books})
         self.assertEqual(report["passes"], 2)
-        self.assertEqual(len(os.listdir(os.path.join(self.index_root, "refused"))), 1)
+        self.assertEqual(len(os.listdir(os.path.join(self.index_root, "refused"))), 2)
         order = [(c["kind"], c["title"]) for c in self.log()]
-        self.assertEqual(order, [("card-notes.json", "Book 0"), ("card-notes.json", "Book 1"), ("card.json", "Book 1"), ("card-check.json", "Book 1"),
-                                 ("card-notes.json", "Book 0"), ("card.json", "Book 0"), ("card-check.json", "Book 0")])
+        self.assertEqual(order, [("card-notes.json", "Book 0"), ("card-notes.json", "Book 0"), ("card-notes.json", "Book 1"), ("card.json", "Book 1"),
+                                 ("card-check.json", "Book 1"), ("card-notes.json", "Book 0"), ("card.json", "Book 0"), ("card-check.json", "Book 0")])
 
     def test_a_call_that_keeps_failing_is_reported_as_failed_with_its_reason(self):
         books = self.books(2)
@@ -428,7 +440,7 @@ class RunTest(QueueCase):
         self.assertIn("same length", failed["reason"])
         self.assertEqual(failed["attempts"], 2)
         self.assertEqual(report["counts"], {"done": 2, "failed": 1, "dropped": 0, "waiting": 0})
-        self.assertEqual(len([c for c in self.log() if c["kind"] == "card.json" and c["title"] == "Book 1"]), 2)  # tried, and tried once more
+        self.assertEqual(len([c for c in self.log() if c["kind"] == "card.json" and c["title"] == "Book 1"]), 4)  # two in each pass: asked, and asked again
         self.assertLessEqual(report["passes"], cardqueue.PASS_CAP)
 
     def test_a_version_whose_conversion_changed_since_the_plan_is_dropped_and_reported(self):
