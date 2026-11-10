@@ -4,33 +4,45 @@
     "topics": {
       "type": "array",
       "items": {
-        "type": "string"
-      }
-    },
-    "topics_support": {
-      "type": "array",
-      "items": {
-        "type": "string"
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "support": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "support"
+        ],
+        "additionalProperties": false
       }
     },
     "key_ideas": {
       "type": "array",
       "items": {
-        "type": "string"
-      }
-    },
-    "key_ideas_support": {
-      "type": "array",
-      "items": {
-        "type": "string"
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "support": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "support"
+        ],
+        "additionalProperties": false
       }
     }
   },
   "required": [
     "topics",
-    "topics_support",
-    "key_ideas",
-    "key_ideas_support"
+    "key_ideas"
   ],
   "additionalProperties": false
 }

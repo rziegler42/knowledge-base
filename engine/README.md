@@ -471,9 +471,12 @@ hand; nothing in the engine writes it:
   registry name, the prompt version, the UTC date and the token counts. If the answer holds the words of a marker it is withheld.
   `model-try` asks for one JSON object with one text key, using the schema `engine/kb/schemas/model-try.json`.
 - In code, `kb.models.run_job` takes a `Job`: a name, a prompt version, the shape of the JSON object it expects (each key a
-  `string`, `strings`, `integer` or `boolean` with its limits) and optionally a schema file name. An answer is refused unless it
+  `string`, `strings`, `integer`, `boolean` or `items` with its limits) and optionally a schema file name. An answer is refused unless it
   is one JSON object with exactly those keys; its text is cleaned of control and hidden characters, and a value that is too long
-  is refused and not cut. A schema is a tracked file in `engine/kb/schemas/`, passed to the bridge by its path relative to the
+  is refused and not cut. `items` is a list of objects that each hold exactly a `text` and a `support`, so that a text and its support
+  are written together and two lists of different lengths cannot be written; the program reads it into two lists of strings, the texts
+  under the key and the supports under the key with `_support` (a job's `stored_shape` is that form, and a saved answer is checked
+  against it). A schema is a tracked file in `engine/kb/schemas/`, passed to the bridge by its path relative to the
   project root; the bridge reads that one file and nothing else, and refuses a path with a link in it.
 - A call that runs past its time limit (the entry's `timeout`, 600 s by default, plus 15 s), or prints more than 2 MB, is killed
   with whatever it started. A reply must be bridge contract version 2: `contract` the integer 2, `ok` a real boolean, `vendor`
@@ -502,7 +505,10 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   `sentences` asks for the summary and the neutral parts as sentences and keeps a sentence only if a verified note supports it (a
   part with no sentence left is empty, and the card is partial). The value is one of the two words; no option takes a path, an
   address or a model. Each report names the form. A card in the making (see "A card in the making can be stopped and taken up again")
-  belongs to the form it was started in, and a saved state of the other form is refused.
+  belongs to the form it was started in, and a saved state of the other form is refused. In the earlier form (card call `v5`) the model
+  writes each topic, key idea and caveat as an object with its `text` and its `support`, so a support cannot be missing or belong to
+  another item; the sentence form keeps its support lists beside its lists (`v6`). The second round (`v2`) writes its topics and key
+  ideas as objects in the same way, in both forms.
 - **Which model does which work is your setting.** The config key `tasks` names, for each kind of work the engine knows, the
   entry of `models` that does it. The kinds are `card-notes` (the notes on one piece of a book), `card` (the card itself) and
   `card-check` (whether the note an item cites supports it). The engine names no model and has no default: a kind of work with no
@@ -601,7 +607,8 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   and the same check as every item of the card call, it must not repeat a kept item (three quarters of its content words, counted as
   the pairing counts them, are in the other, whichever has fewer) and it must fit in the free places. The round asks for no
   `inferred` item and refuses a reply that marks one. A card is offered one round at most. If the call fails, or its reply is
-  refused, the card is made as the first round left it, and the report says so (the reply is not kept aside, as a card's is). The
+  refused, the card is made as the first round left it, and the report says so (a refused first reply of the round is kept aside, as a
+  card's is, and the second is not). The
   grounding record of a card names the items the round added (`added`: the positions in the topics and in the key ideas), so that
   `card-sample` can draw them. Without a setting for `card-more` the card is made as before and the report says the round was off; a
   name that is not in the registry refuses `cards` before anything is sent. The report has `more`: `status` (`off`, `not needed`,

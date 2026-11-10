@@ -65,8 +65,29 @@ def notes(*pairs):
     return {"points": [p for p, _ in pairs], "quotes": [q for _, q in pairs]}
 
 
+class Old(dict):
+    """A reply in the form the call had before the support was written with its item: a list and, beside it, its support list. It is sent
+    as it is, so that a test can show that such a reply is refused."""
+
+
+def wire(answer):
+    """The reply as the model writes it: each topic, key idea and caveat is an object with its text and its support. The tests write a
+    reply in the form the program stores (a list and its support list); this makes the list of objects of it. Lists of different lengths
+    cannot be written that way, so asking for them is an error of the test."""
+    if not isinstance(answer, dict) or isinstance(answer, Old):
+        return dict(answer) if isinstance(answer, Old) else answer
+    out = dict(answer)
+    for field in ("topics", "key_ideas", "caveats"):
+        if field in out and f"{field}_support" in out:
+            texts, supports = out.pop(field), out.pop(f"{field}_support")
+            if len(texts) != len(supports):
+                raise AssertionError(f"{field} and {field}_support are of different lengths: a reply cannot be written so")
+            out[field] = [{"text": t, "support": s} for t, s in zip(texts, supports)]
+    return out
+
+
 def reply(answer):
-    return {"stdout": json.dumps({"contract": 2, "ok": True, "vendor": "ollama", "model": "m1:latest", "reply": json.dumps(answer),
+    return {"stdout": json.dumps({"contract": 2, "ok": True, "vendor": "ollama", "model": "m1:latest", "reply": json.dumps(wire(answer)),
                                   "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": None,
                                             "cached_input_tokens": None, "reasoning_output_tokens": None}})}
 
@@ -264,7 +285,7 @@ class MakeTest(Base):
         notes_record, record = out["records"]
         self.assertEqual((notes_record["task"], notes_record["registry"], notes_record["prompt_version"]), ("card-notes", "notes", "v3"))
         self.assertEqual((record["task"], record["registry"], record["prompt_version"], record["input_tokens"], record["output_tokens"]),
-                         ("card", "cardm", "v4", 10, 5))
+                         ("card", "cardm", "v5", 10, 5))
         self.assertEqual(record["model"], "m1:latest")
 
     def test_a_longer_book_gets_notes_for_each_piece_and_then_one_card(self):
@@ -381,8 +402,11 @@ class MakeTest(Base):
                 self.assertEqual(len(self.calls()), 2)
 
     def test_a_card_of_the_wrong_shape_is_refused(self):
-        for bad in (dict(CARD, key_ideas=["only", "two"]), dict(CARD, key_ideas=["a"] * 6), dict(CARD, summary=5), dict(CARD, extra="x"),
-                    {k: v for k, v in CARD.items() if k != "summary"}):
+        for bad in (dict(CARD, key_ideas=["a"] * 9, key_ideas_support=["inferred"] * 9), dict(CARD, topics=["a"] * 21, topics_support=["inferred"] * 21),
+                    dict(CARD, summary=5), dict(CARD, extra="x"), {k: v for k, v in CARD.items() if k != "summary"},
+                    Old(CARD), Old(dict(wire(CARD), topics=[{"text": "an item with no support"}])),
+                    Old(dict(wire(CARD), topics=[{"text": "a", "support": "1.1", "x": 1}])), Old(dict(wire(CARD), topics=["a bare text"])),
+                    {k: v for k, v in CARD.items() if k != "caveats"}):
             with self.subTest(bad=list(bad)[:3]):
                 self.setUp()
                 self.script(reply(bad))
@@ -750,18 +774,29 @@ class GroundedCardTest(Base):
         self.assertIn("[1.1 verified]", prompt)
         self.assertIn("[1.2 unverified]", prompt)
         self.assertNotIn("a quote that is not there", prompt)
-        for word in ("topics_support", "key_ideas_support", "caveats_support", "neutral_limits_support", "inferred", "none"):
+        for word in ('"text"', '"support"', "neutral_limits_support", "inferred", "none"):
             self.assertIn(word, prompt)
+        for word in ("topics_support", "key_ideas_support", "caveats_support", "same length"):   # the support is written with its item now
+            self.assertNotIn(word, prompt)
 
     def test_a_reply_that_cites_a_note_in_a_wrong_form_is_refused(self):
         with self.assertRaises(KbError) as cm:
             self.make(answer(topics_support=["note one", "2.1"]))
         self.assertIn("support", str(cm.exception))
 
-    def test_a_reply_whose_support_lists_do_not_match_is_refused_as_an_answer_that_is_kept(self):
+    def test_a_reply_in_the_old_shape_with_a_support_list_beside_each_list_is_refused_as_an_answer_that_is_kept(self):
         with self.assertRaises(models.AnswerRefused) as cm:
-            self.make(answer(topics_support=["1.1"]))
+            self.make(Old(answer()))
         self.assertEqual(cm.exception.job, "card")
+        self.assertIn("topics", str(cm.exception))
+        self.assertIn(json.loads(cm.exception.reply)["topics"][0], ("early stopping rule",))   # the answer is carried, as any refusal carries it
+
+    def test_each_item_carries_its_own_support_so_a_support_cannot_be_missed_or_moved_to_another_item(self):
+        out = self.make(answer(topics=["tight bound", "early stopping rule"], topics_support=["2.1", "1.1"]),
+                        verdicts("supports", "supports", "supports", "supports", "supports", "supports"))
+        found = {c[0]: c[1] for c in zip(out["model"]["topics"], out["grounding"]["topics"])}
+        self.assertEqual(found["tight bound"]["notes"], ["2.1"])    # the support written with an item is the item's, whatever its place
+        self.assertEqual(found["early stopping rule"]["notes"], ["1.1"])
 
 
 def round_reply(topics=(), topics_support=None, key_ideas=(), key_ideas_support=None):
@@ -914,10 +949,17 @@ class SecondRoundTest(Base):
                 self.assertNotIn("added", out["grounding"])
                 self.assertIn("support", out["more"]["reason"])
 
-    def test_a_round_whose_lists_do_not_match_is_refused_and_the_card_is_kept(self):
-        out = self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=[]))
-        self.assertEqual(out["more"]["status"], "refused")
-        self.assertEqual(len(out["model"]["topics"]), 12)
+    def test_a_round_in_the_old_shape_or_with_an_item_that_has_no_support_is_refused_and_the_card_is_kept(self):
+        bad = {"old shape": Old(round_reply(topics=["tight bound sides"], topics_support=["2.1"])),
+               "no support": Old({"topics": [{"text": "tight bound sides"}], "key_ideas": []}),
+               "a bare text": Old({"topics": ["tight bound sides"], "key_ideas": []})}
+        for label, more in bad.items():
+            with self.subTest(label):
+                if os.path.exists(os.path.join(self.dir, "n")):
+                    os.remove(os.path.join(self.dir, "n"))
+                out = self.make(self.full_topics(), self.full_checks(), more)
+                self.assertEqual(out["more"]["status"], "refused")
+                self.assertEqual(len(out["model"]["topics"]), 12)
 
     def test_a_round_that_cannot_be_made_leaves_the_card_as_it_was(self):
         out = self.make(self.full_topics(), self.full_checks(), failure())
@@ -968,6 +1010,11 @@ class SecondRoundTest(Base):
         self.assertIn("up to 8 more topics", prompt)
         self.assertIn("never", prompt)
         self.assertIn("inferred", prompt)
+        # the support is written with its item: a list of objects with a text and a support, and no support list beside the list
+        self.assertIn('"text"', prompt)
+        self.assertIn('"support"', prompt)
+        for word in ("topics_support", "key_ideas_support", "same length"):
+            self.assertNotIn(word, prompt)
 
     def test_the_records_name_the_round_and_its_checks(self):
         out = self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=["2.1"]),
@@ -1231,7 +1278,7 @@ class JournalTest(Base):
 
     def test_an_answer_that_is_refused_is_not_in_the_journal(self):
         journal = self.journal()
-        bad = reply(dict(answer(), topics_support=["1.1"]))  # not the length of the topics
+        bad = reply(Old(answer()))  # in the old shape: a refused answer
         with self.assertRaises(models.AnswerRefused):
             self.run_with([reply(n) for n in self.NOTES_REPLIES] + [bad], journal=journal)
         self.assertEqual([e["job"] for e in journal.entries], ["card-notes", "card-notes"])
@@ -1253,23 +1300,79 @@ class JournalTest(Base):
 
 class JobTest(unittest.TestCase):
     def test_the_card_job_asks_for_the_fields_of_a_grounded_card_and_a_support_for_each_marked_list(self):
-        shape = cardmake.EARLIER_JOB.shape
+        shape, stored = cardmake.EARLIER_JOB.shape, cardmake.EARLIER_JOB.stored_shape
         self.assertEqual(cardmake.EARLIER_JOB.name, "card")
-        self.assertEqual(set(shape), set(card.MODEL_SHAPE_GROUNDED) | {"topics_support", "key_ideas_support", "caveats_support",
-                                                                       "neutral_limits_support"})
+        # the reply: each marked list is a list of items that hold their support; the limit has one support
+        self.assertEqual(set(shape), set(card.MODEL_SHAPE_GROUNDED) | {"neutral_limits_support"})
         for key, spec in card.MODEL_SHAPE_GROUNDED.items():
-            self.assertEqual(shape[key], spec, key)
+            if key in card.GROUNDED_LISTS:
+                self.assertEqual((shape[key]["type"], shape[key]["max_items"], shape[key]["max"]), ("items", spec["max_items"], spec["max"]), key)
+                self.assertEqual(shape[key]["support_max"], cardmake.SUPPORT_CHARS)
+            else:
+                self.assertEqual(shape[key], spec, key)
         self.assertEqual((shape["topics"]["max_items"], shape["key_ideas"]["max_items"]), (20, 8))
-        for key in ("topics", "key_ideas", "caveats"):
-            self.assertEqual(shape[f"{key}_support"]["max_items"], shape[key]["max_items"])
         self.assertEqual(shape["neutral_limits_support"]["type"], "string")
+        # the values the rest of the card code gets: the lists and their support lists, as ever
+        self.assertEqual(set(stored), set(card.MODEL_SHAPE_GROUNDED) | {"topics_support", "key_ideas_support", "caveats_support",
+                                                                         "neutral_limits_support"})
+        for key, spec in card.MODEL_SHAPE_GROUNDED.items():
+            self.assertEqual(stored[key], spec, key)
+        for key in card.GROUNDED_LISTS:
+            self.assertEqual(stored[f"{key}_support"], {"type": "strings", "max_items": stored[key]["max_items"], "max": cardmake.SUPPORT_CHARS})
         self.assertIsNotNone(cardmake.EARLIER_JOB.check)
+
+    def test_a_reply_with_the_support_in_each_item_reads_to_the_values_the_old_shape_gave(self):
+        stored = answer(caveats=["the notes are short"], caveats_support=["1.1"])
+        checked = models._check_answer(json.dumps(wire(stored)), cardmake.EARLIER_JOB.shape)
+        self.assertEqual(checked, stored)
+        cardmake.EARLIER_JOB.check(checked)
+        again = models._check_answer(json.dumps(checked), cardmake.EARLIER_JOB.stored_shape)   # what a saved answer goes through
+        self.assertEqual(again, stored)
+        more = round_reply(topics=["tight bound sides"], topics_support=["2.1"], key_ideas=["a looser bound"], key_ideas_support=["2.1"])
+        values = models._check_answer(json.dumps(wire(more)), cardmake.MORE_JOB.shape)
+        self.assertEqual(values, more)
+        self.assertEqual(models._check_answer(json.dumps(values), cardmake.MORE_JOB.stored_shape), more)
+
+    def test_the_model_part_of_a_card_has_its_keys_in_the_order_of_the_card_shape_as_before(self):
+        # the card file is written in this order: the lists must not move to the end because they are now written as items
+        keys = [k for k in cardmake.EARLIER_JOB.shape if k != "neutral_limits_support"]
+        self.assertEqual(keys, list(card.MODEL_SHAPE_GROUNDED))
+        values = models._check_answer(json.dumps(wire(answer())), cardmake.EARLIER_JOB.shape)
+        self.assertEqual([k for k in values if not k.endswith("_support")], list(card.MODEL_SHAPE_GROUNDED))
+
+    def test_a_saved_answer_of_a_job_with_items_keeps_the_texts_and_the_supports_together_even_with_no_check_of_the_job(self):
+        spec = {"type": "items", "max_items": 3, "max": 20, "support_max": 10}
+        plain, optional = models.Job("probe-try", "v1", {"a": spec}), models.Job("probe-try", "v1", {"a": dict(spec, optional=True)})
+        ok = {"a": ["x", "y"], "a_support": ["1", "2"]}
+        self.assertEqual(cardmake._recheck(plain, ok), ok)
+        self.assertEqual(cardmake._recheck(optional, ok), ok)
+        self.assertEqual(cardmake._recheck(optional, {}), {})   # an optional list that was absent is absent in both
+        for job, bad in ((plain, {"a": ["x", "y"], "a_support": ["1"]}), (plain, {"a": ["x"], "a_support": ["1", "2"]}),
+                         (optional, {"a": ["x"]}), (optional, {"a_support": ["1"]}), (optional, {"a": ["x", "y"], "a_support": ["1"]}),
+                         (optional, {"a": []}), (optional, {"a_support": []})):   # one list present and empty: the other is not there
+            with self.subTest(bad=bad), self.assertRaises(cardmake.JournalFault):
+                cardmake._recheck(job, bad)
+
+    def test_the_sentence_form_keeps_its_job_with_the_support_lists_beside_the_lists(self):
+        self.assertEqual(cardmake.CARD_JOB.prompt_version, "v6")
+        self.assertEqual(cardmake.CARD_JOB.shape["topics"]["type"], "strings")
+        self.assertIn("topics_support", cardmake.CARD_JOB.shape)
+        self.assertEqual(cardmake.CARD_JOB.stored_shape, cardmake.CARD_JOB.shape)
+
+    def test_the_second_round_asks_for_the_topics_and_the_key_ideas_with_their_supports_and_nothing_else(self):
+        shape, stored = cardmake.MORE_JOB.shape, cardmake.MORE_JOB.stored_shape
+        self.assertEqual(set(shape), {"topics", "key_ideas"})
+        self.assertEqual({k: v["type"] for k, v in shape.items()}, {"topics": "items", "key_ideas": "items"})
+        self.assertEqual(set(stored), {"topics", "topics_support", "key_ideas", "key_ideas_support"})
+        self.assertEqual((shape["topics"]["max_items"], shape["key_ideas"]["max_items"]), (12, 6))
+        self.assertEqual(cardmake.MORE_FIELDS, ("topics", "key_ideas"))
 
     def test_the_jobs_are_the_kinds_of_work_the_engine_knows(self):
         self.assertEqual({cardmake.EARLIER_JOB.name, cardmake.NOTES_JOB.name, cardmake.check_job(1).name, cardmake.MORE_JOB.name}, set(models.TASKS))
 
     def test_each_job_has_a_prompt_version(self):
-        self.assertEqual((cardmake.EARLIER_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v4", "v3"))
+        self.assertEqual((cardmake.EARLIER_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version, cardmake.MORE_JOB.prompt_version),
+                         ("v5", "v3", "v2"))
 
     def test_the_prompts_ask_for_fewer_items_than_the_limits_so_a_small_overshoot_still_passes(self):
         shape = cardmake.EARLIER_JOB.shape
@@ -1291,9 +1394,11 @@ class JobTest(unittest.TestCase):
         self.assertIn("never more", notes.lower())
 
     def test_the_schema_files_agree_with_the_shapes(self):
+        item = {"type": "object", "properties": {"text": {"type": "string"}, "support": {"type": "string"}}, "required": ["text", "support"],
+                "additionalProperties": False}
         kinds = {"string": {"type": "string"}, "strings": {"type": "array", "items": {"type": "string"}},
-                 "integer": {"type": "integer"}, "boolean": {"type": "boolean"}}
-        for job in (cardmake.EARLIER_JOB, cardmake.NOTES_JOB, cardmake.check_job(1)):
+                 "integer": {"type": "integer"}, "boolean": {"type": "boolean"}, "items": {"type": "array", "items": item}}
+        for job in (cardmake.EARLIER_JOB, cardmake.MORE_JOB, cardmake.NOTES_JOB, cardmake.check_job(1)):
             with self.subTest(job=job.name):
                 path = os.path.join(models._project_root(), *models.SCHEMA_DIR, job.schema)
                 with open(path) as f:
@@ -1306,7 +1411,7 @@ class JobTest(unittest.TestCase):
                     self.assertEqual(schema["properties"][key], kinds[spec["type"]], key)
 
     def test_the_schema_files_pass_the_check_of_the_model_layer(self):
-        for job in (cardmake.EARLIER_JOB, cardmake.NOTES_JOB, cardmake.check_job(1)):
+        for job in (cardmake.EARLIER_JOB, cardmake.MORE_JOB, cardmake.NOTES_JOB, cardmake.check_job(1)):
             self.assertEqual(models._schema_path(models._project_root(), job.schema), "engine/kb/schemas/" + job.schema)
 
 
@@ -1324,7 +1429,7 @@ class RetryTest(Base):
     the second answer is refused too."""
 
     IDENTITY = {"book_id": BOOK_ID, "version_id": "v1", "conversion": None}
-    BAD_CARD = dict(CARD, topics_support=["inferred"])   # two topics and one support: refused
+    BAD_CARD = dict(CARD, bogus="x")   # a key that was not asked for: refused
     BAD_NOTES = {"points": NOTES["points"], "quotes": NOTES["quotes"][:1]}
 
     def conv(self):
@@ -1345,7 +1450,7 @@ class RetryTest(Base):
         self.assertEqual(len(seen), 1)
         self.assertIsInstance(seen[0], models.AnswerRefused)
         self.assertEqual(seen[0].job, "card")
-        self.assertIn("topics and topics_support", str(seen[0]))
+        self.assertIn("not asked for", str(seen[0]))
 
     def test_the_second_prompt_is_the_first_with_one_more_marked_section_that_holds_the_reason(self):
         self.make(reply(NOTES), reply(self.BAD_CARD), reply(CARD))
@@ -1353,7 +1458,7 @@ class RetryTest(Base):
         a, b = any_sections(first), any_sections(second)
         self.assertEqual([x[0] for x in b], [x[0] for x in a] + ["LAST REFUSAL"])
         self.assertEqual([(x[0], x[2]) for x in b[:-1]], [(x[0], x[2]) for x in a])
-        self.assertIn("topics and topics_support", b[-1][2])
+        self.assertIn("not asked for", b[-1][2])
         self.assertNotIn(b[-1][1], first)                  # the token of the new section is not in the first prompt
         self.assertNotEqual(b[-1][1], a[0][1])
         self.assertIn("this is data", second)              # the prompt says that the section is data
@@ -1417,7 +1522,7 @@ class RetryTest(Base):
         card_reply = answer(topics=[f"early rule {n}" for n in range(12)], topics_support=["1.1"] * 12)
         replies = [reply(n) for n in GroundedCardTest.NOTES_REPLIES] + [
             reply(card_reply), verdicts(*["supports"] * 10), verdicts(*["supports"] * 6),
-            reply(round_reply(topics=["tight bound sides"], topics_support=[])),
+            reply(dict(round_reply(topics=["tight bound sides"], topics_support=["2.1"]), bogus="x")),
             reply(round_reply(topics=["tight bound sides"], topics_support=["2.1"])), verdicts("supports")]
         out, seen = self.make(*replies, cfg=cfg, conv=conversion(*[block(x) for x in GroundedCardTest.TEXTS]))
         self.assertEqual([r.job for r in seen], ["card-more"])

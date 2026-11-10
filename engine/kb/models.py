@@ -585,8 +585,10 @@ def embed(cfg, name, texts, launcher=None, root=None, kind="document"):
 
 
 _TYPE_KEYS = {"string": {"type", "max", "optional"}, "strings": {"type", "min_items", "max_items", "max", "optional"},
-              "integer": {"type", "low", "high", "optional"}, "boolean": {"type", "optional"}}
-_NEEDED = {"string": ("max",), "strings": ("max_items", "max"), "integer": ("low", "high"), "boolean": ()}
+              "integer": {"type", "low", "high", "optional"}, "boolean": {"type", "optional"},
+              "items": {"type", "min_items", "max_items", "max", "support_max", "optional"}}
+_NEEDED = {"string": ("max",), "strings": ("max_items", "max"), "integer": ("low", "high"), "boolean": (),
+           "items": ("max_items", "max", "support_max")}
 
 
 def _spec(field, spec):
@@ -605,6 +607,8 @@ def _spec(field, spec):
         raise KbError(f"the shape of {field}: optional is true or false")
     if "max" in spec and not _count(spec["max"], 1, MAX_REPLY):
         raise KbError(f"the shape of {field}: max is a whole number from 1 to {MAX_REPLY}")
+    if "support_max" in spec and not _count(spec["support_max"], 1, MAX_REPLY):
+        raise KbError(f"the shape of {field}: support_max is a whole number from 1 to {MAX_REPLY}")
     if "max_items" in spec and not _count(spec["max_items"], 0, _LIMIT):
         raise KbError(f"the shape of {field}: max_items is a whole number from 0 to {_LIMIT}")
     if "min_items" in spec and not _count(spec["min_items"], 0, spec["max_items"]):
@@ -613,6 +617,22 @@ def _spec(field, spec):
                                   and spec["low"] <= spec["high"]):
         raise KbError(f"the shape of {field}: low and high are whole numbers with low not above high")
     return dict(spec)
+
+
+def _stored_shape(shape):
+    """The shape of the values a reply gives: the same as the shape of the reply, except that a list of `items` is two lists of strings,
+    the texts under its name and the supports under its name with `_support`. A saved answer is checked against this shape."""
+    stored = {}
+    for field, spec in shape.items():
+        if spec["type"] != "items":
+            stored[field] = dict(spec)
+            continue
+        if f"{field}_support" in shape:
+            raise KbError(f"the shape has {field}_support, which the items of {field} already give")
+        extra = {k: spec[k] for k in ("min_items", "optional") if k in spec}
+        stored[field] = {"type": "strings", "max_items": spec["max_items"], "max": spec["max"], **extra}
+        stored[f"{field}_support"] = {"type": "strings", "max_items": spec["max_items"], "max": spec["support_max"], **extra}
+    return stored
 
 
 class Job:
@@ -636,6 +656,7 @@ class Job:
         self.name = name
         self.prompt_version = prompt_version
         self.shape = {field: _spec(field, spec) for field, spec in shape.items()}
+        self.stored_shape = _stored_shape(self.shape)
         self.schema = schema
         self.check = check
 
@@ -683,6 +704,30 @@ def _value(field, value, spec):
     return value
 
 
+def _items(field, value, spec):
+    """The texts and the supports of a list of items, each an object with exactly a `text` and a `support`, in the same order: the two
+    lists are as long as each other because each item holds both. A refusal names the field and the kind of fault."""
+    if not isinstance(value, list):
+        raise KbError(f"the answer's {field} is not a list")
+    if len(value) > spec["max_items"]:
+        raise KbError(f"the answer's {field} has more than the {spec['max_items']} items allowed")
+    if len(value) < spec.get("min_items", 0):
+        raise KbError(f"the answer's {field} has fewer than the {spec['min_items']} items required")
+    texts, supports = [], []
+    for item in value:
+        if not isinstance(item, dict):
+            raise KbError(f"the answer's {field} has an item that is not an object with a text and a support")
+        for key in item:
+            if key not in ("text", "support"):
+                raise KbError(f"the answer's {field} has an item with a key that was not asked for: {textutil.literal(key, 40)}")
+        for key in ("text", "support"):
+            if key not in item:
+                raise KbError(f"the answer's {field} has an item with no {key}")
+        texts.append(_text(field, item["text"], {"max": spec["max"]}))
+        supports.append(_text(f"{field} support", item["support"], {"max": spec["support_max"]}))
+    return texts, supports
+
+
 def _check_answer(text, shape):
     """The values of the JSON object in `text`, if it has exactly the shape `shape` asks for. Text is cleaned, a value is refused
     and not cut when it is too long (checked before cleaning), and a refusal names the key and the kind of fault and quotes no
@@ -692,14 +737,17 @@ def _check_answer(text, shape):
         raise KbError("the answer is not one JSON object")
     for key in doc:
         if key not in shape:
-            raise KbError(f"the answer has a key that was not asked for: {textutil.clean(key, 40)!r}")
+            raise KbError(f"the answer has a key that was not asked for: {textutil.literal(key, 40)}")   # as written, not cleaned: a key must not read as a known one
     values = {}
     for field, spec in shape.items():
         if field not in doc:
             if spec.get("optional"):
                 continue
             raise KbError(f"the answer lacks {field}")
-        values[field] = _value(field, doc[field], spec)
+        if spec["type"] == "items":   # the values are the two lists that the rest of the program reads: the texts, and their supports
+            values[field], values[f"{field}_support"] = _items(field, doc[field], spec)
+        else:
+            values[field] = _value(field, doc[field], spec)
     return values
 
 

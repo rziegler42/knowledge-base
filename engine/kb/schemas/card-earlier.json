@@ -13,7 +13,20 @@
     "topics": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "support": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "support"
+        ],
+        "additionalProperties": false
       }
     },
     "adjacent_topics": {
@@ -25,7 +38,20 @@
     "key_ideas": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "support": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "support"
+        ],
+        "additionalProperties": false
       }
     },
     "neutral_problem": {
@@ -46,25 +72,20 @@
     "caveats": {
       "type": "array",
       "items": {
-        "type": "string"
-      }
-    },
-    "topics_support": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "key_ideas_support": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "caveats_support": {
-      "type": "array",
-      "items": {
-        "type": "string"
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "support": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "support"
+        ],
+        "additionalProperties": false
       }
     },
     "neutral_limits_support": {
@@ -83,9 +104,6 @@
     "neutral_provides",
     "neutral_limits",
     "caveats",
-    "topics_support",
-    "key_ideas_support",
-    "caveats_support",
     "neutral_limits_support"
   ],
   "additionalProperties": false

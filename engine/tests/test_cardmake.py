@@ -1089,9 +1089,14 @@ class GroundedCardTest(Base):
 
 
 def round_reply(topics=(), topics_support=None, key_ideas=(), key_ideas_support=None):
-    """A reply to the call of the second round."""
-    return {"topics": list(topics), "topics_support": list(topics_support if topics_support is not None else []),
-            "key_ideas": list(key_ideas), "key_ideas_support": list(key_ideas_support if key_ideas_support is not None else [])}
+    """A reply to the call of the second round: each topic and key idea is an object with its text and its support. Lists of different
+    lengths cannot be written that way, so asking for them is an error of the test."""
+    topics_support = list(topics_support) if topics_support is not None else []
+    key_ideas_support = list(key_ideas_support) if key_ideas_support is not None else []
+    if len(topics) != len(topics_support) or len(key_ideas) != len(key_ideas_support):
+        raise AssertionError("a reply of the second round cannot be written with a support list of another length")
+    return {"topics": [{"text": t, "support": s} for t, s in zip(topics, topics_support)],
+            "key_ideas": [{"text": t, "support": s} for t, s in zip(key_ideas, key_ideas_support)]}
 
 
 class SecondRoundTest(Base):
@@ -1230,10 +1235,16 @@ class SecondRoundTest(Base):
                 self.assertNotIn("added", out["grounding"])
                 self.assertIn("support", out["more"]["reason"])
 
-    def test_a_round_whose_lists_do_not_match_is_refused_and_the_card_is_kept(self):
-        out = self.make(self.full_topics(), self.full_checks(), round_reply(topics=["tight bound sides"], topics_support=[]))
-        self.assertEqual(out["more"]["status"], "refused")
-        self.assertEqual(len(out["model"]["topics"]), 12)
+    def test_a_round_in_the_old_shape_or_with_an_item_that_has_no_support_is_refused_and_the_card_is_kept(self):
+        bad = {"old shape": {"topics": ["tight bound sides"], "topics_support": ["2.1"], "key_ideas": [], "key_ideas_support": []},
+               "no support": {"topics": [{"text": "tight bound sides"}], "key_ideas": []},
+               "a bare text": {"topics": ["tight bound sides"], "key_ideas": []}}
+        for label, more in bad.items():
+            with self.subTest(label):
+                self.setUp()
+                out = self.make(self.full_topics(), self.full_checks(), more)
+                self.assertEqual(out["more"]["status"], "refused")
+                self.assertEqual(len(out["model"]["topics"]), 12)
 
     def test_a_round_that_cannot_be_made_leaves_the_card_as_it_was(self):
         out = self.make(self.full_topics(), self.full_checks(), failure())

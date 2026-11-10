@@ -46,7 +46,10 @@ else:
     if kind in ("card.json", "card-earlier.json") and left:
         plan["bad_card"][title] = left - 1
         json.dump(plan, open(os.path.join(here, "plan.json"), "w"))
-        answer["topics_support"] = ["1.1"]  # not the length of the topics: a reply that is refused
+        if kind == "card-earlier.json":
+            answer["bogus"] = 1  # a key that was not asked for: a reply that is refused
+        else:
+            answer["topics_support"] = ["1.1"]  # not the length of the topics: a reply that is refused
 sys.stdout.write(json.dumps({"contract": 2, "ok": True, "vendor": "ollama", "model": "m1:latest", "reply": json.dumps(answer),
                              "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": None, "cached_input_tokens": None,
                                        "reasoning_output_tokens": None}}))
@@ -58,12 +61,15 @@ CARD = {"useful_for": ["finding a stopping rule"], "topics": ["stopping rule", "
         "adjacent_topics": ["search"], "key_ideas": ["stopping rule studied", "rule of stopping", "stopping early rule"],
         "caveats": [], "topics_support": ["1.1", "1.1"], "key_ideas_support": ["1.1", "1.1", "1.1"], "caveats_support": [],
         "sentence_fields": ["limits"], "sentences": ["stopping rule only"], "sentences_support": ["1.1"]}
-EARLIER_CARD = {"summary": "A short summary of the work.", "useful_for": ["finding a stopping rule"], "topics": ["stopping rule", "early rule"],
-                "adjacent_topics": ["search"], "key_ideas": ["stopping rule studied", "rule of stopping", "stopping early rule"],
+# the reply of the earlier form as the model writes it: each topic and key idea is an object with its text and its support
+EARLIER_CARD = {"summary": "A short summary of the work.", "useful_for": ["finding a stopping rule"],
+                "topics": [{"text": "stopping rule", "support": "1.1"}, {"text": "early rule", "support": "1.1"}],
+                "adjacent_topics": ["search"],
+                "key_ideas": [{"text": "stopping rule studied", "support": "1.1"}, {"text": "rule of stopping", "support": "1.1"},
+                              {"text": "stopping early rule", "support": "1.1"}],
                 "neutral_problem": "deciding when to stop", "neutral_approach": "compare a running score with a threshold",
                 "neutral_needs": "a stream of observations", "neutral_provides": "a stopping time", "neutral_limits": "stopping rule only",
-                "caveats": [], "topics_support": ["1.1", "1.1"], "key_ideas_support": ["1.1", "1.1", "1.1"], "caveats_support": [],
-                "neutral_limits_support": "1.1"}
+                "caveats": [], "neutral_limits_support": "1.1"}
 SERVERS = {"notes": "srv-n", "cardm": "srv-c", "checker": "srv-k", "morem": "srv-m"}
 
 

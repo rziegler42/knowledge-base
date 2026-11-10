@@ -135,7 +135,16 @@ CARD_JOB = models.Job("card", "v6", CARD_SHAPE, schema="card.json", check=_check
 # plain text, and only the lists and the limit are marked. It is brought back as a form of the same call, chosen by the caller.
 FORMS = cardstate.FORMS
 DEFAULT_FORM = "earlier"   # the form of the commands (the owner decided on 2026-11-09); the functions below default to the sentence form
-EARLIER_SHAPE = {**card.MODEL_SHAPE_GROUNDED, **SUPPORT_SHAPE, "neutral_limits_support": {"type": "string", "max": SUPPORT_CHARS}}
+def _items_spec(field):
+    """The shape of a list of items that each hold their support: the limits of the list are those of the field of the card."""
+    spec = card.MODEL_SHAPE_GROUNDED[field]
+    return {"type": "items", "max_items": spec["max_items"], "max": spec["max"], "support_max": SUPPORT_CHARS}
+
+
+# the model writes each topic, key idea and caveat with its support in one object, so lists of different lengths cannot be written; the
+# values the rest of the card code gets are the same two lists as ever (`Job.stored_shape` is the old shape)
+EARLIER_SHAPE = {**{k: (_items_spec(k) if k in card.GROUNDED_LISTS else v) for k, v in card.MODEL_SHAPE_GROUNDED.items()},   # in the order of the card
+                 "neutral_limits_support": {"type": "string", "max": SUPPORT_CHARS}}
 
 
 def _check_support_earlier(values):
@@ -149,7 +158,7 @@ def _check_support_earlier(values):
     parse_support(values["neutral_limits_support"])
 
 
-EARLIER_JOB = models.Job("card", "v4", EARLIER_SHAPE, schema="card-earlier.json", check=_check_support_earlier)
+EARLIER_JOB = models.Job("card", "v5", EARLIER_SHAPE, schema="card-earlier.json", check=_check_support_earlier)
 
 
 def check_form(form):
@@ -167,10 +176,8 @@ MORE_FIELDS = ("topics", "key_ideas")   # the lists that a second round serves
 MORE_ASKED = {"topics": 8, "key_ideas": 4}   # the most items the second round is asked for, for a list (and never more than its free places)
 CEILING = {field: card.MODEL_SHAPE_GROUNDED[field]["max_items"] for field in MORE_FIELDS}
 REPEAT_SHARE = 0.75      # an item whose content words are this share of the fewer of its own and an other item's is a repeat of it
-MORE_SHAPE = {"topics": {"type": "strings", "max_items": 12, "max": 60},
-              "topics_support": {"type": "strings", "max_items": 12, "max": SUPPORT_CHARS},
-              "key_ideas": {"type": "strings", "max_items": 6, "max": 300},
-              "key_ideas_support": {"type": "strings", "max_items": 6, "max": SUPPORT_CHARS}}
+MORE_SHAPE = {"topics": {"type": "items", "max_items": 12, "max": 60, "support_max": SUPPORT_CHARS},
+              "key_ideas": {"type": "items", "max_items": 6, "max": 300, "support_max": SUPPORT_CHARS}}
 
 
 def _check_more(values):
@@ -185,7 +192,7 @@ def _check_more(values):
                               f"{textutil.literal(text, 40)}")
 
 
-MORE_JOB = models.Job("card-more", "v1", MORE_SHAPE, schema="card-more.json", check=_check_more)
+MORE_JOB = models.Job("card-more", "v2", MORE_SHAPE, schema="card-more.json", check=_check_more)
 
 CHECK_BATCH = 10         # the items that cite a note are checked this many to a call
 VERDICTS = ("supports", "partly", "no")
@@ -408,8 +415,9 @@ def _card_prompt_earlier(title, outline_text, parts, kind):
              f"- \"caveats\": up to {ASKED['caveats']} short notes on limits of this {w} as a source, such as missing or garbled parts, "
              f"its date or its evidence. A caveat must be about this {w}; never write one that would hold for any {w}, such as that "
              "details are sparse.\n"
-             "- \"topics_support\", \"key_ideas_support\" and \"caveats_support\": lists of the same length as topics, key_ideas and "
-             "caveats, in the same order. \"neutral_limits_support\": one value. Each value says what supports the item: the one or two "
+             "- \"topics\", \"key_ideas\" and \"caveats\" are each a list of objects, one object for each item, with exactly two keys: "
+             "\"text\", the item, and \"support\", what supports it. \"neutral_limits_support\": one value, written as a support is. "
+             "A support says what supports the item: the one or two "
              "notes that best state it, separated by spaces, such as \"1.1 3.2\" (do not cite a note that is only loosely related; an item "
              "is kept only if a verified note that bears on it supports it, and a check of the note and the item decides); or the word "
              "\"inferred\" if no note states it and it is your own inference from them; "
@@ -635,10 +643,10 @@ def more_prompt(title, outline_text, parts, model, wanted, kind="book"):
              f"title, the outline of its headings, notes made earlier on each piece of it, and the items that the card already holds "
              f"(KEPT).\n{_DATA}\nWrite in English, whatever the language of the source.\nEach note is a line like \"- [2.1 verified] a "
              "point\": 2.1 is its number, and verified means that the quote behind the point was found in the text, unverified that it "
-             "was not.\nReply with one JSON object with exactly the keys \"topics\", \"topics_support\", \"key_ideas\" and "
-             "\"key_ideas_support\" and no others:\n" + "\n".join(asks) + "\nGive only an item that is not on the card yet and is not "
-             "a restatement of one that is; give fewer, or none, if the notes state nothing more. \"topics_support\" and "
-             "\"key_ideas_support\" are lists of the same length as their lists, in the same order. Each value is the one or two "
+             "was not.\nReply with one JSON object with exactly the keys \"topics\" and \"key_ideas\" and no others, each a list of "
+             "objects, one object for each item, with exactly two keys: \"text\", the item, and \"support\", what supports it:\n"
+             + "\n".join(asks) + "\nGive only an item that is not on the card yet and is not "
+             "a restatement of one that is; give fewer, or none, if the notes state nothing more. A support is the one or two "
              "numbers of the notes that best state the item, separated by spaces, such as \"1.1 3.2\". Cite only a note that is marked "
              "verified and that bears on the item. Never write inferred or none: give an item only if a verified note states it, since "
              "an item is kept only if a check of the note and the item confirms it.\n"
@@ -703,13 +711,17 @@ def _recheck(job, values):
     """The values of a call that was saved, checked again against the shape and the check of the job, as a reply would be; a refusal
     if they are not exactly what a reply would have given."""
     try:
-        checked = models._check_answer(json.dumps(values), job.shape)
+        checked = models._check_answer(json.dumps(values), job.stored_shape)   # saved values are in the stored form, not in the form of a reply
         if job.check is not None:
             job.check(checked)
     except (KbError, TypeError, ValueError, RecursionError):
         raise JournalFault("the saved state of the card holds an answer that is not valid") from None
     if checked != values:
         raise JournalFault("the saved state of the card holds an answer that is not in its clean form")
+    for field, spec in job.shape.items():   # a list of items is saved as two lists that a reply could not have given apart or unequal
+        if spec["type"] == "items" and ((field in checked) != (f"{field}_support" in checked)
+                                         or len(checked.get(field, ())) != len(checked.get(f"{field}_support", ()))):
+            raise JournalFault("the saved state of the card holds an answer whose items and supports do not go together")
     return checked
 
 

@@ -256,3 +256,57 @@ A second round has not been asked for.
   section, and the next answer passes the same checks as any other, so no new privileged use is reached; the reviewer rated the
   exposure low and its one unnamed route was closed. The owner took the recommendation (2026-11-10): no security review; none was run.
   The question is asked again in Increment B, which adds a reader for a nested reply.
+
+### Increment B — The support written with its item
+
+- **Done.** `engine/kb/models.py` has a new shape type, `items`: a list of objects that each hold exactly a `text` and a `support`
+  (`_items`), which `_check_answer` reads into the two lists the rest of the program has always had, the texts under the key and the
+  supports under the key with `_support`; so two lists of different lengths cannot be written. Each `Job` also has a `stored_shape`
+  (the shape of those values, with each `items` field as two lists of strings), and a shape that already has `{field}_support` beside
+  an `items` field is refused. In `engine/kb/cardmake.py` the earlier card call (`EARLIER_JOB`, now `v5`) takes `topics`, `key_ideas` and
+  `caveats` as `items`, in the order of the card's own shape, and the second round (`MORE_JOB`, now `v2`) takes `topics` and `key_ideas`
+  as `items` (it has no caveats); their prompts say so and no longer ask for a support list; `_recheck` checks a saved journal answer
+  against `job.stored_shape`. `engine/kb/schemas/card-earlier.json` and `card-more.json` describe the nested items. The sentence form's
+  card call (`v6`, `card.json`) is unchanged; its second round is the same job and uses the new shape. `engine/README.md` says so.
+- **Stop condition.** It did not apply. `pairs`, `ground`, `unpaired`, `_check_support_earlier`, `_check_more`, `second_round`, the
+  journal's saved values and `card.py` receive and store exactly the values they did; their length checks stay (always true for a fresh
+  reply, still the guard for a saved answer).
+- **Deviations.** (1) The `stored_shape` of a job is new and not named in the plan; step 1 found it necessary, because `_recheck`
+  validates a saved answer by running it through `_check_answer` with the job's shape, which would refuse the stored form of a job whose
+  reply shape is nested. (2) `engine/tests/test_cardqueue.py` is changed though B's Affected areas do not list it: its fake launcher
+  answers the earlier card in the new form and makes a refusal with an unknown key (it could no longer write lists of different
+  lengths). (3) The tests of the earlier form write a reply in the stored form and a helper `wire` makes the nested form (it raises if the
+  lists differ in length); about ten older tests that built lists of different lengths or asserted the old shapes, prompts and versions
+  were rewritten to what is now true or refused: a reply in the old shape, an item with no support, a bare text. (4) The second round's limits (12 topics of 60 characters, 6 key ideas of 300) are
+  the ones it had; the reviewer asked, and I read the old `MORE_SHAPE` to confirm.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest` on `test_cardmake_earlier`, `test_cardmake`, `test_card`,
+  `test_cardstate`, `test_cardqueue`, `test_cardsample`, `test_catalog`, `test_models`: 900 tests, OK (after the two fixes below); `wb run
+  code-work check`: no problems.
+  The new tests were seen to fail first (12 in `test_models` for the unknown type, and 80 of the card tests when the nested reply met
+  the old code). 19 deliberate breaks, each from green (a support dropped and read as none, supports in reverse order, the old shape still
+  accepted, the number of items unchecked, the stored lists of different lengths, a text uncleaned, a missing support accepted, an extra
+  key allowed, the stored shape not made, the name clash not refused, the support limit not required, a saved answer checked against
+  the reply shape, the prompt versions not raised, each prompt still asking for support lists, the sentence form moved to the new
+  shape, the two schema files in the old shape) were each caught; two were first missed or invalid (the second round's prompt had no
+  test of its text; one edit referred to a name defined later) and were fixed. The keys out of the card's order was not run as a
+  break: its test was seen to fail before the fix. No call was made to a model server.
+- **Review.** Independent `reviewer`, one exchange, no blocking finding. Applied: the order of the keys of the earlier shape (the three
+  lists had moved to the end, which would have changed the key order in the card file; values were equal), now in the card's own order
+  and tested. Not changed: the length checks that are now always true. It could not read the diff of the older tests, run anything, or
+  know whether the server accepts a nested schema; the last is Increment D's to find out (the schema has no length limits, which the
+  reader keeps).
+- **Security review checkpoint.** Asked, with a recommendation to run one (a new parser of a model's nested reply, the surface the plan
+  set aside for this question). The owner said yes (2026-11-10), and the `security-reviewer` ran on a copy with a fake launcher and no
+  real server. Result: no Critical, High or Medium finding. Tested and found sound: hostile replies (nesting to the 256 KB cap, a list of
+  8,000 items, a 262,000-character string, duplicate keys at every level, NaN and huge numbers, items of every wrong type, lookalike and
+  hostile keys such as `Text`, a Cyrillic `е`, a zero-width character, a null byte, `__proto__`), all refused in 0.02 s or less at about
+  57 MB; the stored form and the reply form cannot be confused (a reply that carries a support list is refused as an unknown key); a saved
+  answer is checked as strictly as a reply by `_recheck`; the name-clash check; the retry prompt with ten hostile keys (always ASCII,
+  at most 300 characters, one line, one section with a fresh token that cannot be closed or forged); no unbounded model text in a
+  message. Two Low findings, both fixed with a test that failed first and a break that is caught: (1) a refusal for an unknown key quoted
+  it cleaned, so a key such as `text ` read as the known key `text` and the retry note could not be understood (now quoted as an ASCII
+  literal); (2) nothing enforced that the two saved lists of an `items` field go together for a job with no check of its own (none exists
+  today; `_recheck` now refuses one list alone or lists of different lengths). One Info: up to 40 characters of the model's own key
+  reach its retry prompt, in a data section; that is persuasion of the same model, not a parser bypass. A second independent `reviewer`
+  looked at the two fixes and found nothing blocking. Limits of the evidence: the fake launcher only (no real server, no `wb` bridge),
+  `make_model_part` was not run end to end with a journal on disk by the security reviewer, and the CLI display code was not read.

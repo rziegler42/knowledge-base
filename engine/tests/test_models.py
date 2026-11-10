@@ -604,6 +604,116 @@ class JobTest(Base):
         self.assertEqual(got["record"]["prompt_version"], "card.v2-b")
 
 
+ITEMS_SHAPE = {"summary": {"type": "string", "max": 200},
+               "topics": {"type": "items", "max_items": 3, "max": 20, "support_max": 12},
+               "ideas": {"type": "items", "max_items": 2, "max": 30, "support_max": 12, "min_items": 0}}
+ITEMS_REPLY = {"summary": "S.", "topics": [{"text": "a", "support": "1.1"}, {"text": "b", "support": "inferred"}],
+               "ideas": [{"text": "c", "support": "2.1 3.2"}]}
+ITEMS_VALUES = {"summary": "S.", "topics": ["a", "b"], "topics_support": ["1.1", "inferred"], "ideas": ["c"], "ideas_support": ["2.1 3.2"]}
+
+
+class ItemsTest(Base):
+    """A list of items that each hold their text and the support for it (`items`): the model writes the support with the item, so two
+    lists of different lengths cannot be written, and the rest of the program gets the two lists it always got."""
+
+    def run_job(self, answer=None, text=None, j=None):
+        self.plan(stdout=json.dumps(dict(GOOD, reply=text if text is not None else json.dumps(ITEMS_REPLY if answer is None else answer))))
+        return models.run_job(config(), "local", "a question", j or job(shape=ITEMS_SHAPE), launcher=self.launcher, root=self.root)
+
+    def bad(self, **kw):
+        with self.assertRaises(models.AnswerRefused) as cm:
+            self.run_job(**kw)
+        return str(cm.exception)
+
+    def test_each_item_is_read_into_the_list_of_texts_and_the_list_of_supports_in_the_same_order(self):
+        self.assertEqual(self.run_job()["values"], ITEMS_VALUES)
+
+    def test_the_two_lists_have_the_same_length_whatever_the_reply(self):
+        for n in range(0, 4):
+            reply = dict(ITEMS_REPLY, topics=[{"text": f"t{i}", "support": f"{i}.1"} for i in range(n)])
+            with self.subTest(n=n):
+                values = self.run_job(answer=reply)["values"]
+                self.assertEqual((len(values["topics"]), len(values["topics_support"])), (n, n))
+
+    def test_the_job_keeps_the_shape_of_the_reply_and_a_stored_shape_of_the_values(self):
+        j = job(shape=ITEMS_SHAPE)
+        self.assertEqual(j.shape["topics"]["type"], "items")
+        self.assertEqual(j.stored_shape["topics"], {"type": "strings", "max_items": 3, "max": 20})
+        self.assertEqual(j.stored_shape["topics_support"], {"type": "strings", "max_items": 3, "max": 12})
+        self.assertEqual(set(j.stored_shape), {"summary", "topics", "topics_support", "ideas", "ideas_support"})
+        plain = job()
+        self.assertEqual(plain.stored_shape, plain.shape)   # a job with no list of items is as it was
+
+    def test_values_in_the_stored_form_pass_the_stored_shape_and_not_the_reply_shape(self):
+        stored = json.dumps(ITEMS_VALUES)
+        self.assertEqual(models._check_answer(stored, job(shape=ITEMS_SHAPE).stored_shape), ITEMS_VALUES)
+        with self.assertRaises(KbError):
+            models._check_answer(stored, job(shape=ITEMS_SHAPE).shape)
+
+    def test_a_reply_in_the_old_shape_is_refused_with_a_plain_reason(self):
+        old = {"summary": "S.", "topics": ["a", "b"], "topics_support": ["1.1", "1.1"], "ideas": ["c"], "ideas_support": ["2.1"]}
+        reason = self.bad(answer=old)
+        self.assertIn("not asked for", reason)           # the key topics_support is not one that was asked for
+        reason = self.bad(answer=dict(ITEMS_REPLY, topics=["a", "b"]))
+        self.assertIn("topics", reason)
+        self.assertIn("object", reason)
+
+    def test_an_item_that_is_not_an_object_with_a_text_and_a_support_is_refused(self):
+        cases = {"a text": ["a"], "a number": [5], "null": [None], "a list": [["a", "1.1"]],
+                 "no support": [{"text": "a"}], "no text": [{"support": "1.1"}], "an extra key": [{"text": "a", "support": "1.1", "x": 1}],
+                 "a support that is a number": [{"text": "a", "support": 1}], "a text that is a list": [{"text": ["a"], "support": "1.1"}],
+                 "an empty text": [{"text": "  ", "support": "1.1"}], "an empty support": [{"text": "a", "support": ""}],
+                 "a support over its limit": [{"text": "a", "support": "1" * 13}], "a text over its limit": [{"text": "a" * 21, "support": "1.1"}]}
+        for label, items in cases.items():
+            with self.subTest(label):
+                self.bad(answer=dict(ITEMS_REPLY, topics=items))
+
+    def test_more_items_than_allowed_and_a_list_that_is_not_a_list_are_refused(self):
+        self.bad(answer=dict(ITEMS_REPLY, topics=[{"text": str(i), "support": "1.1"} for i in range(4)]))
+        self.bad(answer=dict(ITEMS_REPLY, topics={"text": "a", "support": "1.1"}))
+        self.bad(answer=dict(ITEMS_REPLY, topics="a"))
+
+    def test_the_text_and_the_support_are_cleaned_like_any_other_text(self):
+        got = self.run_job(answer=dict(ITEMS_REPLY, topics=[{"text": "a\u200bb \x1b[31m", "support": "1.1\u202e"}]))["values"]
+        self.assertEqual((got["topics"], got["topics_support"]), (["ab [31m"], ["1.1"]))
+
+    def test_the_names_of_the_two_lists_are_the_name_and_the_name_with_support(self):
+        clash = {"topics": {"type": "items", "max_items": 3, "max": 20, "support_max": 12}, "topics_support": {"type": "string", "max": 5}}
+        with self.assertRaises(KbError):
+            job(shape=clash)
+
+    def test_a_spec_of_items_needs_its_limits_and_knows_no_other_key(self):
+        for spec in ({"type": "items", "max": 20, "support_max": 12}, {"type": "items", "max_items": 3, "support_max": 12},
+                     {"type": "items", "max_items": 3, "max": 20}, {"type": "items", "max_items": 3, "max": 20, "support_max": 12, "x": 1},
+                     {"type": "items", "max_items": 3, "max": 0, "support_max": 12}, {"type": "items", "max_items": 3, "max": 20, "support_max": 0}):
+            with self.subTest(spec=spec), self.assertRaises(KbError):
+                job(shape={"topics": spec})
+
+    def test_an_item_that_is_a_refusal_carries_the_answer_like_any_other_refusal(self):
+        text = json.dumps(dict(ITEMS_REPLY, topics=["a"]))
+        self.plan(stdout=json.dumps(dict(GOOD, reply=text)))
+        with self.assertRaises(models.AnswerRefused) as cm:
+            models.run_job(config(), "local", "q", job(shape=ITEMS_SHAPE), launcher=self.launcher, root=self.root)
+        self.assertEqual(cm.exception.reply, text)
+
+    def test_a_key_that_looks_like_a_known_one_is_quoted_so_that_it_can_be_told_from_it(self):
+        # `clean` would turn "text " or "te<zero width>xt" into text, and the note to the model would say that the key text was not asked for
+        for key in ("text ", "te\u200bxt", "text\n", "text\x00"):
+            with self.subTest(key=key):
+                reason = self.bad(answer=dict(ITEMS_REPLY, topics=[{key: "a", "support": "1.1"}]))
+                self.assertIn("not asked for", reason)
+                self.assertNotIn("'text'", reason)
+        reason = self.bad(answer=dict(ITEMS_REPLY, **{"summary ": "x"}))   # the same for a key of the whole answer
+        self.assertIn("not asked for", reason)
+        self.assertNotIn("'summary'", reason)
+
+    def test_a_check_of_the_job_gets_the_stored_form(self):
+        seen = []
+        j = job(shape=ITEMS_SHAPE, check=seen.append)
+        self.run_job(j=j)
+        self.assertEqual(seen, [ITEMS_VALUES])
+
+
 class SchemaTest(Base):
     def setUp(self):
         super().setUp()
