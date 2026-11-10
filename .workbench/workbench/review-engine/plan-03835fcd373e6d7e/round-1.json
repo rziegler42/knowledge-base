@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Goal and Assumptions and constraints; Increment B, steps 2–4",
+      "problem": "The proposed `/Length1` test is not a safe discriminator for a font program. This scanner does not parse PDF dictionaries, so an action-bearing non-container stream can include a decoy `/Length1` key and have a non-shaped `/JS` demoted. The planned container-key and `/Type` tests do not cover that case, despite the plan claiming a forged font marker costs an attacker nothing.",
+      "severity": "major",
+      "suggestion": "Define and test a conservative font-program predicate that cannot be satisfied merely by an extra `/Length1` in an arbitrary stream, or retain full-strength findings whenever font identity cannot be established. Add a regression test for a non-container action stream with a decoy `/Length1`."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Goal; Completion criteria 2–3; Increment B, steps 1–3",
+      "problem": "The rule applies to every qualifying font-program stream, but the implementation/testing plan covers only a deflated stream. In the current scanner, an unfiltered non-image stream is left out of `spans` and scanned as file text. Unless the plan explicitly changes that branch too, an unfiltered `/Length1` font stream will still report `javascript`, violating the goal.",
+      "severity": "major",
+      "suggestion": "Specify the handling of unfiltered qualifying font streams, add it to the affected code paths, and add twins for an unfiltered `/Length1` stream (including forged/container and shaped-use cases)."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Increment B, step 2(c) and step 4",
+      "problem": "The assumptions require refusal for both `/Type /ObjStm` and `/Type /XRef`, but the proposed regression and deliberate-break checks cover only `ObjStm`. The stated XRef safeguard would therefore be unverified.",
+      "severity": "major",
+      "suggestion": "Add `/Type /XRef` twins and a deliberate-break assertion that proves the type refusal protects both declared container types."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Completion criterion 4",
+      "problem": "It fixes the before/after difference to the Blei PDF even though Increment A is intended to discover every matching `/Length1` stream across all 40 PDFs. Any additional qualifying chance match would make the plan impossible to complete without changing its approved completion criterion.",
+      "severity": "minor",
+      "suggestion": "Make the expected difference conditional on Increment A’s measured qualifying matches, while recording Blei as the known expected case."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has security and coverage gaps around identifying font streams, plus a completion criterion that is too narrowly predetermined.",
+  "verdict": "changes_needed"
+}
