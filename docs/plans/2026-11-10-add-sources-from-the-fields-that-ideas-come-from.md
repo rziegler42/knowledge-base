@@ -287,3 +287,52 @@ A second round has not been asked for.
   after that, so that the twelve searches are made over the cards the owner wants. The three books that failed are carded again by
   that plan. The 27 cards of this run stay in the library as they are.
 - **Not done:** `card-index`, `card-vectors` and the twelve searches (Increment C); no card was read with `card-show`.
+
+### Increment C — The catalog and the vectors (run, 2026-11-10)
+
+- **Cards at this point.** The plan `2026-11-10-a-choice-of-card-form` carded the books again: 29 of the 30 have a card in the earlier form
+  as their newest generation (26 as generation 2 above the sentence-form generation 1; Sequential analysis, Queueing theory and
+  Stigmergy as generation 1); Newsvendor model failed twice there and has only its sentence-form card (generation 1). The searches below
+  are therefore over earlier-form cards for 29 books and a sentence-form card for 1.
+- **Catalog.** `python3 -m kb card-index`: 110 books, 109 cards, 109 versions with a card, 0 failed (the run of the other plan had
+  already rebuilt it with the same counts).
+- **Vectors.** Before: 78 cards searched, 0 stale, 30 without a vector (found with `vectors.coverage`, which sends nothing). The owner said
+  yes to sending the neutral fields of the new cards (problem, approach, provides) to the embedding model on `ned`, in the clear.
+  `python3 -m kb card-vectors` (4 seconds): 109 cards, 1 with no model fields (a card built from the metadata), 0 left out, 319 vectors,
+  230 kept, 89 made, 89 texts sent, model `qwen3-embedding:4b`, dimension 2560, nothing replaced. (At most 90 texts were expected; one
+  field is empty and nothing is sent for an empty field.) A second `card-vectors` made 0, kept 319 and sent 0 texts. Coverage after: 108
+  cards searched, 0 stale, 0 without a vector.
+- **The twelve searches.** The owner said yes to sending the twelve fixed sentences, one `card-search '<sentence>' --meaning` each, to
+  the embedding model on `ned` (sentence 1 was sent twice, once to see the shape of the output, so 13 sends). The sentences were not
+  changed. Result: **a page of the field is among the first five books for 12 of 12 sentences**; a page of the field is first for 11
+  (sentence 1, statistical physics, has the library's older Simulated annealing page first and Metropolis–Hastings second). The pages of
+  the field found, and the place of the first one:
+
+  | # | Field | Pages of the field among the first five (place) |
+  |---|---|---|
+  | 1 | Statistical physics | Metropolis–Hastings (2) |
+  | 2 | Bandits | Multi-armed bandit (1), Thompson sampling (2) |
+  | 3 | Sequential testing | Sequential probability ratio test (1), Optimal stopping (2), Sequential analysis (3) |
+  | 4 | Foraging | Marginal value theorem (1), Optimal foraging theory (2) |
+  | 5 | Epidemics | Compartmental models (1), Percolation theory (2) |
+  | 6 | Immune systems | Artificial immune system (1) |
+  | 7 | Ant trails | Stigmergy (1), Ant colony optimization (2) |
+  | 8 | Visual cortex | Neocognitron (1), Visual cortex (3) |
+  | 9 | Operations research | Newsvendor model (1), Operations research (2), Queueing theory (3) |
+  | 10 | Discrete mathematics | Combinatorics (1), Graph theory (2), Discrete mathematics (3) |
+  | 11 | Numerical methods | Monte Carlo method (1), Newton's method (3), Numerical analysis (5) |
+  | 12 | Linear algebra | Singular value decomposition (1), Eigenvalues and eigenvectors (2), Linear algebra (5) |
+
+  No sentence missed, so there is no miss to explain. Observations: the scores of the first hit are mostly 0.55 to 0.73, lower for
+  epidemics (0.57, then 0.41), discrete mathematics (0.45) and operations research beyond the Newsvendor model (0.45); new pages of other
+  fields also turn up in the first five (for example Ant colony optimization for the immune sentence, Optimal stopping for bandits and
+  foraging), which is the cross-field result the library was widened for. Newsvendor model, the one page with a sentence-form card, is
+  still found first for its sentence. The searches show that the new pages are found by a description of what they are about; they do not
+  show that a hard transfer would be found, because I wrote each sentence about a page that was in the library.
+- **The corpus of the earlier trial.** `shasum -a 256` of the owner-held file gave `f9bdc6268b6b65bdf0c174236f6370c7314d1051a1bd65a63ac9a3f36e91af67`,
+  the recorded hash. `python3 -m kb trial-problems CORPUS REPORT --check` with that file and a report name that did not exist was
+  accepted: 12 problems (10 positive, 2 controls), every title resolved, 108 cards searched, 0 stale, 0 without a vector, 49 sentences
+  that a full run would send; it made no call and wrote no report (confirmed: no such file). Nothing tracked names the file by path.
+- **Verification as run.** The counts of `card-index` and `card-vectors` above (made 89, kept 230 then 319, second run 0 sent, stale 0);
+  the twelve searches recorded above (scratchpad script, run 2026-11-10 at commit `535a282`); `--check` accepted;
+  `wb run code-work check` after this entry. No code was changed.
