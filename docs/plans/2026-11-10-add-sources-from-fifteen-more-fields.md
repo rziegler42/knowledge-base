@@ -412,3 +412,44 @@ A second round has not been asked for.
   chance. This is the baseline of Increment F: it is recorded before any paper is captured and is not changed.
 - **Verification as run:** the counts of `card-index` and `card-vectors` above (made 180, kept 320 then 500, second run 0 sent, stale 0);
   the fifteen searches recorded; `wb run code-work check` after this entry. No tracked code changed.
+  (Committed as `833842f`.)
+
+### Increment D — The papers (run, 2026-11-10)
+
+- **Checkpoint (step 1).** Before any request the owner was told what the Results of the earlier plans say of the PDF path: the first-slice
+  plan's security review (the sandbox held; one High in the network fetchers, the private-address guard, fixed; a hostile arXiv answer could
+  claim a DOI as an identity key, fixed), the scan-hardening and first-walk-through reviews (one High, a large object stream posing as an
+  image, fixed), the scan-deferred-items review (no way found to hide content from a strict zlib reader; two Low, one fixed, one waiting
+  for the owner), and nine real arXiv papers measured for false alarms; and their stated limits (no real PDF reader, so claims about
+  lenient decoders are models). The recommendation was not to review again, since no code changes here. The owner answered
+  **"No security review"**.
+- **The lookup (step 2).** Seven candidates were looked up by title and authors with a web search (only public titles were sent). Six were
+  found on arXiv with the title named; **the Monasson et al. paper (statistical physics) has no arXiv preprint of that title** (only the
+  Nature version; the nearest arXiv item is a different, later review) and was **dropped, not replaced**. Statistical physics joins the
+  ten fields without a paper: **four fields have papers (Information, Inference, Networks, Signals), eleven do not.** The Newman number was
+  not confirmed on arXiv's own page by the search; the owner approved the list of six on the condition that its title be checked at
+  capture. The owner said **yes**.
+- **The capture (step 3).** `capture-arxiv` for each, one at a time with a pause: all six `filed` (none `held`, none `failed`). The
+  title and authors stored in arXiv's metadata match the titles named for all six, Newman's included, so none was dropped.
+  The snapshot of the library's books was taken before (170 books).
+
+  | Field | Paper (arXiv number) | Book id | PDF bytes | Text chars | Scan caveats |
+  |---|---|---|---|---|---|
+  | Information | The information bottleneck method (physics/0004057) | `01M73JQC5FMY1JBJEWW61V406M` | 136,267 | 26,533 | none |
+  | Inference | Variational Inference: A Review for Statisticians (1601.00670) | `01M73JQHVAQZ0SMY0VM273CGNS` | 1,822,810 | 116,786 | `javascript` (count 1): "The PDF contains scripts." |
+  | Inference | A Conceptual Introduction to Hamiltonian Monte Carlo (1701.02434) | `01M73JQQV5TA621H5KTWTC1VB9` | 1,673,324 | 129,241 | `large_image_streams` (count 2) |
+  | Networks | Emergence of scaling in random networks (cond-mat/9910332) | `01M73JQW939GCQ1N7SHXSRZ401` | 211,825 | 19,805 | none |
+  | Networks | The structure and function of complex networks (cond-mat/0303516) | `01M73JR134RB5TFD5D4DJ3EHN5` | 1,242,567 | 309,195 | `scan_incomplete` (count 1) |
+  | Signals | Robust uncertainty principles (math/0409186) | `01M73JR5VSPN9VZ9KWT5WRK605` | 446,499 | 86,092 | none |
+
+- **The conversion.** `process --book` for the six new ids: scanned, converted and indexed, **18 of 18 stages `done`**, 2 seconds
+  (20:35:39Z). Text by `pdftotext`, in the sandbox.
+- **The caveats, as they stand.** Three of six papers carry one; they are kept on the books and will show on the cards. Not investigated
+  further: the `javascript` caveat of the Blei paper (the file's catalog has an `/OpenAction` that points at object 98, which I did not
+  resolve, and the word `/JavaScript` is not in the plain bytes, so it may be inside a compressed object stream); the earlier plans
+  measured false alarms of this kind on figure-heavy papers. No viewer opened any PDF. This is an observation for the owner, not a finding.
+- **The rest of the library.** The snapshot compared again: **170 books before, 176 now, none of the 170 changed, 6 new.**
+- **Not done, by design.** No card, vector or search yet (E and F). Nothing but the requests to the search service and to arXiv left
+  this machine; no paper text has gone to `ned`.
+- **Verification as run:** the lookup table and the stored metadata compared; the `capture-arxiv` statuses; the `process` report (18 of 18
+  `done`); the snapshot comparison; the scan files read; `wb run code-work check` after this entry. No tracked code changed.
