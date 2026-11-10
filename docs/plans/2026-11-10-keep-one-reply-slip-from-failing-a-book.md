@@ -333,3 +333,34 @@ A second round has not been asked for.
 - **Owner's decision (2026-11-10): option 1.** Increment C is not done. Completion criterion 3 (a note point of 300 characters is
   accepted) is therefore not met by this plan, and the Increment D dependency on C is waived by the owner's choice. The notes job stays at
   `v3` with its limit of 240 characters.
+
+### Increment D — Card Newsvendor model again (run, 2026-11-10)
+
+- **Done.** `cards-queue plan --form earlier --again --book 01M72S10KDCX8GDV97FQE7Z18Q` (run `20261110t175240z-9af4e1`; the plan made no
+  call). The owner said yes to the run after being told what is sent (the text of that one Wikipedia page, in pieces, then the notes
+  and the outline to the card model, the checks and any second round, to the models the config names on the owner's server, over plain
+  HTTP), that any call can now be asked twice, and that it was the first time the server received the nested schema. The run made the card
+  in one pass with no pass-level retry (`attempts` 0): generation 2, in the earlier form, between 17:54:01Z and 17:54:42Z (41 seconds).
+  6 calls were recorded: 1 notes, 1 card (prompt `v5`), 3 checks and 1 second round (`card-more`, prompt `v2`), the same number as the
+  sentence-form card of the book made earlier today.
+- **The server accepted the nested schema.** The card call and the second round, both with the new `card-earlier.json` and
+  `card-more.json`, each came back as an answer that was read: the card holds 6 topics, 2 key ideas and 3 caveats, each with its mark.
+- **The retry was not used.** The folder of kept refused answers held 58 files before the run and 58 after, so no answer was refused
+  in this run. One book and no refusal show that the new shape works against the real server; they do not show how much it lowers the
+  rate of refusals, which needs a larger batch (Deferred work).
+- **The card.** Generation 2 is partial for one reason it states: only 2 key ideas were left after the ones without support were dropped
+  and the second round added what it could, so fewer than 3, and none was added to make up the number. No part is empty (generation 1,
+  the sentence form, was partial with two empty parts, needs and provides). Marks: 8 stated and 3 inferred (generation 1: 8 stated, 0
+  inferred). Read with `card-show`: the summary and the five neutral parts are plain text and read sensibly (a single-period inventory
+  model, the critical fractile, linear costs, perishable goods).
+- **The rest of the library.** The sentence-form card of the book is still generation 1. The catalog read 110 books and 109 cards before
+  and after (the queue rebuilt it). The snapshot comparison of the 80 books that existed before the batch of 30 shows none changed. The
+  other 29 cards of the batch were not touched (the plan names one book).
+- **Not done, and one consequence.** `card-vectors` was not run (it would send the card's three neutral fields to the embedding model).
+  The catalog now holds this card as the newest, so the coverage of the vectors, read without sending anything (`vectors.coverage`), is
+  107 cards searched, 2 stale and 1 without a vector (it was 108, 0 and 0 before this run). A vector that no longer matches the card's
+  text is left out of a search by meaning, so until `card-vectors` is run this one book is missing from that search; the owner decides
+  when to run it (it sends this one card's neutral fields to the embedding model on `ned`).
+- **Verification as run.** `cards-queue status`/the run report (done 1, failed 0, dropped 0, generation 2); the kept-file counts
+  (58, 58); the catalog counts; the snapshot comparison; `card-show`; `wb run code-work check` after this entry: no problems. The
+  card test modules were last run at commit `1c859ec` (900 tests, OK) and no code has changed since.
