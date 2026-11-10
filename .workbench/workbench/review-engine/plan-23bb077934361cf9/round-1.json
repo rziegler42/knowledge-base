@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Goal; Increment D; Deferred work",
+      "problem": "The plan defers every change to cards, display, and search to a follow-up plan, but roadmap candidate `cards#card-inferred-items` says its outcome is that the owner decides and “the cards and the display do that,” with those areas explicitly in its boundary. Completing this plan would therefore leave the named candidate incomplete.",
+      "severity": "major",
+      "suggestion": "Either add a verified implementation increment for the chosen behavior after the owner’s decision, or narrow/split the roadmap candidate so this plan is explicitly only the measurement-and-decision work."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment B, step 2; Increment C; Increment D, step 1",
+      "problem": "The sample is required to contain 60 items per mark across topics and key ideas, but it is not required to stratify the draw by both mark and field. A field/mark combination can consequently be absent or too small, although later steps require shares by mark and field for the owner’s decision.",
+      "severity": "minor",
+      "suggestion": "Specify and test a per-mark, per-field allocation (with a documented fallback where the pool is smaller), or limit the reported and decision-making figures to the aggregate-by-mark results."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The measurement workflow is concrete, but the plan does not fulfill the implementation outcome of its named roadmap candidate; its field-level sampling also needs an explicit allocation rule.",
+  "verdict": "changes_needed"
+}

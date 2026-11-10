@@ -1,0 +1,63 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-10T18:14:12Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "Agreed that finishing this plan leaves the candidate open. The Goal now says it is the first half and the candidate stays open, and criterion 4 requires the Result to say so and name the follow-up plan. I did not add an implementation increment because what it changes depends on the decision, and I did not split the candidate because a roadmap change is the owners to make; I raise it with the owner."
+    },
+    {
+      "at": "2026-11-10T18:14:12Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Specified an equal split of each mark over the fields named, with a reported fallback when a pool is smaller. The allocation is tested and has deliberate breaks, the completion criteria and the figures to the owner are by mark and by field, and the cell interval of about 17 points is stated."
+    }
+  ],
+  "format": 1,
+  "generation": 4,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-10-decide-what-to-do-with-inferred-items.md",
+  "rounds": [
+    {
+      "at": "2026-11-10T18:13:32Z",
+      "bridge": "ask-codex",
+      "document_sha256": "a96da2561289f2ae94ff6c927a11ba7123b08def3e93505d26aa1c89c20474d4",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "minor"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "5cb5fc0068829ebbe70a2e64832415265199d69b2e8cbc09838c816f21aa1a9e",
+      "usage": {
+        "input_tokens": 240571,
+        "output_tokens": 2196,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "20474d6ec61cc1a0c02750c6a27b677fe4c65cdd468d2b13b2bb606c162254b1",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
