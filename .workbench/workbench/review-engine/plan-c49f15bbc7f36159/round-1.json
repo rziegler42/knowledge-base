@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Assumptions and constraints — “The reading, written before any search runs”",
+      "problem": "The decision rule judges P only against T and K; it omits M even though M is one of the four searches the plan is intended to compare. P can therefore be called “enough” while the direct meaning search performs as well or better, so the rule cannot support a conclusion about the added value of problem search.",
+      "severity": "major",
+      "suggestion": "Include M in the comparator (or explicitly justify why it is excluded) and define the conclusion for ties and intermediate results against all relevant baselines."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Assumptions and constraints — “The four searches” and “The measures”",
+      "problem": "The plan gives incompatible ranking rules for P. It says a book’s place over several sub-problems is its smallest place, but also says P uses its books in the order returned. The existing problem-search merged list is ordered by best score, not by smallest per-sub-problem rank, so these can yield different ranks and hit-at-5 outcomes.",
+      "severity": "major",
+      "suggestion": "Specify one P ranking calculation unambiguously, including tie-breaking, and require the command/report to use it consistently."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Goal; Increment C, step 4",
+      "problem": "The plan leaves the owner’s pair-judging decision unrestricted, while the referenced roadmap makes pair-judging dependent on the trial showing that search alone is not enough. The plan’s “enough” outcome can still lead to pair judging, which drifts from the candidate’s dependency.",
+      "severity": "major",
+      "suggestion": "State that pair judging is proposed only when the recorded trial result shows search alone is not enough, or amend the roadmap through the required direction-change process before allowing another condition."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan needs a complete comparison rule, an unambiguous P rank definition, and alignment with the roadmap’s pair-judging dependency.",
+  "verdict": "changes_needed"
+}
