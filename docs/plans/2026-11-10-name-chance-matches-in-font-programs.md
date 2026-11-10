@@ -1,6 +1,6 @@
 # Name chance matches in font programs for what they are
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-10
 Candidate: none (a correction that follows from a finding: the scan called a chance match inside a font program "scripts" on a real arXiv paper)
 Specs: none (no statement of a spec changes; the scan keeps reporting every match, only under the milder name the scan already has)
@@ -328,3 +328,10 @@ config entry, and books already filed keep their stored scan results until the o
   `~/.config/knowledge-base/config.json` must be renewed (`python3 -m kb describe-tool all`, then the config) before the scan runs on new
   material; `process` warns until then. The Blei book's stored scan result and card still say `javascript` until the book is scanned
   again, which is the owner's decision.
+- **After the commit (2026-11-10).** The owner renewed the entry in the config: `python3 -m kb tools` then read `kb-scan` 0.0.9, `ok`,
+  with the other three tools `ok`. On the owner's word the Blei book was scanned again (`reconvert --book ... --scan`, then
+  `process --book ...`; nothing sent anywhere, nothing deleted): its stored scan result is now `pattern_in_binary_data` 1 by
+  `kb-scan 0.0.9` (the first output is kept as `derived/kb-scan/1`, the new one is `2`), and a snapshot of all 176 books showed that
+  only that book changed. **Its card (generation 1) still shows `scan finding: javascript ... [kb-scan 0.0.8]`**: a card stores the
+  scan result of the moment it was made. The owner was told what a new card generation would send to `ned` and **decided to leave
+  the card as it is.**
