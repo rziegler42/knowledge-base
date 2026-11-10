@@ -1,6 +1,6 @@
 # Decide what to do with inferred items
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-10
 Candidate: cards#card-inferred-items
 Specs: docs/specs/card.md
