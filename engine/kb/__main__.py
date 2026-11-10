@@ -5,7 +5,7 @@ import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
-from . import cardqueue
+from . import cardmarks, cardqueue
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -143,6 +143,11 @@ def main(argv=None):
                                                                     "(default: the newest card of each version)")
     cs.add_argument("--field", action="append", choices=list(cardsample.FIELDS), help="a field to draw from; repeat for several "
                                                                                   "(default: every field)")
+    cm = sub.add_parser("card-marks", help="count the items of the cards marked stated and inferred, by field and by form of the card; "
+                                           "prints numbers only, calls no model and changes nothing")
+    cm.add_argument("--book", action="append", help="a book to count; repeat for several (default: every active book that has a card)")
+    cm.add_argument("--generation", type=int, action="append", help="a card generation to count; repeat for several "
+                                                                    "(default: the newest card of each version)")
     ca = sub.add_parser("card-accuracy", help="count the labels of a sample by generation and field")
     ca.add_argument("items", help="the labelled items file")
     ca.add_argument("key", help="the key file of the sample")
@@ -155,6 +160,9 @@ def main(argv=None):
             print(json.dumps(cardsample.sample(Store.open(write=False), args.outdir, items=args.items, calibration=args.calibration,
                                                seed=args.seed, generations=args.generation, books=args.book, added=args.added, fields=args.field),
                              indent=1))
+            return 0
+        if args.command == "card-marks":
+            print(json.dumps(cardmarks.counts(Store.open(write=False), generations=args.generation, books=args.book), indent=1))
             return 0
         if args.command == "card-accuracy":
             print(json.dumps(cardsample.accuracy(args.items, args.key), indent=1))

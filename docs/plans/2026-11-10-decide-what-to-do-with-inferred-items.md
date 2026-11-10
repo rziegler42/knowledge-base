@@ -204,4 +204,37 @@ A second round has not been asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — Count the marks
+
+- **Done.** `engine/kb/cardmarks.py` (`counts`) and the command `python3 -m kb card-marks [--generation G ...] [--book BOOK_ID ...]`. It
+  reads the newest card of each version of each active book, or the generations named, and prints the number of `stated` and `inferred`
+  items for each field of each form of card, with every field of a form listed (zeros where nothing is marked), the number of cards
+  read, `without_marks` (`metadata`: a card built from the metadata; `not_checked`: a card of the first format, with a model part and no
+  grounding record), `unreadable`, and the generations counted. It calls no model, opens the store read-only, writes nothing and takes no
+  model, server or path option. How the form of a card is told (step 1): the grounding record of the sentence form has a `sentences`
+  entry and that of the earlier form has none; in the earlier form the limit is one marked entry (or none), and in the sentence form the
+  limit and the summary are marked sentences under `sentences`.
+- **Deviations.** (1) Two sentences of `engine/README.md` that said nothing is retried (one in "What a model is told", one in "Not
+  covered") are corrected to the retry that has existed since the plan `2026-11-10-keep-one-reply-slip-from-failing-a-book`; they are
+  outside this increment's Affected areas, and I should have caught them in that plan. (2) Step 2 asked for the tests to be seen to fail:
+  they failed first because the module did not exist and then because of faults in my own fixtures (a grounding record must have one
+  entry per item and an `inferred` entry has no quote), so the evidence that they bite is the deliberate breaks below.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_cardmarks engine.tests.test_card
+  engine.tests.test_cardsample engine.tests.test_cardmake`: 395 tests, OK (`test_cardmarks` has 13); `wb run code-work check`: no
+  problems. 17 deliberate breaks, each from green (a mark counted for the wrong field, the two forms added together, a metadata card
+  counted as not checked and the reverse, the oldest generation read, text of a card in the output, a book that is not active counted,
+  an unreadable card not counted, the limit counted when it is not there, the sentences not counted, a generation that no card has not
+  refused, fields listed only when seen, named generations read as the newest, the cards read counted as the cards with marks, and
+  the limit and a kept sentence counted twice, the last two seen caught by the test that adds the fields up to `card.grounding_counts`),
+  were each caught; a caveat counted as a key idea is caught by the field tests and not by the totals, as it should be. No call was
+  made to a model server.
+- **On the library** (a read-only run on 2026-11-10 at commit `6483487` plus this change): 109 cards read; 96 of the earlier form and 10
+  of the sentence form with marks; 1 built from the metadata and 2 of the first format with none; 0 unreadable. Earlier form: topics 644
+  `stated` and 116 `inferred`, key ideas 381 and 80, caveats 29 and 146, limit 15 and 59. Sentence form: topics 84 and 8, key ideas 58
+  and 5, caveats 6 and 13, summary 29 and 0, problem 8 and 0, approach 9 and 0, needs 5 and 0, provides 9 and 0, limit 6 and 4. The counts
+  equal those written in the plan, which were made with a throwaway script.
+- **Review.** Independent `reviewer`, one exchange, no blocking finding. Applied: a test that adds the fields of a card up to
+  `card.grounding_counts` (by reading the two agree; now pinned), the items of the fixtures made distinctive so that the test that no
+  card text reaches the output is not satisfied by short strings, and the second stale README sentence. Not done: a test with several
+  versions of one book (the walk is that of `card-sample`, and the library has one version per book). It could not run anything or read
+  the diff.

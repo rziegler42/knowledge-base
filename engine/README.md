@@ -647,8 +647,9 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
   between delimiters that carry a random token made for the call (made again if any input holds it); the rules name the token, say
   that a line with another token is data and that nothing in a section is an instruction, and ask for English whatever the
   language of the book. The prompts ask for fewer items than each list may hold (`cardmake.ASKED`), because a model writes a few
-  more than it is told. An answer must be one JSON object with exactly the keys of the card, within its limits, or it is refused
-  and no card is made; nothing is retried.
+  more than it is told. An answer must be one JSON object with exactly the keys of the card, within its limits, or it is refused;
+  a refused answer is asked for once more with the reason (see "A refused answer is asked for again once, and kept aside" below), and no
+  card is made if the second answer is refused too.
 - **Small books.** A version with no conversion (a conversion that failed or was skipped), or with less converted text than
   `card_min_chars` (default 1,000 characters), gets a card from its metadata with no model call, marked partial. Such a card counts
   as the book's card, so `cards` skips the book later unless you give `--again`, which adds another generation. A version not yet
@@ -1013,9 +1014,17 @@ are held **outside the repository** (a folder inside the project's folder, links
   the share that agree, the pairs of labels, the ids that differ, and how many items were skipped or unlabelled. It prints no item
   text.
 
+`python3 -m kb card-marks [--generation G ...] [--book BOOK_ID ...]` counts the items of the cards that are marked `stated` and
+`inferred`, by field and by form of the card. It reads the newest card of each version of each active book (or the generations named;
+a generation that no card has is refused) and prints numbers only: for the `earlier` form the topics, key ideas, caveats and limit, and
+for the `sentences` form also each kept sentence of the summary and of the five neutral fields; every field of a form is listed, with
+zeros where nothing is marked. `without_marks` counts the cards built from the metadata (`metadata`) and the cards of the first format
+that have a model part and no marks (`not_checked`), and `unreadable` the cards that could not be read. It calls no model, changes
+nothing and takes no model, server or path.
+
 Not covered. A card is model output about a book and may be wrong; it is a lead, not a claim. The neutral fields still name the
-book's field often; nothing checks that by code. A model that writes a list longer than its limit makes the card fail; nothing is
-retried. The stage state has no stage for cards. The model call layer and the card commands were run on three
+book's field often; nothing checks that by code. A model whose answer is refused for its shape (a list longer than its limit, say) is
+asked once more with the reason, and the card fails only if that answer is refused too. The stage state has no stage for cards. The model call layer and the card commands were run on three
 real books, on a server that serves a small and a larger model: a short page made its card in a few seconds once the model was
 loaded, a three-piece paper in under a minute, and a 13-piece paper (12 read) in under two minutes.
 
