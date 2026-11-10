@@ -539,6 +539,359 @@ class AddedTest(SampleCase):
         self.assertEqual(json.loads(r.stdout)["added"], 3)
 
 
+class UnchangedDrawTest(SampleCase):
+    """The draw without the option for marks is as it was before the option existed (plan decide-what-to-do-with-inferred-items,
+    Increment B): the trace below was taken from the code before the change, for seed 7 on this library."""
+
+    TRACE = [("i001", "bravox idea one", "key_ideas", 1, 0), ("i002", "charliey idea two", "key_ideas", 2, 1),
+             ("i003", "alphay caveat", "caveats", 2, 0), ("i004", "charliex provides", "neutral_provides", 1, 0),
+             ("i005", "alphax second sentence.", "summary", 1, 1), ("i006", "alphax idea three", "key_ideas", 1, 2),
+             ("i007", "charliex limits", "neutral_limits", 1, 0), ("i008", "alphay limits", "neutral_limits", 2, 0),
+             ("i009", "charliey problem", "neutral_problem", 2, 0), ("i010", "bravox caveat", "caveats", 1, 0),
+             ("i011", "bravoy idea three", "key_ideas", 2, 2), ("i012", "bravoy needs", "neutral_needs", 2, 0)]
+
+    def test_the_sample_for_a_fixed_seed_is_the_one_drawn_before_the_option_existed(self):
+        self.sample(items=12, calibration=3, seed=7)
+        key = self.load("key.json")["items"]
+        trace = [(i["id"], i["text"], i["field"], key[i["id"]]["generation"], key[i["id"]]["position"]) for i in self.load("items.json")["items"]]
+        self.assertEqual(trace, self.TRACE)
+        self.assertEqual([i["id"] for i in self.load("calibration.json")["items"]], ["i004", "i005", "i007"])
+
+    def test_a_sample_without_marks_has_the_keys_it_always_had(self):
+        summary = self.sample(items=12, calibration=3, seed=7)
+        self.assertEqual(set(summary), {"items", "calibration", "seed", "cards", "unreadable_cards", "generations", "fields", "added"})
+        for entry in self.load("key.json")["items"].values():
+            self.assertEqual(set(entry), {"book_id", "version_id", "generation", "field", "position", "sha256"})
+        self.assertEqual(set(self.load("key.json")), {"format", "seed", "generations", "items"})
+
+
+MARK_CARDS = {"alpha": ("ISS", "ISS"), "bravo": ("ISS", "SII"), "charlie": ("SSS", "ISS"), "delta": ("III", "SSS")}
+# I = inferred, S = stated. Inferred topics: 1 + 1 + 0 + 3 = 5; stated topics: 2 + 2 + 3 + 0 = 7; inferred key ideas: 1 + 2 + 1 + 0 = 4;
+# stated key ideas: 2 + 1 + 2 + 3 = 8. So the pool of the inferred is 9 and that of the stated 15.
+
+
+def mark_entry(code):
+    if code == "S":
+        return {"mark": "stated", "notes": ["1.1"], "quote": "a quote of the book"}
+    return {"mark": "inferred", "notes": [], "quote": None}
+
+
+class MarkedCase(TrialCase):
+    """Four books, each with a card of generation 1 whose topics and key ideas carry the marks of MARK_CARDS, and one book with a card
+    of the first format (no marks at all)."""
+
+    def setUp(self):
+        super().setUp()
+        self.books = {}
+        for tag, (topics, ideas) in MARK_CARDS.items():
+            blocks = [block(f"{tag} opening block"), block(f"the {tag} zebra method decides when to stop"), block(f"{tag} closing block")]
+            book, version = self.converted_book(blocks=blocks, title=f"Book {tag}")
+            model = make_model(topics=[f"{tag} topic {n}" for n in range(len(topics))], key_ideas=[f"{tag} idea {n}" for n in range(len(ideas))])
+            grounding = {"topics": [mark_entry(c) for c in topics], "key_ideas": [mark_entry(c) for c in ideas], "caveats": [],
+                         "neutral_limits": mark_entry("S"), "dropped": {"topics": 0, "key_ideas": 0, "caveats": 0, "neutral_limits": 0}}
+            card.file(self.store, card.make(self.store, book, version, model=model, records=[], grounding=grounding))
+            self.books[tag] = book
+        book, version = self.converted_book(blocks=[block("echo block about topics")], title="Book echo")
+        card.file(self.store, card.make(self.store, book, version, model=make_model(topics=["echo topic 0", "echo topic 1"]), records=[]))
+        self.books["echo"] = book
+        self.out = os.path.join(self.base, "sample")
+
+    def draw(self, marks, fields=("topics", "key_ideas"), seed=7, calibration=2, out=None, **kw):
+        return cardsample.sample(self.store, out or self.out, calibration=calibration, seed=seed, marks=marks, fields=list(fields), **kw)
+
+    def load(self, name, out=None):
+        with open(os.path.join(out or self.out, name)) as f:
+            return json.load(f)
+
+    def truth(self, entry):
+        """The mark that the card itself gives to the item a key entry names."""
+        made = card.read(self.store, entry["book_id"], entry["version_id"], entry["generation"])[1]
+        return made["grounding"][entry["field"]][entry["position"]]["mark"]
+
+    def cells(self):
+        out = {}
+        for entry in self.load("key.json")["items"].values():
+            out[(entry["mark"], entry["field"])] = out.get((entry["mark"], entry["field"]), 0) + 1
+        return out
+
+
+class MarksDrawTest(MarkedCase):
+    def test_the_sample_holds_the_number_of_each_mark_and_the_key_gives_the_mark_the_card_gives(self):
+        summary = self.draw({"inferred": 6, "stated": 6})
+        key = self.load("key.json")["items"]
+        self.assertEqual((summary["items"], len(self.load("items.json")["items"]), len(key)), (12, 12, 12))
+        self.assertEqual(summary["marks"], {"inferred": 6, "stated": 6})
+        for entry in key.values():
+            self.assertEqual(entry["mark"], self.truth(entry))
+        self.assertEqual(sum(1 for e in key.values() if e["mark"] == "inferred"), 6)
+
+    def test_each_mark_is_split_equally_over_the_fields(self):
+        self.draw({"inferred": 6, "stated": 4})
+        self.assertEqual(self.cells(), {("inferred", "topics"): 3, ("inferred", "key_ideas"): 3, ("stated", "topics"): 2, ("stated", "key_ideas"): 2})
+
+    def test_an_odd_number_gives_the_extra_item_to_the_field_named_first(self):
+        self.draw({"inferred": 5, "stated": 3}, fields=("topics", "key_ideas"))
+        self.assertEqual(self.cells(), {("inferred", "topics"): 3, ("inferred", "key_ideas"): 2, ("stated", "topics"): 2, ("stated", "key_ideas"): 1})
+        other = os.path.join(self.base, "other")
+        self.draw({"inferred": 5, "stated": 3}, fields=("key_ideas", "topics"), out=other)
+        cells = {}
+        for entry in self.load("key.json", other)["items"].values():
+            cells[(entry["mark"], entry["field"])] = cells.get((entry["mark"], entry["field"]), 0) + 1
+        self.assertEqual(cells, {("inferred", "key_ideas"): 3, ("inferred", "topics"): 2, ("stated", "key_ideas"): 2, ("stated", "topics"): 1})
+
+    def test_a_field_whose_pool_is_too_small_gives_its_share_to_the_other_and_the_summary_says_so(self):
+        # 9 inferred items: 5 key ideas are asked for first, the pool holds 4, and the topics give the fifth
+        summary = self.draw({"inferred": 9, "stated": 4}, fields=("key_ideas", "topics"), calibration=0)
+        self.assertEqual(self.cells(), {("inferred", "topics"): 5, ("inferred", "key_ideas"): 4, ("stated", "topics"): 2, ("stated", "key_ideas"): 2})
+        inferred = summary["allocation"]["inferred"]
+        self.assertEqual(inferred["key_ideas"], {"asked": 5, "drawn": 4})
+        self.assertEqual(inferred["topics"], {"asked": 4, "drawn": 5})
+        self.assertEqual(summary["allocation"]["stated"]["topics"], {"asked": 2, "drawn": 2})
+
+    def test_a_sample_larger_than_the_pool_of_a_mark_is_refused_and_nothing_is_written(self):
+        with self.assertRaises(KbError) as cm:
+            self.draw({"inferred": 10, "stated": 2})
+        self.assertIn("inferred", str(cm.exception))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_the_items_file_says_nothing_of_the_mark_and_the_marks_are_mixed_in_the_order_of_the_ids(self):
+        for seed in range(1, 6):
+            out = os.path.join(self.base, f"seed{seed}")
+            self.draw({"inferred": 6, "stated": 6}, seed=seed, out=out)
+            for name in ("items.json", "calibration.json"):
+                text = json.dumps(self.load(name, out))
+                self.assertNotIn("mark", text.replace("marks", "").replace("marked", ""))
+                self.assertNotIn("inferred", text)
+            key = self.load("key.json", out)["items"]
+            order = [key[i["id"]]["mark"] for i in self.load("items.json", out)["items"]]
+            self.assertNotIn(order, (["inferred"] * 6 + ["stated"] * 6, ["stated"] * 6 + ["inferred"] * 6), seed)
+            self.assertNotEqual(order, sorted(order), seed)
+
+    def test_the_same_seed_gives_the_same_sample_and_another_seed_another(self):
+        self.draw({"inferred": 6, "stated": 6})
+        first = (self.load("items.json"), self.load("key.json"))
+        other = os.path.join(self.base, "again")
+        self.draw({"inferred": 6, "stated": 6}, out=other)
+        self.assertEqual((self.load("items.json", other), self.load("key.json", other)), first)
+        third = os.path.join(self.base, "third")
+        self.draw({"inferred": 6, "stated": 6}, seed=8, out=third)
+        self.assertNotEqual(self.load("key.json", third)["items"], first[1]["items"])
+
+    def test_no_card_fills_a_cell_while_another_card_has_items_of_that_mark(self):
+        for seed in range(1, 6):
+            out = os.path.join(self.base, f"spread{seed}")
+            self.draw({"inferred": 4, "stated": 4}, seed=seed, out=out, calibration=0)
+            cells = {}
+            for entry in self.load("key.json", out)["items"].values():
+                cells.setdefault((entry["mark"], entry["field"]), []).append(entry["book_id"])
+            for cell, books in cells.items():
+                self.assertEqual(len(books), 2, cell)
+                self.assertEqual(len(set(books)), 2, (seed, cell))   # two items of a cell come from two different cards
+
+    def test_a_card_with_no_marks_is_never_drawn_from(self):
+        for seed in range(1, 6):
+            out = os.path.join(self.base, f"echo{seed}")
+            self.draw({"inferred": 6, "stated": 6}, seed=seed, out=out)
+            self.assertNotIn(self.books["echo"], {e["book_id"] for e in self.load("key.json", out)["items"].values()})
+
+    def test_the_calibration_subset_is_part_of_the_items_and_holds_no_mark(self):
+        self.draw({"inferred": 6, "stated": 6}, calibration=4)
+        ids = {i["id"] for i in self.load("items.json")["items"]}
+        subset = self.load("calibration.json")["items"]
+        self.assertEqual(len(subset), 4)
+        self.assertTrue({i["id"] for i in subset} <= ids)
+
+    def test_the_size_of_the_sample_is_the_sum_of_the_counts_so_the_calibration_may_be_as_large_as_the_whole_of_it(self):
+        summary = self.draw({"inferred": 3, "stated": 3}, calibration=6)
+        self.assertEqual((summary["items"], summary["calibration"]), (6, 6))
+        with self.assertRaises(KbError):
+            self.draw({"inferred": 3, "stated": 3}, calibration=7, out=os.path.join(self.base, "toomany"))
+
+    def test_a_sample_by_one_mark_alone_is_allowed(self):
+        summary = self.draw({"inferred": 4}, calibration=0)
+        self.assertEqual(summary["marks"], {"inferred": 4})
+        self.assertEqual({e["mark"] for e in self.load("key.json")["items"].values()}, {"inferred"})
+
+    def test_what_does_not_fit_is_refused_before_anything_is_written(self):
+        bad = {"a field that carries no mark of its own": dict(marks={"inferred": 2}, fields=("summary",)),
+               "a field not named": dict(marks={"inferred": 2}, fields=()),
+               "an unknown mark": dict(marks={"doubtful": 2}),
+               "no mark at all": dict(marks={}),
+               "a count of zero": dict(marks={"inferred": 0}),
+               "a negative count": dict(marks={"inferred": -1}),
+               "a count that is a boolean": dict(marks={"inferred": True}),
+               "a count that is a text": dict(marks={"inferred": "2"}),
+               "marks that are a list": dict(marks=["inferred"]),
+               "more than the sample may hold": dict(marks={"inferred": cardsample.MAX_ITEMS, "stated": 1}),
+               "a calibration larger than the sample": dict(marks={"inferred": 2}, calibration=3),
+               "generations named": dict(marks={"inferred": 2}, generations=[1]),
+               "added items": dict(marks={"inferred": 2}, added=1),
+               "a size given as well": dict(marks={"inferred": 2}, items=2)}
+        for label, kw in bad.items():
+            with self.subTest(label):
+                call = dict(kw)
+                fields = call.pop("fields", ("topics", "key_ideas"))
+                call.setdefault("calibration", 0)
+                with self.assertRaises(KbError):
+                    cardsample.sample(self.store, self.out, seed=1, fields=list(fields), **call)
+                self.assertFalse(os.path.exists(self.out))
+
+    def test_the_books_option_still_limits_the_sample(self):
+        a, b = self.books["alpha"], self.books["bravo"]
+        self.draw({"inferred": 2, "stated": 2}, books=[a, b], calibration=0)
+        self.assertTrue({e["book_id"] for e in self.load("key.json")["items"].values()} <= {a, b})
+
+
+class AccuracyByMarkTest(MarkedCase):
+    def labelled_file(self, labels):
+        """The items of the sample labelled by `labels`: a function from the entry of the key to a label."""
+        key = self.load("key.json")["items"]
+        items = self.load("items.json")
+        for item in sorted(items["items"], key=lambda i: i["id"]):
+            label = labels(key[item["id"]])
+            item.update(label=label, labelled_by="model", note="follows from a passage" if label == "inference" else "")
+        path = os.path.join(self.base, "labelled.json")
+        with open(path, "w") as f:
+            json.dump(items, f)
+        return path
+
+    def test_the_labels_are_reported_for_each_mark_overall_and_for_each_field(self):
+        self.draw({"inferred": 6, "stated": 6})
+        counter = {"n": 0}
+
+        def labels(entry):
+            if entry["mark"] == "stated":
+                return "supported"
+            counter["n"] += 1
+            return ("supported", "inference", "unsupported")[counter["n"] % 3]
+
+        report = cardsample.accuracy(self.labelled_file(labels), os.path.join(self.out, "key.json"), by_mark=True)
+        marks = report["marks"]
+        self.assertEqual(set(marks), {"inferred", "stated"})
+        self.assertEqual((marks["stated"]["items"], marks["stated"]["supported"], marks["stated"]["unsupported"]), (6, 6, 0))
+        self.assertEqual(marks["stated"]["shares"], {"supported": 1.0, "unsupported": 0.0, "inference": 0.0})
+        inferred = marks["inferred"]
+        self.assertEqual(inferred["items"], 6)
+        self.assertEqual(inferred["supported"] + inferred["inference"] + inferred["unsupported"], 6)
+        self.assertEqual(inferred["supported"], 2)
+        self.assertEqual(sum(f["items"] for f in inferred["fields"].values()), 6)
+        self.assertEqual({f: v["items"] for f, v in inferred["fields"].items()}, {"topics": 3, "key_ideas": 3})
+        self.assertEqual({f: v["items"] for f, v in marks["stated"]["fields"].items()}, {"topics": 3, "key_ideas": 3})
+
+    def test_a_skipped_item_is_counted_and_left_out_of_the_shares(self):
+        self.draw({"inferred": 2, "stated": 2}, calibration=0)
+        report = cardsample.accuracy(self.labelled_file(lambda e: "skip" if e["mark"] == "inferred" else "supported"),
+                                     os.path.join(self.out, "key.json"), by_mark=True)
+        self.assertEqual((report["marks"]["inferred"]["items"], report["marks"]["inferred"]["skipped"]), (2, 2))
+        self.assertIsNone(report["marks"]["inferred"]["shares"])
+        self.assertEqual(report["marks"]["stated"]["shares"]["supported"], 1.0)
+
+    def test_without_the_option_the_report_is_as_it_was_even_for_a_key_with_marks(self):
+        self.draw({"inferred": 2, "stated": 2}, calibration=0)
+        report = cardsample.accuracy(self.labelled_file(lambda e: "supported"), os.path.join(self.out, "key.json"))
+        self.assertNotIn("marks", report)
+        self.assertEqual(set(report), {"items", "notes", "labelled_by", "generations"})
+        self.assertEqual(report["items"], 4)
+
+    def test_the_option_is_refused_for_a_key_that_has_no_marks(self):
+        # a sample drawn the old way has a key without marks
+        self.sample_old = os.path.join(self.base, "old")
+        cardsample.sample(self.store, self.sample_old, items=4, calibration=0, seed=1, generations=[1], fields=["topics"])
+        key = self.load("key.json", self.sample_old)["items"]
+        items = self.load("items.json", self.sample_old)
+        for item in items["items"]:
+            item.update(label="supported", labelled_by="model")
+        path = os.path.join(self.base, "old-labelled.json")
+        with open(path, "w") as f:
+            json.dump(items, f)
+        with self.assertRaises(KbError):
+            cardsample.accuracy(path, os.path.join(self.sample_old, "key.json"), by_mark=True)
+        self.assertEqual(cardsample.accuracy(path, os.path.join(self.sample_old, "key.json"))["items"], len(key))
+
+    def test_a_mark_in_the_key_that_is_not_a_mark_is_refused(self):
+        self.draw({"inferred": 2, "stated": 2}, calibration=0)
+        doc = self.load("key.json")
+        first = next(iter(doc["items"]))
+        doc["items"][first]["mark"] = "doubtful"
+        bad = os.path.join(self.base, "badkey.json")
+        with open(bad, "w") as f:
+            json.dump(doc, f)
+        with self.assertRaises(KbError):
+            cardsample.accuracy(self.labelled_file(lambda e: "supported"), bad)
+
+    def test_a_key_with_a_mark_on_some_entries_only_is_refused_for_the_option(self):
+        self.draw({"inferred": 2, "stated": 2}, calibration=0)
+        doc = self.load("key.json")
+        del doc["items"][next(iter(doc["items"]))]["mark"]
+        bad = os.path.join(self.base, "halfkey.json")
+        with open(bad, "w") as f:
+            json.dump(doc, f)
+        with self.assertRaises(KbError):
+            cardsample.accuracy(self.labelled_file(lambda e: "supported"), bad, by_mark=True)
+
+
+class MarksCommandTest(MarkedCase):
+    def kb(self, *args):
+        env = dict(os.environ, KB_CONFIG_DIR=self.cfg)
+        return subprocess.run([sys.executable, "-m", "kb", *args], cwd=ENGINE_DIR, env=env, capture_output=True, text=True, timeout=120)
+
+    def test_the_command_draws_by_mark_and_the_accuracy_command_reports_by_mark(self):
+        r = self.kb("card-sample", self.out, "--marks", "inferred=4", "stated=4", "--field", "topics", "--field", "key_ideas", "--seed", "3",
+                    "--calibration", "2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        summary = json.loads(r.stdout)
+        self.assertEqual((summary["items"], summary["marks"]), (8, {"inferred": 4, "stated": 4}))
+        self.assertNotIn("alpha", r.stdout)   # numbers, not the texts of the cards
+        items = self.load("items.json")
+        for item in items["items"]:
+            item.update(label="supported", labelled_by="model")
+        path = os.path.join(self.base, "labelled.json")
+        with open(path, "w") as f:
+            json.dump(items, f)
+        r = self.kb("card-accuracy", path, os.path.join(self.out, "key.json"), "--by-mark")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(set(json.loads(r.stdout)["marks"]), {"inferred", "stated"})
+        r = self.kb("card-accuracy", path, os.path.join(self.out, "key.json"))
+        self.assertNotIn("marks", json.loads(r.stdout))
+
+    def test_a_marks_option_that_does_not_fit_is_refused_with_exit_two(self):
+        for label, args in {"a size as well": ["--marks", "inferred=2", "--items", "4"], "no count": ["--marks", "inferred"],
+                            "a count that is not a number": ["--marks", "inferred=x"], "an unknown mark": ["--marks", "doubtful=2"],
+                            "a mark twice": ["--marks", "inferred=2", "inferred=3"], "no field": ["--marks", "inferred=2"],
+                            "a generation as well": ["--marks", "inferred=2", "--field", "topics", "--generation", "1"]}.items():
+            with self.subTest(label):
+                # a calibration of 0, so that a small sample is not refused for its calibration and the refusal is for the option
+                full = ["card-sample", os.path.join(self.base, "refused-" + label.replace(" ", "-")), "--calibration", "0", *args]
+                if "--field" not in args and label != "no field":
+                    full += ["--field", "topics"]
+                r = self.kb(*full)
+                self.assertEqual(r.returncode, 2, label)
+                self.assertIn("refused:", r.stderr, label)   # refused by the program, not only by the parser of the options
+                self.assertNotIn("Traceback", r.stderr, label)
+                self.assertFalse(os.path.exists(os.path.join(self.base, "refused-" + label.replace(" ", "-"))), label)
+
+    def test_a_count_with_a_huge_number_of_digits_is_refused_and_not_a_traceback(self):
+        huge = "9" * 5000
+        with self.assertRaises(KbError):
+            cardsample.parse_marks([f"inferred={huge}"])
+        r = self.kb("card-sample", os.path.join(self.base, "huge"), "--calibration", "0", "--marks", f"inferred={huge}", "--field", "topics")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("refused:", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        for fine in ("0", "5000", "5001", "000000"):   # a count in range or a little out of it reaches the check of the range
+            self.assertEqual(cardsample.parse_marks([f"inferred={fine}"]), {"inferred": int(fine)})
+        with self.assertRaises(KbError):
+            cardsample.parse_marks(["inferred=1" + "0" * 7])
+
+    def test_the_marks_of_the_command_line_are_read_into_counts_and_what_is_not_a_count_of_a_mark_is_refused(self):
+        self.assertEqual(cardsample.parse_marks(["inferred=60", "stated=5"]), {"inferred": 60, "stated": 5})
+        self.assertEqual(cardsample.parse_marks(["stated=1"]), {"stated": 1})
+        for bad in (["inferred"], ["inferred="], ["=3"], ["inferred=x"], ["inferred=-1"], ["inferred=2.5"], ["inferred=٢"], ["doubtful=2"],
+                    ["inferred=2", "inferred=3"], [" inferred=2"], ["inferred = 2"]):
+            with self.subTest(bad=bad), self.assertRaises(KbError):
+                cardsample.parse_marks(bad)
+
+
 def labelled(book="01M6SR01QXBXAZ9V8ZHBWPCDAF", field="topics", text="t", label="supported", by="model", note="", item_id="i001"):
     return {"id": item_id, "book_id": book, "title": "T", "field": field, "text": text, "passages": [], "label": label, "labelled_by": by,
             "note": note}

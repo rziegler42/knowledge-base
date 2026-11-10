@@ -972,8 +972,8 @@ no call and no report.
 ### How accurate are the cards? A sample to label
 
 ```sh
-python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...] [--book BOOK_ID ...] [--added N] [--field FIELD ...]
-python3 -m kb card-accuracy ITEMS KEY
+python3 -m kb card-sample OUTDIR [--items 80] [--calibration 15] [--seed N] [--generation G ...] [--book BOOK_ID ...] [--added N] [--field FIELD ...] [--marks MARK=N ...]
+python3 -m kb card-accuracy ITEMS KEY [--by-mark]
 python3 -m kb card-agreement FIRST SECOND
 ```
 
@@ -992,7 +992,15 @@ are held **outside the repository** (a folder inside the project's folder, links
   which they are. `--field` (repeat it for several; one of `summary`, `topics`, `key_ideas`, `caveats`, `neutral_problem`,
   `neutral_approach`, `neutral_needs`, `neutral_provides`, `neutral_limits`) draws only items of the fields named, and the items that
   a second round added only if they are of those fields; the sample is refused if those fields hold fewer items than it asks for.
-  The same `--seed` gives the same sample. `OUTDIR` is
+  The same `--seed` gives the same sample. `--marks inferred=N stated=M` draws a sample by the mark the card gave each item (see
+  `card-marks`): N items marked `inferred` and M marked `stated`, mixed and shuffled with the rest of the draw, from the newest card
+  of each version that carries marks (a card of the first format or built from the metadata has none), and only of `topics`,
+  `key_ideas` and `caveats`, which are marked one by one in both forms of the card, so `--field` must name some of those. Each count is
+  split equally over the fields (an odd count gives the extra item to the field named first); a field whose pool holds fewer than its
+  share gives all it has and the rest goes to the others, and the printed summary says, for each mark and field, how many were asked
+  for and how many drawn (`allocation`). In each cell the cards are visited in turn, so no card fills it. The size of the sample is
+  N + M, so `--items`, `--generation` and `--added` are refused with it; the summary has `marks`. The key records the mark of each
+  item (`mark`, and the counts asked for at its top); the items file never does. `OUTDIR` is
   new or empty, and four files are written, all private:
   - `items.json`: the items, shuffled, each with an id, the book, the field, the text, up to five passages of the book that share
     the most words with it (the best block with the block before and after, at most 600 characters, none within two blocks of
@@ -1009,6 +1017,8 @@ are held **outside the repository** (a folder inside the project's folder, links
 - **`card-accuracy`** reads a fully labelled items file and the key, and reports for each generation and field the number of items,
   skipped, supported, unsupported and inference items, with shares of the items not skipped. It refuses items that are not the ones
   the key names (ids, text, field), an unlabelled item, an inference with no note, and an unknown label. It prints no item text.
+  With `--by-mark`, for the key of a sample drawn with `--marks`, the report also has `marks`: the same counts, with the shares, for
+  each mark and, within it, for each field; it is refused for a key in which an item has no mark.
 - **`card-agreement`** compares two labellings: the whole sample labelled by a model and the calibration file labelled by the
   owner, say. It compares over the ids of the smaller file, which must be among the larger's and have the same text, and reports
   the share that agree, the pairs of labels, the ids that differ, and how many items were skipped or unlabelled. It prints no item

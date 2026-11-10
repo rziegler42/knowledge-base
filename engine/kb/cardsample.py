@@ -27,6 +27,8 @@ PASSAGE_CHARS = 600
 MAX_NOTE = 500
 MAX_TEXT = 2000
 MAX_LABELLER = 60
+MARKS = ("inferred", "stated")             # the marks a sample can be drawn by (`card.MARKS`), in the order they are drawn
+MARK_FIELDS = card.GROUNDED_LISTS         # the fields whose items carry a mark of their own, one by one, in both forms of the card
 LABELS = ("supported", "unsupported", "inference")
 CHOICES = LABELS + ("skip",)
 FIELDS = ("summary", "topics", "key_ideas", "caveats", "neutral_problem", "neutral_approach", "neutral_needs", "neutral_provides",
@@ -195,6 +197,84 @@ def _draw(rng, cards, quota, skip=frozenset(), fields=None):
     return picked
 
 
+def parse_marks(tokens):
+    """The counts of marks of the command line, `["inferred=60", "stated=60"]`, as `{"inferred": 60, "stated": 60}`. A token that is not
+    a mark, `=` and a whole number, or a mark named twice, is refused."""
+    out = {}
+    for token in tokens:
+        name, _, number = str(token).partition("=")
+        if name not in MARKS or not number.isascii() or not number.isdigit() or len(number) > 6:   # six digits: far above the range, and
+            # far below the length at which Python refuses to read a number, which would end in a traceback and not in a refusal
+            raise KbError(f"a count of marks is a mark and a whole number, such as inferred=60: {textutil.literal(token, 40)}")
+        if name in out:
+            raise KbError(f"the mark {name} is given twice")
+        out[name] = int(number)
+    return out
+
+
+def _shares(sizes, count, mark):
+    """How many items to take from each field for a mark: `count` is split equally over the fields (the extra items, if it does not
+    divide, go to the first fields named); a field that holds fewer than its share gives all it has and the rest goes to the fields that
+    still have items, in the order named. Returns `(asked, drawn)`, each a dict by field. Refused if the fields hold fewer than `count`."""
+    names = list(sizes)
+    asked = {name: count // len(names) + (1 if n < count % len(names) else 0) for n, name in enumerate(names)}
+    drawn = {name: min(asked[name], sizes[name]) for name in names}
+    left = count - sum(drawn.values())
+    for name in names:
+        extra = min(left, sizes[name] - drawn[name])
+        drawn[name] += extra
+        left -= extra
+    if left:
+        raise KbError(f"the cards hold only {sum(sizes.values())} {mark} items of those fields, and the sample asks for {count}")
+    return asked, drawn
+
+
+def _draw_cell(rng, entries, count):
+    """`count` of `entries` (`(book_id, version_id, card, generation, field, position, text)`), taken one card at a time in a shuffled
+    order and a random item of each card, round after round, so that no card fills the cell while another has items."""
+    by_card = {}
+    for entry in sorted(entries, key=lambda e: (e[0], e[1], e[3], e[5])):
+        by_card.setdefault((entry[0], entry[1], entry[3]), []).append(entry)
+    order = sorted(by_card)
+    rng.shuffle(order)
+    for card_key in order:
+        rng.shuffle(by_card[card_key])
+    picked = []
+    while len(picked) < count:
+        for card_key in order:
+            if len(picked) == count:
+                break
+            if by_card[card_key]:
+                picked.append(by_card[card_key].pop())
+    return picked
+
+
+def _draw_by_mark(cards, marks, fields, seed):
+    """The items of a sample drawn by mark: `(picked, allocation, mark_of)`. For each mark asked for, in the order of MARKS, the count is
+    split over `fields` (`_shares`) and each cell of mark and field is drawn from the cards that carry marks. `allocation` says, for each
+    mark and field, the share asked for and the number drawn; `mark_of` gives the mark of each item picked, by its place in its card."""
+    cells = {(mark, field): [] for mark in MARKS for field in fields}
+    for book_id, version_id, made, number in cards:
+        grounding = made.get("grounding")
+        if not isinstance(grounding, dict):   # a card of the first format has no marks
+            continue
+        for field in fields:
+            for position, text in enumerate(made["model"][field]):
+                if text.strip():
+                    cells[(grounding[field][position]["mark"], field)].append((book_id, version_id, made, number, field, position, text))
+    picked, allocation, mark_of = [], {}, {}
+    for mark in MARKS:
+        if mark not in marks:
+            continue
+        asked, drawn = _shares({field: len(cells[(mark, field)]) for field in fields}, marks[mark], mark)
+        allocation[mark] = {field: {"asked": asked[field], "drawn": drawn[field]} for field in fields}
+        for field in fields:
+            for entry in _draw_cell(random.Random(f"{seed}:{mark}:{field}"), cells[(mark, field)], drawn[field]):
+                picked.append(entry)
+                mark_of[(entry[0], entry[1], entry[3], entry[4], entry[5])] = mark
+    return picked, allocation, mark_of
+
+
 def _spread(rng, items, count):
     """`count` of `items` taken from different fields in turn."""
     by_field = {}
@@ -252,13 +332,34 @@ def _added_items(pool):
     return out
 
 
-def sample(store, outdir, items=80, calibration=15, seed=None, generations=None, books=None, added=0, fields=None):
+def sample(store, outdir, items=None, calibration=15, seed=None, generations=None, books=None, added=0, fields=None, marks=None):
     """Draw the sample and write its files in `outdir`; returns a summary of numbers. Refuses a folder inside the project or one that
     holds files, a sample larger than the cards hold, a calibration larger than the sample, a generation no card has, and a book
     whose converted text cannot be read. With `added`, that many of the items are drawn from those that a second round added to the
     cards (`cards#card-grounding`), marked in the key and counted in the sample; it is refused if the cards hold fewer, or if a
     generation would have more of them than its share of the sample. With `fields`, a non-empty list of names from FIELDS, only items of
-    those fields are drawn (the added items too). Changes nothing in the library."""
+    those fields are drawn (the added items too). `items` is the size of the sample (80 when none is given).
+
+    With `marks`, a dict from `inferred` and `stated` to a count (`plan decide-what-to-do-with-inferred-items`), the sample holds that
+    many items of each mark, drawn from the newest card of each version that carries marks, from `fields` (some of MARK_FIELDS, whose
+    items are marked one by one): each count is split equally over the fields, a field that holds too few giving its share to the
+    others, and the summary says what was asked and what was drawn. The size of the sample is the sum of the counts, so no `items`,
+    `generations` or `added` may be given: no item is drawn as one that a second round added (such an item is a `stated` item like any
+    other and may be drawn as one, its key entry not flagged `added`). The items are mixed and shuffled like any sample's and the items
+    file does not say which mark an item has; the key does (`mark`). Changes nothing in the library."""
+    if marks is not None:
+        if not isinstance(marks, dict) or not marks or not set(marks) <= set(MARKS) \
+                or not all(type(n) is int and 1 <= n <= MAX_ITEMS for n in marks.values()):
+            raise KbError(f"the marks are a non-empty set of counts, each a whole number from 1 to {MAX_ITEMS}, for {' and '.join(MARKS)}")
+        if items is not None:
+            raise KbError("the size of a sample drawn by mark is the sum of the counts of the marks; give no size as well")
+        if generations is not None or added:
+            raise KbError("a sample drawn by mark comes from the newest card of each version and holds no item that a second round added")
+        if fields is None or not set(fields) <= set(MARK_FIELDS):
+            raise KbError(f"a sample drawn by mark needs fields from {', '.join(MARK_FIELDS)}: only their items carry a mark one by one")
+        items = sum(marks.values())
+    elif items is None:
+        items = 80
     if type(added) is not int or not 0 <= added <= MAX_ITEMS:
         raise KbError(f"the number of added items is a whole number from 0 to {MAX_ITEMS}")
     if type(items) is not int or not 1 <= items <= MAX_ITEMS or type(calibration) is not int or not 0 <= calibration <= items:
@@ -283,21 +384,24 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
             _blocks(store, book_id, version_id)
     if added > items:
         raise KbError("the sample cannot hold more added items than its own size")
-    numbers = sorted(pool)
-    drawn = []
-    if added:
-        candidates = [e for e in _added_items(pool) if fields is None or e[4] in fields]
-        if added > len(candidates):
-            raise KbError(f"the cards hold only {len(candidates)} items that a second round added, and the sample asks for {added}")
-        drawn = random.Random(f"{seed}:added").sample(candidates, added)
-    skip = {(e[0], e[1], e[3], e[4], e[5]) for e in drawn}
-    picked = list(drawn)
-    for n, group in enumerate(numbers):
-        quota = items // len(numbers) + (1 if n < items % len(numbers) else 0)
-        have = sum(1 for e in drawn if (0 if wanted is None else e[3]) == group)
-        if have > quota:
-            raise KbError("a generation would hold more added items than its share of the sample")
-        picked += _draw(random.Random(f"{seed}:{group}"), pool[group], quota - have, skip, fields)
+    drawn, skip, mark_of, allocation = [], set(), {}, None
+    if marks is not None:
+        picked, allocation, mark_of = _draw_by_mark(pool[0], marks, list(fields), seed)
+    else:
+        numbers = sorted(pool)
+        if added:
+            candidates = [e for e in _added_items(pool) if fields is None or e[4] in fields]
+            if added > len(candidates):
+                raise KbError(f"the cards hold only {len(candidates)} items that a second round added, and the sample asks for {added}")
+            drawn = random.Random(f"{seed}:added").sample(candidates, added)
+        skip = {(e[0], e[1], e[3], e[4], e[5]) for e in drawn}
+        picked = list(drawn)
+        for n, group in enumerate(numbers):
+            quota = items // len(numbers) + (1 if n < items % len(numbers) else 0)
+            have = sum(1 for e in drawn if (0 if wanted is None else e[3]) == group)
+            if have > quota:
+                raise KbError("a generation would hold more added items than its share of the sample")
+            picked += _draw(random.Random(f"{seed}:{group}"), pool[group], quota - have, skip, fields)
     random.Random(f"{seed}:order").shuffle(picked)
     cache = {}
     listed, key = [], {}
@@ -311,6 +415,8 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
                         "sha256": _sha(text)}
         if (book_id, version_id, number, field, position) in skip:
             key[item_id]["added"] = True
+        if marks is not None:   # the key says which mark the item has; the items file never does
+            key[item_id]["mark"] = mark_of[(book_id, version_id, number, field, position)]
     subset = _spread(random.Random(f"{seed}:calibration"), listed, calibration)
     head = {"format": FORMAT, "untrusted": True, "rubric": RUBRIC}
     folder, made_here = _prepare(outdir)
@@ -318,7 +424,7 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
     try:
         for name, obj in (("items.json", {**head, "items": listed}), ("calibration.json", {**head, "items": subset}),
                           ("key.json", {"format": FORMAT, "seed": seed, "generations": sorted({e["generation"] for e in key.values()}),
-                                        "items": key})):
+                                        **({"marks": marks} if marks is not None else {}), "items": key})):
             written.append(name)
             config.write_json_atomic(os.path.join(folder, name), obj, 0o600)
         written.append("rubric.md")
@@ -336,9 +442,12 @@ def sample(store, outdir, items=80, calibration=15, seed=None, generations=None,
                 pass
         raise
     count = lambda values: {str(k): values.count(k) for k in sorted(set(values))}
-    return {"items": len(listed), "calibration": len(subset), "seed": seed, "cards": len({(e[0], e[1], e[3]) for e in picked}),
-            "unreadable_cards": unreadable, "generations": count([e[3] for e in picked]), "fields": count([e[4] for e in picked]),
-            "added": len(drawn)}
+    summary = {"items": len(listed), "calibration": len(subset), "seed": seed, "cards": len({(e[0], e[1], e[3]) for e in picked}),
+               "unreadable_cards": unreadable, "generations": count([e[3] for e in picked]), "fields": count([e[4] for e in picked]),
+               "added": len(drawn)}
+    if marks is not None:
+        summary.update(marks=count(list(mark_of.values())), allocation=allocation)
+    return summary
 
 
 def _read_json(path, what):
@@ -415,17 +524,22 @@ def _load_key(path):
         raise KbError("the key file is not a key of this format")
     for entry in doc["items"].values():
         base = {"book_id", "version_id", "generation", "field", "position", "sha256"}
-        if not isinstance(entry, dict) or set(entry) not in (base, base | {"added"}) or entry.get("added", True) is not True \
+        if not isinstance(entry, dict) or set(entry) not in (base, base | {"added"}, base | {"mark"}, base | {"added", "mark"}) \
+                or entry.get("added", True) is not True or entry.get("mark", MARKS[0]) not in MARKS \
                 or type(entry["generation"]) is not int or not 1 <= entry["generation"] <= 10 ** 6:
             raise KbError("the key file holds an entry that is not valid")
     return doc["items"]
 
 
-def accuracy(items_path, key_path):
+def accuracy(items_path, key_path, by_mark=False):
     """Counts of supported, unsupported and inference items (and skipped ones) by generation and field, from the labelled items and the
-    key they were drawn with. Every item must be labelled and must be the item the key names. Holds no item text."""
+    key they were drawn with. Every item must be labelled and must be the item the key names. Holds no item text. With `by_mark` the
+    report also has `marks`: the same counts, and the shares of the items not skipped, for each mark overall and for each field of each
+    mark; it is refused for a key in which an item has no mark (a sample that was not drawn by mark)."""
     items = _load(items_path, "the items file")
     key = _load_key(key_path)
+    if by_mark and not all("mark" in entry for entry in key.values()):
+        raise KbError("the key does not name the mark of every item: the sample was not drawn by mark")
     if {i["id"] for i in items} != set(key):
         raise KbError("the items are not the ones the key was made for (the ids differ)")
     for item in items:
@@ -435,25 +549,38 @@ def accuracy(items_path, key_path):
         if item["label"] is None:
             raise KbError(f"the item {item['id']} is not labelled")
     blank = lambda: {"items": 0, "skipped": 0, **{label: 0 for label in LABELS}}
-    generations = {}
+    generations, marks = {}, {}
     for item in items:
         group = generations.setdefault(str(key[item["id"]]["generation"]), {**blank(), "fields": {}})
         targets = [group, group["fields"].setdefault(item["field"], blank())]
         if key[item["id"]].get("added"):  # the items that a second round added are counted apart as well
             targets.append(group.setdefault("added", blank()))
+        if by_mark:  # and, if asked, by the mark the card gave the item, overall and for each field
+            mark_group = marks.setdefault(key[item["id"]]["mark"], {**blank(), "fields": {}})
+            targets += [mark_group, mark_group["fields"].setdefault(item["field"], blank())]
         for target in targets:
             target["items"] += 1
             target["skipped" if item["label"] == "skip" else item["label"]] += 1
+
+    def shares(part):
+        judged = part["items"] - part["skipped"]
+        part["shares"] = {label: round(part[label] / judged, 4) for label in LABELS} if judged else None
+
     for group in generations.values():
         for part in (group, group.get("added")):
             if part is not None:
-                judged = part["items"] - part["skipped"]
-                part["shares"] = {label: round(part[label] / judged, 4) for label in LABELS} if judged else None
+                shares(part)
+    for group in marks.values():
+        for part in (group, *group["fields"].values()):
+            shares(part)
     labeller = {}
     for item in items:
         labeller[item["labelled_by"]] = labeller.get(item["labelled_by"], 0) + 1
-    return {"items": len(items), "notes": sum(1 for i in items if i["note"].strip()), "labelled_by": labeller,
-            "generations": dict(sorted(generations.items()))}
+    report = {"items": len(items), "notes": sum(1 for i in items if i["note"].strip()), "labelled_by": labeller,
+              "generations": dict(sorted(generations.items()))}
+    if by_mark:
+        report["marks"] = dict(sorted(marks.items()))
+    return report
 
 
 def agreement(first_path, second_path):

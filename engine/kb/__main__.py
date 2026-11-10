@@ -133,7 +133,11 @@ def main(argv=None):
     cs = sub.add_parser("card-sample", help="draw a blind sample of card items, with passages of the book, to be labelled; the files are held "
                                             "outside the repository; no model is called and nothing in the library changes")
     cs.add_argument("outdir", help="the folder to write the sample in (new or empty)")
-    cs.add_argument("--items", type=int, default=80, help="the number of items (default 80)")
+    cs.add_argument("--items", type=int, default=None, help="the number of items (default 80; not to be given with --marks)")
+    cs.add_argument("--marks", nargs="+", metavar="MARK=N", help="draw N items of each mark, inferred and stated, from the newest card of "
+                    "each version, mixed; the items file does not say which is which, the key does. The count of each mark is split "
+                    "equally over the fields given with --field (topics, key_ideas or caveats), and the size of the sample is the sum "
+                    "of the counts (for example --marks inferred=60 stated=60 --field topics --field key_ideas)")
     cs.add_argument("--calibration", type=int, default=15, help="the number of items in the calibration subset (default 15)")
     cs.add_argument("--added", type=int, default=0, help="the number of items to draw from those that a second round added to the cards "
                     "(default 0); they are counted in the sample and marked in the key")
@@ -151,6 +155,8 @@ def main(argv=None):
     ca = sub.add_parser("card-accuracy", help="count the labels of a sample by generation and field")
     ca.add_argument("items", help="the labelled items file")
     ca.add_argument("key", help="the key file of the sample")
+    ca.add_argument("--by-mark", action="store_true", help="also report the labels for each mark, overall and for each field "
+                    "(needs the key of a sample drawn with --marks)")
     cg = sub.add_parser("card-agreement", help="compare two labellings of the same items")
     cg.add_argument("first")
     cg.add_argument("second")
@@ -158,14 +164,15 @@ def main(argv=None):
     try:
         if args.command == "card-sample":
             print(json.dumps(cardsample.sample(Store.open(write=False), args.outdir, items=args.items, calibration=args.calibration,
-                                               seed=args.seed, generations=args.generation, books=args.book, added=args.added, fields=args.field),
+                                               seed=args.seed, generations=args.generation, books=args.book, added=args.added, fields=args.field,
+                                               marks=cardsample.parse_marks(args.marks) if args.marks is not None else None),
                              indent=1))
             return 0
         if args.command == "card-marks":
             print(json.dumps(cardmarks.counts(Store.open(write=False), generations=args.generation, books=args.book), indent=1))
             return 0
         if args.command == "card-accuracy":
-            print(json.dumps(cardsample.accuracy(args.items, args.key), indent=1))
+            print(json.dumps(cardsample.accuracy(args.items, args.key, by_mark=args.by_mark), indent=1))
             return 0
         if args.command == "card-agreement":
             print(json.dumps(cardsample.agreement(args.first, args.second), indent=1))

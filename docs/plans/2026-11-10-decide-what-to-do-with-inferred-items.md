@@ -238,3 +238,45 @@ A second round has not been asked for.
   card text reaches the output is not satisfied by short strings, and the second stale README sentence. Not done: a test with several
   versions of one book (the walk is that of `card-sample`, and the library has one version per book). It could not run anything or read
   the diff.
+
+### Increment B — A sample by mark, and the accuracy by mark
+
+- **Done.** In `engine/kb/cardsample.py`: `card-sample --marks inferred=N stated=M --field ...` draws one sample with N items marked
+  `inferred` and M marked `stated`, from the newest card of each version that carries marks. Each count is split equally over the fields
+  named (the extra item of an odd count to the field named first); a field whose pool holds fewer than its share gives all it has and
+  the rest goes to the others, and the summary says, for each mark and field, what was asked and what was drawn (`allocation`) and the
+  counts of each mark (`marks`); a mark whose fields hold fewer than asked is refused. In each cell the cards are visited in turn, so
+  no card fills it. The items are mixed and shuffled with the same shuffle as any sample, and ids are given after it; the items file and
+  the calibration file never say the mark, the key does (`mark` for each item, and the counts asked for at its top). `card-accuracy
+  --by-mark` reports the counts and the shares of `supported`, `inference` and `unsupported` for each mark overall and for each field
+  of each mark, and is refused for a key in which an item has no mark; without the option the report is as it was. `_load_key` accepts
+  an optional `mark` and checks its value, so keys of earlier samples load as before. `parse_marks` reads `MARK=N` and refuses anything
+  else, a mark twice, and a count of more than six digits. Step 1 (does the key record the mark?): it did not; `mark` is new.
+- **Deviations.** (1) `--marks` accepts only `topics`, `key_ideas` and `caveats`, the three fields whose items carry a mark one by one in
+  both forms of the card (the limit has one mark in the earlier form, the other fields of the sentence form are marked as sentences);
+  the plan said "the fields named". (2) The size of the sample is the sum of the counts, so `--items`, `--generation` and `--added` are
+  refused with `--marks`; `--items` no longer has the default 80 on the command line, `sample` applies 80 when it is given no size and
+  no marks (the only callers are the command and the tests, by keyword). (3) A `stated` item that a second round added can be drawn like
+  any other `stated` item (its key entry is not flagged `added`); the docstring says so.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest` on `test_cardsample`, `test_cardmarks`, `test_card`,
+  `test_cardmake`, `test_cardmake_earlier`, `test_cardqueue`, `test_cardstate`, `test_catalog`, `test_models`: 939 tests, OK (90 of
+  them in `test_cardsample`), run after the review's fixes; `wb run code-work check`: no problems. The draw without the option is pinned by
+  a trace of seed 7 taken from the code before the change (`UnchangedDrawTest`; stable over six runs before it was written into the
+  test), and the summary and key of such a sample are pinned to the keys they always had. 22 deliberate breaks, each from green (the
+  mark in the items file, the two kinds drawn in blocks, the key without the mark, the draw not seeded, the old draw changed, the
+  share of one mark counted into the other, the shares of the fields not equal, the extra item to the last field, a pool that is too
+  small refused, the fallback not reported, `--by-mark` not refused for a key without marks, a mark of the key not checked,
+  generations or added items or a size accepted with marks, any field accepted, a mark named twice accepted, a card with no marks
+  drawn from, one card filling a cell, the size not the sum, the command ignoring `--by-mark` or `--marks`, and the length of a count
+  not limited) were each caught; two were first missed (a mark named twice, because the command-line test was refused for its
+  calibration and not for the option; the size not the sum, because nothing set a calibration between the largest count and the sum)
+  and the tests were strengthened. The tests failed first for the missing option (33 errors and failures). No call was made to a model
+  server and no file of a sample was made outside a temporary folder.
+- **Review.** Independent `reviewer`, one exchange, no blocking finding. Applied: a count of more than 4,300 digits ended in a traceback
+  (Python refuses `int()` of a longer string) and exit 1; `parse_marks` now refuses more than six digits, and the command-line tests
+  now check that a refusal is the program's (`refused:` and no traceback) and not only the parser's; the docstring of `sample` no
+  longer says that no second-round item can be drawn. Noted for Increment C and not changed: the content of `inferred` items differs
+  from that of `stated` ones (an inferred item has no supporting quote, and its passages may be fewer or poorer), so a labeller may
+  judge the two marks differently for a reason that is part of the difference being measured, and the Result of C must say so among
+  the limits; and Increment C must send `items.json` (or `calibration.json`) only and never the folder, which holds the key. It could not
+  run anything or compare the trace with the old code.
