@@ -328,4 +328,35 @@ A second round has not been asked for.
   address, the retrieval date and the hash, the text between the untrusted-text markers).
 - **Not checked here.** Whether a page is marked partial or carries a scan caveat is not in the report of `process`; the cards, made in
   Increment B, carry it. The index was not rebuilt from the book folders for a comparison; no code or test changed, so no test was run.
-- **Verification as run:** the counts above; `wb run code-work check` found no problems.
+- **Verification as run:** the counts above; `wb run code-work check` found no problems. (Committed as `a0943f3`.)
+
+### Increment B — Cards for the new pages (run, 2026-11-10)
+
+- **The plan and the owner's word.** `cards-queue plan --book ID ...` for the 60 ids (run `20261110t194623z-6efd35`; the plan made no call):
+  60 books, form `earlier` (the default), models by entry `gemma`, `gptoss`, `local`, `checker`, `local`, 146 notes calls and 60 card calls
+  counted. The owner was told, before the run: that the text of the 60 pages goes to the models on `ned` in the clear over plain HTTP
+  (public text, nothing else), the expected 430 calls and 30 to 45 minutes, that any call can be asked twice and a book up to four times
+  at one call, that 58 refused answers were kept before the run (the baseline), and that nothing would be sent for the catalog's
+  vectors or the searches without a further word. The owner said **yes**.
+- **The run.** `cards-queue run`, one pass, from 19:51:47Z to 20:20:59Z (about 29 minutes): **60 done, 0 failed, 0 dropped, and no book
+  needed a second attempt** (`attempts` 0 for all). 411 calls were recorded on the cards: 146 notes, 60 card, 153 check and 52 second
+  round (6.85 a card; the first batch of 30 pages made 6.9). The queue rebuilt the catalog: 170 books, 169 versions with a card.
+- **The retry was used 6 times, each in a different book, and each time the second asking was accepted.** The kept refused answers rose
+  from 58 to 64. The six: a notes call with more than 6 points; a notes call with points and quotes of unequal length; a card call with
+  a topic over 60 characters; a card call with a support `2.3 inferred`; and the second round twice with a topic over 60 characters. No
+  book failed, so no second asking was refused. **None of the six is a list and its support list of different lengths**, the fault that
+  made all 9 refusals kept in the earlier-form run of the first batch of 30 pages (before the support was written with its item); the
+  shape no longer allows it. The books differ, the numbers are small, and this shows consistency with that change and not proof of its effect.
+  Observation, not acted on: 3 of the 6 are a topic over the limit of 60 characters.
+- **The cards** (60, all in the earlier form, all generation 1; counted apart as the plan says; the 29 earlier-form cards of the first
+  batch are given for comparison, different pages): **1 partial** (Kanban: only 2 key ideas were supported; 7 of 29 in the first batch);
+  **5 cards with an empty part**, each the limit (Statistical mechanics, Hidden Markov model, Critical path method, Public-key
+  cryptography, Wavelet), no other part empty (5 of 29 had an empty part); key ideas 5.4 a card on average and topics 8.2; 1 to 5 pieces
+  read, so none was sampled. Marks (`card-marks` on the 60): topics 404 `stated` and 90 `inferred` (18 percent), key ideas 275 and 49
+  (15), caveats 12 and 114 (90), limits 2 and 53 (96); in all 693 `stated` and 306 `inferred` (31 percent; 31 percent in the first
+  batch, 141 of 455). Two cards were read with `card-show` (Kalman filter, a clean card; Kanban, the partial one) and read sensibly.
+- **The rest of the library.** The snapshot compared again: **110 books before, 170 now, none of the 110 changed, 60 new.**
+- **Not done, by design.** `card-index` was run by the queue only; no `card-vectors` and no search by meaning (Increment C, each on the
+  owner's word). The 60 cards have no vectors yet, so they are not found by the search by meaning until C.
+- **Verification as run:** `cards-queue status` before and the run's report after (counts above); the kept-file counts (58, 64); the
+  snapshot comparison; `card-marks` on the 60; `card-show` of two; `wb run code-work check` after this entry. No tracked code changed.
