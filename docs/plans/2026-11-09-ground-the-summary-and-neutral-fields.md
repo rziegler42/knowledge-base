@@ -1,6 +1,6 @@
 # Ground the summary and the neutral fields of a card
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-09
 Candidate: cards#card-ground-the-rest
 Specs: docs/specs/card.md
@@ -422,7 +422,10 @@ nothing wider is named, since no other module reads the grounding record.
 - **Provenance.** Run on 2026-11-09 at commit 503d46c on the owner's configured servers; the labelling was done by cloud Opus
   subagents; the commands were `cards-queue plan --again`, `cards-queue run`, `card-sample`, `card-accuracy`; the counting scripts,
   the labelled files and the run's name are held outside the repository.
-- **Status label, set 2026-11-10.** `In Progress`, because completion criterion 5 is not met: it asks that the owner has labelled a
-  calibration subset of at least ten items, and the owner did not (the comparison above is the model's labels alone, as the plan's own
-  rule says). All four increments are committed and the owner's decision is recorded; no work is under way. The plan is `Completed`
-  when the owner labels the calibration items, or says that it is to be closed without them and the Result says so.
+- **Closed without the calibration labels, 2026-11-10.** Completion criterion 5 asks that the owner has labelled a calibration subset
+  of at least ten items. The owner did not, and on 2026-11-10 agreed to close the plan without them, on my recommendation: the decision
+  above (the old form is not replaced and the library is not carded again with the new form) rests on the model's labels alone, as the
+  plan's own rule says, and labelling now would change nothing in it. So criterion 5 is met only in part, and the agreement between
+  the cloud labeller and the owner is not measured; that stays a limit of the comparison above. All four increments are committed.
+  The plan is marked `Completed` on this record. It makes the candidate `cards#card-ground-the-rest` complete in the sense that the
+  form is built and measured; it does not make the new form the form in use.

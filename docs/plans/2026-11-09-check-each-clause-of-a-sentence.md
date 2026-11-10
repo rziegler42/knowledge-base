@@ -261,5 +261,8 @@ nothing wider is named, since no other module reads the check.
   changed.
 - **Status label, set 2026-11-10.** `In Progress`, because completion criteria 2 and 3 are not met (the check by clause is not in the
   engine and no new cards or sample exist) and the plan was not closed by a decision that says so. Increment A is committed; the owner
-  ended the line at A, and no work is under way. The plan is `Completed` only if Increments B and later are done; to close it as it
-  stands the owner would say so and the Result would record that.
+  ended the line at A, and no work is under way. The plan is `Completed` only if Increments B and later are done.
+- **Closed as a line of work, 2026-11-10.** The owner agreed to drop the roadmap candidate `cards#card-clause-check`, which this plan
+  names, with the reason above (12 of 21 supported sentences cut or dropped, 57 percent, against a limit of a quarter). The plan keeps
+  the label `In Progress` and is parked: it is not `Completed`, because the check by clause is not built and `Completed` would make the
+  dropped candidate look complete. It restarts only if the owner asks for a new candidate.

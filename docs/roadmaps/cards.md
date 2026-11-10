@@ -1,7 +1,7 @@
 # Cards
 
 Status: Active
-Updated: 2026-11-08
+Updated: 2026-11-10
 
 ## Purpose
 
@@ -108,6 +108,9 @@ proposed. A bridge to local models (`ask-ollama`) is installed in the workbench,
 - Boundary: in, splitting an item into clauses, the check prompt and its tests, and the accuracy measure. Out, a cloud model as a
   checker and any change to the sample method.
 - Trigger: the owner asks for a plan.
+- Dropped: on 2026-11-10, at the owner's word. Reason: the plan `2026-11-09-check-each-clause-of-a-sentence` stopped after its first
+  increment, by its own rule. A probe of the check by clause on the unsupported `stated` sentences cut or dropped 12 of the 21
+  supported sentences (57 percent), over the limit of a quarter that the plan set for going on. The candidate stays in the file.
 
 ### card-ground-the-rest: Ground the summary and the neutral fields
 

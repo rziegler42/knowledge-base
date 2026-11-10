@@ -1,6 +1,6 @@
 # First slice: capture a source, convert it, search it, read it
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-05
 Candidate: none (no roadmap exists yet; the owner asked for a simple foundation built)
 Specs: book, library, pipeline, reading
@@ -943,7 +943,13 @@ by three follow-up plans and the card plans. Nothing was changed in the plan's t
      By design; noted because it is stricter than many readers expect.
 - **Left for the owner:** whether to run the rest of the list (six pages and two papers), whether the findings above are to be
   fixed (a new plan would be needed: the fixes change committed code, which the approved plan does not cover), and the word to push.
-- **Status label, set 2026-11-10.** `In Progress`, because completion criterion 6 is not met: the walk-through of Increment J has had nine
-  web pages and three papers, and the criterion asks for at least ten pages and three papers, or a recorded decline by the owner. The
-  rest of the list waits for the owner's word; nothing is under way. The plan is `Completed` when the owner runs the rest or declines
-  it and the Result says so. Every other increment is committed.
+- **Closed, 2026-11-10.** Criterion 6 asks for a walk-through of at least ten pages and three papers, or a recorded decline by the owner;
+  the walk-through had nine pages and three papers. On 2026-11-10 the owner agreed, on my recommendation, to **decline the rest of the
+  list** (six pages and two papers), so that the Result records a decline and the criterion is met in the way it allows. The reason:
+  the purpose of the walk-through, finding what goes wrong in loading, was served by two batches and by the loading of about 80 books
+  since. Criterion 1, the full suite, had no recorded run and was run for this closing: `python3 -W error::ResourceWarning -m unittest
+  discover -s engine/tests -t .` (the `-t .` so that the test packages import) from the repository root at commit `8b53dfe`: **1,925 tests,
+  OK, 53 skipped** in 384 seconds. The 53 skipped are the tests of the helper of the `kb` package, which need a checkout of the
+  workbench; `KB_WORKBENCH_CHECKOUT=<checkout> python3 -m unittest engine.tests.test_package` then gives 64 tests, OK. The run printed
+  `ResourceWarning: unclosed database` notices from the finalizer of some tests; they are not failures and are not new to this plan.
+  Criteria 2 to 5 stand on the records of their increments above. The plan is marked `Completed`.
