@@ -8,6 +8,7 @@ from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card
 from . import cardqueue
 from . import cardsample
 from . import problem
+from . import problemtrial
 from . import vectors
 from .store import Store
 
@@ -110,6 +111,15 @@ def main(argv=None):
     ps.add_argument("sub_problems", nargs="+", metavar="SUB_PROBLEM", help=f"a sub-problem, at most {problem.MAX_SUB_CHARS} characters")
     ps.add_argument("--limit", type=int, default=problem.DEFAULT_LIMIT, help=f"at most this many books from each sub-problem (1 to {problem.MAX_LIMIT})")
     ps.add_argument("--launcher", metavar="PATH", help="the absolute path of the workbench launcher (wb), for a caller whose PATH does not hold it")
+    tp = sub.add_parser("trial-problems", help="run a corpus of problems through four searches (the text, the cards by keyword, the cards by "
+                        "meaning, and the problem search) and write a report of the place of each expected book; both files are held outside "
+                        "the repository; the problem texts and the sub-problems of the corpus go to the embedding model's server and to "
+                        "nothing else; the report holds numbers and decides nothing; --check reads the corpus and the library and sends nothing")
+    tp.add_argument("corpus", help="the corpus file (JSON): problems, expected and home titles, keyword queries and sub-problems")
+    tp.add_argument("report", help="the report file to write")
+    tp.add_argument("--replace", action="store_true", help="replace a report that exists")
+    tp.add_argument("--check", action="store_true", help="read the corpus and the library, resolve the titles and print what would be run; "
+                    "send nothing and write nothing")
     tr = sub.add_parser("trial", help="run a corpus of questions against the library and write a report of what the search of the cards and "
                                        "the search of the text find; both files are held outside the repository; no model is called "
                                        "and nothing in the library changes")
@@ -189,6 +199,10 @@ def main(argv=None):
                 found = catalog.search(config.load()["index_root"], args.query, limit=args.limit, book_id=args.book,
                                        within=args.within or "all")
             print(json.dumps(found, indent=1))
+            return 0
+        if args.command == "trial-problems":
+            print(json.dumps(problemtrial.run(Store.open(write=False), config.load(), args.corpus, args.report, replace=args.replace,
+                                              check=args.check), indent=1))
             return 0
         if args.command == "problem-search":
             cfg = config.load()

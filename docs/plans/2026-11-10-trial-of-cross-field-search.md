@@ -228,4 +228,51 @@ A second round has not been asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The command that runs the trial (done)
+
+- **What was built:** `engine/kb/problemtrial.py` and the subcommand `python3 -m kb trial-problems CORPUS REPORT [--replace] [--check]`
+  (in `engine/kb/__main__.py`), with the README section "The trial of cross-field search" and a bullet under "Evaluation" in
+  `docs/specs/testing.md`. The corpus (format 1) is checked in full (form, sizes, ids, texts that can be sent, one to three keyword
+  queries, one to five sub-problems, titles that match exactly one book, no expected book in a control, none both expected and home)
+  and must lie outside the project. The four searches are T (`search`), K (`card-search` all sides), M (`vectors.search` of the problem
+  text) and P (`problem.search` at limit 10); each is placed by its own rule, P by its position in the merged list. The report has, for
+  each problem and search, the order, the books at a place of 5 or less with their titles, the scores of M and P, and for a problem with
+  expected books the places, the places after setting aside, hit at 5 (both ways), the reciprocal rank and the home books among the
+  first five; a control has no measures. The summary counts the hits, the pairs within ten and the mean reciprocal rank over the
+  problems with expected books. The report holds the hashes of the catalog, the text index and the vectors, the model, whether a query
+  prefix was used (never the prefix), the cards covered, and no path. `--check` resolves the titles and prints what would be sent
+  (`sentences_to_send`) with no call and no report.
+- **Tests first:** `engine/tests/test_problemtrial.py`, 45 tests on six books with chosen vectors, a hand-worked case of four problems
+  and a fake bridge; the first run failed on the missing module. Three more failures after the first implementation were my own: the
+  text and card searches were placed by position in the merged order, which lost the ties of the `trial.py` rule (fixed in the code
+  and the test), and two tests that expected "nothing was sent" for failures that happen after a send.
+- **Verification as run:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_problemtrial engine.tests.test_problem
+  engine.tests.test_vectors engine.tests.test_catalog engine.tests.test_trial engine.tests.test_models` gave 483 tests, OK;
+  `wb run code-work check` found no problems. No call was made to the owner's server.
+- **Deliberate breaks, each from green:** 28, of which 27 were caught: P placed by the smallest per-sub-problem rank, the place taken from
+  the last query, the home books not removed or removed without moving the others up, hit at 5 counting the sixth (both ways), a control
+  measured, M sent the sub-problems, P sent the problem text, a corpus inside the project, a title matching two books or none,
+  `--check` sending a call, a report overwritten without `--replace`, a change of the library not noticed, six sub-problems allowed, a
+  sub-problem not checked, a book both expected and home, a control with expected books, the prefix flag always false, a pair at the
+  eleventh place counted, the mean reciprocal rank, no stale-catalog check, stale vectors accepted, cards without a vector accepted, no
+  coverage check, and the counts left out of the report. The one not caught is redundant: the explicit check of the vectors' model,
+  dimension and prefix is now also made by `vectors.coverage`, so removing the first changes nothing.
+- **Review:** the read-only `reviewer` agent, one round, **one blocking finding, applied**: the command did not refuse stale vectors,
+  although the plan says it does. `vectors.search` leaves out a stored vector whose card text changed and a card with no vector, and
+  only counts them, so a half-stale file would have given a trial that looked clean. Fixed with a test first (4 failures): a new
+  `vectors.coverage(index_root, cfg)` returns the counts of a search without sending a query, and the command refuses, before
+  anything is sent, when `stale` or `without_vector` is not zero, naming `card-vectors`; `--check` shows the counts and the report holds
+  them. To share the counting, `vectors.search` was refactored (`_catalog_rows`, `_usable`) with no change of behaviour: `test_vectors`
+  gave 119 tests, OK, with 3 new ones for `coverage`. **This changes `vectors.py` and `test_vectors.py`, which the plan's list of affected
+  areas does not name.** Not blocking, recorded: (2) for T and K over several queries "hit at 5" and "the first five" mean a place of 5
+  or less by the rule of `trial.py`, so up to three books can share a place and the list of the first five can hold more than five; for
+  M and P it is the first five exactly; the README says so. The plan's words "among the first five books" are read that way. (3) A
+  card's title is its book's title (`root["title"]`), the same for every version, so the finding that a book with versions of different
+  titles would not resolve does not apply. (4) The question about a security review (step 5) is put to the owner after this report.
+  The fix itself had no second round of review; it was checked by its tests and four breaks.
+- **Not done, and why:** the plan says a stale text index is refused; only its presence is checked, as `trial` does, because there is
+  no cheap way to compare the index with the books (the README says to run `index` after adding books).
+- **Security review (step 5).** Asked once of the owner, with the surface named: a corpus file the owner names is read, a report file is
+  written outside the project, and the problem texts and sub-problems are sent to the owner's server in the clear through the existing
+  path (the new `vectors.coverage` only reads). My recommendation was no (the corpus is the owner's own bounded file, and the send path
+  and the file-writing code are ones already reviewed). The owner's answer: **no**. No security review was run for this surface.

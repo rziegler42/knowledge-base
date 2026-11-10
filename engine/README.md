@@ -896,6 +896,54 @@ questions from your own projects must not be committed. It reports numbers and n
 - **What it cannot show.** A small library and a few questions make a finding for you to weigh, not a measure of how well the library
   serves your real use.
 
+### The trial of cross-field search: problems and four searches
+
+```sh
+python3 -m kb trial-problems CORPUS REPORT [--replace] [--check]
+```
+
+`trial-problems` runs problems that you choose through four searches over the same library and reports where the books you expect
+come. You start it; it reads the library and writes only the report. Both files are held **outside the repository** (a path inside the
+project's folder, links followed, is refused). It reports numbers and never decides; the reading of them is for the plan or for you.
+**Searches M and P send sentences out:** each problem text (M) and each sub-problem (P) goes, with the query prefix of the config, to
+the embedding model that the config sets for `card-embed`, and to nothing else (at most 50 problems and 250 sub-problems, one
+call each); T and K send nothing. `--check` reads the corpus and the library, resolves the titles and prints what would be sent, with
+no call and no report.
+
+- **The corpus** is a JSON file you write: `{"format": 1, "problems": [{"id": "p1", "control": false, "text": "the problem in the words of its
+  field", "expected": ["<full title of a book from another field>", ...], "home": ["<title of a book of the problem's own field>", ...],
+  "keyword_queries": ["one to three plain words", ...], "sub_problems": ["one idea in general terms", ...]}]}`. There are 1 to 50
+  problems; a title is the title as the catalog stores it (for example `Simulated annealing - Wikipedia`) and must match exactly one
+  book; a problem has 1 to 20 expected titles unless it is a control, which has none and is a problem that no book should answer;
+  1 to 3 keyword queries and 1 to 5 sub-problems, of at most 1,000 characters each. Write the queries and sub-problems before the
+  first run, without the library or the expected books in view, and do not change them after seeing results; the report records the
+  file's sha256.
+- **The four searches.** **T**, the text search of the books (`search`), once for each keyword query. **K**, the keyword search of the
+  cards, all their fields, once for each keyword query. **M**, the search by meaning with the problem text as written. **P**, the
+  problem search with the sub-problems, 10 books asked for each.
+- **How a book is placed**, one rule for each search. T and K: the rule of `trial` (a book's place in one query is counted from 1 by
+  its first appearance, over several queries it is the smallest it has, and books of the same place are ordered by book id). M: the
+  order of its list. P: the position in the merged list that `problem-search` returns (best score, then book id); the ranks inside a
+  sub-problem are not used. Each list holds at most 50 books.
+- **The measures**, for a problem with expected books: the *place* of each expected book (`null` if not in the list); the same *after
+  setting aside*, with the home books taken out of the lists, which simulates a perfect setting aside of the problem's own field;
+  *hit at 5* (an expected book at a place of 5 or less) and the same after setting aside; the *reciprocal rank* of the best-placed
+  expected book; and the number of home books among the books at a place of 5 or less. A control has no measures and lists its books.
+  Every search lists the books at a place of 5 or less with their titles, and M and P their scores. The summary counts, over the
+  problems with expected books, the hits, the pairs (problem, expected book) at a place of 10 or less, and the mean reciprocal rank,
+  each with the number it is out of.
+- **The report** (JSON, mode 600, never over a file that exists unless `--replace`) holds the problems with their texts, the lists, the
+  measures and the summary, the corpus hash, the date, and a manifest: the library, the sha256 of the catalog, the text index and the
+  vectors, the model, whether a query prefix was used (never the prefix), and how many cards the search by meaning covers. The command
+  refuses a catalog that is not the one the cards make, a missing text index, catalog or vectors, vectors made by another model,
+  dimension or document prefix than the config sets, and **vectors that are not current** (a stored vector whose card text has
+  changed, or a card with no vector: it names `card-vectors`), all before anything is sent; and it refuses, writing no report, if one
+  call fails or a file changes during the run. The text index is checked only for its presence, as `trial` checks it, so run `index`
+  after books are added. It prints the summary, the hashes and the number of sentences sent, not the problems.
+- **What it cannot show.** A few problems that one person chose, in a small library, make a finding for you to weigh, not a measure of
+  how well the library serves your real use. The setting aside of the home field is simulated by your list of home books; how well an
+  agent does it is not measured.
+
 ### How accurate are the cards? A sample to label
 
 ```sh

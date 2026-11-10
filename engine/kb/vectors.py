@@ -397,6 +397,47 @@ def _unit(vector):
     return [x / length for x in vector]
 
 
+def _catalog_rows(index_root):
+    """The rows of the catalog that a search reads, in a fixed order, or a refusal that names the command to run."""
+    try:
+        with closing(catalog.connect(catalog.path_of(index_root), readonly=True)) as cconn:
+            return cconn.execute("SELECT id, book_id, version_id, generation, is_current, added, citation, card FROM cards "
+                                 "ORDER BY book_id, version_id").fetchall()
+    except sqlite3.Error as e:
+        raise KbError(f"the catalog cannot be read ({e}): run `{catalog.COMMAND}` to build it again") from None
+
+
+def _usable(stored, by_card):
+    """`(usable, stale, without_vector)`: the unit vectors that a search would use, by card and field; the number of stored vectors it
+    would leave out (text changed, card gone, damaged); and the number of cards that have text to embed and no vector to use."""
+    usable, stale = {}, 0
+    for v in stored:
+        key = (v["book_id"], v["version_id"])
+        row = by_card.get(key)
+        text = _field_text(row[7], v["field"]) if row is not None and v["vector"] is not None else None
+        unit = _unit(v["vector"]) if text is not None and sha256(text) == v["text_sha256"] else None
+        if unit is None:
+            stale += 1
+        else:
+            usable.setdefault(key, {})[v["field"]] = unit
+    without_vector = sum(1 for key, row in by_card.items() if key not in usable and any(_field_text(row[7], f) for f in FIELDS))
+    return usable, stale, without_vector
+
+
+def coverage(index_root, cfg):
+    """What a search would cover, found without sending a query: `{"cards_searched", "stale", "without_vector"}` as a search reports
+    them. Refused as a search is before it sends (no file of vectors or catalog, a file of vectors for another model, dimension or
+    document prefix, a row that is not what this engine writes). Reads the two files read-only and sends nothing."""
+    name, _ = models.choose(cfg, "card-embed")
+    entry = models.registry(cfg)[name]
+    with closing(connect(path_of(index_root), readonly=True)) as vconn:
+        check_entry(vconn, entry)
+        stored = read_rows(vconn, entry["dimension"], lenient=True)
+    by_card = {(row[1], row[2]): row for row in _catalog_rows(index_root)}
+    usable, stale, without_vector = _usable(stored, by_card)
+    return {"cards_searched": len(usable), "stale": stale, "without_vector": without_vector}
+
+
 def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, root=None):
     """Search by meaning. The query is turned into a vector by the embedding model that the config sets for `card-embed`, and each card
     is ranked by the cosine between it and the closest of the card's vectors (problem, approach, provides), larger being closer. Returns
@@ -416,12 +457,7 @@ def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, 
     with closing(connect(path_of(index_root), readonly=True)) as vconn:
         meta = check_entry(vconn, entry)
         stored = read_rows(vconn, entry["dimension"], lenient=True)
-    try:
-        with closing(catalog.connect(catalog.path_of(index_root), readonly=True)) as cconn:
-            rows = cconn.execute("SELECT id, book_id, version_id, generation, is_current, added, citation, card FROM cards "
-                                 "ORDER BY book_id, version_id").fetchall()
-    except sqlite3.Error as e:
-        raise KbError(f"the catalog cannot be read ({e}): run `{catalog.COMMAND}` to build it again") from None
+    rows = _catalog_rows(index_root)
     got = models.embed(cfg, name, [query], launcher=launcher, root=root, kind="query")
     if got["model"] != meta["model"]:
         raise KbError(f"the model that answered for the query ({textutil.clean(got['model'], 60)}) is not the one that made the vectors; "
@@ -430,17 +466,7 @@ def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, 
     if q is None:
         raise KbError("the vector for the query has no length")
     by_card = {(row[1], row[2]): row for row in rows}
-    usable, stale = {}, 0
-    for v in stored:
-        key = (v["book_id"], v["version_id"])
-        row = by_card.get(key)
-        text = _field_text(row[7], v["field"]) if row is not None and v["vector"] is not None else None
-        unit = _unit(v["vector"]) if text is not None and sha256(text) == v["text_sha256"] else None
-        if unit is None:
-            stale += 1
-        else:
-            usable.setdefault(key, {})[v["field"]] = unit
-    without_vector = sum(1 for key, row in by_card.items() if key not in usable and any(_field_text(row[7], f) for f in FIELDS))
+    usable, stale, without_vector = _usable(stored, by_card)
     ranked = []
     for key, fields in usable.items():
         best, best_field = None, None

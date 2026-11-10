@@ -125,6 +125,15 @@ Each group names what must hold. The other specs hold the detail.
   measures are the rank of the first source paper and theme, recall at 5, 10 and 20, how often one book is a hub, and whether each
   composite sub-question reaches its source shelf. The papers are fetched from public sources at run time and never committed. The
   first run is summarised in evidence note 10 of `knowledge-base.md`.
+- **[proposed]** Built in the engine: `trial-problems CORPUS REPORT [--check]` runs problems the owner chooses through four searches of
+  the library (the text, the cards by keyword, the cards by meaning, and the problem search), with the keyword queries and sub-problems
+  written by an agent that never saw the corpus or the library, and reports for each the place of every expected book, whether one is
+  in the first five, and the same after the problem's own field's books are removed (a simulated setting aside), with controls that no
+  book should answer. The corpus and the report are held outside the repository and hashed, the measures are fixed before any search
+  runs, and the command reports numbers and decides nothing. The sentences of the corpus go to the embedding model's server and to
+  nothing else, and `--check` sends nothing. The plan `2026-11-10-trial-of-cross-field-search` states the reading of the numbers. It
+  is not the standard transfer set above: it uses twelve synthetic problems against the library as it is, and the papers of the
+  transfer set are not fetched.
 - **[idea]** A second corpus with more variety than the first, because the first extraction test was small and mostly one field.
   The transfer set has 4 to 8 papers per shelf and eight transfers, so a larger one with held-out queries would settle what it could not.
 

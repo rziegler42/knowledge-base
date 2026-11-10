@@ -888,6 +888,36 @@ class RankTest(SearchCase):
         self.assertLessEqual(len(line), search.EXCERPT_CHARS + 2)
 
 
+class CoverageTest(SearchCase):
+    """What a search would leave out, found without sending a query."""
+
+    def test_the_counts_are_those_of_a_search_and_nothing_is_sent(self):
+        sent = len(self.sent())
+        got = vectors.coverage(self.store.cfg["index_root"], self.mcfg)
+        self.assertEqual(len(self.sent()), sent)
+        search = self.find("Q-A")
+        self.assertEqual(got, {"cards_searched": search["cards_searched"], "stale": search["stale"], "without_vector": search["without_vector"]})
+        self.assertEqual(got, {"cards_searched": 2, "stale": 0, "without_vector": 0})
+
+    def test_a_changed_card_and_a_card_without_vectors_are_counted(self):
+        card.file(self.store, card.make(self.store, self.one, self.one_v, model=self.model_with("one", neutral_problem="changed"), records=[]))
+        new = self.carded(title="Three", model=self.model_with("three"))
+        self.rebuild()
+        got = vectors.coverage(self.store.cfg["index_root"], self.mcfg)
+        search = self.find("Q-A")
+        self.assertEqual(got, {k: search[k] for k in ("cards_searched", "stale", "without_vector")})
+        self.assertEqual((got["stale"], got["without_vector"]), (1, 1))
+        self.assertTrue(new)
+
+    def test_it_refuses_what_a_search_refuses_before_a_query_would_be_sent(self):
+        with self.assertRaises(KbError) as cm:
+            vectors.coverage(self.store.cfg["index_root"], with_embedding(model="other:latest"))
+        self.assertIn("card-vectors", str(cm.exception))
+        os.remove(self.path())
+        with self.assertRaises(KbError):
+            vectors.coverage(self.store.cfg["index_root"], self.mcfg)
+
+
 class ResultTest(SearchCase):
     def test_a_result_has_every_key_of_a_keyword_result_and_the_same_markers(self):
         (keyword,) = catalog.search(self.store.cfg["index_root"], "one problem", within="neutral")
