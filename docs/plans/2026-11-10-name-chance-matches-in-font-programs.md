@@ -178,4 +178,45 @@ config entry, and books already filed keep their stored scan results until the o
 
 ## Result
 
-Empty until work starts.
+### Increment A — What the scan says of the library's 40 PDFs (run, 2026-11-10)
+
+- **Method.** `python3 -I` on a script outside the repository: each PDF of the library was copied to a folder of its own and the copy
+  scanned with the scan's own function (`scan_tool.scan_pdf`, label `kb-scan 0.0.8`). The scan's own functions were wrapped to
+  record what they are given, not reimplemented: the dictionary of each stream (does it have `/Length1`, which container keys, which
+  `/Type`, is it taken for a picture) and every match with whether it has the shape of a use. No viewer opened a file, nothing was
+  sent anywhere, and no byte of a file is written here. The script and the copies are untracked; the record of the run has SHA-256
+  `7b8317649dcc7dfc533f84ce6c674aeb7c5fa4bb3e2f45a54398f179975ce783`.
+- **Step 1, the check.** For **all 40 PDFs the recomputed caveats equal those stored on the books** (kind and count; 21 were stored by
+  `kb-scan 0.0.8`, the other 19 have no caveat, so no label). The recorder also agrees with the scan's own counts for every pattern and
+  for `pattern_in_binary_data` on all 40: the matches it saw are the ones the scan counted.
+- **The findings of the 40 PDFs.** 9 have a `javascript`, `pattern_in_binary_data` or `external_actions` finding: `javascript` in 1
+  PDF, `pattern_in_binary_data` in 8, `external_actions` in 1. (Others: `large_image_streams` in 13, `scan_incomplete` in 4.)
+- **Step 2, where each match sits** (place = how the scan read the bytes; "picture" = a stream the scan takes for an image; "compressed
+  bytes" = the raw bytes of a decoded stream or a picture codec's data, kept as a binary place):
+
+  | Book (paper) | Name in the stored caveats | Where the matches sit | Shaped like a use |
+  |---|---|---|---|
+  | Language Models are Few-Shot Learners | `pattern_in_binary_data` 1 | compressed bytes: `javascript` 1 | no |
+  | An Image is Worth 16x16 Words | `pattern_in_binary_data` 1 | a picture: `embedded_files` 1 | no |
+  | Learning Transferable Visual Models (CLIP) | `pattern_in_binary_data` 24 | a picture: `javascript` 24 | no |
+  | PaLM | `pattern_in_binary_data` 1 | compressed bytes: `javascript` 1 | no |
+  | Dota 2 with Large Scale Deep Reinforcement Learning | `pattern_in_binary_data` 2 | a picture and compressed bytes: `embedded_files` 1 and 1 | no |
+  | Soft Actor-Critic | `external_actions` 2, `pattern_in_binary_data` 1 | an object stream (`/N`, `/First`, `/Type /ObjStm`), read as text: `external_actions` 1, not shaped; the file as it is: `external_actions` 1, shaped; compressed bytes: `javascript` 1, not shaped | one of the two `external_actions` |
+  | 3D Gaussian Splatting | `pattern_in_binary_data` 18 | pictures (8 recorded pieces) and compressed bytes: `javascript` 4, `embedded_files` 14 | no |
+  | Fusion 360 Gallery | `pattern_in_binary_data` 1 | compressed bytes: `javascript` 1 | no |
+  | **Variational Inference (the Blei paper)** | **`javascript` 1** | **one stream with `/Length1` and no container key, read as text: `javascript` 1** | **no** |
+
+- **Step 3, the font marker.** 35 of the 40 PDFs have `/Length1` in their plain bytes (fonts are embedded in most papers). **Exactly
+  one match in the library sits in a stream that has `/Length1`, no container key and no `/Type` of `ObjStm` or `XRef`, read as
+  text: the Blei match** (not shaped). In the 8 other PDFs with a finding, no match sits in such a stream: they sit in pictures and
+  in compressed bytes, which are already binary places, and in one object stream (Soft Actor-Critic), which the plan keeps at full
+  strength. **No match sits in a font stream without `/Length1`** (no stream is read as text with a match except the Blei stream and
+  that object stream), so the scope of B, streams with `/Length1`, covers every case found.
+- **What B will therefore change in the library's 40:** one finding, the Blei `javascript` 1 becoming `pattern_in_binary_data` 1. The
+  rest of the stored caveats must come out equal.
+- **Not shown, or not done.** The records show only where matches occur, not how many font streams the 40 PDFs hold. The Soft
+  Actor-Critic `external_actions` in an object stream (unshaped, so possibly a chance match like the others) stays as it is: it is
+  in a container, the case the plan keeps at full strength, and it is outside this plan. Forty PDFs are a small sample, mostly machine
+  learning papers; the Blei match is the only one of its kind among them.
+- **Verification as run:** the 40 stored caveat lists against the recomputed ones (equal); the recorder against the scan's counts
+  (equal on all 40); the counts above are the output of the script. `wb run code-work check` after this entry. No tracked code changed.
