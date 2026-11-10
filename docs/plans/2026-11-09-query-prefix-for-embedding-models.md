@@ -1,6 +1,6 @@
 # A query prefix for embedding models
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-09
 Candidate: none (an improvement that follows from Increment E of the completed plan 2026-11-09-search-the-neutral-descriptions-by-meaning, whose Result found that the models the owner chose from are made to take an instruction before a query and the engine sends none)
 Specs: docs/specs/models.md, docs/specs/card.md
