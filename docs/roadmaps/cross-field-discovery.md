@@ -1,6 +1,6 @@
 # Cross-field discovery
 
-Status: Active
+Status: Archived
 Updated: 2026-11-10
 
 ## Purpose
