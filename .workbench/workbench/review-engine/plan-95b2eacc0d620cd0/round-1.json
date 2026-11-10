@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Increment A — Steps / Increment B — Step 6",
+      "problem": "Increment A adds the restored model-output parsing path, but the required security-review question is deferred to Increment B. Increment A can therefore be committed after changing a parser of untrusted model output without the plan having asked the owner whether to review that surface.",
+      "severity": "major",
+      "suggestion": "Add the security-review checkpoint to Increment A after the independent review and before its commit, explicitly covering the new earlier-form parsing and journal handling; record the owner's answer in the Result. Remove or narrow the duplicate checkpoint in B."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan aligns with the referenced card spec and the cited 30-book batch, but its security-review checkpoint is sequenced after the parsing change it should cover.",
+  "verdict": "changes_needed"
+}
