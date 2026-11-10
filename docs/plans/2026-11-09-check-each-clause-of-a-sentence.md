@@ -1,6 +1,6 @@
 # Check each clause of a grounded sentence
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-09
 Candidate: cards#card-clause-check
 Specs: docs/specs/card.md
@@ -259,3 +259,7 @@ nothing wider is named, since no other module reads the check.
     The first-part check of "whole" is also weak: some parts overlap or repeat ("and diverse representation schemes" appears twice).
 - **State.** The stop rule fired on a valid test. Stopped before increment B, as the rule says. No tracked file other than this plan
   changed.
+- **Status label, set 2026-11-10.** `In Progress`, because completion criteria 2 and 3 are not met (the check by clause is not in the
+  engine and no new cards or sample exist) and the plan was not closed by a decision that says so. Increment A is committed; the owner
+  ended the line at A, and no work is under way. The plan is `Completed` only if Increments B and later are done; to close it as it
+  stands the owner would say so and the Result would record that.

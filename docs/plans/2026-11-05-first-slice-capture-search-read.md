@@ -1,6 +1,6 @@
 # First slice: capture a source, convert it, search it, read it
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-05
 Candidate: none (no roadmap exists yet; the owner asked for a simple foundation built)
 Specs: book, library, pipeline, reading
@@ -943,3 +943,7 @@ by three follow-up plans and the card plans. Nothing was changed in the plan's t
      By design; noted because it is stricter than many readers expect.
 - **Left for the owner:** whether to run the rest of the list (six pages and two papers), whether the findings above are to be
   fixed (a new plan would be needed: the fixes change committed code, which the approved plan does not cover), and the word to push.
+- **Status label, set 2026-11-10.** `In Progress`, because completion criterion 6 is not met: the walk-through of Increment J has had nine
+  web pages and three papers, and the criterion asks for at least ten pages and three papers, or a recorded decline by the owner. The
+  rest of the list waits for the owner's word; nothing is under way. The plan is `Completed` when the owner runs the rest or declines
+  it and the Result says so. Every other increment is committed.

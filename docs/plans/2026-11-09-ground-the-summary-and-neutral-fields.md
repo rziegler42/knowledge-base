@@ -1,6 +1,6 @@
 # Ground the summary and the neutral fields of a card
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-09
 Candidate: cards#card-ground-the-rest
 Specs: docs/specs/card.md
@@ -422,3 +422,7 @@ nothing wider is named, since no other module reads the grounding record.
 - **Provenance.** Run on 2026-11-09 at commit 503d46c on the owner's configured servers; the labelling was done by cloud Opus
   subagents; the commands were `cards-queue plan --again`, `cards-queue run`, `card-sample`, `card-accuracy`; the counting scripts,
   the labelled files and the run's name are held outside the repository.
+- **Status label, set 2026-11-10.** `In Progress`, because completion criterion 5 is not met: it asks that the owner has labelled a
+  calibration subset of at least ten items, and the owner did not (the comparison above is the model's labels alone, as the plan's own
+  rule says). All four increments are committed and the owner's decision is recorded; no work is under way. The plan is `Completed`
+  when the owner labels the calibration items, or says that it is to be closed without them and the Result says so.
