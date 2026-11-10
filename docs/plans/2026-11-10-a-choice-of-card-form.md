@@ -208,6 +208,7 @@ The reviewer found the plan consistent with the card spec and with the cited bat
   reply's shape, and the sentence path is unchanged), accepted. It could not read git history; the comparison with history was made by me.
 - **Security review checkpoint.** Asked once, about the parsing of a model's reply and the journal header. The owner said no security
   review; none was run. The reviewer found no new exposure by reading (replies still pass the shape check and `parse_support`; the form is
+  checked against a fixed set before any call).
 
 ### Increment B — Choosing the form in the commands and the queue
 
@@ -242,4 +243,45 @@ The reviewer found the plan consistent with the card spec and with the cited bat
 - **No second security question.** The option's value is one of two words checked by argparse, `check_form` and the manifest in writing
   and in reading, and never reaches a path, command, address or model name; the reviewer found no concrete exposure. As the plan says,
   the owner is not asked again.
-  checked against a fixed set before any call).
+
+### Increment C — Card the 30 books in the earlier form
+
+- **Done.** Run `20261110t152341z-f03ec5` (`cards-queue plan --form earlier --again`, 30 books; the plan made no call). The owner said yes
+  to the run after being told what is sent: the text of the 30 Wikipedia pages in pieces, and the notes, outlines and short-page text
+  for the card and the checks, to the models the config names on the owner's server, over plain HTTP. It ran from 2026-11-10T15:25:31Z to
+  15:41:26Z (about 16 minutes; the plan expected 30 to 60) in 2 passes and made 201 calls on the 29 cards filed (66 notes, 29 card, 77
+  check, 29 second round). Result: 29 done, 1 failed. The queue rebuilt the catalog (110 books, 109 cards, no failures); vectors were not
+  made.
+- **The failed book.** Newsvendor model: after two tries the card model gave `topics` and `topics_support` of different lengths and the
+  answer was refused and kept aside. Its only card is still the sentence-form one (generation 1). No new attempt was made; the owner
+  decides whether to try again.
+- **Where the cards are.** 26 books have the sentence-form card as generation 1 and the earlier-form card as generation 2; the 3 books
+  that had no card (Sequential analysis, Queueing theory, Stigmergy) have the earlier-form card as generation 1; Newsvendor model has the
+  sentence-form card only. All 27 sentence-form cards are still generation 1. The 80 books that existed before the batch are unchanged
+  (snapshot compare: 80 before, 110 now, 0 changed, 30 new).
+- **Comparison** (counts of what each form produced, not accuracy; `card.read` over the 30 books; provenance: the scratchpad script
+  `compare_forms.py` run at commit `fa2ea76`, 2026-11-10):
+
+  | | sentence form | earlier form |
+  |---|---|---|
+  | cards | 27 | 29 |
+  | marked partial | 24 | 7 |
+  | cards with an empty part | 24 | 5 |
+  | empty parts in all | 56 | 5 |
+  | searched fields (problem, approach, provides) holding text | 51 of 81 | 87 of 87 |
+  | items marked stated / inferred | 321 / 85 | 314 / 141 |
+  | key ideas per card, average | 5.0 | 4.6 |
+
+  On the 26 books that have both: partial 23 against 6, searched fields with text 49 of 78 against 78 of 78, stated / inferred 313 / 85
+  against 293 / 117. The two earlier-form cards with an empty limit are Sequential probability ratio test and Linear programming; the
+  other five partial earlier-form cards are partial for other reasons that the cards state. The earlier form marks more items inferred, which
+  is its cost; no accuracy was measured (see Deferred work). Two cards were read with `card-show` (Annealing, Thompson sampling) and read
+  sensibly.
+- **The owner's decision (2026-11-10).** The owner took the recommendation: the earlier form stays the newest generation. Nothing was
+  deleted; the sentence-form generation can still be read with `card-show --generation 1`. No change was made to any card after the run.
+- **Verification as run.** `cards-queue status` before and the run's report after (counts above); the snapshot comparison (0 of the 80
+  old books changed); the comparison counts above; the card test modules once more at the end of the plan (708 tests, OK, no code changed
+  since Increment B); `wb run code-work check`: no problems.
+- **Left for the owner.** Whether to try Newsvendor model again; the plan `2026-11-10-add-sources-from-the-fields-that-ideas-come-from`
+  can go on with its Increment C (card-index, card-vectors, the twelve searches) now that the cards are in the form wanted; a labelled
+  sample of accuracy for the two forms (Deferred work); push of the local commits.
