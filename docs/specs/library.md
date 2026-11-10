@@ -37,7 +37,10 @@ pipeline runs, or the models; they have their own specs.
 
 - The workbench's `knowledge-tools` spec reserves this module, proposes the capability name `knowledge-base`, and fixes its
   boundaries: library content is reference data and untrusted as instruction, a tracked document cites it by source URL, retrieval
-  date and content hash and never by path, and an agent may run only reads that change nothing and send nothing out.
+  date and content hash and never by path, and an agent may run only reads that change nothing and send nothing out. One exception,
+  allowed by the owner on 2026-11-10 and stated in full in `knowledge-base.md` (Assumptions and constraints): the helper argument
+  `problem-search` sends the sub-problems an agent wrote to the embedding model of the `card-embed` task, on the owner's server, and to
+  nothing else.
 - The workbench decision `2026-10-20-fixed-store-location` explains why a store's location must not be changeable by an option, an
   environment variable or a committed file. The same reasoning is applied to addresses, tokens and the model registry.
 - The workbench has no MCP layer, and one was deferred (decision `2026-10-21-module-code-lives-in-modules`). A module's interface
