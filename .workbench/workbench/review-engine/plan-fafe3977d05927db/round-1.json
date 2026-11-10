@@ -1,0 +1,43 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Header, Candidate line 5",
+      "problem": "This is a substantial, three-increment addition of a deliberately selected 30-source corpus, but it declares `Candidate: none`. The plan conventions reserve that for work too small to need roadmap direction; the plan itself even defers the needed loading-sources roadmap.",
+      "severity": "major",
+      "suggestion": "Have the owner add and approve a loading-sources candidate with this outcome and boundary, then cite it here; alternatively narrow the work to a genuinely small corrective operation."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment A, before live capture (lines 81-88)",
+      "problem": "The plan names new untrusted-input, filesystem, and third-party-network activity but omits the required once-per-surface owner question about a security review.",
+      "severity": "major",
+      "suggestion": "Add a step before capture that identifies this existing capture/process surface, asks the owner whether to run the installed security-review module (or records that none is installed), and records the answer."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Increment C, step 2 and completion criterion 4 (lines 70-71, 112-116)",
+      "problem": "The twelve meaning-search queries are only described as “a sentence about the field.” The pass/fail ranking criterion is therefore neither reproducible nor protected from post-hoc query selection.",
+      "severity": "major",
+      "suggestion": "List the twelve exact neutral query sentences in the plan, or define a fixed pre-run artifact with its path and hash, and record the corresponding results."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Increment C, step 3 (lines 114-115)",
+      "problem": "`CORPUS` and `REPORT` are unspecified, and “the corpus of the earlier trial” gives neither its concrete outside-project location nor its recorded hash. The verification cannot establish that it checked the intended corpus.",
+      "severity": "major",
+      "suggestion": "Name the earlier corpus by its recorded hash and concrete owner-held location, and specify a safe outside-project report argument for `--check`."
+    },
+    {
+      "id": "R1-F5",
+      "location": "Assumptions and constraints, lines 45-51",
+      "problem": "The text says the last four fields have “three each,” but Operations research lists four pages. The stated total of 30 is correct, but the selection rule is internally inconsistent.",
+      "severity": "minor",
+      "suggestion": "Correct the sentence to say that Operations research has four pages and the other three owner-choice fields have three, or revise the table."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan needs a roadmap candidate, required security-review checkpoint, and reproducible verification inputs before approval.",
+  "verdict": "changes_needed"
+}
