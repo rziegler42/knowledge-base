@@ -1,6 +1,6 @@
 # Keep one reply slip from failing a book
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-10
 Candidate: cards#card-format-resilience
 Specs: docs/specs/card.md
@@ -364,3 +364,12 @@ A second round has not been asked for.
 - **Verification as run.** `cards-queue status`/the run report (done 1, failed 0, dropped 0, generation 2); the kept-file counts
   (58, 58); the catalog counts; the snapshot comparison; `card-show`; `wb run code-work check` after this entry: no problems. The
   card test modules were last run at commit `1c859ec` (900 tests, OK) and no code has changed since.
+- **Afterwards: the vectors made again (owner's word, 2026-11-10, after the commit above).** The owner said to go with the
+  recommendation to run `card-vectors`, which had been described as sending the one card's neutral fields to the embedding model on
+  `ned`, in the clear. `python3 -m kb card-vectors`: 109 cards, 1 with no model fields, 0 left out, 320 vectors, 317 kept, 3 made, 3 texts
+  sent, model `qwen3-embedding:4b`; a second run made 0 and sent 0. Coverage afterwards: 108 cards searched, 0 stale, 0 without a vector,
+  so the book is found by meaning again. This was done outside the increments and changed no tracked file.
+- **Completion.** Increments A, B and D are done; C is not, by the owner's choice, so criterion 3 (a note point of 300 characters is
+  accepted) is not met and is left open (the measurements are under Increment C above). Criteria 1, 2, 4 and 5 are met: a refused answer is asked again once with the
+  reason; the earlier form and the second round write the support with each item; Newsvendor model has a card in the earlier form as its
+  newest generation and the other 109 cards are unchanged; the card tests pass (900) and `wb run code-work check` finds no problems.
