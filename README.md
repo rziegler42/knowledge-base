@@ -5,11 +5,13 @@ search while they brainstorm and write specs, decisions, roadmaps and plans, to 
 they would not otherwise reach.
 
 > **Status:** experimental, built in small reviewed steps. The engine can capture a web page or an arXiv paper, scan and convert
-> it, search it by keyword and read a passage back, from the command line. Two walk-throughs on real pages and papers found
-> problems, and three plans have fixed them: the first walk-through's fixes, a hardening of the PDF scan, and one rule for titles
-> (see [Where the work stands](#where-the-work-stands)). A model can now write a card for a book, by a command. The workbench
-> package that lets an agent in another project call the library is not built yet, and neither are themes or the program that
-> adds sources by itself. The cards can be searched by keyword.
+> it, search it by keyword and read a passage back, from the command line. Models you name write a card for each book, with a
+> description of its problem and approach in words of no field, and each point of a card is marked as found in the book or as the
+> model's own inference. The cards can be searched by keyword and by meaning. A workbench package, `kb`, lets an agent in another
+> project search by keyword, read a passage, and put a problem to the library by meaning, with a skill that says how (see
+> [Where the work stands](#where-the-work-stands)). The library holds about eighty books, 79 of them with a card. Not built yet:
+> a trial on problems you choose that shows how often it finds a source from another field, themes, and the program that adds
+> sources by itself.
 
 ## What it does now
 
@@ -36,9 +38,29 @@ they would not otherwise reach.
   `card-show` prints it between the untrusted-text markers. Book text goes to the models you name. If a model's answer is refused
   for its shape, no card is made and the answer is kept in a file for you to read. `card-index` builds a catalog of the cards and
   `card-search` finds them by keyword; the catalog is not updated as cards are made.
+- **Grounds a card in its book.** A card is made from notes that each carry a short quote the engine has checked against the
+  book, and a second model confirms that a note supports the point that cites it. Each topic, key idea, caveat and neutral limit is
+  marked `stated` (found in the book) or `inferred` (the model's own inference), and a point with no support is dropped, not
+  padded. How accurate the cards are was measured on blind samples, and the numbers are in the plans' Results: the card is a
+  model's description of a book and can be wrong, which is why a result shows its marks.
+- **Searches the cards by meaning.** `card-vectors` turns three neutral fields of each card (what the book is about, its approach
+  and what it provides) into vectors with the embedding model your config names for `card-embed`, and `card-search QUERY --meaning`
+  ranks the cards by closeness to a sentence or two about a problem. The library uses `qwen3-embedding:4b`, chosen over two others on
+  eight searches, with an instruction put before the query. A vector is used only while its text is unchanged. **The text of the
+  fields, and each query, go to the embedding model's server.**
+- **Takes a problem in sub-problems.** `python3 -m kb problem-search -- 'sub-problem' ...` takes one to five sub-problems, which the
+  caller has put in general terms, and prints each one's ranked books and one list of the books found. The engine does not set
+  aside the books of the problem's own field, because no card says which field a book belongs to: the caller does.
+- **Gives an agent in another project a way in.** The workbench package `kb` offers `wb run kb search`, `read` and `problem-search`
+  to an agent in a project you install it into, and a skill, `pose-a-problem`, that tells the agent how to put a problem in general
+  terms, split it, set aside its own field, give a reason from the matched text and read the book before relying on it. The
+  package finds the engine only through `~/.config/knowledge-base/helper.json`, which you make. `problem-search` is the one
+  argument that sends anything out: the sub-problems an agent wrote go, in the clear, to your embedding model's server and nowhere
+  else. It was run once through the package, from a scratch project.
 
-Planned, not built: the thin workbench package that gives an agent `search` and `read` in a project, themes
-made with a local or cloud model, a search across fields, and a scheduled program that adds sources while the owner is away.
+Planned, not built: a trial on problems you choose that compares keyword search, search by meaning and the problem search, judging
+pairs of ideas that a search returned, themes made with a local or cloud model, and a scheduled program that adds sources while
+the owner is away. The roadmaps are in [docs/roadmaps/](docs/roadmaps/).
 
 The design and its reasons are in [docs/specs/knowledge-base.md](docs/specs/knowledge-base.md).
 
@@ -62,7 +84,15 @@ python3 -m kb capture-arxiv 1706.03762
 python3 -m kb process                # scan, convert and index everything that is not done
 python3 -m kb search 'attention heads'
 python3 -m kb read BOOK_ID 'LOCATOR_JSON' --version v1    # the text at a locator a search returned
+python3 -m kb cards --book BOOK_ID   # write a card; the book text goes to the models in your config
+python3 -m kb card-index             # build the catalog of cards
+python3 -m kb card-vectors           # vectors of the neutral fields; their text goes to your embedding model
+python3 -m kb card-search 'a problem in a few sentences' --meaning
+python3 -m kb problem-search -- 'first sub-problem' 'second sub-problem'
 ```
+
+The model commands need a model registry in the config (`python3 -m kb models` lists it and makes no call); the section "Calling a
+model" of [engine/README.md](engine/README.md) says how.
 
 A tool runs only if you have put it on the approved list yourself; the engine prints what to put there and never does it for
 you. The full description of each command, its refusals and what it does not cover is in [engine/README.md](engine/README.md).
@@ -72,7 +102,7 @@ An index written by an older version of the engine is refused, and the search sa
 
 | Plan | What it covers | State |
 |---|---|---|
-| [First slice](docs/plans/2026-11-05-first-slice-capture-search-read.md) | setup, the book store, capture, scan, conversion, search and read, then the workbench package and a live walk-through | everything up to read by locator is built; the workbench package is deferred; the walk-through has had two batches (nine web pages and three papers in all) |
+| [First slice](docs/plans/2026-11-05-first-slice-capture-search-read.md) | setup, the book store, capture, scan, conversion, search and read, then the workbench package and a live walk-through | everything up to read by locator is built; the workbench package `kb` was built and installed in a scratch project (it has since gained `problem-search`, see the last row); the walk-through has had two batches (nine web pages and three papers in all) |
 | [Fixes from the first walk-through](docs/plans/2026-11-06-first-walk-through-fixes.md) | page encoding, page titles, long pages indexed in pieces, large images in a PDF, converting a book again, and applying the fixes to the first four books | completed: all six fixes are committed and applied to the first four books |
 | [Hardening the PDF scan](docs/plans/2026-11-06-scan-hardening.md) | no way to hide an object stream from the scan without saying so: streams behind a predictor are decoded, objects are read forward with strings and comments known, and bytes after a stream's data are reported | completed: all five increments are committed and the four books were scanned again |
 | [Title safety](docs/plans/2026-11-06-title-safety.md) | one rule for a title where it is stored and where it is shown, and a citation line that a title cannot imitate | completed: all four increments are committed and the index was rebuilt |
@@ -80,6 +110,17 @@ An index written by an older version of the engine is refused, and the search sa
 | [The card of a book](docs/plans/2026-11-07-card-stage.md) | the model for each kind of work set in the config, the card file kept as generations, reading a book in pieces, the `cards` and `card-show` commands, and cards for three real books | completed: all five increments are committed and cards were made for three books |
 | [Two fixes from the first live run of cards](docs/plans/2026-11-07-card-live-run-fixes.md) | a flat conversion no longer makes a card partial, and a model answer refused for its shape is kept aside in a file | completed: both increments are committed |
 | [Searching the cards by keyword](docs/plans/2026-11-07-card-catalog.md) | a catalog of the cards built from the book folders, a keyword search of it with a summary side, a neutral side and a named book, and the `card-index` and `card-search` commands | completed: all three increments are committed and the three real cards were indexed and searched |
+| [Scan false alarms](docs/plans/2026-11-06-scan-false-alarms.md) | ordinary figure-heavy PDFs no longer get a false "scripts" or "incomplete" alarm | completed |
+| [Close the deferred items of the PDF scan](docs/plans/2026-11-07-scan-deferred-items.md) | a bound on memory for hostile name escapes, the file-attachment caveat, one ceiling for match counts, and no false "incomplete" for data that only looks compressed | completed |
+| [Making the cards accurate](docs/plans/2026-11-07-card-grounding.md) | notes with verified quotes, items marked stated or inferred, a second model that confirms support, and a measured accuracy | completed |
+| [A trial of whether the cards help](docs/plans/2026-11-07-card-trial.md) | the search of the cards compared with the search of the full text on questions you chose, and a report on the cards themselves | completed |
+| [Card lists that follow the book](docs/plans/2026-11-08-card-lists-that-follow-the-book.md) | one more round by a second model for a list that was cut off or lost most of its items, and reading a long book in every piece | completed |
+| [Cards for the library, one model at a time](docs/plans/2026-11-08-cards-for-the-library-one-model-at-a-time.md) | one run that makes a grounded card with a neutral description for every book without one, works through the models one at a time, and can be stopped and started again | completed: 79 books have a card |
+| [Ground the summary and the neutral fields](docs/plans/2026-11-09-ground-the-summary-and-neutral-fields.md) | the summary and the neutral fields as sentences that each cite and carry a mark | built and measured on nine books; the supported share did not rise enough, so the old form was not replaced and the library was not carded again |
+| [Check each clause of a sentence](docs/plans/2026-11-09-check-each-clause-of-a-sentence.md) | cut a sentence back to the clauses its notes support | stopped after the first increment: the check cut or dropped more supported sentences than the plan allowed |
+| [Search the neutral descriptions by meaning](docs/plans/2026-11-09-search-the-neutral-descriptions-by-meaning.md) | vectors of three neutral fields, `card-vectors` and `card-search --meaning`, a security review, and a comparison of three embedding models | completed; the library keeps `qwen3-embedding:4b` |
+| [A query prefix for embedding models](docs/plans/2026-11-09-query-prefix-for-embedding-models.md) | an instruction before the query, recorded with the vectors | completed: on eight searches 12 of 18 expected books ranked higher, 5 the same and 1 lower |
+| [Pose a problem to the search by meaning](docs/plans/2026-11-10-pose-a-problem-to-the-search-by-meaning.md) | `problem-search` in the engine and in the `kb` package, the `pose-a-problem` skill, and one live run | completed: all four increments are committed and the helper ran once, in 3.2 seconds |
 
 Each increment of a plan is one verified, reviewed local commit. A plan needs the owner's approval before anything is built, and
 the plan, not the conversation, is the record of what was done and checked.
@@ -92,6 +133,9 @@ Tests are run from the repository root. The conversion, search and read tests us
 python3 -m unittest engine.tests.test_setup engine.tests.test_store engine.tests.test_stages engine.tests.test_textutil \
     engine.tests.test_capture_url engine.tests.test_capture_arxiv engine.tests.test_scan engine.tests.test_convert_run
 engine/.venv/bin/python -m unittest engine.tests.test_convert engine.tests.test_search engine.tests.test_read
+python3 -W error::ResourceWarning -m unittest engine.tests.test_card engine.tests.test_catalog engine.tests.test_models \
+    engine.tests.test_vectors engine.tests.test_problem
+KB_WORKBENCH_CHECKOUT=/path/to/a/workbench/checkout python3 -m unittest engine.tests.test_package   # skipped without the variable
 ```
 
 The documents and plans are checked with the workbench:
@@ -130,7 +174,10 @@ The library holds and parses untrusted content, and the engine is built on that 
   characters and is flagged as untrusted wherever it is shown;
 - each increment is reviewed independently before it is committed, and the parts that take untrusted input (capture, the tool
   runner and scan, conversion, search and read) have each had a security review whose findings and fixes are recorded in the
-  plan's Result.
+  plan's Result;
+- an agent in another project is allowed only reads, and only `problem-search` sends anything out: the sub-problems it wrote go,
+  over plain HTTP, to the embedding model that your config names, and the helper finds the engine and the workbench launcher only
+  in a settings file that is yours alone. Nothing checks those sub-problems for private text, and the server is trusted.
 
 Limits that are known and documented in [engine/README.md](engine/README.md): the sandbox is macOS only, and `sandbox-exec` is
 deprecated by Apple; memory is not limited; a title or a text can still carry misleading words that no cleaning removes, which is
