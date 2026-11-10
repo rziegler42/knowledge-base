@@ -176,4 +176,36 @@ The reviewer found the plan consistent with the card spec and with the cited bat
 
 ## Result
 
-Empty until work starts.
+### Increment A — The earlier call as a form of the card call
+
+- **Done.** `engine/kb/cardmake.py` has `FORMS = ("earlier", "sentences")`, `EARLIER_JOB` (prompt version `v4`, schema
+  `card-earlier.json`), `check_form`, `card_job`, the earlier prompt (`_card_prompt_earlier`) and a `form` parameter in `card_prompt`,
+  `new_journal`, `make_model_part`, `make_for_version`, `run` and `thin_reason`; `pairs`, `unpaired` and `ground` read a reply in the earlier
+  shape by the key `neutral_limits_support`. `engine/kb/schemas/card-earlier.json` is the schema as it was before `2c082cd`. The
+  earlier-form tests are restored from `2c082cd^` into `engine/tests/test_cardmake_earlier.py` (125 tests), with new tests for the choice
+  of form (12) and one end-to-end class. Provenance: the earlier prompt text and the schema were compared with `git show 2c082cd^` and are
+  identical.
+- **What separates the two forms** (step 1): the prompt; the shape of the reply (earlier: plain `summary` and `neutral_*` plus
+  `neutral_limits_support`; sentences: `sentence_fields`, `sentences`, `sentences_support`); the grounding (earlier: the three lists and
+  the limit are checked, the summary and the other neutral parts are the plain text; sentences: each sentence needs a verified note);
+  the empty-part reason (sentences only); the prompt version (`v4` and `v6`). The checks and the second round did not need a change, so
+  the stop condition did not apply.
+- **Deviations.** (1) The function default is `form="sentences"` here; the default `earlier` is made in Increment B with the option, so
+  that no commit changes what the engine does before the choice exists. (2) The earlier form uses today's check call (`card-check` v2),
+  not the v1 it was made with; the restored test that named v1 now names v2. (3) The new tests are in a new file, not in
+  `test_cardmake.py`, so that the sentence-form tests stay as they are. (4) The journal header has no `form` key: `cardstate` accepts
+  exactly its eleven keys, so a header with a twelfth cannot be saved. The prompt version of the card call (`v4` or `v6`) is in the header
+  and makes a journal of one form stale for the other; a journal made before this change is read as the sentence form. This was found by
+  the reviewer (a journal of the earlier form could not be written to its file) and fixed with a test that writes and reads a journal of
+  each form.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest` on `test_cardmake_earlier`, `test_cardmake`, `test_card`,
+  `test_cardstate`, `test_cardqueue`, `test_cardsample`, `test_catalog`: 691 tests, OK; `wb run code-work check`: no problems. The
+  restored tests were seen to fail first (112 errors, 8 failures, for the missing `form` and `EARLIER_JOB`). Twenty deliberate breaks, each
+  from green, were each caught; one (the second round forgetting the form) was first missed and a test was added; two breaks about a `form`
+  key in the header no longer apply and the key's return is caught by the new round-trip test. No call to a model server was made.
+- **Review.** Independent `reviewer`, one exchange: one blocking finding (the header key above), applied; two not-blocking notes
+  (the new test file; the changes to `pairs`, `unpaired`, `ground` and `thin_reason` are the earlier form's own, additive and keyed on the
+  reply's shape, and the sentence path is unchanged), accepted. It could not read git history; the comparison with history was made by me.
+- **Security review checkpoint.** Asked once, about the parsing of a model's reply and the journal header. The owner said no security
+  review; none was run. The reviewer found no new exposure by reading (replies still pass the shape check and `parse_support`; the form is
+  checked against a fixed set before any call).

@@ -131,6 +131,37 @@ CARD_SHAPE = {**{k: card.MODEL_SHAPE_GROUNDED[k] for k in ("useful_for", "topics
               **SUPPORT_SHAPE, **SENTENCE_SHAPE}
 CARD_JOB = models.Job("card", "v6", CARD_SHAPE, schema="card.json", check=_check_support)
 
+# The earlier form of the card call, which the sentence form replaced (commit 2c082cd): the summary and the neutral parts are asked for as
+# plain text, and only the lists and the limit are marked. It is brought back as a form of the same call, chosen by the caller.
+FORMS = ("earlier", "sentences")
+EARLIER_SHAPE = {**card.MODEL_SHAPE_GROUNDED, **SUPPORT_SHAPE, "neutral_limits_support": {"type": "string", "max": SUPPORT_CHARS}}
+
+
+def _check_support_earlier(values):
+    """Each marked list has a support value for each item, in the same order, every support value has a form that can be read, and the
+    limit has one too."""
+    for field in card.GROUNDED_LISTS:
+        if len(values[f"{field}_support"]) != len(values[field]):
+            raise KbError(f"the answer's {field} and {field}_support are not lists of the same length")
+        for text in values[f"{field}_support"]:
+            parse_support(text)
+    parse_support(values["neutral_limits_support"])
+
+
+EARLIER_JOB = models.Job("card", "v4", EARLIER_SHAPE, schema="card-earlier.json", check=_check_support_earlier)
+
+
+def check_form(form):
+    """`form` if it is one of `FORMS`, else a refusal (nothing is sent before a form is known)."""
+    if form not in FORMS:
+        raise KbError(f"the form of the card is one of {', '.join(FORMS)}: {textutil.literal(form, 20)}")
+    return form
+
+
+def card_job(form):
+    """The job of the card call in a form."""
+    return EARLIER_JOB if check_form(form) == "earlier" else CARD_JOB
+
 MORE_FIELDS = ("topics", "key_ideas")   # the lists that a second round serves
 MORE_ASKED = {"topics": 8, "key_ideas": 4}   # the most items the second round is asked for, for a list (and never more than its free places)
 CEILING = {field: card.MODEL_SHAPE_GROUNDED[field]["max_items"] for field in MORE_FIELDS}
@@ -198,6 +229,8 @@ def pairs(values, notes):
     "also", the further notes shown with the first ({"ref", "point", "quote"}, none or one)."""
     items = [(field, index, item, values[f"{field}_support"][index]) for field in card.GROUNDED_LISTS
              for index, item in enumerate(values[field])]
+    if "neutral_limits_support" in values:  # a reply in the earlier form: the limit is one item, checked after the lists
+        items.append(("neutral_limits", 0, values["neutral_limits"], values["neutral_limits_support"]))
     out = []
     for field, index, item, support in items:
         kind, refs = parse_support(support)
@@ -332,9 +365,43 @@ def source_word(kind):
     return _WORDS.get(str(kind).strip().casefold(), "book")
 
 
-def card_prompt(title, outline_text, parts, kind="book"):
-    """The prompt that asks for the card of a book. `parts` are the labelled sections of what the card is made from: the notes on each
-    piece, each in a section of its own, and for a short book its text too. `kind` is the kind of source, for the word the prompt uses."""
+def _card_prompt_earlier(title, outline_text, parts, kind):
+    """The prompt of the earlier form of the card call, as it was before the sentence form (commit 2c082cd): the summary and the
+    neutral parts are asked for as plain text, and only the lists and the limit carry a support."""
+    w = source_word(kind)
+    rules = (f"You are writing the catalog entry (the card) of a {w}, so that someone looking for ideas can tell whether the {w} "
+             f"would help them. Below are labelled sections of data: the {w}'s title, the outline of its headings, notes made "
+             f"earlier on each piece of it, and for a short {w} its text too.\n{_DATA}\nWrite in English, whatever the language "
+             "of the source.\nEach note is a line like \"- [2.1 verified] a point\": 2.1 is its number (the piece, then the point), "
+             "and verified means that the quote behind the point was found in the text, unverified that it was not.\n"
+             "Reply with one JSON object with exactly these keys and no others:\n"
+             f"- \"summary\": what the {w} is about, in about 80 words.\n"
+             f"- \"useful_for\": up to {ASKED['useful_for']} short phrases naming situations or questions in which the {w} would help.\n"
+             f"- \"topics\": up to {ASKED['topics']} short names for the ideas it covers, including other names an idea is known by.\n"
+             f"- \"adjacent_topics\": up to {ASKED['adjacent_topics']} neighbouring topics that it does not cover but is close to.\n"
+             f"- \"key_ideas\": up to {ASKED['key_ideas']} ideas from the {w} that a reader might not expect; give fewer if it holds fewer.\n"
+             "- \"neutral_problem\", \"neutral_approach\", \"neutral_needs\", \"neutral_provides\", \"neutral_limits\": the problem the "
+             f"{w} addresses, its approach in general terms, what it needs, what it provides, and where it would not work, each "
+             "in a sentence or two, written without the name of any field, game, product or person.\n"
+             f"- \"caveats\": up to {ASKED['caveats']} short notes on limits of this {w} as a source, such as missing or garbled parts, "
+             f"its date or its evidence. A caveat must be about this {w}; never write one that would hold for any {w}, such as that "
+             "details are sparse.\n"
+             "- \"topics_support\", \"key_ideas_support\" and \"caveats_support\": lists of the same length as topics, key_ideas and "
+             "caveats, in the same order. \"neutral_limits_support\": one value. Each value says what supports the item: the one or two "
+             "notes that best state it, separated by spaces, such as \"1.1 3.2\" (do not cite a note that is only loosely related; an item "
+             "is kept only if a verified note that bears on it supports it, and a check of the note and the item decides); or the word "
+             "\"inferred\" if no note states it and it is your own inference from them; "
+             f"or the word \"none\".\nIn the text of the card never mention notes, pieces, numbers of notes or this message: write "
+             f"about the {w} itself.\n{_NO_MORE}")
+    return _prompt(rules, [("TITLE", title), ("OUTLINE", outline_text), *parts])
+
+
+def card_prompt(title, outline_text, parts, kind="book", form="sentences"):
+    """The prompt that asks for the card of a book, in a form (`FORMS`). `parts` are the labelled sections of what the card is made
+    from: the notes on each piece, each in a section of its own, and for a short book its text too. `kind` is the kind of source, for
+    the word the prompt uses."""
+    if check_form(form) == "earlier":
+        return _card_prompt_earlier(title, outline_text, parts, kind)
     w = source_word(kind)
     rules = (f"You are writing the catalog entry (the card) of a {w}, so that someone looking for ideas can tell whether the {w} "
              f"would help them. Below are labelled sections of data: the {w}'s title, the outline of its headings, notes made "
@@ -380,6 +447,8 @@ _CHECK_LABEL = _FIELD_WORD
 def unpaired(values, found):
     """How many items cite notes and have no pair (so were dropped without a model being asked): `found` are the pairs."""
     cited = sum(1 for field in card.GROUNDED_LISTS for support in values[f"{field}_support"] if parse_support(support)[0] == "refs")
+    if "neutral_limits_support" in values:
+        cited += parse_support(values["neutral_limits_support"])[0] == "refs"
     cited += sum(1 for s in sentences_of(values) if s["checked"] and parse_support(s["support"])[0] == "refs")
     return cited - len(found)
 
@@ -432,13 +501,23 @@ def ground(values, notes, confirmed, paired=None):
                 return {"mark": "stated", "notes": listed, "quote": notes[ref]["quote"]}
         return None
 
-    model = {k: v for k, v in values.items() if k in ("useful_for", "adjacent_topics")}
+    earlier = "neutral_limits_support" in values   # a reply in the earlier form: plain summary and neutral parts, and a marked limit
+    if earlier:
+        model = {k: v for k, v in values.items() if not k.endswith("_support")}
+    else:
+        model = {k: v for k, v in values.items() if k in ("useful_for", "adjacent_topics")}
     grounding, dropped = {}, {}
     for field in card.GROUNDED_LISTS:
         marked = [(item, judge(field, index, support)) for index, (item, support) in enumerate(zip(values[field], values[f"{field}_support"]))]
         model[field] = [item for item, entry in marked if entry]
         grounding[field] = [entry for _, entry in marked if entry]
         dropped[field] = len(marked) - len(model[field])
+    if earlier:
+        entry = judge("neutral_limits", 0, values["neutral_limits_support"])
+        model["neutral_limits"] = values["neutral_limits"] if entry else ""
+        grounding["neutral_limits"], dropped["neutral_limits"] = entry, 0 if entry else 1
+        grounding["dropped"] = dropped
+        return {"model": model, "grounding": grounding, "reasons": thin_reason(model, form="earlier"), "sentences": None}
     record = {field: {"kept": [], "dropped": 0} for field in card.SENTENCE_FIELDS}
     stats = {field: {"asked": 0, "kept": 0, "dropped": {"over": 0, "none": 0, "unpaired": 0, "not_confirmed": 0, "repeat": 0}}
              for field in card.SENTENCE_FIELDS}
@@ -477,18 +556,20 @@ def ground(values, notes, confirmed, paired=None):
     return {"model": model, "grounding": grounding, "reasons": thin_reason(model), "sentences": stats}
 
 
-def thin_reason(model, rounded=False):
-    """The reasons, as a list, that the card is thin: fewer than MIN_KEY_IDEAS key ideas are left, and a part written as sentences
-    that kept none is empty. `rounded` says that a second round has added what it could."""
+def thin_reason(model, rounded=False, form="sentences"):
+    """The reasons, as a list, that the card is thin: fewer than MIN_KEY_IDEAS key ideas are left, and, in the sentence form, a part
+    written as sentences that kept none is empty (in the earlier form a part is plain text and an empty limit is no reason).
+    `rounded` says that a second round has added what it could."""
     out = []
     left = len(model["key_ideas"])
     if left < MIN_KEY_IDEAS:
         what = "the ones without support were dropped" + (" and a second round added what it could" if rounded else "")
         out.append(f"only {left} key {'idea was' if left == 1 else 'ideas were'} left after {what}, "
                    f"so the card holds fewer than {MIN_KEY_IDEAS}; none was added to make up the number")
-    for field in card.SENTENCE_FIELDS:
-        if model.get(field) == "":
-            out.append(f"no sentence of the {_EMPTY_WORD[field]} was left after the checks, so that part of the card is empty")
+    if form == "sentences":
+        for field in card.SENTENCE_FIELDS:
+            if model.get(field) == "":
+                out.append(f"no sentence of the {_EMPTY_WORD[field]} was left after the checks, so that part of the card is empty")
     return out
 
 
@@ -566,7 +647,7 @@ class Pause(Exception):
         self.entry = entry
 
 
-def _expected(cfg, conversion, title, kind):
+def _expected(cfg, conversion, title, kind, form="sentences"):
     """What the card made with these arguments will be made with, and what a journal for it must say: the title as it is used, the
     kind of source, the number of pieces the book has and the number that will be read, the model entry of each kind of work and the
     server and model behind it, the prompt version of each job, and a digest of the outline and of the text of the pieces read. Everything is found before the first call, so a missing setting stops the card before anything is sent."""
@@ -579,19 +660,20 @@ def _expected(cfg, conversion, title, kind):
     entries = models.registry(cfg)
     read = sample(found, limit)[0]
     digest = hashlib.sha256("\x00".join([outline(conversion)] + read).encode("utf-8")).hexdigest()
-    return {"title": textutil.title(str(title if title is not None else ""), MAX_TITLE) or "(no title)", "kind": kind, "limit": limit,
-            "pieces": len(found), "tasks": {"notes": notes_model, "card": card_model, "check": check_model, "more": more_model},
-            "versions": {"notes": NOTES_JOB.prompt_version, "card": CARD_JOB.prompt_version, "check": check_job(1).prompt_version,
-                         "more": MORE_JOB.prompt_version if more_model else None},
-            "models": {k: ([entries[name]["server"], entries[name]["model"]] if name else None)
-                       for k, name in (("notes", notes_model), ("card", card_model), ("check", check_model), ("more", more_model))},
-            "text": digest}
+    header = {"title": textutil.title(str(title if title is not None else ""), MAX_TITLE) or "(no title)", "kind": kind, "limit": limit,
+              "pieces": len(found), "tasks": {"notes": notes_model, "card": card_model, "check": check_model, "more": more_model},
+              "versions": {"notes": NOTES_JOB.prompt_version, "card": card_job(form).prompt_version, "check": check_job(1).prompt_version,
+                           "more": MORE_JOB.prompt_version if more_model else None},
+              "models": {k: ([entries[name]["server"], entries[name]["model"]] if name else None)
+                         for k, name in (("notes", notes_model), ("card", card_model), ("check", check_model), ("more", more_model))},
+              "text": digest}
+    return header   # the keys are those the saved state accepts; the prompt version of the card call tells the forms apart
 
 
-def new_journal(cfg, conversion, title, book_id, version_id, fingerprint=None, kind="book", save=None):
+def new_journal(cfg, conversion, title, book_id, version_id, fingerprint=None, kind="book", save=None, form="sentences"):
     """An empty journal for the card of a version: its header says what the card will be made with (`_expected`) and which conversion
     (`fingerprint`, the tool, version and generation of the one in use) it is for. `save`, if given, is called after each call is added."""
-    header = {"book_id": book_id, "version_id": version_id, "conversion": fingerprint, **_expected(cfg, conversion, title, kind)}
+    header = {"book_id": book_id, "version_id": version_id, "conversion": fingerprint, **_expected(cfg, conversion, title, kind, form)}
     return cardstate.Journal(header, save=save)
 
 
@@ -612,7 +694,7 @@ def _recheck(job, values):
 IDENTITY_KEYS = ("book_id", "version_id", "conversion")
 
 
-def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book", journal=None, allow=None, identity=None):
+def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book", journal=None, allow=None, identity=None, form="sentences"):
     """Make the model part of a card for a converted book. Returns {"model": the checked values, "records": how each call was made,
     "pieces": pieces read, "calls": calls made, "reasons": why the card is partial, "notes": the number of points in the notes and
     how many of them have a quote that occurs in their piece, "checks": the number of items checked against the note they cite and
@@ -629,8 +711,14 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
     version and conversion (a dict with the keys book_id, version_id and conversion, which the caller must give with a journal); a
     saved call that is not the call being made, an answer that is not valid, and calls in the journal that the card does not make are
     refused too. With `allow`, a set of model entries that the caller is serving now (it needs a journal), a call for any other entry
-    that is not yet in the journal raises `Pause` before it is made."""
-    expected = _expected(cfg, conversion, title, kind)
+    that is not yet in the journal raises `Pause` before it is made.
+
+    `form` is the form of the card call (`FORMS`): `sentences`, which asks for the summary and the neutral parts as sentences that notes
+    support, or `earlier`, which asks for them as plain text and marks the lists and the limit. A form that is not one of them is refused
+    before anything is sent, and a journal made for one form is refused for the other. In the earlier form the result has no account of
+    sentences (`"sentences": None`)."""
+    check_form(form)
+    expected = _expected(cfg, conversion, title, kind, form)
     limit, total, title = expected["limit"], expected["pieces"], expected["title"]
     found = pieces(conversion)
     read, why = sample(found, limit)
@@ -717,7 +805,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
         for word, count in local.items():
             tally[word] += count
         tally["unpaired"] += sum(s["dropped"]["unpaired"] for s in stats.values())
-        grounded["reasons"] = thin_reason(model, True)
+        grounded["reasons"] = thin_reason(model, True, form)
         return {"status": "ran", "reason": "", "fields": stats}
 
     parts, found = [("BOOK TEXT", read[0])] if len(read) == 1 else [], {}
@@ -731,7 +819,7 @@ def make_model_part(cfg, conversion, title, launcher=None, root=None, kind="book
             lines.append(f"- [{number}.{k} {'verified' if ok else 'unverified'}] {point}")
         records[-1].update(points=len(lines), verified=ok_count)  # the counts go in the record of the call for these notes
         parts.append((f"NOTES {number}", "\n".join(lines)))
-    values = ask(card_model, card_prompt(title, outline(conversion), parts, kind=kind), CARD_JOB)
+    values = ask(card_model, card_prompt(title, outline(conversion), parts, kind=kind, form=form), card_job(form))
     todo, confirmed = pairs(values, found), {}
     tally = {"checked": 0, "supports": 0, "partly": 0, "no": 0, "unpaired": unpaired(values, todo)}
     check_all(todo, tally, confirmed)
@@ -848,7 +936,7 @@ def file_model_card(store, book_id, version_id, part):
                    more=part["more"], book_pieces=part["book_pieces"], sentences=part["sentences"])
 
 
-def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None):
+def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher=None, root=None, form="sentences"):
     """Make and file the card of one version (the current one, if none is named) and return a report of what was done. A book that
     is not active, or that has a card and `again` is not set, is skipped. A version that is not yet fetched or converted, a missing
     setting, a failed call or an answer of the wrong shape is a refusal (a KbError), and nothing is filed. A version with no
@@ -863,20 +951,20 @@ def make_for_version(store, cfg, book_id, version_id=None, again=False, launcher
         return _report(book_id, version_id, "carded", generation=number, made=made)
     _, loaded, mechanical = chosen
     try:
-        part = make_model_part(cfg, loaded[1], mechanical["title"], launcher=launcher, root=root, kind=mechanical["kind"])
+        part = make_model_part(cfg, loaded[1], mechanical["title"], launcher=launcher, root=root, kind=mechanical["kind"], form=form)
     except models.AnswerRefused as refusal:
         raise keep_aside(store, refusal, book_id, version_id) from None
     return file_model_card(store, book_id, version_id, part)
 
 
-def run(store, cfg, book_ids, again=False, launcher=None, root=None):
+def run(store, cfg, book_ids, again=False, launcher=None, root=None, form="sentences"):
     """`make_for_version` for each book named, in order. A book that is not there is a refusal before any work is done. A book that
     fails is reported as failed with the reason, and the others go on."""
     versions = {book_id: store.read_book(book_id).get("current_version") for book_id in book_ids}
     reports = []
     for book_id in book_ids:
         try:
-            reports.append(make_for_version(store, cfg, book_id, again=again, launcher=launcher, root=root))
+            reports.append(make_for_version(store, cfg, book_id, again=again, launcher=launcher, root=root, form=form))
         except CardRefused as e:  # the answer was kept aside (or the note says why not); the report names the file
             reason = textutil.clean(str(e) + (f" ({e.note})" if e.note else ""), 400)
             reports.append(_report(book_id, versions[book_id], "failed", reason, kept=e.kept))
