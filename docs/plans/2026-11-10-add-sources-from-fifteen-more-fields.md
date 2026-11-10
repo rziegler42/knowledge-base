@@ -453,3 +453,36 @@ A second round has not been asked for.
   this machine; no paper text has gone to `ned`.
 - **Verification as run:** the lookup table and the stored metadata compared; the `capture-arxiv` statuses; the `process` report (18 of 18
   `done`); the snapshot comparison; the scan files read; `wb run code-work check` after this entry. No tracked code changed.
+  (Committed as `c3351be`.)
+
+### Increment E — Cards for the papers (run, 2026-11-10)
+
+- **The plan and the owner's word.** `cards-queue plan --book ID ...` for the six ids (run `20261110t203740z-231385`; no call): 6 books,
+  form `earlier`, the same five model steps as for the pages, 33 notes calls and 6 card calls counted. The owner was told, before the run,
+  that the text of the six papers (about 790,000 characters, in pieces) goes to the models on `ned` in the clear over plain HTTP (public
+  arXiv papers), the expected 80 to 100 calls and 10 to 15 minutes, that a long paper is sampled (up to 12 pieces), that any call can be
+  asked twice, that 64 refused answers were kept before (the baseline), and that no vector or search would run before F. The owner said
+  **yes**.
+- **The run.** One pass, 20:37:52Z to 20:42:51Z (**about 5 minutes**, under the 10 to 15 expected): **6 done, 0 failed, 0 dropped, no
+  book needed a second attempt.** 62 calls were recorded on the cards: 33 notes, 6 card, 17 check and 6 second round (10.3 a card; the
+  pages made 6.85). The queue rebuilt the catalog: 176 books, 175 versions with a card.
+- **The retry was used once**: a check call of the Blei paper, whose answer had `verdicts` longer than 16 characters; the second asking was
+  accepted. Kept refused answers: 64 before, 65 after.
+- **The cards** (6, earlier form, generation 1; counted apart from the pages' 60): pieces read 2, 6, 7, 1, 12 and 5 (information
+  bottleneck, variational inference, Hamiltonian Monte Carlo, scaling, Newman, Candès). **1 partial: Newman, 12 of 17 pieces read, evenly
+  spaced, so the card may miss parts** (the only sampled paper; the 60 pages had none). **No empty part** in any of the six (5 of 60
+  pages had one). Key ideas 3, 8, 7, 3, 5 and 4; topics 8, 11, 17, 8, 16 and 6. Marks (`card-marks --book` for the six): topics 66 `stated`
+  and 0 `inferred`, key ideas 30 and 0, caveats 3 and 6, limits 0 and 6; in all **99 `stated` and 12 `inferred` (11 percent; the pages
+  had 31 percent)**. Every limit is `inferred`, as for the pages. Two cards were read with `card-show` (Newman, the partial one; Candès,
+  a clean one) and read sensibly; both limits are marked `inferred`.
+- **The scan finding on the cards.** The Blei card shows `scan finding: javascript (found 1 times): The PDF contains scripts.`; the
+  card of a paper carries what the scan found, as designed. The alarm itself was still not investigated.
+- **The rest of the library.** The snapshot taken at the start of the run was compared after it: of 176 books exactly six changed, **and
+  they are exactly the six papers** (checked against their ids): each gained its card. The other 170 are unchanged.
+- **Not done, by design.** No vector and no search (F). Only the text of the six papers went to `ned`.
+- **Reading, with its limits.** The papers' cards are fewer (6) and from two long-text kinds of source; the lower share of `inferred`
+  items (11 against 31 percent) and the absence of empty parts are a difference of six cards from sixty and are not a finding. The
+  calls a card, 10.3 against 6.85, follow the length of a paper.
+- **Verification as run:** `cards-queue plan` before; the run's report (counts above); the kept-file counts (64, 65); `card-marks` on
+  the six; `card-show` of two; the snapshot comparison with the changed ids checked; `wb run code-work check` after this entry. No
+  tracked code changed.
