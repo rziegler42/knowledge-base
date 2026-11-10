@@ -280,3 +280,60 @@ A second round has not been asked for.
   judge the two marks differently for a reason that is part of the difference being measured, and the Result of C must say so among
   the limits; and Increment C must send `items.json` (or `calibration.json`) only and never the folder, which holds the key. It could not
   run anything or compare the trace with the old code.
+
+### Increment C — Label the sample (run, 2026-11-10)
+
+- **The send, and the owner's word.** The sample was drawn first, and the owner was told, before anything left the machine: 120 items,
+  30 in each cell of mark and field; `items.json` of 325,032 bytes (about 80,000 tokens) holding the item text, the book title, an opaque
+  book id, the field and up to five passages of the book (536 passages), plus the rubric; the 75 titles all public (51 Wikipedia pages,
+  22 papers, and the FreeCAD and Python documentation); that the key never leaves the machine and that only a copy of
+  `items.json` in a folder of its own would be given to the labellers; and that the labellers are three strong-model subagents of this
+  session, the provider that runs the session. The owner said yes. The calibration subset (15 items, `calibration.json`) was not
+  labelled by the owner and is not needed; it stays in the sample folder for the owner to label.
+- **Provenance.** `python3 -m kb card-sample ~/.local/share/knowledge-base/trial/inferred-sample --field topics --field key_ideas --marks
+  inferred=60 stated=60 --seed 20261110 --calibration 15` at commit `475cba5`, on the library of 110 books and 109 cards; SHA-256 of
+  `items.json` `0dbf9c66d1b496ae40a0471471771232f56d3900fec1d61b9d29fca0f929fb02`. The marks come from the newest card of each of 75 books
+  (generations 1 to 4 and 6), 30 in each cell. In the file the marks run in a mixed order along the ids, and
+  `items.json` holds none of the fields of the key. Labellers: three subagents with the model `claude-opus-5-5` (from the transcripts),
+  launched in parallel with the same neutral brief that named neither the marks nor the aim and gave only the path of the staged copy
+  (SHA-256 checked equal) and the rubric. The transcripts show that each made only `Read` calls of that one file (8, 6 and 6 calls, in
+  parts) and the final hand-back, and no other tool and no other path. Each returned all 120 ids with a label and a note; the files
+  were assembled from the returned JSON by script and accepted by the engine's loader (`labelled-labeller-N.json` in the sample folder).
+  `python3 -m kb card-accuracy LABELLED KEY --by-mark` for each, and `card-agreement` for each pair.
+- **Agreement.** The three labellers agree closely: 115 of 120 (95.8 percent), 117 of 120 (97.5) and 118 of 120 (98.3) for the three
+  pairs, and all three give the same label to 115 items. They give `unsupported` to the same 16 items, 4 of which are items for which no
+  passage was found. The five split items are all key ideas and every split is between `supported` and `inference`.
+- **The labels by mark** (shares of the items not skipped; no item was skipped; labeller 1 / 2 / 3):
+
+  | | items | supported | inference | unsupported |
+  |---|---|---|---|---|
+  | `inferred`, all | 60 | 45 / 48 / 47 (75.0 / 80.0 / 78.3 percent) | 5 / 2 / 3 | 10 / 10 / 10 (16.7 percent) |
+  | `stated`, all | 60 | 50 / 50 / 49 (83.3 / 83.3 / 81.7 percent) | 4 / 4 / 5 | 6 / 6 / 6 (10.0 percent) |
+  | `inferred` topics | 30 | 27 / 27 / 27 (90.0 percent) | 0 | 3 (10.0 percent) |
+  | `stated` topics | 30 | 28 / 28 / 28 (93.3 percent) | 0 | 2 (6.7 percent) |
+  | `inferred` key ideas | 30 | 18 / 21 / 20 (60.0 / 70.0 / 66.7 percent) | 5 / 2 / 3 | 7 (23.3 percent) |
+  | `stated` key ideas | 30 | 22 / 22 / 21 (73.3 / 73.3 / 70.0 percent) | 4 / 4 / 5 | 4 (13.3 percent) |
+
+- **What the numbers show, and do not.** Topics and key ideas marked `inferred` are judged supported by the passages shown about three
+  times in four (75 to 80 percent, and 83.3 percent counting `inference`), against 82 to 83 percent (90.0 percent with `inference`) for
+  those marked `stated`. The point estimates favour `stated` by 3 to 8 points of `supported` and by 6.7 points of `unsupported`
+  (10 of 60 against 6 of 60), but at 60 items a side the difference is within chance: Fisher's exact test, two-sided, gives p = 0.42 for
+  the `unsupported` counts, 0.55 when the 4 items without passages (3 `inferred`, 1 `stated`) are left out, 0.37, 0.81 and 0.82 for the
+  strict `supported` counts of the three labellers, and 0.51 for key ideas alone (7 of 30 against 4 of 30). The sample cannot tell
+  these two marks apart on topics and key ideas; it does not show that they are the same. The weak spot of both is the key idea
+  (60 to 73 percent supported against 90 to 93 percent for topics); the items judged `unsupported` are mostly a detail the passages do
+  not state (a named condition, a term such as FFT or POMDP that no shown passage mentions). **This is for topics and key ideas only.**
+  Caveats and limits, most of which are `inferred` (83 and 80 percent of them), are not in the sample, and the earlier finding that
+  2 of 13 `inferred` items were supported (`2026-11-07-card-grounding`) was mostly about caveats and limits.
+- **Limits.** (1) A labeller sees only the five best passages; an item supported elsewhere in the book is counted `unsupported`, so
+  every share is a lower bound for support, for both marks alike. (2) Three labellers of one model: their agreement shows that they
+  read the rubric alike, not that they are right; the owner's labels of the calibration subset would test that and have not been given.
+  (3) A cell of 30 items has an interval of about plus or minus 17 points. (4) The content of the two marks differs: an `inferred` item
+  has no supporting quote behind it, and 3 of the 4 items with no passages are `inferred`, which the labellers had to call
+  `unsupported`; part of the gap is the method, not the items. (5) The cards were made over several days with different prompts
+  (generations 1 to 4 and 6); the sample is the newest card of each book, not a controlled comparison of one prompt, and the form and
+  model of each card were not examined. (6) These are shares of items in the
+  sample, not the accuracy of the cards as a whole.
+- **Verification as run.** The counts above are those of `card-accuracy` and `card-agreement`; the 120 labelled items of each file
+  were accepted by the loader (no unlabelled item, no `inference` without a note); the totals add up to 120 for every labeller and
+  mark; the transcripts were checked for the tool calls. No tracked code was changed by this increment.
