@@ -1,6 +1,6 @@
 # A trial of cross-field search
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-10
 Candidate: cross-field-discovery#cross-field-trial
 Specs: docs/specs/testing.md, docs/specs/card.md
