@@ -276,3 +276,31 @@ A second round has not been asked for.
   written outside the project, and the problem texts and sub-problems are sent to the owner's server in the clear through the existing
   path (the new `vectors.coverage` only reads). My recommendation was no (the corpus is the owner's own bounded file, and the send path
   and the file-writing code are ones already reviewed). The owner's answer: **no**. No security review was run for this surface.
+  (Committed as `3daece5`.)
+
+### Increment B — The corpus, written blind (done)
+
+- **What was sent, and said beforehand:** the text of each of the twelve problems and steps 1 and 2 of the skill `pose-a-problem` (the
+  parts that say how to restate and split; the plan says "the text of the skill", and the rest of the skill is about calling the tool and
+  reading its answer, so it was left out), to a cloud model through twelve subagents, one for each problem, run in parallel. The owner
+  said "start b" after being told this. The problems are synthetic.
+- **Blindness:** each agent was given only its problem and told to use no tool and to answer once. The transcript of each shows one tool
+  call, the `SubagentHandback` that delivers its report, and no other: no file, search or shell tool. No answer was discarded, none was
+  asked for twice. One attempt each. The agents were never given the expected books, the home books or the library.
+- **The corpus:** `~/.local/share/knowledge-base/trial/cross-field-problems-corpus.json` (outside the repository, mode 600), 11,727
+  bytes, **sha256 `f9bdc6268b6b65bdf0c174236f6370c7314d1051a1bd65a63ac9a3f36e91af67`**. Twelve problems (ten with expected books, two
+  controls), the expected and home titles of the plan in the full form the catalog stores, 36 keyword queries and 37 sub-problems. I
+  typed the agents' answers into a script that wrote the file and then compared each with its agent's transcript: all twelve are
+  identical, character for character. No sub-problem has an apostrophe or a quotation mark.
+- **`--check`** (`python3 -m kb trial-problems CORPUS REPORT --check`): accepted. Every title resolves to exactly one book; the model is
+  `qwen3-embedding:4b` with a query prefix; 78 cards would be searched, 0 stale, 0 without a vector; **49 sentences would be sent** (12
+  problem texts and 37 sub-problems; the plan's bound was 72). Nothing was sent and no report was written.
+- **Something the owner should weigh when reading the corpus.** The blind agents brought their own knowledge, as a real agent would, and
+  in several problems named the answer outright in a keyword query or a sub-problem: p05 ("Bloom filter"), p06 ("annealing schedule"),
+  p07 ("learned index", and a sub-problem about a learned model of the cumulative distribution), p09 ("Nash equilibrium", "best response
+  dynamics"), p10 ("dynamic programming", "memoization"), and p01 ("traveling salesman"). For those problems the keyword searches (T and
+  K) and the problem search (P) start from the answer's name and are not a test of a vocabulary gap; the search by meaning (M) uses the
+  problem as written and is. The Result of Increment C must say so when it reads the counts.
+- **The owner's reading.** The whole corpus (every keyword query and sub-problem, with the caveat above) was shown to the owner, who
+  then said "commit b" and made no change. That is recorded as the corpus standing as it is, with the hash above; the owner did not
+  otherwise comment on it, and no wording was changed or asked for again.
