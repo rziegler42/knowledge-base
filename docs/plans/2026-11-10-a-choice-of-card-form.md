@@ -1,6 +1,6 @@
 # A choice of card form
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-10
 Candidate: none (a correction that follows from a finding: the Result of Increment B of the plan `2026-11-10-add-sources-from-the-fields-that-ideas-come-from` found that the engine can make only the sentence form of the card, which the owner decided on 2026-11-09 not to use for the library)
 Specs: docs/specs/card.md
