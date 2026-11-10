@@ -203,4 +203,38 @@ A second round has not been asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — Capture and process the 30 pages (done)
+
+- **Checkpoint and list, both said beforehand (steps 1 and 2).** The surfaces and what had been reviewed were named to the owner:
+  capture, scan and conversion (reviewed), the card queue (reviewed 2026-11-08), and the model call and card prompts (no review asked for
+  or run). The owner was asked once whether to run the security review before the batch; my recommendation was no, and the owner's
+  answer was **no** (no security review was run for this batch). The 30 addresses were then shown with the number of requests (30,
+  three seconds apart, one site) and the owner said **yes**. I added one safeguard of my own, that the first three requests would be
+  looked at before the other 27.
+- **Before the batch.** The store listed **80 books** (79 of them with a card; the plan's "79" meant the carded ones). A read-only
+  snapshot recorded, for each, one hash over the path and content of every file of its folder.
+- **Capture (steps 3).** `python3 -m kb capture-url` for each address in the order of the table, one at a time, three seconds apart, by a
+  small driver script outside the repository, on 2026-11-10 at commit `0d0e8b5`. The first three were looked at (all `filed`), then the
+  other 27. **All 30 were `filed`; none `held`, none `failed`.** The new books, in the order of the table: Annealing (metallurgy)
+  `01M72RYSF85XRRWQ3777BQXES7`; Metropolis–Hastings algorithm `01M72RYWV9M3N66616WWGQ6GSA`; Multi-armed bandit
+  `01M72RZ06V3JF52J3ZAZA428N2`; Thompson sampling `01M72RZ77M6BQ01MQK6KQW2HZX`; Sequential analysis `01M72RZAJ0KPX6DW0B2XJE9176`;
+  Sequential probability ratio test `01M72RZDTTXXG6JNJZ8XD6PQCV`; Optimal stopping `01M72RZH684MNWQ2TWS56B71AX`; Optimal foraging theory
+  `01M72RZMGYXBPQ7JZSD18JTCZS`; Marginal value theorem `01M72RZQTD3N5DG90AHHTY2D78`; Compartmental models in epidemiology
+  `01M72RZVAAQMM72E3Z8NP03XES`; Percolation theory `01M72RZYRCB2KCSXFZCR22YQEK`; Artificial immune system
+  `01M72S024N2PYAKDQDAZY6WXPX`; Immune system `01M72S05H2S9BVX0GWD24WZPC3`; Ant colony optimization algorithms
+  `01M72S08ZQR5X7BC1NYS1ZWGWH`; Stigmergy `01M72S0CCJZJPD3M4Z4YMTJE01`; Visual cortex `01M72S0FSJS7KNK5CFWM45XQK9`; Neocognitron
+  `01M72S0K618P8C11TA42DR0G2M`; Operations research `01M72S0PH765EM1KZW3GEQZ1NS`; Linear programming `01M72S0SWRH2HD71S7Z8Z47DXM`;
+  Queueing theory `01M72S0X7DQKV4B301VVBW4JD5`; Newsvendor model `01M72S10KDCX8GDV97FQE7Z18Q`; Discrete mathematics
+  `01M72S13Y315F6PCPN84TZ4CD7`; Graph theory `01M72S179VTSK44PKHT3BMG4Y0`; Combinatorics `01M72S1AN46TVA37SKENKTCBQG`; Numerical
+  analysis `01M72S1E5GXNYR1E2BSVXYSBEM`; Newton's method `01M72S1HHSPR8FNSWGBP52HCQN`; Monte Carlo method
+  `01M72S1MXQXAB106HVMB18R9GR`; Linear algebra `01M72S1RA7D5YJ1AAE6P28536G`; Singular value decomposition
+  `01M72S1VQBY820CG8ZN6KKJN7H`; Eigenvalues and eigenvectors `01M72S1Z4DKCTE9FSBGETWY5J6`.
+- **Process (step 4).** `python3 -m kb process --book ID` for the 30 ids only, so that nothing else was touched. Its report holds 90
+  results (30 scanned, 30 converted, 30 indexed), **all `done`**, none failed.
+- **Checks (step 5).** The same snapshot taken again: **80 books before, 110 now, none of the 80 changed, 30 new.** A text search of
+  three queries ("Metropolis Hastings", "Thompson sampling", "eigenvalues eigenvectors") returned five results each, all from the new
+  books. A passage of the Thompson sampling page was read back with `read` (status `found`, the citation line with the address and the
+  retrieval date, the text between the untrusted-text markers).
+- **Not checked here.** Whether a page is marked partial or carries a scan caveat is not in the report of `process`; the cards, made in
+  Increment B, carry it. The index was not rebuilt from the book folders for a comparison; no code or test changed, so no test was run.
+- **Verification as run:** the counts above; `wb run code-work check` found no problems.
