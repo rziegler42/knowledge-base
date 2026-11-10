@@ -1,6 +1,6 @@
 # Pose a problem to the search by meaning
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-10
 Candidate: cross-field-discovery#problem-search
 Specs: docs/specs/knowledge-base.md, docs/specs/card.md
