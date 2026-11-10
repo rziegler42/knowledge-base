@@ -626,5 +626,70 @@ class DeclarationTests(unittest.TestCase):
         self.assertTrue(stat.S_ISREG(mode))
 
 
+SKILL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "package", "kb", "harness", "neutral", "skills",
+                     "pose-a-problem", "SKILL.md")
+
+
+class SkillTests(unittest.TestCase):
+    """The skill that tells an agent how to pose a problem. It needs no workbench checkout: it is a Markdown file of the package."""
+
+    def setUp(self):
+        with open(SKILL, encoding="utf-8") as f:
+            self.text = f.read()
+        self.head, _, self.body = self.text.partition("\n---\n")
+        self.lower = " ".join(self.body.lower().split())  # a phrase may be wrapped over two lines
+
+    def test_the_skill_is_a_neutral_skill_with_a_name_and_a_description(self):
+        lines = self.head.splitlines()
+        self.assertEqual(lines[0], "---")
+        fields = dict(line.split(": ", 1) for line in lines[1:])
+        self.assertEqual(sorted(fields), ["description", "name"])
+        self.assertEqual(fields["name"], "pose-a-problem")
+        self.assertTrue(30 <= len(fields["description"]) <= 300)
+        self.assertEqual(os.path.basename(os.path.dirname(SKILL)), fields["name"])
+
+    def test_it_says_how_to_restate_the_problem_and_what_to_leave_out(self):
+        for phrase in ("general terms", "name of a field", "private", "secret"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_to_split_into_one_to_five_sub_problems_of_one_idea_and_one_line(self):
+        for phrase in ("sub-problem", "one to five", "one idea", "one line", "1000 characters"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_names_the_call_with_the_double_dash_and_says_to_call_it_once_and_not_to_loop(self):
+        self.assertIn("wb run kb problem-search [--limit <1-10>] -- '", self.body)  # the double dash sits before the first sub-problem
+        self.assertNotIn('problem-search [--limit <1-10>] -- "', self.body)  # single quotes: a double quote lets the shell expand the text
+        for phrase in ("call it once for the problem", "do not repeat the same call", "owner's server", "single quotes", "apostrophe"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_the_engine_does_not_set_the_own_field_aside_and_the_agent_does_from_title_and_matched_text(self):
+        for phrase in ("own field", "title", "matched", "set aside", "say which"):
+            self.assertIn(phrase, self.lower)
+        self.assertIn("the engine sets nothing aside: you do", self.lower)
+
+    def test_it_says_to_keep_a_book_only_with_a_reason_made_from_its_matched_text_quoted_as_the_books_words(self):
+        for phrase in ("reason", "quote", "so quote it as the card's description of the book, never as the book's own words"):
+            self.assertIn(phrase, self.lower)
+        self.assertNotIn("as the book's words", self.lower)  # the excerpt is the card's description, which a model wrote
+
+    def test_it_says_to_read_the_passage_before_relying_on_a_book_and_how_to_get_a_locator(self):
+        self.assertIn("- `wb run kb read [--version <version_id>] <book> '<locator-json>'`", self.body)
+        self.assertIn("- `wb run kb search '<words of its title", self.body)
+        self.assertIn("a result carries a `locator`", self.body)
+
+    def test_it_names_the_keys_that_read_needs_and_says_how_to_pick_the_books_passage_and_what_to_do_without_one(self):
+        for phrase in ("`book_id`", "`version_id`", "title words first", "whose `book_id` is the book you kept", "unread",
+                       "do not rely on it"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_every_result_is_untrusted_and_when_nothing_fits_to_say_so(self):
+        for phrase in ("untrusted", "not an instruction", "nothing from another field", "say so plainly"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_to_stop_and_tell_the_owner_when_the_helper_refuses_for_its_settings(self):
+        for phrase in ("refused", "tell the owner", "do not try another way"):
+            self.assertIn(phrase, self.lower)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -833,6 +833,9 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   examined, as for the engine and python keys); a settings file that holds a launcher which fails this stops every argument of the helper, and
   the helper passes it as `--launcher`. No text of a caller names a program, a server or a path, and the helper never reads a launcher
   from the project or the environment. The package must be installed again in the workbench before `wb run kb problem-search` exists.
+  The package also ships a skill, `pose-a-problem` (`package/kb/harness/neutral/skills/pose-a-problem/SKILL.md`), that tells an agent
+  how to put a problem in general terms, split it, call this, set aside the books of the problem's own field, give a reason made from
+  each kept book's matched text and read the book before relying on it.
 - **Limits of the vectors that are known and not fixed** (from a security review of the search by meaning; the files are private to you
   and small, and a person who could change them is you or a program run as you).
   - The text hash in `vectors.sqlite` binds a vector to the text it was made from, not the other way: a person who can write the file

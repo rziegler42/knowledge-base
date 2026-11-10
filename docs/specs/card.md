@@ -175,6 +175,14 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   anything else is left out and counted in the reply (`stale`, `without_vector`), and a file made for another model or with another
   document prefix is refused, so vectors of two models are never mixed. The query is sent with the entry's query prefix, if it has
   one, and the reply says whether it did (`query_prefix`). It takes no shelf or book filter yet.
+- **[proposed]** Built in the engine: `problem-search -- SUB ...` puts a problem to the search by meaning as one to five
+  sub-problems (the caller restates and splits the problem; the engine calls no chat model). Each is searched as above and the reply
+  holds each sub-problem's ranked books and one list in which each book appears once, with its best result without the card text
+  (a reply over 60,000 characters is refused) and the sub-problems that returned it with the rank and score of each. **The engine
+  sets nothing aside by field**: no card says which field a book belongs to (every shelf is `default`), so the caller sets aside the
+  books of the problem's own field. An agent in a project reaches it through the `kb` helper (`wb run kb problem-search`), which sends
+  the sub-problems to the embedding model of the config and to nothing else, and through the skill `pose-a-problem` that the package
+  ships. A field label on cards, so that the engine could set a field aside, is not built.
 - **[proposed]** The card as shown to a reader marks each kept topic, key idea, caveat and neutral limit, and each sentence of the
   summary and the neutral fields of a card that has them, `[stated]` or `[inferred]`,
   and a result says how many items of each mark its card has, or that the card was not checked (a card of the earlier form). The

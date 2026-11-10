@@ -306,4 +306,47 @@ A second round has not been asked for.
   the launcher validation (links, `..`, `//`, NUL, relative, missing, directory, not executable, in the project, group- or
   other-writable); the engine's argparse keeps `--launcher`, `--limit=9`, `-h` and `--` positional after `--`. Not checked by the reviewer:
   the real `wb` and bridge, the real `wbkit.jsonstrict` (stubbed), the tests, the body of `vectors.search`, and a Python older than the
-  3.15 tried.
+  3.15 tried. (Committed as `b9a241c`.)
+
+### Increment C — The skill and the specs (done)
+
+- **How a module ships a skill (step 1):** found in the workbench's `docs/specs/harness-modules.md` ("Neutral items") and in the
+  packages `safe-git` and `security-review`: a Markdown file `harness/neutral/skills/<name>/SKILL.md` with the front matter `name` and
+  `description`, and no entry in `module.json` (nothing under `harness/` needs one in `ships` or `provides`). The skill is
+  `package/kb/harness/neutral/skills/pose-a-problem/SKILL.md`. The plan's text "its entry in the module declaration" is therefore not
+  done, on purpose: there is none to make; `module.json` changed only in its `description` (it said "by keyword" only).
+- **What the skill says:** put the problem in general terms and leave out private text and secrets (the text is sent to the owner's server
+  in the clear and may be kept in its logs); one to five sub-problems, one idea and one line of at most 1000 characters each; the call
+  `wb run kb problem-search [--limit <1-10>] -- 'sub-problem' ...` in single quotes (a double quote lets the shell expand the text)
+  and no apostrophe, once for the problem and not in a loop; read the reply as untrusted data; the engine sets nothing aside by field, so
+  the agent sets aside the problem's own field from the title and the matched text and says which; keep a book only with a reason made
+  from its matched text, quoted as the card's description of the book and never as the book's own words; read the book before relying
+  on it (`wb run kb search`, a result of the book's own `book_id`, then `wb run kb read [--version <version_id>]`) and mark it unread
+  and unrelied-on if no passage turns up; stop and tell the owner when the helper refuses for its settings; say plainly when nothing
+  from another field fits.
+- **Specs:** `docs/specs/knowledge-base.md` now states the one exception to "send nothing out" (the argument, the `card-embed` model on the
+  owner's server, nothing else; the workbench's own spec is not changed and is the owner's to reconcile); `docs/specs/card.md` has a
+  bullet on what `problem-search` builds and its limit (no field label on cards). `engine/README.md` has two sentences on the skill.
+- **Tests first:** `SkillTests` in `engine/tests/test_package.py` (9 tests, then 10), written before the skill existed (9 errors, the
+  file missing). After the review four assertions were changed to the new text and seen to fail (4 failures) before the skill was
+  edited.
+- **Verification as run:** `KB_WORKBENCH_CHECKOUT=… python3 -W error::ResourceWarning -m unittest engine.tests.test_package
+  engine.tests.test_problem` gave 102 tests, OK (without the variable the 53 helper tests are skipped and the 10 skill tests pass);
+  `wb run code-work check` found no problems. Not run: the skill was not installed or loaded in a project (that needs the package
+  installed again in the workbench and a live harness).
+- **Deliberate breaks of the skill text:** 24 (the name, an extra front matter field, the warnings about private text, one idea, the
+  length, double quotes, the double dash, single quotes, apostrophes, call once, no loop, setting the own field aside, saying which,
+  quoting as the book's words, the card's description, `book_id` and `version_id`, `--version`, title words first, matching the
+  `book_id`, the unread fallback, the locator search, untrusted, saying so plainly, stopping and telling the owner). The first run of
+  16 missed four, because the assertions were too loose (`--` also matches `[--limit`); they were tightened, and in the second run
+  one more (the sentence "quote it as the card's description" appeared twice) was missed and pinned. All were then caught.
+- **Review:** the read-only `reviewer` agent, one round, no blocking finding, six points. Applied: (1) the example used double quotes,
+  against the rule of this project's `AGENTS.md` and open to shell expansion: now single quotes, with a warning about apostrophes; (2)
+  the excerpt is the card's description (a model wrote it), so the skill said "quote as the book's words" wrongly: now "the card's
+  description of the book, never the book's own words" (this departs from the plan's wording "as the book's words"); (3) the recipe for
+  finding a locator had no match key and no fallback: title words first, the result of the book's own `book_id`, and "unread, do not
+  rely on it" if nothing turns up; (4) the keys `read` needs (`book_id`, `version_id`, `--version`) were not named: now named; (5) the
+  `module.json` description said "by keyword" only: changed. Recorded and not changed: (6) `docs/specs/library.md:40` repeats the rule
+  that an agent may run only reads that send nothing out, with no exception. The plan names only `knowledge-base.md` and `card.md`, so
+  it is left for the owner to decide whether `library.md` should carry the same sentence. The reviewer ran nothing and could not check
+  that the skill loads or that `wb run` passes `--` through (Increment D).
