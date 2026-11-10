@@ -237,4 +237,53 @@ A second round has not been asked for.
   retrieval date, the text between the untrusted-text markers).
 - **Not checked here.** Whether a page is marked partial or carries a scan caveat is not in the report of `process`; the cards, made in
   Increment B, carry it. The index was not rebuilt from the book folders for a comparison; no code or test changed, so no test was run.
-- **Verification as run:** the counts above; `wb run code-work check` found no problems.
+- **Verification as run:** the counts above; `wb run code-work check` found no problems. (Committed as `7638d78`.)
+
+### Increment B — Cards for the new books (run; decided: option (b), a plan of its own)
+
+- **Plan, said beforehand (step 1).** `python3 -m kb cards-queue plan --book ID ...` with the 30 new ids made the run
+  `20261110t133834z-efd82d` (30 books, none skipped; no call). Shown to the owner with the order of the models (`gemma4:12b` for the
+  notes, `gpt-oss:20b` for the card, `phi4` for the checks, `qwen3:14b` for the second round), 97 calls known (67 notes, 30 card) and
+  about two calls of checks for each card, and the statement that the text of the pages goes in pieces to those models on `ned` over
+  plain HTTP. The owner said **yes**.
+- **A stop on the owner's word.** The run was started at about 13:39 UTC and, within a minute or two, the owner asked to pause it: the
+  GPU of `ned` had crashed and needed a reboot (the owner then said that the crash had happened several days before and was noticed
+  only then). The background task was stopped; no `cards-queue` or `ask-ollama` process was left; the run's state was 30 waiting, none
+  made. After the reboot the owner said to start again (13:48:26 UTC), and the run went on from its journal.
+- **Result.** The run finished at 14:10:25 UTC, 22 minutes after the restart, in 2 passes: **27 books done, 3 failed, none dropped.** The
+  27 cards are generation 1 of their books. **The 3 that failed** (each tried twice and kept aside, as designed): Sequential analysis
+  `01M72RZAJ0KPX6DW0B2XJE9176` and Queueing theory `01M72S0X7DQKV4B301VVBW4JD5`, both with "the support of a sentence of this part is
+  the numbers of notes; inferred and none are not allowed: 'inferred'", and Stigmergy `01M72S0CCJZJPD3M4Z4YMTJE01` with "the answer's
+  sentence_fields, sentences and sentences_support are not lists of the same length" (the intermittent slip of the earlier runs). As the
+  plan says, a new attempt or a fix is the owner's decision.
+- **Calls and time** (read from the records of the 27 cards; the calls of the failed attempts are not in them and are not counted): 211
+  calls (63 notes, 27 card, 94 check, 27 second round); 207 of them after the restart, in 21.8 minutes, **6.3 seconds a call**. The
+  earlier queue run (2026-11-08 and 09, 66 books) took about 5 seconds a call in 495 calls, with a `keep_alive` of 10 minutes; this run
+  had 30 seconds, after a reboot, and a different mix (more check calls, 45 percent against 33), so the two are not a controlled
+  comparison. About 25 percent slower a call, not more.
+- **What the cards are like — a finding that stops the plan before Increment C.** The cards were made by the card call that the engine
+  has now, which asks for the summary and the five neutral parts as *sentences* with support and drops a sentence that no verified note
+  supports (the form built in the plan `2026-11-09-ground-the-summary-and-neutral-fields`). **24 of the 27 cards are marked partial**,
+  against 8 of 63 in the earlier run, because a part of the card is empty: no sentence was left for the problem in 13 cards, the
+  provides in 9, the approach in 8, the needs in 22, the limits in 3, the summary in 1; 3 cards also have fewer than three key ideas.
+  Of the three fields that the search by meaning uses (problem, approach, provides) the 27 cards hold **51 of the 81 possible**; 8
+  cards have all three, 10 have two, 7 have one and 2 have none. The 78 older cards with a model part, made in the earlier form, have
+  4 empty fields among the same 234. 457 items are marked stated and 102 inferred over the 27 new cards. The books are otherwise
+  intact: the same snapshot as in Increment A shows **80 books before, 110 now, none of the 80 changed**.
+- **Why, and what I missed.** The engine has no choice of card form: `card.py` can read a card of the earlier form, but `cardmake` and
+  `cardqueue` make only the sentence form. On 2026-11-09 the owner decided, on my recommendation, that "the old form is not replaced and
+  the library is not carded again with the new form", and the recommendation said to "keep the new form as an option"; no option was
+  built, so any new carding gives the new form. I did not check which form this plan's card run would make when I drafted it, and the
+  plan's goal ("a grounded card with a domain-neutral description") assumed the complete neutral parts of the older cards. I should have
+  caught this when drafting the plan.
+- **Options for the owner** (recorded for the decision; none is done): (a) go on to Increment C with the cards as they are, and retry
+  the three failures once; the vectors would be 51 (up to about 60 with the retries), two cards would be unsearchable by meaning, and a
+  miss in the twelve searches could be a miss of the card form and not of the library; (b) a small plan of its own to give the engine a
+  choice of card form, as the decision of 2026-11-09 meant, and to card the 30 books again in the earlier form as a new generation (the
+  new-form cards stay as generation 1, never overwritten); (c) stop here.
+- **Owner's decision:** option (b), on my recommendation. A plan of its own, `2026-11-10-a-choice-of-card-form`, gives the engine a
+  choice of card form (the earlier form the default) and cards these 30 books again in the earlier form as generation 2, keeping the
+  27 sentence-form cards as generation 1. This plan goes on with its Increment C (the catalog, the vectors and the twelve searches)
+  after that, so that the twelve searches are made over the cards the owner wants. The three books that failed are carded again by
+  that plan. The 27 cards of this run stay in the library as they are.
+- **Not done:** `card-index`, `card-vectors` and the twelve searches (Increment C); no card was read with `card-show`.
