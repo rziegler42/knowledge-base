@@ -303,4 +303,64 @@ A second round has not been asked for.
   problem as written and is. The Result of Increment C must say so when it reads the counts.
 - **The owner's reading.** The whole corpus (every keyword query and sub-problem, with the caveat above) was shown to the owner, who
   then said "commit b" and made no change. That is recorded as the corpus standing as it is, with the hash above; the owner did not
-  otherwise comment on it, and no wording was changed or asked for again.
+  otherwise comment on it, and no wording was changed or asked for again. (Committed as `41aaea4`.)
+
+### Increment C — The run and the reading (done)
+
+- **What was sent, and said beforehand:** 49 sentences (the 12 problem texts and the 37 sub-problems), each with the query prefix, to the
+  owner's server `ned` over plain HTTP, and nothing else; the keyword searches sent nothing. The owner said "start c" after being told.
+- **Provenance.** Run on 2026-11-10 at commit `41aaea4`: `python3 -m kb trial-problems CORPUS REPORT`, once, with the corpus of
+  Increment B (sha256 `f9bdc626…91af67`), against the catalog `76728081…`, the text index `5056fe38…` and the vectors `a30b6c73…` (78
+  cards covered, 0 stale, 0 without a vector), model `qwen3-embedding:4b` with a query prefix. The report is outside the repository,
+  sha256 **`214185068f6f4e24f1be1a1e7ee3df93c42f42f6a37785d6b10d53ca99466f3b`**. The command finished without a failed call.
+- **The counts** (ten problems with expected books; fifteen pairs of problem and expected book): hit at 5 — **T 9, K 7, M 8, P 9** of
+  10, and the same after setting aside the home books (taking the home books out of the lists changed no hit). Pairs within the
+  first ten — T 12, K 8, M 12, P 14 of 15. Mean reciprocal rank — T 0.833, K 0.633, M 0.644, P 0.825.
+- **The places of the expected books** (`-` = not in the list of at most 50, or at most 10 books for each sub-problem for P):
+
+  | | expected | T | K | M | P |
+  |---|---|---|---|---|---|
+  | p01 | Simulated annealing, Genetic algorithm | 2, 1 | -, - | 26, 42 | 1, 5 |
+  | p02 | Genetic algorithm, Simulated annealing | 1, - | -, - | 3, 1 | 3, 1 |
+  | p03 | Nash equilibrium, Minimax | 1, 3 | 1, - | 8, 5 | 6, 4 |
+  | p04 | Message Passing Interface | - | - | - | - |
+  | p05 | Bloom filter | 1 | 1 | 1 | 1 |
+  | p06 | Simulated annealing | 1 | 1 | 5 | 1 |
+  | p07 | The Case for Learned Index Structures | 1 | 1 | 1 | 1 |
+  | p08 | Dijkstra's algorithm, A* search algorithm | 3, 1 | 1, 1 | 1, 2 | 2, 1 |
+  | p09 | Multi-Agent Reinforcement Learning, Evolutionary game theory | 3, - | 3, - | 5, 1 | 6, 1 |
+  | p10 | Dynamic programming | 1 | 1 | 1 | 1 |
+
+  Every search missed p04 (the expected book is not among the first five of any; MPI is not in the first 50 of M nor the first ten of any
+  sub-problem of P). In M the home books were among the first five in p01 (three of them), p04 (three), p09 (three), p03 (two) and
+  p02, p05 and p06 (one each); in P in p04, p06 and p09 (three each) and p03 (one).
+- **The reading against the rule written before the run.** B5, the best of the four, is 9: **search alone looks enough** (7 or more).
+  P5 is 9 and the larger of T5, K5 and M5 is also 9, so **the problem search adds nothing** by the rule (it needed 2 more); P5 is 1 more
+  than M5 (8), from one problem, p01, where the search by meaning put the expected books 26th and 42nd, behind the three home books,
+  and the problem search, with the restatement of the blind agent, put them 1st and 5th.
+- **The controls.** The keyword searches and both meaning searches return books for the bakery (p11) and the clinical trial (p12) all
+  the same: M gave Minimax, Training Compute-Optimal Large Language Models, Dynamic programming, Simulated annealing and Mechanism
+  design for p11; P gave Minimax and A* search first for p11 and p12 (T gave Nash equilibrium, Evolutionary game theory and a
+  multi-agent paper for p12, and nothing for p11). So an agent has to judge every list, as the skill says. The best score of M for the
+  controls is 0.359 and 0.365 and that of P 0.397 and 0.428, below the best score of every problem with an expected book (M from 0.42, P
+  from 0.51). With two controls this is an observation and no threshold.
+- **What cannot be concluded, and what weakens the reading.** (1) Ten problems that one person chose, with expected books that are
+  one person's judgment, in a library of about eighty books in seven fields where many of the expected books are the Wikipedia article
+  of the very method: "enough" holds for this corpus and this library, not for a larger one. (2) The blind agents brought their own
+  knowledge and named the answer in p05, p06, p07, p09, p10 and p01; T and K and P are strong where they did. T's 9 of 10 is largely a
+  measure of an agent that knows the name of the method and a library that holds an article about it; it does not show that the
+  keyword search would find a source for a problem whose answer the agent does not know. M, which uses the problem as written, needs
+  no such knowledge and found 8 of 10. (3) The setting aside of the home field is simulated by the list of home books, and it changed
+  nothing here. (4) One first attempt by each blind agent, one run, no repetition. (5) p03 and p09 are blurred between fields, as the
+  plan warned; p01, p02 and p06 share expected books. (6) The two controls cannot support a threshold.
+- **Recommendation (given before the owner's word).** Do not go on to pair judging now: by the plan's own rule search alone looks
+  enough, and the roadmap allows pair judging only if the trial shows it is not. The one miss everywhere, p04, is an analogy at a
+  distance (splitting the state of a training run across workers, matched with message passing), which is the kind of case where a judge
+  of pairs might help; one problem is too few to build on. What the numbers point to instead is a test that this trial cannot make: a
+  second corpus whose problems come from fields the blind agent does not know the answer to, or from a larger library, where the
+  keyword search has no name to start from. That would be a plan of its own.
+- **Owner's decision:** the owner said to go with the recommendation: **do not go on to pair judging now**
+  (`cross-field-discovery#pair-judging` is not started; the roadmap is not changed). The second corpus, with problems whose answers the
+  blind agent does not know, or a larger library, is not planned yet; it is listed under Deferred work and would be a plan of its own.
+- **Verification as run:** the report holds all twelve problems and four searches; the counts above are the ones it holds (read from
+  the report, with the summary printed by the command); `wb run code-work check` found no problems.
