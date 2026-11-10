@@ -210,7 +210,7 @@ until `card-vectors` is run once; the plan says so before it happens.
 
 ## Result
 
-### Increment A — Prefixes for the texts the engine embeds (done; not committed)
+### Increment A — Prefixes for the texts the engine embeds (done)
 
 - **What was built** (`engine/kb/models.py`): an embedding entry may have `query_prefix` and `document_prefix`, each text of 1 to 400
   characters that are printable or a line break (`_prefix_ok`: `str.isprintable` plus `\n`); a chat entry refuses both, and the listing
@@ -241,7 +241,7 @@ until `card-vectors` is run once; the plan says so before it happens.
   value cannot be. The reviewer ran nothing and read no bridge source.
 - **Not asked yet:** the question about a security review comes at the end of Increment B, as the plan says. (Committed as `6204014`.)
 
-### Increment B — Record the document prefix with the vectors and use the prefixes in the build and the search (done; not committed)
+### Increment B — Record the document prefix with the vectors and use the prefixes in the build and the search (done)
 
 - **What was built** (`engine/kb/vectors.py`): the file of vectors is of format 2 and its meta table has a new key,
   `document_prefix_sha256`, the SHA-256 of the entry's document prefix exactly as written (no normalization), that of an empty text
@@ -272,4 +272,29 @@ until `card-vectors` is run once; the plan says so before it happens.
 - **Security review (step 4).** Asked once of the owner, with the surface named: text from the config reaching the bridge on stdin as
   part of every text, and a new field in the vector file that a search compares. My recommendation was no (the new input is the
   owner's own config text, sent only to the owner's server, and checked as before). The owner's answer: **no**. No security review was
-  run for this surface.
+  run for this surface. (Committed as `0864bc8`.)
+
+### Increment C — Try an instruction before the query for the model the library keeps (done)
+
+- **Wording** (agreed with the owner, who added it to the config; I did not write the config): `query_prefix` of `embed-qwen` is
+  `Instruct: Given a description of a problem or of how something works, find descriptions of methods or ideas that solve the same
+  problem or work the same way, in any field`, a line break, and `Query: ` (value ends after `Query: `, 177 characters). No
+  `document_prefix`. `python3 -m kb models` loaded the config and made no call. Only this one wording was tried.
+- **Build** (the owner said yes after being told that 230 texts go to the server `ned`, in the clear): `python3 -m kb card-vectors`
+  gave `made 230, kept 0, texts_sent 230, replaced true` (the file was of format 1); run again, `kept 230, made 0, texts_sent 0,
+  replaced false`. The file's meta table, read after the build: format 2, model `qwen3-embedding:4b`, dimension 2560,
+  `document_prefix_sha256` e3b0c442…b855 (the SHA-256 of an empty text, as the config has no document prefix).
+- **Eight searches** (the owner said yes after being told that the eight query sentences go to `ned`, each with the prefix): the same
+  sentences and script as Increment E of the earlier plan. The script asserted the markers and a citation on every result; the reply
+  said `query_prefix: true`, 0 stale, 0 without a vector, 78 cards searched. Rank of the books I expected, without a prefix (from the
+  earlier run, same 230 texts and model) and with this prefix:
+  1 Bloom filter 1 → 1; 2 DeepStack 3 → 2, Imperfect-Information 5 → 4; 3 Simulated annealing 1 → 1, Genetic algorithm 5 → 2, DeepCAD
+  19 → 15; 4 Amdahl 5 → 2, Message Passing 23 → 10, OpenMP 1 → 1, Horovod 3 → 4, ZeRO 11 → 6, Megatron 10 → 8; 5 Simulated annealing
+  1 → 1; 6 Monte Carlo tree search 9 → 4; 7 Learned Index 25 → 5; 8 Dynamic programming 1 → 1, Fast Fourier 13 → 11, FlashAttention
+  16 → 3. Of 18 books, 12 ranked higher, 5 the same and 1 lower (Horovod, 3 → 4).
+- **What cannot be concluded:** eight searches, books chosen by me, all within the library's 78 cards, several searches with more than
+  one right book. This is not a measure of accuracy and says nothing about other searches; scores are not compared, only ranks. In
+  search 7 the top five are still mostly unrelated books (Learned Index is fifth).
+- **Owner's decision:** the owner took my recommendation: the config keeps this wording as the query prefix of `embed-qwen`. No
+  second wording was tried. Verified as run: the file names `qwen3-embedding:4b` and the hash of the document prefix the config has;
+  the second build sent no text; every result had the markers and a citation; the search reported that a query prefix was used.
