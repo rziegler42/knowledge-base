@@ -360,3 +360,55 @@ A second round has not been asked for.
   owner's word). The 60 cards have no vectors yet, so they are not found by the search by meaning until C.
 - **Verification as run:** `cards-queue status` before and the run's report after (counts above); the kept-file counts (58, 64); the
   snapshot comparison; `card-marks` on the 60; `card-show` of two; `wb run code-work check` after this entry. No tracked code changed.
+  (Committed as `035c69e`.)
+
+### Increment C — The catalog, the vectors and the fifteen searches, the pages alone (run, 2026-11-10)
+
+- **Catalog and vectors (step 1).** `python3 -m kb card-index`: 170 books, 169 versions with a card, 0 failed. The vectors before, read
+  without sending anything (`vectors.coverage`): 108 cards searched, 0 stale, **60 without a vector**, the new cards. The owner was told
+  what `card-vectors` would send (the problem, approach and provides fields of the 60 cards, up to 180 short texts of about 120
+  characters, about 20 KB, to the embedding model on `ned` in the clear over plain HTTP) and said **yes**. `python3 -m kb card-vectors`
+  (6 seconds, 20:24:41Z): 169 cards, 1 with no model fields, 0 left out, 500 vectors, **320 kept, 180 made, 180 texts sent**, model
+  `qwen3-embedding:4b`, dimension 2560, nothing replaced. A second `card-vectors` made 0, kept 500 and sent 0 texts. Coverage after: 168
+  cards searched, **0 stale, 0 without a vector**.
+- **The fifteen searches (step 2).** The owner was told what would be sent (the 15 sentences of this plan, parsed from its text by script
+  and not retyped, 2,417 characters in all, 110 to 214 characters each, one at a time to the embedding model on `ned` in the clear) and
+  said **yes**. `python3 -m kb card-search '<sentence>' --meaning` for each, on 2026-11-10 at 20:26Z at commit `035c69e`, by a small
+  driver outside the repository. The first run of the driver stopped after the first search because of a mistake in the driver (it read a
+  `title` that a result does not carry), so **sentence 1 was sent twice, 16 sends in all**; the driver was fixed and all 15 were run again.
+  Every search saw 168 cards, 0 stale, 0 without a vector. The record of the first five books of each is below (own = a page the table
+  lists for the sentence's field; new = a page of another new field, named; older = a book the library already held; the score is the
+  cosine); the file of the record has SHA-256 `8514f67dde492a4eebba78fc394a73bb6b9e1fc0d195b03ce80af9d42bc3f59d`.
+
+  1. Control: Control theory (own, 0.686); PID controller (own, 0.631); Ant colony optimization algorithms (older, 0.423); Kanban (new: Production, 0.407); Theory of constraints (new: Production, 0.391).
+  2. Information: Error detection and correction (own, 0.706); Huffman coding (own, 0.596); Information theory (own, 0.590); Entropy (information theory) (own, 0.484); Merkle tree (new: Cryptography, 0.425).
+  3. Statistical physics: Self-organization (new: Self-organisation, 0.574); Cellular automaton (new: Self-organisation, 0.551); Stigmergy (older, 0.535); Ising model (own, 0.528); Swarm intelligence (new: Ecology and evolution, 0.504).
+  4. Inference: Bayesian inference (own, 0.677); Kalman filter (new: Control, 0.632); Hidden Markov model (own, 0.594); Expectation–maximization algorithm (own, 0.509); Sequential analysis (older, 0.437).
+  5. Ecology and evolution: Lotka–Volterra equations (own, 0.672); Evolutionary game theory (older, 0.459); Optimal foraging theory (older, 0.447); Marginal value theorem (older, 0.433); Swarm intelligence (own, 0.413).
+  6. Networks: Small-world network (own, 0.597); Scale-free network (own, 0.551); Network science (own, 0.479); Percolation theory (older, 0.473); PageRank (own, 0.437).
+  7. Economics: Vickrey auction (own, 0.757); Auction theory (own, 0.595); Mechanism design (older, 0.581); Market design (own, 0.545); Principal–agent problem (own, 0.492).
+  8. Scheduling: Travelling salesman problem (own, 0.686); Knapsack problem (own, 0.526); Ant colony optimization algorithms (older, 0.520); Dynamic programming (older, 0.513); Dijkstra's algorithm (older, 0.452).
+  9. Distributed systems: Paxos (computer science) (own, 0.702); Consensus (computer science) (own, 0.675); CAP theorem (own, 0.560); Stigmergy (older, 0.529); Conflict-free replicated data type (own, 0.518).
+  10. Cryptography: Public-key cryptography (own, 0.654); Zero-knowledge proof (own, 0.560); Merkle tree (own, 0.464); Information theory (new: Information, 0.452); Paxos (computer science) (new: Distributed systems, 0.448).
+  11. Learning in the brain: Hebbian theory (own, 0.642); Neural coding (own, 0.497); Artificial immune system (older, 0.462); Predictive coding (own, 0.455); Neocognitron (older, 0.446).
+  12. Signals: Compressed sensing (own, 0.683); Nyquist–Shannon sampling theorem (own, 0.556); Wavelet (own, 0.469); Fast Fourier transform (older, 0.451); Matched filter (own, 0.423).
+  13. Optimisation: Gradient descent (own, 0.646); Particle swarm optimization (new: Ecology and evolution, 0.453); Simulated annealing (older, 0.440); Newton's method (older, 0.432); Ant colony optimization algorithms (older, 0.426).
+  14. Production: Kanban (own, 0.649); Theory of constraints (own, 0.543); Lean manufacturing (own, 0.521); Toyota Production System (own, 0.513); Critical path method (new: Scheduling, 0.433).
+  15. Self-organisation: Self-organization (own, 0.651); Stigmergy (older, 0.646); Swarm intelligence (new: Ecology and evolution, 0.642); Cellular automaton (own, 0.623); Reaction–diffusion system (own, 0.547).
+
+- **Reading.** **A page of the sentence's own field is among the first five for 15 of 15 sentences, and first for 14.** The exception is
+  the statistical physics sentence (3), whose own page, the Ising model, is fourth, behind Self-organization, Cellular automaton and
+  Stigmergy; the sentence describes many simple units that switch together at a critical value, and those are neighbours of that idea in
+  another field, not misses of the library. Of the 75 places, 44 are pages of the sentence's own field, 12 are pages of another new field and
+  19 are books the library already held. The places held by other fields are the cross-field result the library is for: the control
+  sentence finds Kanban and the Theory of constraints (feedback on a flow) and Ant colony optimization; the information sentence finds
+  the Merkle tree; the inference sentence finds the Kalman filter and Sequential analysis; the ecology sentence finds Evolutionary game
+  theory, Optimal foraging theory and the Marginal value theorem; the scheduling sentence finds Ant colony optimization, Dynamic
+  programming and Dijkstra's algorithm; the distributed systems sentence finds Stigmergy; the cryptography sentence finds Information theory
+  and Paxos. Scores of the first own-field page run from 0.528 (Ising model) to 0.757 (Vickrey auction).
+- **Limits.** I wrote each sentence about pages that I put in the library, so the hits show that the new pages are found by a
+  description of what they are about; they do not show that a hard transfer, a problem stated in one field whose answer lies in another,
+  would be found (the same limit as the first batch). One run of each sentence, the scores of one embedding model, and no test of
+  chance. This is the baseline of Increment F: it is recorded before any paper is captured and is not changed.
+- **Verification as run:** the counts of `card-index` and `card-vectors` above (made 180, kept 320 then 500, second run 0 sent, stale 0);
+  the fifteen searches recorded; `wb run code-work check` after this entry. No tracked code changed.
