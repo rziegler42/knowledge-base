@@ -310,3 +310,26 @@ A second round has not been asked for.
   reach its retry prompt, in a data section; that is persuasion of the same model, not a parser bypass. A second independent `reviewer`
   looked at the two fixes and found nothing blocking. Limits of the evidence: the fake launcher only (no real server, no `wb` bridge),
   `make_model_part` was not run end to end with a journal on disk by the security reviewer, and the CLI display code was not read.
+
+### Increment C — A note point may be longer (not done: stopped at step 1, by the owner's choice)
+
+- **Stopped at step 1, as the plan says to.** The step asks for the largest card prompt at the new limit and a stop if the worst case no
+  longer fits. Measured on 2026-11-10 at commit `1c859ec` with the real `card_prompt` (a title of 500 characters, an outline of 2,500, and
+  for every piece 6 points at the limit with their labels): 12 pieces (the default) 26,774 bytes with points of 240 characters and
+  31,094 with points of 300; 20 pieces (the largest `card_pieces`) 39,806 and 47,006. The project's own test, "the worst-case prompts fit
+  the window of a small model", holds the 12-piece case under 30,000 bytes, which 31,094 exceeds by 1,094. Against the documented
+  window of 16,384 tokens, 47 KB is about 11,800 tokens at English rates, which fits on paper; the real window of the card model on the
+  owner's server is not known to the engine. No code, test or document was changed.
+- **A finding outside the increment.** The comment on `MAX_CARD_PIECES` and `engine/README.md` say that at 20 pieces the card prompt is
+  "about 32 KB with the rules and the outline". That figure is the notes alone (20 pieces of 6 points of 240 characters, about 31 KB); the
+  whole prompt is 39.8 KB at 240 characters already. Not corrected here (outside this plan).
+- **Why it matters little.** The retry of Increment A already covers the case: a point over 240 characters is refused with the reason
+  "points is longer than the 240 characters allowed" and the call is asked again at once. Of the 58 refused answers kept before the plan,
+  2 were over-long points (246 and 249 characters).
+- **Options put to the owner:** (1) skip C for now, recorded here, revisit if over-long points keep turning up in the kept-aside files;
+  (2) do C and cut a point to 240 characters in the card prompt (the prompt size stays; up to 60 characters of a rare long point are
+  lost; it differs from the plan's "kept whole" and needs the owner's word); (3) do C as planned and raise the 30,000-byte bound to
+  about 32 KB, with the documents corrected (the worst-case prompt grows 16%).
+- **Owner's decision (2026-11-10): option 1.** Increment C is not done. Completion criterion 3 (a note point of 300 characters is
+  accepted) is therefore not met by this plan, and the Increment D dependency on C is waived by the owner's choice. The notes job stays at
+  `v3` with its limit of 240 characters.
