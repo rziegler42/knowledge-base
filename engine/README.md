@@ -805,6 +805,24 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   ones set, of another format, with a trigger or a view, or with a row that is not what the engine writes; and refused if the model that answers for the
   query is not the one that made the vectors. It reads both files read-only and writes nothing. A closeness says how near a field is
   to the query and nothing of whether the field is right: see the `grounding` counts of the result.
+- **A problem put to the search** (`python3 -m kb problem-search [--limit N] [--launcher PATH] -- SUB_PROBLEM ...`) is for a caller that
+  has put a problem in general terms and split it into one to five sub-problems (each text of at most 1000 characters; the caller does
+  the restating and the splitting, the engine calls no chat model). Each is searched by meaning as above. **Each sub-problem goes to
+  the embedding model of the config, with its query prefix, and nothing else does.** Give them after `--`, so that one that starts with
+  a dash is text. `--limit` (1 to 10, 5 by default) is the number of books asked of each sub-problem. It prints one object:
+  `{"meaning": true, "model", "query_prefix", "cards_searched", "stale", "without_vector", "sub_problems", "books"}`. `sub_problems` lists,
+  in the order given, `{"sub_problem": n, "books": [{"book_id", "version_id", "rank", "score"}]}`. `books` holds each book once, best
+  first (by its best score, then by book id): the result of a search by meaning as above, **without its `text`** (read the card with
+  `card-show` and the book with `read`) and with `found_by`, a list of `{"sub_problem", "rank", "score"}` for each sub-problem that
+  returned the book; its `score` is the best of them. The excerpt carries the untrusted-text marker and the citation starts with the
+  book's title. **Nothing is set aside by field**: no card says which field a book belongs to (every shelf is `default`), so the caller
+  sets aside the books of the problem's own field. Everything that can be refused is refused before the first sub-problem is sent (the
+  count, the length and the text of the sub-problems, the limit, the launcher, a missing or foreign file of vectors); a search that fails
+  later fails the whole command and prints nothing. The reply is measured as it will be printed, and one of more than 60,000 characters
+  is refused before anything is printed, with a lower limit named, because the helper that an agent calls reads at most 65,536
+  characters and a cut reply is not valid JSON. If the cards or the vectors change between two sub-problems the command is refused.
+  `--launcher` is the absolute path of an executable file, for a caller whose `PATH` does not hold `wb`; without it `wb` is looked for
+  on the `PATH` as for every model call.
 - **Limits of the vectors that are known and not fixed** (from a security review of the search by meaning; the files are private to you
   and small, and a person who could change them is you or a program run as you).
   - The text hash in `vectors.sqlite` binds a vector to the text it was made from, not the other way: a person who can write the file

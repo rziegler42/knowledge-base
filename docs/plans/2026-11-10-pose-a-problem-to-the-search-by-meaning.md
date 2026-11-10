@@ -216,4 +216,36 @@ A second round has not been asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The engine command (done)
+
+- **What was built:** `engine/kb/problem.py` (`search`, `render`, the bounds) and the subcommand `python3 -m kb problem-search [--limit N]
+  [--launcher PATH] -- SUB ...` in `engine/kb/__main__.py`; the README bullet "A problem put to the search". Each sub-problem is searched
+  with `vectors.search`; the reply holds `sub_problems` (each one's ranked books) and `books` (each book once, best result without `text`,
+  `found_by`, ordered by best score then book id). `render` measures the printed reply and refuses one over 60,000 characters, naming
+  `--limit`. Everything that can be refused is refused before the first send: the count, the length, the text and the encoding of the
+  sub-problems, the limit, the launcher; a missing or foreign file of vectors is refused by the first search before it sends.
+- **Tests first:** `engine/tests/test_problem.py`, 38 tests, written before the module existed (the first run failed on the missing
+  module). The encoding test was added after the review and seen to fail for the right reason (one sub-problem sent before the
+  refusal) before the fix.
+- **Verification as run:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_problem engine.tests.test_vectors
+  engine.tests.test_models engine.tests.test_catalog` gave 391 tests, OK; `wb run code-work check` found no problems. No call was made to
+  the owner's server (a fake bridge answers). Not run: the real library (no sub-problem was sent to `ned`), so the real reply size is
+  covered only by a synthetic test and by the measure of a keyword result (about 4,500 characters, 3,800 of them the card text).
+- **Deliberate breaks, each from green:** 16 (a sub-problem searched twice, the merge keeping the lowest score, the order by
+  sub-problem, `found_by` rank off by one, the count bound removed, `untrusted` removed from the entry, `text` kept, the size bound not
+  enforced, the length bound removed, an empty sub-problem allowed, the limit unchecked, the launcher unchecked, a change between searches
+  unnoticed, `query_prefix` always false, a book listed twice, and the command printing without the size check). All 16 were caught.
+- **Differences from the plan text, none of which changes an outcome:** (1) the plan listed the title among the merged entry's keys;
+  a result carries no title key, and its citation starts with the quoted title, so the entry has no `title` key and the README says
+  the citation starts with it. (2) A ranked book under `sub_problems` also carries `version_id` (the key of a card is book and version).
+  (3) The command refuses when the model, the query prefix or the counts differ between two sub-problems' searches (the files changed
+  while it ran); the plan did not name this. (4) The plan says "25 books at most"; at `--limit 10` five sub-problems can return up to
+  50 books, about 900 characters each at the most (a test checks that 50 of the largest entry fit), and the size bound refuses a reply
+  that would not.
+- **Review:** the read-only `reviewer` agent, one round, no blocking finding. Applied: the UTF-8 check was only in `vectors._query`,
+  per sub-problem, so a later sub-problem holding a lone surrogate (what an argument with an invalid byte becomes) was refused after an
+  earlier one was sent; it is now in the check before the first send, with a test. Recorded and not changed: the differences (2) and (3)
+  above; the size advice cannot help if even `--limit 1` were too large, which the bounded excerpt makes practically impossible.
+  Noted for Increment B: `--launcher` names any absolute executable file that the engine then runs, which is acceptable for the owner at
+  a terminal and must not take a value a caller can influence; the helper must take it only from the owner-only `helper.json`. The
+  reviewer ran nothing and read neither spec.

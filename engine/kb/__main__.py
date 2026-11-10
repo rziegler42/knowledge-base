@@ -7,6 +7,7 @@ from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardqueue
 from . import cardsample
+from . import problem
 from . import vectors
 from .store import Store
 
@@ -102,6 +103,13 @@ def main(argv=None):
     cx.add_argument("--in", dest="within", choices=list(catalog.SIDES), default=None,
                     help="where to look: all, summary (the card in the words of its source) or neutral (the five neutral fields)")
     cx.add_argument("--limit", type=int, default=catalog.DEFAULT_LIMIT, help=f"at most this many results (1 to {catalog.MAX_LIMIT})")
+    ps = sub.add_parser("problem-search", help="search by meaning for each of one to five sub-problems (a problem put in general terms and "
+                        "split by the caller) and print each one's ranked books and one list of the books found; each sub-problem goes to "
+                        "the embedding model that the config sets for card-embed, with its query prefix, and to nothing else; needs "
+                        "`card-vectors` run first; give the sub-problems after `--`")
+    ps.add_argument("sub_problems", nargs="+", metavar="SUB_PROBLEM", help=f"a sub-problem, at most {problem.MAX_SUB_CHARS} characters")
+    ps.add_argument("--limit", type=int, default=problem.DEFAULT_LIMIT, help=f"at most this many books from each sub-problem (1 to {problem.MAX_LIMIT})")
+    ps.add_argument("--launcher", metavar="PATH", help="the absolute path of the workbench launcher (wb), for a caller whose PATH does not hold it")
     tr = sub.add_parser("trial", help="run a corpus of questions against the library and write a report of what the search of the cards and "
                                        "the search of the text find; both files are held outside the repository; no model is called "
                                        "and nothing in the library changes")
@@ -181,6 +189,10 @@ def main(argv=None):
                 found = catalog.search(config.load()["index_root"], args.query, limit=args.limit, book_id=args.book,
                                        within=args.within or "all")
             print(json.dumps(found, indent=1))
+            return 0
+        if args.command == "problem-search":
+            cfg = config.load()
+            print(problem.render(problem.search(cfg["index_root"], cfg, args.sub_problems, limit=args.limit, launcher=args.launcher)))
             return 0
         if args.command == "cards":
             cfg = config.load()
