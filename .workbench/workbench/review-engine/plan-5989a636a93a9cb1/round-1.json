@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "docs/plans/2026-11-10-keep-one-reply-slip-from-failing-a-book.md, Increment B (Outcome and steps 2–3)",
+      "problem": "The plan says the second-round reply will hold topics, key ideas, and caveats as item/support objects. The current second round—and the card spec—serve only topics and key ideas; its schema has no caveats. As written, implementation would either incorrectly expand the second round beyond the specified behavior or leave the plan incomplete.",
+      "severity": "major",
+      "suggestion": "State that the earlier card reply changes topics, key ideas, and caveats, while the second-round reply changes only topics and key ideas; tailor its schema and tests to those two fields."
+    },
+    {
+      "id": "R1-F2",
+      "location": "docs/plans/2026-11-10-keep-one-reply-slip-from-failing-a-book.md, Increment C (Outcome and steps 2–3)",
+      "problem": "The new maximum length for a note point is never specified. “Longer” and comparison to quote handling do not establish an implementable boundary for the required acceptance/refusal tests.",
+      "severity": "major",
+      "suggestion": "Name the exact new point limit (and whether it is intended to match the existing 600-character quote ceiling), then use that value in the outcome, tests, and prompt-size assessment."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has two material ambiguities in its format-change increments: it overstates the fields in the second round, and it omits the new note-point limit.",
+  "verdict": "changes_needed"
+}
