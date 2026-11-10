@@ -1,0 +1,63 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-10T08:42:16Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Checked: a keyword result is about 4,500 characters and the whole card is 3,800 of them, so the reply would be over 100,000. The plan now drops the card text, keeps a compact entry per book and makes the engine refuse a reply over 60,000 before printing."
+    },
+    {
+      "at": "2026-11-10T08:43:50Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The conflict is real: the spec line says an agent sends nothing out. The owner decided to allow one exception for this argument and the owner own embedding server. The plan now states it, amends the spec line in Increment C and notes the workbench spec is outside the project."
+    }
+  ],
+  "format": 1,
+  "generation": 4,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-10-pose-a-problem-to-the-search-by-meaning.md",
+  "rounds": [
+    {
+      "at": "2026-11-10T08:41:18Z",
+      "bridge": "ask-codex",
+      "document_sha256": "5a2bbdc8c4e32170c719b104dacac0ff732db97c0d7450416705d9e324317f2f",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "blocker"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "14bc66d1947bcdd68ff6cebe1ca479c314c0231067be519999783b3838fccc38",
+      "usage": {
+        "input_tokens": 315542,
+        "output_tokens": 4339,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "d431bc62f6f75734a5db56fa0d37c19059b3291c004820a7226de54e8b657db2",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
