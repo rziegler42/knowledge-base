@@ -320,9 +320,11 @@ A second round has not been asked for.
   the window of a small model", holds the 12-piece case under 30,000 bytes, which 31,094 exceeds by 1,094. Against the documented
   window of 16,384 tokens, 47 KB is about 11,800 tokens at English rates, which fits on paper; the real window of the card model on the
   owner's server is not known to the engine. No code, test or document was changed.
-- **A finding outside the increment.** The comment on `MAX_CARD_PIECES` and `engine/README.md` say that at 20 pieces the card prompt is
-  "about 32 KB with the rules and the outline". That figure is the notes alone (20 pieces of 6 points of 240 characters, about 31 KB); the
-  whole prompt is 39.8 KB at 240 characters already. Not corrected here (outside this plan).
+- **A finding outside the increment.** `engine/README.md` said that at 20 pieces the card prompt is "about 32 KB with the rules and the
+  outline". That figure is the notes alone (20 pieces of 6 points of 240 characters, 31.0 KB measured); the whole prompt is 39.8 KB at
+  240 characters already. The README was corrected afterwards, in a commit outside any plan. (This entry first said that the comment on
+  `MAX_CARD_PIECES` made the same claim; it does not: the comment says the notes are about 32 KB, which is right, so the comment was left
+  as it is.) Not corrected in this plan (outside it).
 - **Why it matters little.** The retry of Increment A already covers the case: a point over 240 characters is refused with the reason
   "points is longer than the 240 characters allowed" and the call is asked again at once. Of the 58 refused answers kept before the plan,
   2 were over-long points (246 and 249 characters).
