@@ -1,6 +1,6 @@
 # Add sources from fifteen more fields
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-10
 Candidate: none (loading sources is outside the roadmaps `cards` and `cross-field-discovery`; this is the second batch of an operation the engine already does, not new work to build)
 Specs: none (no spec changes; the plan only runs commands the engine has)
