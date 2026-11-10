@@ -41,6 +41,7 @@ _RUN = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 _VERSION_ID = re.compile(r"v[1-9][0-9]{0,5}")
 _JOB = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _TASKS = ("notes", "card", "check", "more")
+FORMS = ("earlier", "sentences")   # the forms of the card call; a run is made in one of them (the sentence form is what a run made before the forms was)
 _HEADER = ("book_id", "version_id", "conversion", "title", "kind", "limit", "pieces", "tasks", "versions", "models", "text")
 _ENTRY = ("job", "entry", "values", "record")
 _RECORD = ("model", "registry", "prompt_version", "date", "input_tokens", "output_tokens")
@@ -322,13 +323,19 @@ _ITEM = ("book_id", "version_id", "fingerprint", "had", "status", "attempts", "g
 
 
 class Manifest:
-    """A run: when it was planned, whether it asked for new cards of books that have one, how many passes it has made, and its items."""
+    """A run: when it was planned, whether it asked for new cards of books that have one, the form of the card call it makes, how many
+    passes it has made, and its items."""
 
-    def __init__(self, run, created, again, items, passes=0):
-        self.run, self.created, self.again, self.items, self.passes = run, created, again, items, passes
+    def __init__(self, run, created, again, items, passes=0, form="sentences"):
+        self.run, self.created, self.again, self.items, self.passes, self.form = run, created, again, items, passes, form
 
     def document(self):
-        return {"format": FORMAT, "run": self.run, "created": self.created, "again": self.again, "passes": self.passes, "items": self.items}
+        return {"format": FORMAT, "run": self.run, "created": self.created, "again": self.again, "passes": self.passes,
+                "form": self.form, "items": self.items}
+
+
+def _form_ok(form):
+    return isinstance(form, str) and form in FORMS
 
 
 def _check_item(i):
@@ -355,7 +362,7 @@ def write_manifest(index_root, run, manifest):
     if manifest.run != run:
         raise KbError("the manifest is not the manifest of this run")
     if len(manifest.items) > MAX_ITEMS or not isinstance(manifest.created, str) or len(manifest.created) > 40 \
-            or type(manifest.again) is not bool or not _count(manifest.passes, 1000):
+            or type(manifest.again) is not bool or not _count(manifest.passes, 1000) or not _form_ok(manifest.form):
         raise KbError("the manifest of a run is not valid")
     for i in manifest.items:
         _check_item(i)
@@ -372,13 +379,15 @@ def read_manifest(index_root, run):
     doc = _get(index_root, run, MANIFEST)
     if doc is None:
         return None
-    if set(doc) != {"format", "run", "created", "again", "passes", "items"} or type(doc["format"]) is not int or doc["format"] != FORMAT \
+    base = {"format", "run", "created", "again", "passes", "items"}
+    if set(doc) not in (base, base | {"form"}) or type(doc["format"]) is not int or doc["format"] != FORMAT \
             or doc["run"] != run or not isinstance(doc["created"], str) or len(doc["created"]) > 40 or type(doc["again"]) is not bool \
-            or not _count(doc["passes"], 1000) or not isinstance(doc["items"], list) or len(doc["items"]) > MAX_ITEMS:
+            or not _count(doc["passes"], 1000) or not isinstance(doc["items"], list) or len(doc["items"]) > MAX_ITEMS \
+            or not _form_ok(doc.get("form", "sentences")):   # a manifest with no form was made before the forms: the sentence form
         raise KbError("the manifest of the run is not valid")
     for i in doc["items"]:
         _check_item(i)
-    return Manifest(run, doc["created"], doc["again"], doc["items"], doc["passes"])
+    return Manifest(run, doc["created"], doc["again"], doc["items"], doc["passes"], doc.get("form", "sentences"))
 
 
 @contextlib.contextmanager

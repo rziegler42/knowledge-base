@@ -288,6 +288,47 @@ class ManifestTest(Base):
         self.assertEqual(back.items, [ITEM, dict(ITEM, status="done", generation=2, had=1, attempts=1, reason="r")])
         self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.folder(), "manifest.json")).st_mode), 0o600)
 
+    def put(self, doc):
+        os.makedirs(self.folder(), exist_ok=True)
+        os.chmod(os.path.join(self.root, cardstate.FOLDER), 0o700)
+        os.chmod(self.folder(), 0o700)
+        with open(os.path.join(self.folder(), "manifest.json"), "w") as f:
+            json.dump(doc, f)
+        os.chmod(os.path.join(self.folder(), "manifest.json"), 0o600)
+
+    def old_document(self, **over):
+        return {"format": 1, "run": RUN, "created": "2026-11-08T10:00:00Z", "again": False, "passes": 0, "items": [dict(ITEM)], **over}
+
+    def test_the_form_of_a_run_is_written_and_read_back_and_a_manifest_made_without_one_is_the_sentence_form(self):
+        self.assertEqual(self.manifest().form, "sentences")
+        for form in ("earlier", "sentences"):
+            with self.subTest(form=form):
+                manifest = self.manifest()
+                manifest.form = form
+                cardstate.write_manifest(self.root, RUN, manifest)
+                self.assertEqual(cardstate.read_manifest(self.root, RUN).form, form)
+
+    def test_a_manifest_written_before_the_forms_has_no_form_key_and_is_read_as_the_sentence_form(self):
+        self.put(self.old_document())
+        self.assertEqual(cardstate.read_manifest(self.root, RUN).form, "sentences")
+
+    def test_a_form_outside_the_two_is_refused_when_writing_and_when_reading(self):
+        self.assertEqual(cardstate.FORMS, ("earlier", "sentences"))
+        for bad in ("third", "", "Earlier", None, 5, True, ["earlier"], {"earlier": 1}):
+            with self.subTest(bad=bad):
+                manifest = self.manifest()
+                manifest.form = bad
+                with self.assertRaises(KbError):
+                    cardstate.write_manifest(self.root, RUN, manifest)
+                self.put(self.old_document(form=bad))
+                with self.assertRaises(KbError):
+                    cardstate.read_manifest(self.root, RUN)
+
+    def test_a_manifest_with_a_key_it_does_not_know_is_still_refused(self):
+        self.put(self.old_document(form="earlier", extra=1))
+        with self.assertRaises(KbError):
+            cardstate.read_manifest(self.root, RUN)
+
     def test_a_run_with_no_manifest_reads_as_none_and_a_bad_name_is_refused(self):
         self.assertIsNone(cardstate.read_manifest(self.root, RUN))
         for run in ("", "Run", "../x", "a/b", "a" * 41):

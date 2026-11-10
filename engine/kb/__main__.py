@@ -74,6 +74,8 @@ def main(argv=None):
     cs.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", required=True,
                     help="a book to make a card for (repeat for more; there is no way to cover the whole library)")
     cs.add_argument("--again", action="store_true", help="make another card for a book that has one, as a new generation")
+    cs.add_argument("--form", choices=cardmake.FORMS, default=cardmake.DEFAULT_FORM,
+                    help=f"the form of the card call: earlier (plain summary and neutral parts) or sentences (default {cardmake.DEFAULT_FORM})")
     cq = sub.add_parser("cards-queue", help="make the cards of many books by working through the models one at a time: plan a run (a "
                                             "snapshot of the books that need a card; nothing is sent), run it, and see where it has got "
                                             "to; book text goes to the models the tasks setting names; no model, server or address is an "
@@ -82,6 +84,8 @@ def main(argv=None):
     cqp = cqs.add_parser("plan", help="plan a run for the active, converted books that have no card; sends nothing")
     cqp.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", help="limit the plan to this book (repeat for more)")
     cqp.add_argument("--again", action="store_true", help="include books that have a card, to make another as a new generation")
+    cqp.add_argument("--form", choices=cardmake.FORMS, default=cardmake.DEFAULT_FORM,
+                     help=f"the form of the card call for the whole run: earlier or sentences (default {cardmake.DEFAULT_FORM})")
     cqr = cqs.add_parser("run", help="run a planned run until nothing is waiting or the passes are made; it can be stopped and run again")
     cqr.add_argument("run", help="the name of the run that `plan` printed")
     cqr.add_argument("--passes", type=int, default=cardqueue.PASS_CAP, help=f"at most this many passes (1 to 10, default {cardqueue.PASS_CAP})")
@@ -165,7 +169,7 @@ def main(argv=None):
             cfg = config.load()
             store = Store.open() if args.action != "status" else Store.open(write=False)
             if args.action == "plan":
-                out = cardqueue.plan(store, cfg, book_ids=args.books, again=args.again)
+                out = cardqueue.plan(store, cfg, book_ids=args.books, again=args.again, form=args.form)
             elif args.action == "run":
                 out = cardqueue.run(store, cfg, args.run, passes=args.passes)
             else:
@@ -213,7 +217,7 @@ def main(argv=None):
             for task in models.REQUIRED_TASKS:  # model work on and a model set for each task that is needed, before any book is touched
                 models.choose(cfg, task)
             cardmake.pieces_limit(cfg)  # and the number of pieces to read, if the config sets one
-            reports = cardmake.run(Store.open(), cfg, args.books, again=args.again)
+            reports = cardmake.run(Store.open(), cfg, args.books, again=args.again, form=args.form)
             for report in reports:
                 print(json.dumps(report))
             failed = [r for r in reports if r["status"] == "failed"]

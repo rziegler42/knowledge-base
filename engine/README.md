@@ -493,10 +493,16 @@ name. It does not make one when a book is filed, and `process` does not make one
 
 ```sh
 cd engine
-python3 -m kb cards --book BOOK_ID [--book BOOK_ID ...] [--again]
+python3 -m kb cards --book BOOK_ID [--book BOOK_ID ...] [--again] [--form earlier|sentences]
 python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 ```
 
+- **The form of the card.** `--form` chooses the form of the card call for the run: `earlier` (the default) asks the model for the
+  summary and the neutral parts as plain text and marks only the topics, key ideas, caveats and the limit as stated or inferred;
+  `sentences` asks for the summary and the neutral parts as sentences and keeps a sentence only if a verified note supports it (a
+  part with no sentence left is empty, and the card is partial). The value is one of the two words; no option takes a path, an
+  address or a model. Each report names the form. A card in the making (see "A card in the making can be stopped and taken up again")
+  belongs to the form it was started in, and a saved state of the other form is refused.
 - **Which model does which work is your setting.** The config key `tasks` names, for each kind of work the engine knows, the
   entry of `models` that does it. The kinds are `card-notes` (the notes on one piece of a book), `card` (the card itself) and
   `card-check` (whether the note an item cites supports it). The engine names no model and has no default: a kind of work with no
@@ -677,7 +683,7 @@ python3 -m kb card-show BOOK_ID [--version v1] [--generation 1]
 
 ```sh
 cd engine
-python3 -m kb cards-queue plan [--book BOOK_ID ...] [--again]
+python3 -m kb cards-queue plan [--book BOOK_ID ...] [--again] [--form earlier|sentences]
 python3 -m kb cards-queue run RUN [--passes N]
 python3 -m kb cards-queue status RUN
 ```
@@ -686,7 +692,10 @@ python3 -m kb cards-queue status RUN
   with `--book`, only the books named) and writes it as a *run* in the index root (`card-runs/<run>/manifest.json`). It makes no call
   and sends nothing. It prints the name of the run, the number of books, how many were left out and why, the order of the models by
   their entries in your config (no server or address), and the calls that can be counted before the answers are known. A book that
-  arrives later is not in the run; the next `plan` has it. Two plans are two runs with their own state.
+  arrives later is not in the run; the next `plan` has it. Two plans are two runs with their own state. `--form` (default `earlier`)
+  is the form of the card call for the whole run (see "The form of the card" above); it is kept in the manifest, used for every call,
+  and named in what `plan`, `run` and `status` print. A manifest made before the forms has no form and is read as `sentences`, which is
+  what it was made with.
 - **`run`** works through the run in passes (at most `--passes`, 1 to 10, default 3). A pass visits the models in the order of the
   stages (the notes, the card, the checks, and, if `card-more` is set, the second round and its checks). At each visit it takes every
   waiting book as far as the calls of the model it is serving go, using the journal of the book (see "A card in the making can be

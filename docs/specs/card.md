@@ -123,6 +123,11 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 - **[proposed]** The card is the first model stage after conversion and runs in priority order, newest and most relevant first.
   A book is searchable by keyword once converted, and by meaning once its card is indexed (`pipeline.md`, "Findability and
   completeness").
+- **[agreed]** The card call has two forms, chosen for each run: the **earlier form** (the default), in which the model writes
+  the summary and the neutral fields as plain text and only the topics, key ideas, caveats and the limit are marked, and the
+  **sentence form**, in which they are written as sentences that notes must support. A card made in either form is valid and is read
+  and searched alike; the form of a card is told by its record (`grounding.sentences` is present in the sentence form only). A run
+  records its form, and a card in the making that was started in one form is never taken up in the other.
 - **[proposed]** A new version regenerates the card for the current version, and the earlier card is kept as an earlier
   generation. A better prompt or model adds a generation, the index uses one active generation, and an earlier one can be restored.
 - **[proposed]** Regeneration is rare, because a full rebuild is costly at the expected scale. It is run for a book on request, or

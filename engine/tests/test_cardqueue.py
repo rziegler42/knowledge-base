@@ -26,7 +26,7 @@ with open(os.path.join(here, "calls.jsonl"), "a") as handle:
     handle.write(json.dumps({"server": opt("--server"), "model": opt("--model"), "kind": kind, "title": title}) + "\\n")
 for name, job in (("down_card", "card.json"), ("down_notes", "card-notes.json")):
     down = plan.get(name, {}).get(title, 0)
-    if kind == job and down:
+    if (kind == job or (name == "down_card" and kind == "card-earlier.json")) and down:
         plan[name][title] = down - 1
         json.dump(plan, open(os.path.join(here, "plan.json"), "w"))
         sys.stdout.write(json.dumps({"contract": 2, "ok": False, "vendor": "ollama", "error": "unreachable", "detail": "no answer"}))
@@ -41,9 +41,9 @@ elif kind == "card-notes.json":
         json.dump(plan, open(os.path.join(here, "plan.json"), "w"))
         answer["quotes"] = []  # not the length of the points: a reply that is refused
 else:
-    answer = dict(plan["card"])
+    answer = dict(plan["earlier_card"] if kind == "card-earlier.json" else plan["card"])
     left = plan.get("bad_card", {}).get(title, 0)
-    if kind == "card.json" and left:
+    if kind in ("card.json", "card-earlier.json") and left:
         plan["bad_card"][title] = left - 1
         json.dump(plan, open(os.path.join(here, "plan.json"), "w"))
         answer["topics_support"] = ["1.1"]  # not the length of the topics: a reply that is refused
@@ -58,6 +58,12 @@ CARD = {"useful_for": ["finding a stopping rule"], "topics": ["stopping rule", "
         "adjacent_topics": ["search"], "key_ideas": ["stopping rule studied", "rule of stopping", "stopping early rule"],
         "caveats": [], "topics_support": ["1.1", "1.1"], "key_ideas_support": ["1.1", "1.1", "1.1"], "caveats_support": [],
         "sentence_fields": ["limits"], "sentences": ["stopping rule only"], "sentences_support": ["1.1"]}
+EARLIER_CARD = {"summary": "A short summary of the work.", "useful_for": ["finding a stopping rule"], "topics": ["stopping rule", "early rule"],
+                "adjacent_topics": ["search"], "key_ideas": ["stopping rule studied", "rule of stopping", "stopping early rule"],
+                "neutral_problem": "deciding when to stop", "neutral_approach": "compare a running score with a threshold",
+                "neutral_needs": "a stream of observations", "neutral_provides": "a stopping time", "neutral_limits": "stopping rule only",
+                "caveats": [], "topics_support": ["1.1", "1.1"], "key_ideas_support": ["1.1", "1.1", "1.1"], "caveats_support": [],
+                "neutral_limits_support": "1.1"}
 SERVERS = {"notes": "srv-n", "cardm": "srv-c", "checker": "srv-k", "morem": "srv-m"}
 
 
@@ -72,7 +78,7 @@ class QueueCase(LibraryCase):
 
     def set_plan(self, **extra):
         with open(os.path.join(self.fake, "plan.json"), "w") as f:
-            json.dump({"notes": NOTES, "card": CARD, **extra}, f)
+            json.dump({"notes": NOTES, "card": CARD, "earlier_card": EARLIER_CARD, **extra}, f)
 
     def log(self):
         path = os.path.join(self.fake, "calls.jsonl")
@@ -751,6 +757,93 @@ class StatusTest(QueueCase):
             cardqueue.status(self.store, "nosuchrun")
 
 
+class FormTest(QueueCase):
+    """The form of the card call (`earlier` or `sentences`) is a property of a run: planned, kept in the manifest, used for every call,
+    named in the reports, and a journal of the other form is refused."""
+
+    def kinds(self):
+        return [c["kind"] for c in self.log()]
+
+    def test_a_plan_records_its_form_in_the_manifest_and_the_summary(self):
+        self.books(1)
+        for form in ("earlier", "sentences"):
+            with self.subTest(form=form):
+                listed = self.plan(form=form, again=True)
+                self.assertEqual((listed["form"], self.manifest(listed["run"]).form), (form, form))
+
+    def test_a_plan_without_a_form_is_the_sentence_form_as_it_was_before(self):
+        self.books(1)
+        listed = self.plan()
+        self.assertEqual((listed["form"], self.manifest(listed["run"]).form), ("sentences", "sentences"))
+
+    def test_a_form_outside_the_two_is_refused_before_a_run_is_written(self):
+        self.books(1)
+        for bad in ("third", "", None, 5, ["earlier"]):
+            with self.subTest(bad=bad), self.assertRaises(KbError) as cm:
+                self.plan(form=bad)
+            self.assertIn("earlier, sentences", str(cm.exception))   # said at once, not as a manifest that cannot be written
+        self.assertFalse(os.path.exists(os.path.join(self.index_root, cardstate.FOLDER)) and os.listdir(os.path.join(self.index_root, cardstate.FOLDER)))
+
+    def test_a_run_of_the_earlier_form_makes_every_card_call_in_that_form_and_a_run_of_the_other_in_its_own(self):
+        for form, schema in (("earlier", "card-earlier.json"), ("sentences", "card.json")):
+            with self.subTest(form=form):
+                self.books(1, f"Book {form}")
+                before = len(self.log())
+                listed = self.plan(form=form)
+                ran = self.run_queue(listed["run"])
+                self.assertEqual(ran["counts"]["done"], 1)
+                made = [k for k in self.kinds()[before:] if k.startswith("card") and not k.startswith(("card-notes", "card-check", "card-more"))]
+                self.assertEqual(made, [schema])
+                self.assertEqual(ran["form"], form)
+
+    def test_a_card_made_in_the_earlier_form_is_a_card_with_plain_neutral_parts_and_no_sentence_record(self):
+        (book,) = self.books(1)
+        self.run_queue(self.plan(form="earlier")["run"])
+        version = self.store.read_book(book)["current_version"]
+        made = card.read(self.store, book, version, 1)[1]
+        self.assertEqual(made["model"]["neutral_problem"], EARLIER_CARD["neutral_problem"])
+        self.assertNotIn("sentences", made["grounding"])
+
+    def test_status_names_the_form(self):
+        self.books(1)
+        listed = self.plan(form="earlier")
+        self.assertEqual(cardqueue.status(self.store, listed["run"])["form"], "earlier")
+
+    def test_a_run_planned_before_the_forms_has_no_form_and_runs_as_the_sentence_form(self):
+        self.books(1)
+        listed = self.plan()
+        doc = self.manifest(listed["run"]).document()
+        doc.pop("form", None)
+        path = os.path.join(self.index_root, cardstate.FOLDER, listed["run"], "manifest.json")
+        with open(path, "w") as f:
+            json.dump(doc, f)
+        ran = self.run_queue(listed["run"])
+        self.assertEqual((ran["form"], ran["counts"]["done"]), ("sentences", 1))
+        self.assertEqual([k for k in self.kinds() if k == "card-earlier.json"], [])
+
+    def test_a_journal_of_the_other_form_is_refused_and_no_model_is_asked_for_that_book(self):
+        (book,) = self.books(1)
+        version = self.store.read_book(book)["current_version"]
+        listed = self.plan(form="earlier")
+        _, loaded, mechanical = cardmake.plan_version(self.store, self.loaded(), book, version, True)
+        stale = cardmake.new_journal(self.loaded(), loaded[1], mechanical["title"], book, version, fingerprint=loaded[0],
+                                     kind=mechanical["kind"], form="sentences")   # the header of the same card but for the other form
+        cardstate.write(self.index_root, listed["run"], book, version, stale)
+        ran = self.run_queue(listed["run"])
+        self.assertEqual(self.states(ran), {book: "dropped"})
+        self.assertIn("saved state", ran["items"][0]["reason"])
+        self.assertEqual(self.log(), [])
+
+    def test_a_run_that_is_run_again_keeps_its_form(self):
+        self.books(2)
+        listed = self.plan(form="earlier")
+        self.run_queue(listed["run"], passes=1)
+        again = self.run_queue(listed["run"])
+        self.assertEqual(again["form"], "earlier")
+        self.assertIn("card-earlier.json", self.kinds())
+        self.assertNotIn("card.json", self.kinds())
+
+
 class CommandTest(QueueCase):
     def kb(self, *args):
         env = dict(os.environ, KB_CONFIG_DIR=self.cfg, PATH=self.fake + os.pathsep + os.environ["PATH"])
@@ -767,6 +860,48 @@ class CommandTest(QueueCase):
         status = self.kb("cards-queue", "status", run_id)
         self.assertEqual(status.returncode, 0, status.stderr)
         self.assertNotIn("stopping rule", ran.stdout + status.stdout + planned.stdout)
+
+    def card_kinds(self):
+        return [c["kind"] for c in self.log() if c["kind"] in ("card.json", "card-earlier.json")]
+
+    def test_the_queue_plans_in_the_earlier_form_unless_the_sentence_form_is_asked_for(self):
+        self.books(1)
+        for args, form in (([], "earlier"), (["--form", "earlier"], "earlier"), (["--form", "sentences"], "sentences")):
+            with self.subTest(args=args):
+                planned = self.kb("cards-queue", "plan", "--again", *args)
+                self.assertEqual(planned.returncode, 0, planned.stderr)
+                run_id = json.loads(planned.stdout)["run"]
+                self.assertEqual(json.loads(planned.stdout)["form"], form)
+                before = len(self.card_kinds())
+                ran = self.kb("cards-queue", "run", run_id)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertEqual(json.loads(ran.stdout)["form"], form)
+                self.assertEqual(self.card_kinds()[before:], ["card-earlier.json" if form == "earlier" else "card.json"])
+                self.assertEqual(json.loads(self.kb("cards-queue", "status", run_id).stdout)["form"], form)
+
+    def test_cards_makes_the_card_in_the_earlier_form_unless_the_sentence_form_is_asked_for(self):
+        (book,) = self.books(1)
+        for args, schema in (([], "card-earlier.json"), (["--form", "sentences"], "card.json")):
+            with self.subTest(args=args):
+                before = len(self.card_kinds())
+                done = self.kb("cards", "--book", book, "--again", *args)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                report = json.loads(done.stdout.strip().splitlines()[-1])
+                self.assertEqual((report["status"], report["form"]), ("carded", "earlier" if schema == "card-earlier.json" else "sentences"))
+                self.assertEqual(self.card_kinds()[before:], [schema])
+
+    def test_a_form_outside_the_two_is_refused_by_both_commands_and_nothing_is_sent(self):
+        (book,) = self.books(1)
+        for args in (["cards-queue", "plan", "--form", "third"], ["cards", "--book", book, "--form", "third"],
+                     ["cards-queue", "plan", "--form", ""], ["cards", "--book", book, "--form", "Earlier"]):
+            with self.subTest(args=args):
+                self.assertEqual(self.kb(*args).returncode, 2)
+        self.assertEqual(self.log(), [])
+
+    def test_no_option_of_the_form_takes_a_path_an_address_or_a_model(self):
+        for form in ("/etc/passwd", "http://x", "gpt-oss:20b", "../earlier"):
+            with self.subTest(form=form):
+                self.assertEqual(self.kb("cards-queue", "plan", "--form", form).returncode, 2)
 
     def test_no_option_names_a_model_a_server_or_an_address(self):
         for args in (["plan", "--model", "x"], ["plan", "--server", "x"], ["plan", "--address", "x"], ["run", "r", "--model", "x"],

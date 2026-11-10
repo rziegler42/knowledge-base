@@ -2203,6 +2203,10 @@ def reply_text(text):
 
 class CommandTest(LibraryCase):
     def kb(self, *args, path=True):
+        # the fake launcher and the fixtures of this class are of the sentence form; the default form of the command (the earlier one) is
+        # tested in test_cardqueue.CommandTest
+        if args[:1] == ("cards",) and "--form" not in args:
+            args = (*args, "--form", "sentences")
         env = dict(os.environ, KB_CONFIG_DIR=self.cfg, PATH=(self.fake + os.pathsep + os.environ["PATH"]) if path else "/nonexistent")
         return subprocess.run([sys.executable, "-m", "kb", *args], cwd=ENGINE_DIR, env=env, capture_output=True, text=True, timeout=120)
 

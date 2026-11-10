@@ -133,7 +133,8 @@ CARD_JOB = models.Job("card", "v6", CARD_SHAPE, schema="card.json", check=_check
 
 # The earlier form of the card call, which the sentence form replaced (commit 2c082cd): the summary and the neutral parts are asked for as
 # plain text, and only the lists and the limit are marked. It is brought back as a form of the same call, chosen by the caller.
-FORMS = ("earlier", "sentences")
+FORMS = cardstate.FORMS
+DEFAULT_FORM = "earlier"   # the form of the commands (the owner decided on 2026-11-09); the functions below default to the sentence form
 EARLIER_SHAPE = {**card.MODEL_SHAPE_GROUNDED, **SUPPORT_SHAPE, "neutral_limits_support": {"type": "string", "max": SUPPORT_CHARS}}
 
 
@@ -971,4 +972,6 @@ def run(store, cfg, book_ids, again=False, launcher=None, root=None, form="sente
         except Exception as e:  # whatever one book's data does to the program, the other books go on (as `process` does)
             reason = str(e) if isinstance(e, KbError) else f"{type(e).__name__}: {e}"
             reports.append(_report(book_id, versions[book_id], "failed", textutil.clean(reason, 300)))
+    for report in reports:
+        report["form"] = form   # each report names the form the books were carded in
     return reports

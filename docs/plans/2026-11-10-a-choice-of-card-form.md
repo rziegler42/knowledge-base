@@ -208,4 +208,38 @@ The reviewer found the plan consistent with the card spec and with the cited bat
   reply's shape, and the sentence path is unchanged), accepted. It could not read git history; the comparison with history was made by me.
 - **Security review checkpoint.** Asked once, about the parsing of a model's reply and the journal header. The owner said no security
   review; none was run. The reviewer found no new exposure by reading (replies still pass the shape check and `parse_support`; the form is
+
+### Increment B — Choosing the form in the commands and the queue
+
+- **Done.** `cards` and `cards-queue plan` take `--form earlier|sentences` (argparse `choices`, default `earlier` from
+  `cardmake.DEFAULT_FORM`). `cardqueue.plan` checks the form first and writes it in the manifest; `_serve` passes `manifest.form` to
+  `new_journal` and `make_model_part`, so every call of a run, and of a run taken up again, is in the recorded form; `plan`, `run`,
+  `status` and each `cards` report name the form. `cardstate` has `FORMS`, `Manifest.form` and an optional `form` key (a manifest with no
+  key is read as `sentences`; a value outside the two, or a non-string, is refused in writing and in reading; unknown keys are still
+  refused). `engine/README.md` (the form, both commands, the manifest) and `docs/specs/card.md` (one `[agreed]` bullet, following the
+  owner's decision of 2026-11-09 that the earlier form is the default) are updated.
+- **Deviations.** (1) `engine/kb/cardstate.py` and `engine/tests/test_cardstate.py` are changed though B's Affected areas do not list
+  them: the manifest is validated there and takes a fixed set of keys. The owner agreed to this on 2026-11-10 when asked. (2) Completion
+  criterion 2 asks that each journal record the form; a journal records it through the prompt version of the card call (`v4` or `v6`),
+  not a key (Result of A), and the manifest records it as a key. (3) The library functions (`cardmake.run`, `make_for_version`,
+  `make_model_part`, `cardqueue.plan`, `Manifest`) default to `sentences`; only the commands default to `earlier`. Reason: a manifest
+  with no form must read as `sentences`, and no existing caller changes behaviour. The reviewer calls this a latent trap for a script that
+  calls the functions directly; the only callers in the repository pass the form. (4) Five command tests in `test_cardmake.CommandTest`
+  now pass `--form sentences`, because their fake launcher and fixtures are of the sentence form and the command default moved; the
+  default itself is tested in `test_cardqueue.CommandTest`.
+- **Known and left.** Every `cards` report names the form, including a card built from the metadata with no model call and a skipped
+  book; for those the field is the form asked for, not one the card was made in (cosmetic, reported by the reviewer).
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest` on `test_cardmake_earlier`, `test_cardmake`, `test_card`,
+  `test_cardstate`, `test_cardqueue`, `test_cardsample`, `test_catalog`: 708 tests, OK; `wb run code-work check`: no problems. The new
+  tests were seen to fail first. Eighteen deliberate breaks, each from green (the option ignored by each command, the default made
+  `sentences`, a resumed run taking the default for the journal and for the calls, the manifest without the form, the form unchecked in
+  writing and in reading, any extra key allowed, the plan not checking the form, a journal of the other form accepted, the form missing
+  from `run`, `status`, `plan` and the `cards` report, the option taking any value) were each caught; one (the plan not checking the form)
+  was first missed because the manifest write refuses a bad form too, and the test now requires the plain refusal. No call was made to a
+  model server.
+- **Review.** Independent `reviewer`, one exchange, no blocking finding. Not blocking, accepted: the library-default trap (3 above) and the
+  metadata label (known and left); the others confirmed the code and the documents. It could not run anything or read the diff.
+- **No second security question.** The option's value is one of two words checked by argparse, `check_form` and the manifest in writing
+  and in reading, and never reaches a path, command, address or model name; the reviewer found no concrete exposure. As the plan says,
+  the owner is not asked again.
   checked against a fixed set before any call).

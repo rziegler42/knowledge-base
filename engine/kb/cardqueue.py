@@ -52,10 +52,12 @@ def _stamp():
     return time.strftime("%Y%m%dt%H%M%Sz", time.gmtime()) + "-" + secrets.token_hex(3)
 
 
-def plan(store, cfg, book_ids=None, again=False):
+def plan(store, cfg, book_ids=None, again=False, form="sentences"):
     """Plan a run: write the manifest and return a summary (the run's name, the number of books, what was left out, the order of the
     models by entry, and the calls that can be counted before the answers are known). Makes no call. A book that is not there, or a
-    setting that is missing, is a refusal and nothing is written."""
+    setting that is missing, is a refusal and nothing is written. `form` is the form of the card call the run makes (`cardmake.FORMS`);
+    it is kept in the manifest and used for every call of the run."""
+    cardmake.check_form(form)
     order = _sequence(cfg)
     if book_ids is not None:
         for book_id in book_ids:
@@ -97,8 +99,8 @@ def plan(store, cfg, book_ids=None, again=False):
             break
     else:
         raise KbError("no free name for the run was found")
-    cardstate.write_manifest(index_root, run_id, cardstate.Manifest(run_id, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), again, items))
-    return {"run": run_id, "books": len(items), "again": again, "skipped": skipped, "order": order,
+    cardstate.write_manifest(index_root, run_id, cardstate.Manifest(run_id, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), again, items, form=form))
+    return {"run": run_id, "books": len(items), "again": again, "form": form, "skipped": skipped, "order": order,
             "calls_known": {"notes": notes_calls, "card": model_items},
             "calls_note": "the checks and the second round depend on the answers; about two calls for the checks for each card"}
 
@@ -191,11 +193,11 @@ def _serve(store, cfg, manifest, item, allow, launcher, root):
     try:
         if journal is None:
             journal = cardmake.new_journal(cfg, loaded[1], mechanical["title"], book_id, version_id, fingerprint=loaded[0],
-                                           kind=mechanical["kind"], save=save)
+                                           kind=mechanical["kind"], save=save, form=manifest.form)
         else:
             journal.set_save(save)
         part = cardmake.make_model_part(cfg, loaded[1], mechanical["title"], launcher=launcher, root=root, kind=mechanical["kind"],
-                                        journal=journal, allow=allow,
+                                        journal=journal, allow=allow, form=manifest.form,
                                         identity={"book_id": book_id, "version_id": version_id, "conversion": loaded[0]})
     except cardmake.Pause:
         return "paused"
@@ -264,7 +266,7 @@ def run(store, cfg, run_id, passes=PASS_CAP, launcher=None, root=None):
     elif any(i["status"] == "done" for i in manifest.items):
         note = ("no card was made by this call, so the catalog was not rebuilt; if cards of this run were made before, run "
                 f"`{catalog.COMMAND}`")
-    return {"run": run_id, "passes": made_passes, "counts": _counts(manifest), "items": _items(manifest), "catalog": catalog_result,
+    return {"run": run_id, "form": manifest.form, "passes": made_passes, "counts": _counts(manifest), "items": _items(manifest), "catalog": catalog_result,
             "catalog_note": note}
 
 
@@ -294,4 +296,4 @@ def status(store, run_id):
             if last == "card-check" and any(e["job"] == "card-more" for e in journal.entries):
                 where = "round check"
         waiting[where] = waiting.get(where, 0) + 1
-    return {"run": run_id, "passes": manifest.passes, "counts": _counts(manifest), "waiting": waiting, "items": _items(manifest)}
+    return {"run": run_id, "form": manifest.form, "passes": manifest.passes, "counts": _counts(manifest), "waiting": waiting, "items": _items(manifest)}
