@@ -1940,6 +1940,146 @@ class PlacesTest(unittest.TestCase):
             self.assertEqual(max(found.get(k, 0) for k in ("javascript", "pattern_in_binary_data")), scan_tool.MAX_COUNT, label)  # one of them at the ceiling
 
 
+class FontProgramTest(unittest.TestCase):
+    """The bytes of an embedded font program are binary, like the pixels of a picture: a chance match in them without the shape of a use
+    is pattern_in_binary_data. The rule rests on the refusals (the keys of an object stream or a cross-reference stream, a /Type of
+    ObjStm or XRef, a stream marker in the bytes), not on the /Length1 key, which can be written into any stream. Nothing is dropped."""
+
+    HIGH = bytes(range(0x80, 0x90))
+    CHANCE = HIGH + b"/JS\xd0" + HIGH  # the three bytes of a name, then a byte that cannot begin its value: no shape of a use
+    USE = b"<< /S /JavaScript /JS (app.alert(1)) >>"
+    FONT = b"/Length1 2576 /Length 26772"
+    REFUSED = {"the keys of an object stream": b"/Length1 20 /N 1 /First 4",
+               "the keys of a cross-reference stream": b"/Length1 20 /W [1 2 1] /Size 4",
+               "the type of an object stream alone": b"/Length1 20 /Type /ObjStm",
+               "the type of a cross-reference stream alone": b"/Length1 20 /Type /XRef",
+               "the type spelled with no space": b"/Length1 20 /Type/ObjStm"}
+
+    def scan(self, data):
+        return kinds(scan_tool.scan_pdf(data))
+
+    def stream(self, dictionary, content, deflate=True):
+        if deflate:
+            return pdf(stream_object(dictionary + b" /Filter /FlateDecode", zlib.compress(content)))
+        return pdf(stream_object(dictionary, content))
+
+    def test_a_chance_match_in_a_font_program_is_not_a_script(self):
+        for deflate in (True, False):
+            found = self.scan(self.stream(self.FONT, self.CHANCE, deflate))
+            self.assertEqual(found, {"pattern_in_binary_data": 1}, f"deflated: {deflate}")
+
+    def test_the_same_bytes_in_a_stream_without_the_font_key_are_a_script_as_before(self):
+        for deflate in (True, False):
+            self.assertEqual(self.scan(self.stream(b"/Length 20", self.CHANCE, deflate)), {"javascript": 1}, f"deflated: {deflate}")
+
+    def test_a_stream_that_could_be_a_container_is_still_read_as_text_whatever_it_says_of_fonts(self):
+        for label, dictionary in self.REFUSED.items():
+            for deflate in (True, False):
+                self.assertEqual(self.scan(self.stream(dictionary, self.CHANCE, deflate)), {"javascript": 1}, f"{label}, deflated: {deflate}")
+
+    def test_a_match_with_the_shape_of_a_use_keeps_its_own_kind_in_a_font_program(self):
+        for deflate in (True, False):
+            found = self.scan(self.stream(self.FONT, self.USE, deflate))
+            self.assertGreater(found.get("javascript", 0), 0, f"deflated: {deflate}: {found}")
+            self.assertNotIn("pattern_in_binary_data", found)
+
+    def test_a_stream_marker_in_the_bytes_means_the_structure_was_swallowed_and_the_bytes_are_text(self):
+        content = self.CHANCE + b" stream " + self.HIGH
+        stored = pdf(stream_object(self.FONT + b" /Filter /FlateDecode", zlib.compress(content, 0)))
+        self.assertIn(b"stream", zlib.compress(content, 0))
+        # stored blocks keep the content in the file as it is: the compressed bytes (already a binary place) hold the match once,
+        # and the decoded content, read as text, once more
+        self.assertEqual(self.scan(stored), {"javascript": 1, "pattern_in_binary_data": 1})
+        self.assertEqual(self.scan(self.stream(self.FONT, content, deflate=False)), {"javascript": 1})
+
+    def test_a_font_stream_with_no_end_of_its_own_does_not_make_the_objects_it_swallows_binary(self):
+        # the scan reads a stream to the first endstream: a stream cut short by /Length that has no endstream swallows the next object. An
+        # object header or end in the bytes means structure was swallowed (the reader's own sign), and a real action there keeps its kind.
+        def swallowing(action):  # a font stream cut by /Length with no endstream of its own, then the action, then a lone endstream
+            return pdf(stream_object(self.FONT + b" /Length 4", b"abcd\n" + action + b"\n", number=5)[:-len(b"\nendstream\nendobj\n")]
+                       + b"endstream\nendobj\n")
+        spelled = {"an object header and its end": b"6 0 obj\n<< /Type /Action /S /JavaScript\x00/JS (x) >>\nendobj",
+                   "a header with no space before the dictionary": b"6 0 obj<</S/Launch/F(x)>>",
+                   "the word glued to a digit": b"6 0 obj1<</S/Launch/F(x)>>",
+                   "the word after a letter": b"6 0 xobj<</S/Launch/F(x)>>",
+                   "the word after a slash": b"6 0 /obj<</S/Launch/F(x)>>",
+                   "the word before a letter": b"6 0 objx<</S/Launch/F(x)>>",
+                   "only the end word": b"<</S/Launch/F(x)>>\nendobj"}
+        for label, action in spelled.items():
+            found = self.scan(swallowing(action))
+            self.assertNotIn("pattern_in_binary_data", found, f"{label}: {found}")
+            self.assertTrue(set(found) & {"javascript", "launch_action"}, f"{label}: {found}")
+        # what is left: an object with no obj word in it at all (not a header a viewer reads by its number and offset) is a binary place
+        self.assertEqual(self.scan(swallowing(b"<</S/Launch/F(x)>>")), {"pattern_in_binary_data": 1})
+        honest = pdf(stream_object(self.FONT, b"abcd") + spelled["an object header and its end"])
+        self.assertEqual(self.scan(honest), {"javascript": 2})  # the same action after an honest end: text, as ever
+
+    def test_the_residual_the_readme_names_a_real_container_cut_short_by_a_fake_stream_header(self):
+        # A record of what is left, not a rule. The scan reads a stream to its first endstream; a viewer reads it by /Length. A real object
+        # stream whose data holds a fake stream header (in a string) is read as two streams, and its actions as the bytes of the second,
+        # a picture's or a font program's: reported under the weaker name, never as nothing. This holds for a picture in the code before
+        # font programs were added. If the reader ever uses /Length this changes, and the README paragraph with it.
+        action = b"<</S/JavaScript/JS\x00(alert(1))>>"
+        for decoy in (b"/Length1 1", b"/Type/XObject/Subtype/Image"):
+            data = pdf(stream_object(b"/Type /ObjStm /N 1 /First 4 /Length 300", b"1 0 (endstream\n7 0 obj <<" + decoy + b">> stream\n)" + action))
+            self.assertEqual(self.scan(data), {"pattern_in_binary_data": 2}, decoy)
+        plain = pdf(stream_object(b"/Type /ObjStm /N 1 /First 4 /Length 300", b"1 0 " + action))
+        self.assertEqual(self.scan(plain), {"javascript": 2})  # without the fake header the container keeps the full kind
+
+    def test_a_decoy_font_key_on_a_stream_that_is_not_a_container_is_the_accepted_case(self):
+        decoy = b"/Note (/Length1 9)"
+        self.assertEqual(self.scan(self.stream(decoy, self.CHANCE)), {"pattern_in_binary_data": 1})  # not read as objects by a viewer
+        found = self.scan(self.stream(decoy, self.USE))
+        self.assertGreater(found.get("javascript", 0), 0)  # a match with the shape of a use is never weakened
+        self.assertNotIn("pattern_in_binary_data", found)
+
+    def test_the_names_in_the_dictionary_of_a_stream_stay_at_full_strength_whatever_the_font_key(self):
+        action = pdf(stream_object(b"/S /JavaScript /JS (x) /Length1 5 /Filter /FlateDecode", zlib.compress(b"hello")))
+        found = self.scan(action)
+        self.assertGreater(found.get("javascript", 0), 0)
+        self.assertNotIn("pattern_in_binary_data", found)
+
+    def test_a_pdf_with_no_font_program_gives_what_it_gave(self):
+        self.assertEqual(self.scan(CLEAN_PDF), {})
+        self.assertEqual(self.scan(pdf(b"1 0 obj << /S /JavaScript /JS (x) /A /Launch >> endobj\n" + stream_object(b"/Length 5", b"/XFA "))),
+                         {"javascript": 2, "launch_action": 1, "xfa_forms": 1})
+
+    def test_font_programs_full_of_matches_cost_a_bounded_time(self):
+        for label, content, kind in (("with the shape of a use", b"/JS " * 500_000, "javascript"),
+                                     ("without", b"/JS/JS" * 333_333, "pattern_in_binary_data")):
+            data = pdf(b"".join(stream_object(self.FONT + b" /Filter /FlateDecode", zlib.compress(content)) for _ in range(8)))
+            started = time.monotonic()
+            found = self.scan(data)
+            took = time.monotonic() - started
+            self.assertLess(took, 12, f"{label}: {took:.1f} s")
+            self.assertEqual(found.get("scan_incomplete"), None, label)
+            self.assertEqual(found.get(kind), scan_tool.MAX_COUNT, label)  # at the ceiling
+
+    def test_a_damaged_font_program_keeps_its_raw_bytes_as_a_binary_place_and_says_it_was_not_read_to_the_end(self):
+        stored = zlib.compress(self.CHANCE, 0)
+        for label, data, expected in (("cut short", stored[:-6], {"pattern_in_binary_data": 2, "scan_incomplete": 1}),
+                                      ("a broken checksum", stored[:-1] + b"\x00", {"pattern_in_binary_data": 1, "scan_incomplete": 1})):
+            self.assertEqual(self.scan(pdf(stream_object(self.FONT + b" /Filter /FlateDecode", data))), expected, label)
+            plain = self.scan(pdf(stream_object(b"/Length 9 /Filter /FlateDecode", data)))  # the twin without the font key: text
+            self.assertGreater(plain.get("javascript", 0), 0, label)
+            self.assertEqual(plain.get("scan_incomplete"), 1, label)
+
+    def test_a_font_program_too_big_to_read_is_not_counted_as_a_large_picture(self):
+        # the count of large pictures and the predictor stay about pictures: a font program cut short at the limit is only "not read to the end"
+        self.assertEqual(self.scan(self.stream(self.FONT, bytes(BIG))), {"scan_incomplete": 1})
+        self.assertEqual(self.scan(pdf(image(bytes(BIG), typed=b""))), {"large_image_streams": 1})  # the picture, for contrast
+
+    def test_a_font_program_is_charged_for_the_work_of_reading_it_as_a_picture_is(self):
+        # a slash costs twice as much in a binary place (it is read twice, to place each match): five streams of slashes spend a small
+        # allowance as font programs and do not as plain streams
+        slashes = zlib.compress(b"/" * 2_000_000)
+        font = pdf(b"".join(stream_object(self.FONT + b" /Filter /FlateDecode", slashes) for _ in range(5)))
+        plain = pdf(b"".join(stream_object(b"/Length 9 /Filter /FlateDecode", slashes) for _ in range(5)))
+        with mock.patch.object(scan_tool, "MAX_TOTAL_OUT", 400_000_000):
+            self.assertEqual(self.scan(font), {"scan_incomplete": 1})
+            self.assertEqual(self.scan(plain), {})
+
+
 class ChanceHeaderTest(ScanCase):
     """Decoded data that begins like a zlib header is "compressed again inside" only when it decodes: a start that is chance (random
     pixels, a font) is not, and a trial that cannot be made is not guessed at."""

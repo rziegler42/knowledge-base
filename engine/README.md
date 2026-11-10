@@ -254,8 +254,13 @@ figures of 950,000 bytes and 1,500 and 2,500 small ones that give no caveat).
 bytes and the pixels of a large file they turn up by chance, or are spelled by a flat patch of one colour (#2F4A53 is `/JS`). So a
 match is named by where it sits. The **binary places** are the raw and the decoded bytes of an image (a stream with `/Subtype
 /Image` and none of the keys of a container, whatever its `/Type`), the raw bytes of a stream with an image codec (`DCTDecode`,
-`JPXDecode`, `CCITTFaxDecode`, `JBIG2Decode`), and the raw bytes of a stream the scan decoded (to its end, or as far as its limits
-allowed); every other place (the file outside streams, a stream dictionary, an unfiltered stream, the decoded content of a stream
+`JPXDecode`, `CCITTFaxDecode`, `JBIG2Decode`), the raw and the decoded bytes of a **font program** (a stream with `/Length1`, none of the
+keys of a container, no `/Type` of `ObjStm` or `XRef`, and neither the word `stream` nor the three bytes `obj` in its bytes (in any spelling: a stream that lacks its own `endstream` swallows
+the next objects, and every object header and end holds `obj`; a picture has no such refusal, as before); the key can be written into any stream, as
+`/Subtype /Image` can, so the safety rests on those refusals and not on the key), and the raw bytes of a stream the scan decoded (to its
+end, or as far as its limits allowed, and, for a picture or a font program, also when it was damaged or cut short, which is still
+reported as not read to the end); every other place (the file outside streams, a stream dictionary, an unfiltered stream that is neither
+a picture nor a font program, the decoded content of a stream
 that is not a picture, such as an object stream, and the bytes of a stream the scan could not decode or did not reach) is a **text
 place**. A match in a text place is reported as its own kind. A match in a binary place is too if it has **the
 shape of a use**: the twelve bytes before it (after escapes are undone) are printable ASCII or white space other than a null, as in a dictionary, and the
@@ -265,7 +270,12 @@ counted in **`pattern_in_binary_data`**: "usually a coincidence, and not read as
 counts together are what the scan counted before. The start of the data counts as printable and the end of it is not a value start;
 neighbouring streams do not lend each other a shape. What this leaves: a real action placed in image bytes behind bytes that are
 not syntax (a stream extent that a viewer does not see the way the scan does), or written compactly with no white space after the
-name (`<</S/Launch/F(x)>>`), is reported under the weaker name, never as nothing;
+name (`<</S/Launch/F(x)>>`), is reported under the weaker name, never as nothing. The extent is the case to know: the scan ends a
+stream at its first `endstream` and a viewer goes by `/Length`, so a real object stream whose data holds a fake stream header (in a
+string) is read as two streams, and its actions as the bytes of the second; if that one has the key of a picture (`/Subtype /Image`) or
+of a font program (`/Length1`), they are reported under the weaker name. A test records it (`FontProgramTest`); a reader that went by
+`/Length`, direct and indirect, would close it for both, and is not built. And an object swallowed by a font stream that has no
+`obj` in it at all (an object header is what a viewer reads it by) is a binary place too;
 and a flat patch of the colour that spells a pattern, followed by a byte that begins a value, keeps its own kind (the end of such a
 patch is a space or a black pixel only by luck).
 **How it finds a stream.** The scan reads the file forward. In the space between objects it looks for an `N G obj` header (and for

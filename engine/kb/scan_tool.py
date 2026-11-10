@@ -160,6 +160,28 @@ def _is_image(dictionary):
     return all(t == b"XObject" for t in _TYPE.findall(dictionary)) and bool(_IMAGE.search(dictionary))
 
 
+_LENGTH1 = re.compile(rb"/Length1(?![A-Za-z0-9])")  # the key of an embedded font program (the length of its clear part)
+_CONTAINER_TYPES = frozenset({b"ObjStm", b"XRef"})
+
+
+def _is_font_program(dictionary, blob):
+    """Whether the bytes of a stream may be read as binary data, like a picture's, because it says it holds a font program: it has
+    /Length1, none of the keys of an object stream or a cross-reference stream, no /Type of ObjStm or XRef, and in its bytes neither
+    the word stream nor the three bytes obj, in any spelling (either means the extent the scan located may have swallowed structure
+    around it; the three bytes are looked for without regard to what is next to them, since every object header and end holds them,
+    and a few chance hits in a large font only give its matches their stronger name). The scan does not parse dictionaries, so
+    /Length1 can be written into any stream, as /Subtype /Image can: what makes the rule safe is the
+    refusals, which a container cannot leave out, and not the key. What the key can do is weaken the name of a match that has no shape
+    of a use; a match with the shape of a use keeps its own name, and nothing is dropped. What it cannot rule out is the residual the
+    README names for pictures too: the scan reads a stream to its first endstream, a viewer reads it by /Length, and a file that makes
+    the two differ (a fake stream header inside a string in a real object stream) has the real container's actions read as this
+    stream's bytes, and so reported under the weaker name."""
+    if not _LENGTH1.search(dictionary):
+        return False  # first, because it is cheap, and the tests below read every byte of the stream
+    return not (_CONTAINER_KEYS.search(dictionary) or any(t in _CONTAINER_TYPES for t in _TYPE.findall(dictionary))
+                or b"stream" in blob or b"obj" in blob)
+
+
 class _Unreadable(Exception):
     """Parameters or predicted data that the scan cannot read with certainty. It is never guessed at: the stream is reported as
     not fully read, and what could be decoded before the predictor is still scanned."""
@@ -723,6 +745,7 @@ def scan_pdf(data):
         covered.append(located[:2])  # the filters named inside this dictionary are accounted for below
         dictionary = _unescape_regular(located[2])
         picture_shaped = _is_image(dictionary)  # its raw and decoded bytes are pixels, a binary place
+        binary_shaped = picture_shaped or _is_font_program(dictionary, blob)  # or a font program's: binary data, not text a viewer reads
         if len(_FILTER_KEY.findall(dictionary)) > 1:
             # the text is read without knowing strings or nested dictionaries, so which /Filter is the stream's own is not known: the
             # first one read could be a decoy that says an image codec, which the scan does not look into. Not guessed at, not skipped.
@@ -741,8 +764,8 @@ def scan_pdf(data):
         if _FILTER_KEY.search(dictionary) and not names:
             incomplete = True  # a filter written in a way this scan does not read
         elif not names or all(n in _IMAGE_FILTERS for n in names):
-            if names or picture_shaped:
-                spans.append((start, start + len(blob)))  # an image codec's data, or the pixels of an unfiltered image
+            if names or binary_shaped:
+                spans.append((start, start + len(blob)))  # an image codec's data, or the bytes of an unfiltered picture or font program
             continue  # not compressed, or an image: covered by the scan of the file as it is, below
         elif all(n in _DECODABLE for n in names):
             try:
@@ -757,7 +780,7 @@ def scan_pdf(data):
             cap = min(MAX_STREAM_OUT, MAX_TOTAL_OUT - total)
             raws, layers = [], [0]
             out, state = _decode_chain(blob, names, cap, parms, rows_left, raws, bytes_left, layers)
-            total += _work(out, picture_shaped) + sum(_work(raw, picture_shaped) for raw in raws) + layers[0]
+            total += _work(out, binary_shaped) + sum(_work(raw, binary_shaped) for raw in raws) + layers[0]
             only_deflate_last = (names[-1] in _FLATE_NAMES and sum(n in _FLATE_NAMES for n in names) == 1
                                  and len(_FILTER_KEY.findall(dictionary)) == 1)  # one filter key: a second might be the real list
             again = False  # whether what came out is a zlib stream: it begins like one and the trial does not call that chance
@@ -773,13 +796,14 @@ def scan_pdf(data):
                 large_images += 1
             elif state != "ok" or again:  # damaged, cut short, or compressed again inside
                 incomplete = True
-            if picture_shaped or state in ("ok", "limit", "spent"):
+            if binary_shaped or state in ("ok", "limit", "spent"):
                 spans.append((start, start + len(blob)))  # compressed bytes that were decoded, or a picture's: not text to a viewer
-            # what the stream decoded to is read where it sits: pixels are a binary place, any other content (an object stream, a font, a
-            # page) is a text place. A dictionary is read as text, so a decoy /DecodeParms in a string would make the scan undo a
-            # predictor that the viewer never applies, and garble what it reads: the bytes from before the predictor are read as well
+            # what the stream decoded to is read where it sits: pixels and the bytes of a font program are a binary place, any other
+            # content (an object stream, a page) is a text place. A dictionary is read as text, so a decoy /DecodeParms in a string
+            # would make the scan undo a predictor that the viewer never applies, and garble what it reads: the bytes from before the
+            # predictor are read as well
             for piece in ([out] if out else []) + [raw for raw in raws if raw]:
-                if picture_shaped:
+                if binary_shaped:
                     _tally_binary(counts, binary, _unescape_names(piece))
                 else:
                     _tally(counts, _unescape_names(piece))

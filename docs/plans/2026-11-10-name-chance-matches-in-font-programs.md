@@ -168,6 +168,20 @@ config entry, and books already filed keep their stored scan results until the o
   - **R1-F4 applied:** completion criterion 4 now takes the expected difference from the matches that A finds, with the Blei paper as
     the known case.
   - **Left for the owner:** whether to ask for a second round; the review is at 1 of 3.
+- **Reviewer agent on Increment B** (read only, cannot run commands), 2026-11-10, one exchange: no blocking finding, four not-blocking
+  notes, all applied (the Result entry, a test that a font program cut at the limit is not a large picture, the order of the two tests
+  in `_is_font_program`, two README sentences). It named no new security exposure beyond the accepted decoy case, and said what it could
+  not check (test results, the hash). A security review was not asked for by the reviewer; that question is the owner's (Result of B).
+- **Security review of Increment B (the owner's word: "perform security review"), 2026-11-10:** two `security-reviewer` agents on copies,
+  one exchange each, and a third for a second look at the fix. Evaluated with `evaluate-findings`, each checked against the code and
+  most by my own reproduction on HEAD and on the working copy. **Applied:** the swallowed-object finding (refuse `obj` in the bytes,
+  twice: the first form, the reader's own pattern, was widened to the plain bytes on the second look). **Recorded and not closed, with
+  the reason:** the Medium (fake stream header inside a real object stream), because the code before the plan already does it for
+  pictures and closing it needs a resolver of indirect `/Length` in the reader (outside this plan; in the README and held by a test);
+  the unmetered final pass (measured, bounded by the 50 MB cap); a large font read as incomplete (as before). **Rejected:** giving
+  pictures the same refusals (it would add false alarms on large pictures; a change to existing behaviour for the owner). **Left for the
+  owner:** the reader that goes by `/Length` (a candidate for a later plan), whether to meter the final pass, and the pictures question.
+  No Critical or High finding.
 
 ## Deferred work
 
@@ -220,3 +234,97 @@ config entry, and books already filed keep their stored scan results until the o
   learning papers; the Blei match is the only one of its kind among them.
 - **Verification as run:** the 40 stored caveat lists against the recomputed ones (equal); the recorder against the scan's counts
   (equal on all 40); the counts above are the output of the script. `wb run code-work check` after this entry. No tracked code changed.
+  (Committed as `ad29e05`.)
+
+### Increment B — A font program is a binary place (run, 2026-11-10)
+
+- **Step 1, the decisions** for each use of `picture_shaped` in `scan_pdf`, now one new local `binary_shaped = picture_shaped or
+  _is_font_program(dictionary, blob)`: **the branch for an unfiltered stream or an image codec's data** (keeps the bytes as a span: yes,
+  so an unfiltered font program is a binary place, the gap that review round 1 found); **the work charged** for the decoded and raw
+  pieces (yes, a slash costs twice as much, as for pixels); **the span of the compressed bytes** kept as a binary place when the
+  stream is a picture or a font program, or when the scan decoded it (yes); **the choice between `_tally_binary` and `_tally`** for the
+  decoded pieces (yes). **The count of large pictures** (`picture`, which asks `_is_image`) **and the predictor stay about pictures**
+  (no change). Where `scan_pdf` reads `picture_shaped` for anything else there is no other use.
+- **Step 2, the tests first.** A new class `FontProgramTest` in `engine/tests/test_scan.py`, 14 tests in the end (12 at first, 2 added
+  for the security review below): the chance match in a deflated
+  and an unfiltered font program; the same bytes without `/Length1` (`javascript` as before); each container refusal alone (object-stream
+  keys, cross-reference keys, `/Type /ObjStm`, `/Type /XRef`, `/Type/ObjStm` without a space), deflated and unfiltered; a match with the
+  shape of a use keeps its kind; a stream marker in the bytes; the decoy `/Length1` (an unshaped match demoted, the accepted case; a
+  shaped one not) and the names in a stream dictionary that holds `/Length1` and an action (full strength); a PDF with no font stream;
+  the cost (bounded time, and the charge at the picture's rate against a small allowance); a damaged font program keeps its raw bytes as a
+  binary place and is `scan_incomplete`; and a font program cut at the limit is not counted as a large picture. **Seen failing before
+  the code, for the right reason**: the chance match, the decoy and the unshaped cost case each gave `javascript` where
+  `pattern_in_binary_data` is right (3 of the first 9; the others are twins that hold before and after). One test of mine had a wrong
+  expectation (a stored-block deflate puts the match in the compressed bytes as well) and was corrected before the code was written.
+- **Step 3, the code.** `_LENGTH1`, `_CONTAINER_TYPES` and `_is_font_program(dictionary, blob)` in `engine/kb/scan_tool.py`, beside
+  `_is_image`: `/Length1` is looked for first (cheap), then the refusals: a key of an object stream or a cross-reference stream, a
+  `/Type` of `ObjStm` or `XRef`, the word `stream` in the stream's bytes, and (added after the security review) the three bytes `obj`
+  in the stream's bytes, in any spelling. `approvals.SCAN_VERSION` 0.0.8 to **0.0.9**, with the history line in `ToolVersionTest`
+  (SHA-256 of the script `4ba3f096e6d152932b80dd5f92af99cb23932829d5f136e22a182cac513d2c4e`). The paragraph "Where a match sits" of
+  `engine/README.md` names font programs, the damaged-stream case, the refusals and the residuals below.
+- **Step 4, the deliberate breaks** (each on the real file, one at a time, restored byte for byte, checked): **12 of 12 caught** in the
+  end (the last run, after the security review's fix): the `obj` refusal removed; the container-key refusal removed; the `/Type /ObjStm` refusal alone; the `/Type /XRef` refusal alone; the stream-marker refusal;
+  the count of large pictures taken for font programs too; the unfiltered branch dropped; every stream taken for a font program (with
+  and without the other refusals); the decoded bytes not tallied as binary; the cost charged as text; the compressed bytes of a font
+  program not kept as a binary place. **The first run missed two** (the cost charged as text, and the compressed bytes of a damaged
+  font program): the cost test only looked at time, and a damaged stream was not tested. Two tests were added for them and the run
+  repeated.
+- **Step 5, the 40 PDFs again** with the new code (the script of Increment A; record SHA-256
+  `046b7e2b1a8d04df7361dd432d20509f73439f462d1eed4e4cea69cf8639ba95`): **one result differs from A's record: *Variational Inference:
+  A Review for Statisticians*, `javascript` 1 becomes `pattern_in_binary_data` 1.** The other 39 are equal, and no match is left read as
+  text in a stream with `/Length1` and no container key. This is the difference A predicted (completion criterion 4).
+- **Step 7, the reviewer agent** (read only, one exchange): no blocking finding; four notes, all applied: the Result entry (this one);
+  a test that a font program cut at the limit is `scan_incomplete` and not a large picture (added, with a break); the cheap `/Length1`
+  test moved before the stream-marker test (which reads every byte of a stream); and two README sentences. It could run nothing, so the
+  results above are mine, not its.
+- **Observation, not acted on.** For a picture the stream-marker refusal is used only in the count of large pictures (`picture`), not in
+  the decision that the bytes are a binary place; for a font program the refusal is in the decision, as this plan says. Whether pictures
+  should be refused the same way is a question for the owner and outside this plan.
+- **Step 6, the security review** (completion criterion 5). The owner was asked, with a recommendation to run it, and answered **yes:
+  "perform security review"**. Two `security-reviewer` agents worked on copies (neither could run git; both read the code and ran probes
+  on synthetic PDFs; no real PDF reader was available, so what a viewer does is argued from the format, not tested). One looked at
+  forging the rule, one at cost, limits and edge values. A third took a second look at the fix.
+  - *Critical, High: none.*
+  - **Medium (forging), confirmed by me against the real HEAD code, recorded as a residual and not closed:** a real object stream
+    whose data holds a fake stream header in a string (`(endstream\n7 0 obj <</Length1 1>> stream\n)`) is read by the scan as two
+    streams, because it ends a stream at its first `endstream` and a viewer goes by `/Length`; its actions then sit in the bytes of
+    the second, and if that has `/Length1` they are reported as `pattern_in_binary_data` (nothing dropped, a shaped match keeps its
+    kind). **The code before this plan does the same with `/Subtype /Image`** (checked on HEAD: `pattern_in_binary_data` 2), so this
+    plan adds a second key to a documented residual (README: "a stream extent that a viewer does not see the way the scan does"), not
+    a new class. A plain object with the fake header in a string or a comment is caught by the forward reader (full kind and
+    `scan_incomplete`). The only unforgeable fact is the container's declared `/Length`; measured on the 40 PDFs: 18,965 streams have a
+    direct `/Length` equal to the located extent, 0 disagree, 969 are indirect, and 24 of the 40 PDFs (the Blei paper included) have an
+    indirect one, so a check on direct lengths alone would be evaded by an indirect one, and a complete fix needs a resolver of
+    indirect lengths in the reader, for pictures too. **Not built; outside this plan.** It is in the README and held by a test that
+    records the behaviour (`..._residual_the_readme_names...`) so that a future fix changes it on purpose. This also corrects a phrase
+    of this plan's Assumptions ("in bytes no viewer reads as objects"): the decoy case is read by a viewer as objects.
+  - **Low 1 (cost and edges), confirmed and fixed:** a `/Length1` stream with no `endstream` of its own swallows the next real object
+    (an action written without the shape of a use became `pattern_in_binary_data`; HEAD: `javascript`). Test written first and seen
+    failing; fix: refuse a stream whose bytes hold `obj` (first the reader's own `_STRUCTURE` pattern, then, on the second look's
+    finding that its look-around leaves spellings such as `obj1`, `xobj`, `/obj` and `objx`, the plain three bytes). A deliberate break
+    is caught. What stays: a swallowed object with no `obj` in it at all (not a header a viewer reads it by), in the README. A real
+    font program whose raw bytes hold `obj` by chance loses the demotion (a few percent for megabyte fonts, measured 1 in 200 random
+    300 KB blobs by the second look): a false alarm only, never a missed one.
+  - **Low 2 (cost), not changed, measured:** the final pass over the binary spans is not metered by `_work`, and is 1.4 to 2.3 times
+    slower on match-dense bytes than a text pass. At the largest accepted capture (50 MB, `capture_arxiv.PDF_MAX_BYTES`) the worst
+    case built took about 12 to 13 s on this machine against 9 to 10 s before, with `MAX_SECONDS` = 25 between streams and a 60 s kill;
+    memory about four times the file. The same constant factor already applied to pictures. Not changed: the margin is about 4 to 5
+    times on this machine and the cap bounds it; metering the final pass is deferred.
+  - **Low 3 (false alarm), not changed:** a font program that decodes past 2 MB gives `scan_incomplete`, as it did before this plan.
+  - *Second look at the fix:* sound (cost linear, 0.6 to 1.4 s for a 50 MB blob with no hit; no exception; it can only strengthen a
+    name). It found the look-around gaps above (applied), a README precision point (applied by the change itself), and that the
+    refusals cover font programs only and not pictures (stated in the README; **giving pictures the same refusals was not done**: it
+    would add false alarms on large pictures, whose raw bytes hold `obj` by chance, and is a change to existing behaviour for the
+    owner to decide).
+  - *Found sound by the reviews* (tested unless marked): the edge spellings of `/Length1` and of the container keys and types
+    (`/#4E`, `/Obj#53tm`, `/Length#31`, twice, in a string, nested); the refusals; empty, one-byte and damaged streams; span order and
+    non-overlap and equal totals old against new over 6,000 random PDFs; the cost of a font-shaped stream equal to a picture's; a
+    deflate bomb (0.01 s); no exception path (read only for the new function).
+- **Verification as run:** `python3 -m unittest engine.tests.test_scan` (217 tests, OK, 97 s); `engine.tests.test_bench_pdf` (20, OK);
+  `engine/.venv/bin/python -m unittest engine.tests.test_convert.ToolVersionTest` (4, OK); the 12 breaks; the 40-PDF comparison;
+  `wb run code-work check`. Not run: the other test modules (the change is in the scan tool, its label and its history line; the one
+  other reader of its output checks kinds and counts, which did not change).
+- **For the owner after the commit.** The label of the scan tool is now `kb-scan 0.0.9`, so the entry in
+  `~/.config/knowledge-base/config.json` must be renewed (`python3 -m kb describe-tool all`, then the config) before the scan runs on new
+  material; `process` warns until then. The Blei book's stored scan result and card still say `javascript` until the book is scanned
+  again, which is the owner's decision.
