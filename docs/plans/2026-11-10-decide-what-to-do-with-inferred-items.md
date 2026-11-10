@@ -337,3 +337,36 @@ A second round has not been asked for.
 - **Verification as run.** The counts above are those of `card-accuracy` and `card-agreement`; the 120 labelled items of each file
   were accepted by the loader (no unlabelled item, no `inference` without a note); the totals add up to 120 for every labeller and
   mark; the transcripts were checked for the tool calls. No tracked code was changed by this increment.
+
+### Increment D — The numbers, the options and the decision (2026-11-10)
+
+- **Put to the owner.** The counts (`card-marks`, Increment A): in the newest card of each version, 209 topics and key ideas are marked
+  `inferred` (196 on 96 cards of the earlier form, 13 on 10 cards of the sentence form), against 1,167 `stated` (1,025 and 142); caveats
+  and limits are mostly `inferred` (83 and 80 percent in the earlier form) and are not part of this decision. The labels (Increment C):
+  of 60 `inferred` and 60 `stated` topics and key ideas, three labellers judged 75 to 80 percent of the `inferred` and 82 to 83 percent of
+  the `stated` supported by the passages shown (83.3 and 90.0 percent counting `inference`), with 16.7 and 10.0 percent `unsupported`,
+  a difference within chance at this size (p = 0.42 and up); topics 90 to 93 percent supported for both marks, key ideas 60 to 73 percent.
+- **The options and what each would do to today's library.** (a) Drop the `inferred` topics and key ideas when a card is made: the
+  209 items would go, about three quarters of which held up against the passages. (b) Keep them on the card and leave them out of the
+  keyword index (`cards_fts`): the same 209 items could no longer be found by their words. (c) Keep and index them and show the mark with
+  the item, as `card-show` does now: no change to any card, the catalog or the vectors.
+- **The recommendation** was (c), for the reasons above: most of the `inferred` items are good, the labelling found no difference from the
+  `stated` ones that the sample can detect, and (a) and (b) would discard or hide them. Two cautions were given with it: caveats and
+  limits are not covered by these figures, and the three labellers are of one model family, so the owner's labels of the calibration
+  subset (not given) would be the test of how far they are right.
+- **The owner's decision (2026-11-10): (c), on that recommendation** ("go with your recommendation"). The `inferred` topics and key ideas
+  stay on the cards, stay in the keyword index, and are shown with their mark by `card-show`. Nothing in the cards, the catalog, the
+  vectors or the display is changed by this decision.
+- **What the decision leaves open.** (1) A search result today gives the counts of `stated` and `inferred` items of a card (`grounding`),
+  not the mark of each item it finds; whether a result should carry the mark of the item that matched is the one point of (c) ("show the
+  mark with the item") that `card-show` meets and a search result does not. It was not decided here. If the owner wants it, it is a
+  small plan of its own; if not, the candidate's second half is already true. (2) Caveats and limits, and how they should be written
+  when a quote cannot state them, remain outside this plan (the other half of the boundary of the candidate). (3) The roadmap is not
+  changed by this plan: `cards#card-inferred-items` stays as written, and whether to close or reword it is the owner's decision
+  (a change of direction), not made here. (4) The labellers' files stay in `~/.local/share/knowledge-base/trial/inferred-sample/`
+  (outside the repository) with the key; the calibration subset is unlabelled; the staged copy for the labellers is in
+  `inferred-sample-for-labellers/`.
+- **Criteria.** 1 (`card-marks`), 2 (`card-sample --marks` and `card-accuracy --by-mark`), 3 (a labelled sample of 60 and 60 with 30 in each
+  cell, with the figures and their limits) and 4 (the numbers and the options put, the decision recorded, and the candidate named as not
+  complete with its open point) are met. 5: the card test modules (939 tests) pass and `wb run code-work check` finds no problems, both
+  run at the end of the plan, and `card-marks` run again gives the counts written in the plan and in the Result of A.
