@@ -66,8 +66,9 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 - **[proposed]** The vectors are a second derived file in the index root (`vectors.sqlite`), apart from the keyword catalog. It
   holds one vector for each of three neutral fields of a card (what the book is about, its approach and what it provides; the needs
   and the limits are not embedded, because a sample found most of their sentences not in the book), the SHA-256 of the text each
-  was made from, and the model and dimension that made them. It is built from the cards alone, can be thrown away and rebuilt,
-  keeps a vector while its text and model are unchanged, and is never reused for another model or dimension. Built in the engine as
+  was made from, and the model, the dimension and the document prefix (a hash of it) that made them. It is built from the cards
+  alone, can be thrown away and rebuilt, keeps a vector while its text, model and document prefix are unchanged, and is never reused
+  for another model, dimension or document prefix. Built in the engine as
   `card-vectors`; the search that uses it is Increment D of the plan
   `2026-11-09-search-the-neutral-descriptions-by-meaning`.
 
@@ -171,8 +172,9 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   card (problem, approach, provides). The query is turned into a vector by the embedding model of the config, each card is ranked by
   the cosine to its closest field (larger is closer), and a result is a keyword result with that cosine as its score and the field
   that matched. A vector is used only while its text still hashes to the card's text, and the model and dimension are those set;
-  anything else is left out and counted in the reply (`stale`, `without_vector`), and a file made for another model is refused, so
-  vectors of two models are never mixed. It takes no shelf or book filter yet.
+  anything else is left out and counted in the reply (`stale`, `without_vector`), and a file made for another model or with another
+  document prefix is refused, so vectors of two models are never mixed. The query is sent with the entry's query prefix, if it has
+  one, and the reply says whether it did (`query_prefix`). It takes no shelf or book filter yet.
 - **[proposed]** The card as shown to a reader marks each kept topic, key idea, caveat and neutral limit, and each sentence of the
   summary and the neutral fields of a card that has them, `[stated]` or `[inferred]`,
   and a result says how many items of each mark its card has, or that the card was not checked (a card of the earlier form). The

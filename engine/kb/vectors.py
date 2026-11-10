@@ -3,16 +3,18 @@ book is about, its approach, what it provides), made by the embedding model that
 "Where it is stored"; `docs/specs/models.md`, "The embedding model").
 
     vectors.sqlite
-      meta      the format, the model as the bridge named it, the name the config gave the model, the dimension, the date of the build
+      meta      the format, the model as the bridge named it, the name the config gave the model, the dimension, the hash of the document
+                prefix the vectors were made with (that of an empty text if none), the date of the build
       vectors   one row per (book, version, field): the generation of the card, the SHA-256 of the text the vector was made from, and
                 the vector as little-endian 32-bit floats
 
 The file is derived from the cards and can be thrown away: `build` reads each card through `card.read`, keeps the vector of a row whose
-text and model have not changed, sends every other text to the embedding model and writes a new file beside the old one, which it
-renames into place under the writers' lock of the catalog. The needs and the limits of a card are not embedded: a sample found most of
+text, model and document prefix have not changed, sends every other text (after the entry's document prefix, if it has one) to the
+embedding model and writes a new file in a folder of its own, which it renames into place under the writers' lock of the catalog. The needs and the limits of a card are not embedded: a sample found most of
 their sentences not in the book (the plan `2026-11-09-search-the-neutral-descriptions-by-meaning`, Increment A). A file that this
-engine did not make, or that was made for another model or dimension, is not reused: a build replaces it. A search never mixes the
-vectors of two models: it refuses such a file (`connect`, `check_entry`).
+engine did not make, or that was made for another model, dimension or document prefix, is not reused: a build replaces it. A search
+never mixes the vectors of two models, or of two document prefixes: it refuses such a file (`connect`, `check_entry`), and sends its
+query after the entry's query prefix, if it has one.
 
 Vectors are model output, so they are checked when they are made and again when they are read: the right length, finite numbers and
 not all zeros."""
@@ -35,10 +37,10 @@ from . import search as fulltext  # the limits of a result and the excerpt: the 
 
 INDEX_FILE = "vectors.sqlite"
 BUILD_PREFIX = ".vectors-build-"  # the folders in which a build is made; a killed build leaves one, and the next removes it
-FORMAT = 1
+FORMAT = 2
 COMMAND = "python3 -m kb card-vectors"
 FIELDS = ("neutral_problem", "neutral_approach", "neutral_provides")  # the fields of a card's model part that are embedded
-_META_KEYS = ("format", "model", "configured", "dimension", "built")
+_META_KEYS = ("format", "model", "configured", "dimension", "built", "document_prefix_sha256")
 _COLUMNS = ["book_id", "version_id", "generation", "field", "text_sha256", "vector"]
 _SCHEMA = (
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -55,6 +57,12 @@ def path_of(index_root):
 
 def sha256(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def prefix_hash(entry):
+    """The hash of the document prefix of an embedding entry, exactly as written (no normalization), that of an empty text if it has none.
+    A vector depends on the prefix its text was sent with, so the file records it and is not used for another."""
+    return sha256(entry.get("document_prefix", ""))
 
 
 def pack(vector):
@@ -119,17 +127,20 @@ def _meta(conn):
         raise KbError(f"the file of vectors cannot be read ({e}): run `{COMMAND}` to build it again") from None
     if (set(rows) != set(_META_KEYS) or not all(isinstance(v, str) for v in rows.values()) or rows["format"] != str(FORMAT)
             or not _DIMENSION.fullmatch(rows["dimension"]) or not 1 <= int(rows["dimension"]) <= models.MAX_DIMENSION
-            or not models._valid_model(rows["model"]) or not models._valid_model(rows["configured"]) or len(rows["built"]) > 40):
+            or not models._valid_model(rows["model"]) or not models._valid_model(rows["configured"]) or len(rows["built"]) > 40
+            or len(rows["document_prefix_sha256"]) != 64 or set(rows["document_prefix_sha256"]) - _HEX):
         raise KbError(f"the file of vectors does not say which model made it: run `{COMMAND}` to build it again")
     return rows
 
 
 def check_entry(conn, entry):
-    """Refuse a file made for another model or dimension than the embedding entry that is set (`entry` as `models.registry` gives it).
-    Returns the meta of the file."""
+    """Refuse a file made for another model or dimension, or with another document prefix, than the embedding entry that is set (`entry`
+    as `models.registry` gives it). Returns the meta of the file."""
     rows = _meta(conn)
-    if rows["configured"] != entry["model"] or int(rows["dimension"]) != entry["dimension"]:
-        raise KbError(f"the file of vectors was made for another model or dimension than the one set in the config: run `{COMMAND}` to build it again")
+    if (rows["configured"] != entry["model"] or int(rows["dimension"]) != entry["dimension"]
+            or rows["document_prefix_sha256"] != prefix_hash(entry)):
+        raise KbError(f"the file of vectors was made for another model, dimension or document prefix than the ones set in the config: "
+                      f"run `{COMMAND}` to build it again")
     return rows
 
 
@@ -233,7 +244,7 @@ def build(store, cfg, again=False, launcher=None, root=None):
     """Build the file of vectors again from the cards and put it in place of the old one. Returns the counts: the cards read, the cards
     with no model part, the cards and books that could not be read (`left_out`), the vectors in the file, the vectors `kept` from the old
     file and `made` now, the texts sent (`texts_sent`), the model the bridge reported, the dimension and whether the old file was not
-    usable and so `replaced`. With `again`, every vector is made again. Refused: model work off, no `card-embed` set in the config,
+    usable (another format, model, dimension or document prefix, or damaged) and so `replaced`. With `again`, every vector is made again. Refused: model work off, no `card-embed` set in the config,
     a model that the bridge reports as another than the one that made the vectors that are kept, a library that is not there. A failure
     leaves the old file as it was. Only the text of the embedded fields is sent. The cards and the old file are read before the models are
     called, and the lock is taken only to write: a card made, or a second build, while the texts are with the model gives a file that
@@ -261,7 +272,7 @@ def build(store, cfg, again=False, launcher=None, root=None):
     per = max(1, models.MAX_EMBED_NUMBERS // entry["dimension"])  # as many texts at a time as their vectors can be held in memory
     for start in range(0, len(todo), per):
         group = todo[start:start + per]
-        got = models.embed(cfg, name, [t[5] for t in group], launcher=launcher, root=root)
+        got = models.embed(cfg, name, [t[5] for t in group], launcher=launcher, root=root, kind="document")
         if rows and got["model"] != old_model:
             raise KbError(f"the model the bridge reports ({textutil.clean(got['model'], 60)}) is not the one that made the vectors that "
                           f"are kept ({textutil.clean(old_model, 60)}); run `{COMMAND} --again` to make every vector again")
@@ -273,7 +284,7 @@ def build(store, cfg, again=False, launcher=None, root=None):
     rows.sort(key=lambda r: (r[0], r[1], r[3]))
     model = made_model or (old_model if rows else None) or entry["model"]
     meta = {"format": str(FORMAT), "model": model, "configured": entry["model"], "dimension": str(entry["dimension"]),
-            "built": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+            "document_prefix_sha256": prefix_hash(entry), "built": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     with catalog.lock(index_root):
         in_place = False
         folder = None
@@ -389,7 +400,8 @@ def _unit(vector):
 def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, root=None):
     """Search by meaning. The query is turned into a vector by the embedding model that the config sets for `card-embed`, and each card
     is ranked by the cosine between it and the closest of the card's vectors (problem, approach, provides), larger being closer. Returns
-    `{"meaning", "model", "cards_searched", "stale", "without_vector", "results"}`; a result is a keyword result of the catalog with the
+    `{"meaning", "model", "query_prefix", "cards_searched", "stale", "without_vector", "results"}` (`query_prefix` says whether the entry has
+    a query prefix, which was put in front of the query; it never holds the prefix); a result is a keyword result of the catalog with the
     cosine for its score, the field that matched, and that field's text for its excerpt. A vector is used only if its text still hashes
     to the card's text in the catalog and it is a vector of the entry's dimension: any other is left out and counted in `stale`, and a
     card with no vector that can be used is counted in `without_vector`. Refused before the query is sent: a query that is not text, a
@@ -410,7 +422,7 @@ def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, 
                                  "ORDER BY book_id, version_id").fetchall()
     except sqlite3.Error as e:
         raise KbError(f"the catalog cannot be read ({e}): run `{catalog.COMMAND}` to build it again") from None
-    got = models.embed(cfg, name, [query], launcher=launcher, root=root)
+    got = models.embed(cfg, name, [query], launcher=launcher, root=root, kind="query")
     if got["model"] != meta["model"]:
         raise KbError(f"the model that answered for the query ({textutil.clean(got['model'], 60)}) is not the one that made the vectors; "
                       f"run `{COMMAND}` to build them again")
@@ -445,5 +457,6 @@ def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, 
             return CATALOG_NAMES[field], card._shown(fulltext.excerpt_of(made["model"][field], []))
 
         results.append(catalog.result_of(by_card[key][:8], score, [CATALOG_NAMES[field]], pick))
-    return {"meaning": True, "model": meta["model"], "cards_searched": len(usable), "stale": stale, "without_vector": without_vector,
+    return {"meaning": True, "model": meta["model"], "query_prefix": "query_prefix" in entry, "cards_searched": len(usable), "stale": stale,
+            "without_vector": without_vector,
             "results": results}

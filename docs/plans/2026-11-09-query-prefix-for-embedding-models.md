@@ -239,4 +239,37 @@ until `card-vectors` is run once; the plan says so before it happens.
   own text sent to the owner's server). Noted for Increment B: the document-prefix hash must cover the exact string, since no
   normalization is applied, and a `str` subclass with its own methods could make `embed` raise a different error, which a JSON config
   value cannot be. The reviewer ran nothing and read no bridge source.
-- **Not asked yet:** the question about a security review comes at the end of Increment B, as the plan says.
+- **Not asked yet:** the question about a security review comes at the end of Increment B, as the plan says. (Committed as `6204014`.)
+
+### Increment B — Record the document prefix with the vectors and use the prefixes in the build and the search (done; not committed)
+
+- **What was built** (`engine/kb/vectors.py`): the file of vectors is of format 2 and its meta table has a new key,
+  `document_prefix_sha256`, the SHA-256 of the entry's document prefix exactly as written (no normalization), that of an empty text
+  if it has none (`prefix_hash`). `_meta` requires it to be 64 lowercase hex digits; `check_entry` refuses a file whose hash differs
+  from the entry's, with the command to run, so a search is refused before anything is sent, and `build` (through `_old_rows`) does not
+  reuse any vector of such a file and replaces it (`replaced`). `build` embeds each stored text with `kind="document"` and `search`
+  embeds its query with `kind="query"`. The stored text hash still covers the text alone, so a changed text is found stale as before.
+  The reply of a search has a new key, `query_prefix`, true if the entry has a query prefix (which was put in front of the query) and
+  never the prefix itself. A change of the query prefix alone needs no rebuild. A file of the earlier format is refused by a search
+  (the command to run is named) and replaced by the first build, which sends every text again. The card spec, the models spec and the
+  README say what is built, and the earlier README sentence "do not set either prefix yet" is gone.
+- **Tests first** (24 failures and 2 errors against the code of Increment A, among them the query sent with the document prefix, no hash
+  in the meta table and the old format accepted), then `python3 -W error::ResourceWarning -m unittest engine.tests.test_vectors
+  engine.tests.test_models engine.tests.test_catalog` gave 353 tests, OK; `wb run code-work check` found no problems. Two existing
+  tests were changed for the new format number. No call was made to the owner's server (a fake bridge with chosen vectors answers).
+- **Deliberate breaks**, each from green: 10 (the build using the query kind, the search using the document kind, the hash not
+  recorded, the hash not compared, the stored text hash made over the prefixed text, the format not raised, the prefix shown in the
+  reply, the flag always true, the prefix hash normalised, the stored hash not checked to be a hash). Nine were caught. The last is not
+  caught and is redundant: a stored value that is not a hash can never equal the entry's hash, so the comparison refuses it first.
+  A test was added for the format number (the older-format tests would have passed even if it were not raised).
+- **Review.** The read-only `reviewer` agent, no blocking finding: it found no path in which a vector made with one document prefix is
+  kept, searched or ranked with another, and none in which a query gets the document prefix or a stored text the query prefix. Applied
+  (all wording): the module docstring, the `build` docstring and the first sentence of the README's vectors bullet did not mention the
+  document prefix; the README's list of what a search refuses left it out; a test was named as a refusal but tests that a long text
+  fits (renamed); and the known limits did not say that someone who can write the file can set the hash of the document prefix to
+  the config's value. Not applied: the reason a file was replaced is not printed (the counts say `replaced`, and the README says what
+  makes a file unusable). The reviewer ran nothing and did not read the fake-bridge helpers.
+- **Security review (step 4).** Asked once of the owner, with the surface named: text from the config reaching the bridge on stdin as
+  part of every text, and a new field in the vector file that a search compares. My recommendation was no (the new input is the
+  owner's own config text, sent only to the owner's server, and checked as before). The owner's answer: **no**. No security review was
+  run for this surface.

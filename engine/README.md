@@ -463,10 +463,9 @@ hand; nothing in the engine writes it:
   entry with no prefix for the kind sends the text as it is, as before. The prefix is your own text in the config: it goes on standard
   input as part of the text and is never an argument of the command, and `python3 -m kb models` does not print it. As an example of the
   form (not checked at its source), `qwen3-embedding` is described as trained for `Instruct: <a task>`, a line break and `Query: <the
-  query>` before a query and for a plain document. A change of the document prefix means the vectors must be made again. **Until the
-  build and the search of the vectors pass the kind (a later change of the plan `2026-11-09-query-prefix-for-embedding-models`), they
-  call `embed` with the default kind, so a `document_prefix` in the config would be put in front of a search's query too and the file of
-  vectors would not record it: do not set either prefix yet.**
+  query>` before a query and for a plain document. A change of the document prefix means the vectors must be made again. `card-vectors`
+  sends every stored text with the document prefix and records a hash of that prefix in the file of vectors, and `card-search
+  --meaning` sends its query with the query prefix (see [Searching the cards](#searching-the-cards)).
 - `printf '<prompt>' | python3 -m kb model-try <name>` sends the prompt (at most 256 KB of UTF-8) and prints the answer. The answer
   is the model's text, so it is printed between the untrusted-text markers, with a record of the model the server reported, the
   registry name, the prompt version, the UTC date and the token counts. If the answer holds the words of a marker it is withheld.
@@ -772,11 +771,15 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   folder is still the one it made, owned by you and not a link, when it makes it and again before it puts the file in place; that
   narrows, and does not close, a race with someone who can write in the index folder and rename the folder in the moments between,
   since SQLite makes the file through the folder's name. The file is private to you, is derived from the cards alone, and can be deleted. A vector is kept
-  while the text it was made from (its SHA-256 is stored with it) and the model are the same, so a second run sends nothing; a
+  while the text it was made from (its SHA-256 is stored with it, without any prefix), the model and the document prefix are the
+  same, so a second run sends nothing; a
   card that changed has its vector made again. `--again` makes every vector again. The file says which model made the vectors (the
-  name the bridge reported, and the name in your config) and their dimension; a file of another format, with other tables, a
-  trigger or a view, a link, or made for another model or dimension than the one set, is **not reused: the run replaces it**, and
-  the counts say `replaced`. If the bridge reports another model than the one that made the vectors that are kept, the run is
+  name the bridge reported, and the name in your config), their dimension and a hash of the **document prefix** they were made with
+  (see [Calling a model](#calling-a-model); the hash of an empty text if the entry has none); a file of another format, with other
+  tables, a trigger or a view, a link, or made for another model, dimension or document prefix than the ones set, is **not reused:
+  the run replaces it**, and the counts say `replaced`. The file is of format 2: **a file of the earlier format is refused by a
+  search with the command to run, and the first `card-vectors` after this change replaces it** (every text is sent again). A change
+  of the query prefix alone needs no rebuild. If the bridge reports another model than the one that made the vectors that are kept, the run is
   refused and asks for `--again`, so vectors of two models are never mixed. The counts printed are the cards read, the cards with no
   model part, those that could not be read (`left_out`; the exit is 1), the vectors, those `kept` and `made`, the texts sent, the
   model and the dimension. Nothing leaves your network except to the server of the embedding entry.
@@ -784,7 +787,9 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   about a problem, not keywords), into a vector with the same embedding model, and ranks the cards by the cosine between it and the
   closest of each card's three vectors (problem, approach, provides). **The query goes to that model**, and nothing else does. It
   needs `card-vectors` and `card-index` run first, and takes no `--in` and no `--book`. It prints one object:
-  `{"meaning": true, "model", "cards_searched", "stale", "without_vector", "results"}`. A result is a keyword result (the same keys,
+  `{"meaning": true, "model", "query_prefix", "cards_searched", "stale", "without_vector", "results"}`. `query_prefix` is true if the
+  entry has a query prefix, which was put in front of the query (a search never prints the prefix); a search is refused if the file
+  was made with another document prefix than the entry has. A result is a keyword result (the same keys,
   the same card text between the untrusted-text markers, the same citation, grounding counts and checks of the row against its card),
   except that `score` is the cosine, **larger being closer** (a keyword score is smaller for a better match), `matched` and
   `excerpt_field` name the field whose vector was closest (`n_problem`, `n_approach` or `n_provides`), and the excerpt is the start of
@@ -796,15 +801,17 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   number of cards with at least one vector that can be used, so the reply says how much of the library the search covered. As in the
   keyword search, a card is checked against its row only when it is in the results, so a damaged row of a card that is ranked below
   the limit goes unnoticed, and one in the results stops the search with the command to run. The
-  search is refused, before the query is sent, for a file of vectors made for another model or dimension than the one set, of another
-  format, with a trigger or a view, or with a row that is not what the engine writes; and refused if the model that answers for the
+  search is refused, before the query is sent, for a file of vectors made for another model, dimension or document prefix than the
+  ones set, of another format, with a trigger or a view, or with a row that is not what the engine writes; and refused if the model that answers for the
   query is not the one that made the vectors. It reads both files read-only and writes nothing. A closeness says how near a field is
   to the query and nothing of whether the field is right: see the `grounding` counts of the result.
 - **Limits of the vectors that are known and not fixed** (from a security review of the search by meaning; the files are private to you
   and small, and a person who could change them is you or a program run as you).
   - The text hash in `vectors.sqlite` binds a vector to the text it was made from, not the other way: a person who can write the file
     can put any vector under a correct hash, to rank a card first or last, and `card-vectors` keeps it while the text is unchanged.
-    **`card-vectors --again` makes every vector again from the cards** and is the recovery.
+    **`card-vectors --again` makes every vector again from the cards** and is the recovery. The same holds for the hash of the
+    document prefix in the file: someone who can write it can set it to the config's value and have vectors made with another
+    prefix kept.
   - A file of vectors and the catalog are read whole into memory when searched or rebuilt, with no cap on their size or on the time
     taken, as the catalog is when it is built; the size of your library is the bound.
   - The time limit of a build is for each call to the bridge, not for the whole build, so a very slow server makes a long build.

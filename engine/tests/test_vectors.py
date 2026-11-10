@@ -127,7 +127,7 @@ class BuildTest(VectorCase):
         self.two()
         self.build()
         meta = self.meta()
-        self.assertEqual((meta["model"], meta["configured"], meta["dimension"], meta["format"]), ("bge-m3:latest", "bge-m3:latest", "4", "1"))
+        self.assertEqual((meta["model"], meta["configured"], meta["dimension"], meta["format"]), ("bge-m3:latest", "bge-m3:latest", "4", str(vectors.FORMAT)))
         self.assertRegex(meta["built"], r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T")
 
     def test_the_store_is_private(self):
@@ -449,7 +449,7 @@ class ConnectTest(VectorCase):
 
     def test_a_meta_table_with_odd_values_is_refused_for_the_entry(self):
         for key, value in (("dimension", "²"), ("dimension", "4.0"), ("dimension", "0"), ("dimension", "8193"), ("model", b"blob"),
-                           ("model", "a b"), ("configured", b"blob"), ("built", "x" * 41), ("format", "2")):
+                           ("model", "a b"), ("configured", b"blob"), ("built", "x" * 41), ("format", str(vectors.FORMAT + 1))):
             self.build(again=True)
             with closing(sqlite3.connect(self.path())) as conn:
                 conn.execute("UPDATE meta SET value = ? WHERE key = ?", (value, key))
@@ -1120,6 +1120,199 @@ class SearchCommandTest(SearchCase):
         r = self.kb("card-search", "one problem")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIsInstance(json.loads(r.stdout), list)
+
+
+def prefixed_table(document_prefix, query_prefix):
+    """TABLE with each key as the fake bridge will be sent it: a stored text after the document prefix, a query after the query prefix."""
+    return {(query_prefix if key.startswith("Q-") else document_prefix) + key: value for key, value in TABLE.items()}
+
+
+def sha_of(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class PrefixBuildTest(VectorCase):
+    TEXTS = [f"{tag} {field}" for tag in ("one", "two") for field in ("problem", "approach", "provides")]
+
+    def test_a_build_sends_each_text_with_the_document_prefix_and_never_the_query_prefix(self):
+        self.two()
+        self.build(cfg=with_embedding(query_prefix="ZQ: ", document_prefix="D: "))
+        self.assertEqual(sorted(self.sent()), sorted("D: " + t for t in self.TEXTS))
+
+    def test_the_vector_is_made_from_the_prefixed_text_and_the_stored_hash_covers_the_text_without_it(self):
+        (one, _), (two, _) = self.two()
+        self.build(cfg=with_embedding(document_prefix="D: "))
+        tag = {one: "one", two: "two"}
+        rows = self.stored()
+        self.assertEqual(len(rows), 6)
+        for book, _, _, field, sha, vector in rows:
+            text = f"{tag[book]} {field.split('_')[1]}"
+            self.assertEqual(sha, sha_of(text))  # the hash of the text as the card holds it, with no prefix
+            for a, b in zip(vector, fake_vector("D: " + text)):  # and the vector is that of the text with the prefix
+                self.assertAlmostEqual(a, b, places=6)
+
+    def test_the_file_records_the_hash_of_the_document_prefix_and_that_of_an_empty_text_when_there_is_none(self):
+        self.two()
+        self.build(cfg=with_embedding(document_prefix="D: ", query_prefix="Q: "))
+        self.assertEqual(self.meta()["document_prefix_sha256"], sha_of("D: "))
+        self.build()
+        self.assertEqual(self.meta()["document_prefix_sha256"], sha_of(""))
+
+    def test_the_file_is_of_format_two(self):
+        self.two()
+        self.build()
+        with closing(sqlite3.connect(self.path())) as conn:
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 2)
+        self.assertEqual(vectors.FORMAT, 2)
+        self.assertEqual(self.meta()["format"], "2")
+
+    def test_with_no_prefix_a_build_sends_the_texts_as_before(self):
+        self.two()
+        self.build()
+        self.assertEqual(sorted(self.sent()), sorted(self.TEXTS))
+
+    def test_a_build_keeps_a_vector_only_if_it_was_made_with_the_same_document_prefix(self):
+        self.two()
+        self.build(cfg=with_embedding(document_prefix="D: "))
+        again = self.build(cfg=with_embedding(document_prefix="D: "))
+        self.assertEqual((again["kept"], again["made"], again["replaced"]), (6, 0, False))
+        for other in ("E: ", "D:", "d: "):
+            changed = self.build(cfg=with_embedding(document_prefix=other))
+            with self.subTest(other=other):
+                self.assertEqual((changed["kept"], changed["made"], changed["replaced"]), (0, 6, True))
+                self.assertEqual(self.meta()["document_prefix_sha256"], sha_of(other))
+        self.build(cfg=with_embedding(document_prefix="E: "))
+        none = self.build()  # a file made with a prefix is not reused for an entry with none, and the other way round
+        self.assertEqual((none["kept"], none["made"], none["replaced"]), (0, 6, True))
+        withp = self.build(cfg=with_embedding(document_prefix="E: "))
+        self.assertEqual((withp["kept"], withp["made"], withp["replaced"]), (0, 6, True))
+
+    def test_a_change_of_the_query_prefix_alone_does_not_make_the_build_make_vectors_again(self):
+        self.two()
+        self.build(cfg=with_embedding(document_prefix="D: ", query_prefix="Q1: "))
+        again = self.build(cfg=with_embedding(document_prefix="D: ", query_prefix="Q2: "))
+        self.assertEqual((again["kept"], again["made"], again["texts_sent"], again["replaced"]), (6, 0, 0, False))
+
+    def test_every_chunk_of_a_build_gets_the_document_prefix(self):
+        self.two()
+        with mock.patch.object(models, "MAX_EMBED_NUMBERS", 8):
+            self.build(cfg=with_embedding(document_prefix="D: "))
+        self.assertEqual(sorted(self.sent()), sorted("D: " + t for t in self.TEXTS))
+        self.assertGreater(self.calls(), 1)
+
+    def test_a_long_text_with_a_long_document_prefix_is_sent_whole_when_it_fits_the_limit(self):
+        self.carded(title="Long", model=self.model_with("long", neutral_problem="x" * 480))
+        cfg = with_embedding(document_prefix="D" * 400)
+        counts = self.build(cfg=cfg)  # 880 characters: well inside the bridge's limit
+        self.assertEqual(counts["made"], 3)
+        self.assertIn("D" * 400 + "x" * 480, self.sent())
+
+    def test_a_file_of_the_earlier_format_is_replaced_by_a_build(self):
+        self.two()
+        self.build()
+        with closing(sqlite3.connect(self.path())) as conn:
+            conn.execute("PRAGMA user_version = 1")
+            conn.execute("DELETE FROM meta WHERE key = 'document_prefix_sha256'")
+            conn.commit()
+        counts = self.build()
+        self.assertEqual((counts["kept"], counts["made"], counts["replaced"]), (0, 6, True))
+        self.assertEqual(self.meta()["format"], str(vectors.FORMAT))
+
+    def test_a_meta_table_with_a_document_prefix_hash_that_is_not_a_hash_is_replaced_by_a_build(self):
+        self.two()
+        for value in ("nope", "", "0" * 63, "0" * 65, "A" * 64, sha_of("")[:-1] + "g", b"blob"):
+            self.build(again=True)
+            with closing(sqlite3.connect(self.path())) as conn:
+                conn.execute("UPDATE meta SET value = ? WHERE key = 'document_prefix_sha256'", (value,))
+                conn.commit()
+            with self.subTest(value=value):
+                self.assertTrue(self.build()["replaced"])
+
+
+class PrefixSearchTest(VectorCase):
+    D, Q = "ZD: ", "ZQ: "
+
+    def setUp(self):
+        super().setUp()
+        self.plan(table={**prefixed_table(self.D, self.Q), **prefixed_table(self.D, "ZQ2: "), **prefixed_table("", "")})
+        self.two()
+        catalog.rebuild(self.store)
+        self.cfg_p = with_embedding(document_prefix=self.D, query_prefix=self.Q)
+        self.build(cfg=self.cfg_p)
+
+    def find(self, query, cfg=None, **kw):
+        return vectors.search(self.store.cfg["index_root"], cfg or self.cfg_p, query, launcher=self.launcher, **kw)
+
+    def test_a_search_sends_its_query_with_the_query_prefix_and_never_the_document_prefix(self):
+        sent = len(self.sent())
+        got = self.find("Q-A")
+        self.assertEqual(self.sent()[sent:], [self.Q + "Q-A"])
+        first = got["results"][0]
+        self.assertAlmostEqual(first["score"], 1.0, places=6)  # the vector of the table for the prefixed query: the prefix was applied
+        self.assertEqual(first["matched"], ["n_problem"])
+
+    def test_with_no_query_prefix_the_query_is_sent_as_it_is(self):
+        cfg = with_embedding(document_prefix=self.D)
+        sent = len(self.sent())
+        self.find("Q-A", cfg=cfg)
+        self.assertEqual(self.sent()[sent:], ["Q-A"])
+
+    def test_a_search_refuses_a_file_made_with_another_document_prefix_and_sends_nothing(self):
+        for cfg in (with_embedding(document_prefix="Other: ", query_prefix=self.Q), with_embedding(query_prefix=self.Q)):
+            calls = self.calls()
+            with self.subTest(prefix=cfg["models"]["emb"].get("document_prefix")):
+                with self.assertRaises(KbError) as cm:
+                    self.find("Q-A", cfg=cfg)
+                self.assertIn("card-vectors", str(cm.exception))
+                self.assertEqual(self.calls(), calls)
+
+    def test_a_file_made_with_no_prefix_is_refused_for_an_entry_that_has_a_document_prefix(self):
+        self.build(cfg=with_embedding())
+        with self.assertRaises(KbError):
+            self.find("Q-A")
+
+    def test_a_change_of_the_query_prefix_alone_needs_no_rebuild_and_changes_only_the_query_sent(self):
+        cfg2 = with_embedding(document_prefix=self.D, query_prefix="ZQ2: ")
+        sent = len(self.sent())
+        got = self.find("Q-A", cfg=cfg2)
+        self.assertEqual(self.sent()[sent:], ["ZQ2: Q-A"])
+        self.assertAlmostEqual(got["results"][0]["score"], 1.0, places=6)
+
+    def test_the_reply_says_whether_a_query_prefix_was_used_and_never_holds_the_prefix(self):
+        with_q = self.find("Q-A")
+        without_q = self.find("Q-A", cfg=with_embedding(document_prefix=self.D))
+        self.assertIs(with_q["query_prefix"], True)
+        self.assertIs(without_q["query_prefix"], False)
+        for reply in (with_q, without_q):
+            self.assertNotIn(self.Q, json.dumps(reply))
+            self.assertNotIn(self.D, json.dumps(reply))
+
+    def test_a_text_that_changed_is_still_found_stale_because_the_hash_covers_the_text_without_the_prefix(self):
+        (one, one_v) = next(iter({(r[0], r[1]) for r in self.stored()}))
+        self.sentence_card(one, one_v, neutral_problem="a changed problem", neutral_approach="x approach", neutral_provides="x provides")
+        catalog.rebuild(self.store)
+        got = self.find("Q-A")
+        self.assertEqual(got["stale"], 3)  # all three of that card's vectors no longer match its text
+
+    def test_a_file_of_the_earlier_format_is_refused_by_a_search_with_the_command_to_run(self):
+        with closing(sqlite3.connect(self.path())) as conn:
+            conn.execute("PRAGMA user_version = 1")
+            conn.execute("DELETE FROM meta WHERE key = 'document_prefix_sha256'")
+            conn.commit()
+        with self.assertRaises(KbError) as cm:
+            self.find("Q-A")
+        self.assertIn("card-vectors", str(cm.exception))
+
+    def test_a_meta_table_with_a_document_prefix_hash_that_is_not_a_hash_is_refused_by_a_search(self):
+        for value in ("nope", "", "0" * 63, "A" * 64, b"blob"):
+            self.build(cfg=self.cfg_p, again=True)
+            with closing(sqlite3.connect(self.path())) as conn:
+                conn.execute("UPDATE meta SET value = ? WHERE key = 'document_prefix_sha256'", (value,))
+                conn.commit()
+            with self.subTest(value=value):
+                with self.assertRaises(KbError) as cm:
+                    self.find("Q-A")
+                self.assertIn("card-vectors", str(cm.exception))
 
 
 class CommandTest(VectorCase):

@@ -197,8 +197,8 @@ rules, which this spec depends on.
   before a query, and for a plain document (read in summaries of its card, not checked at the source). An entry with no prefix sends
   the text as it is. The prefix is the owner's own text in the config, goes on standard input as part of the text, and is never an
   argument of the command. A document prefix changes the vectors of the stored texts; the vectors must be made again after it changes.
-  Until the build and the search of the vectors pass the kind (`docs/plans/2026-11-09-query-prefix-for-embedding-models.md`, Increment
-  B, which also records the document prefix in the file of vectors), both call `embed` with the default kind: do not set a prefix yet.
+  The build of the file of vectors sends each stored text as a document and records a hash of the document prefix in the file, which is
+  not reused, and is refused by a search, if it was made with another one; a search sends its query as a query.
 
 ### Privacy of what is sent
 
