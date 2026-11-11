@@ -1,0 +1,39 @@
+{
+  "closed": null,
+  "decisions": [],
+  "format": 1,
+  "generation": 2,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-11-show-the-model-where-each-block-sits.md",
+  "rounds": [
+    {
+      "at": "2026-11-11T17:57:19Z",
+      "bridge": "ask-codex",
+      "document_sha256": "bbe8a6dc8eaa25a6c2299555122f77d4261639ec39d122a86944b1ec07d1c0ef",
+      "file": "round-1.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "7f9d261eed3943d0a22fb042e62ebb13257525572563a60e367d7706cbea99d7",
+      "usage": {
+        "input_tokens": 286853,
+        "output_tokens": 2780,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "e0ef731507525521b3375fee55fd8065910a4ffbcd790e1c73364fec7177d0f8",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

@@ -264,7 +264,7 @@ owner chose to go on to approval after round 1, so the review did not converge. 
 - **Not done.** C and D. No live call. No security review (none asked): the book text is untrusted input to the prompt as before, and nothing from
   a reply reaches a path, a command or an unchecked field.
 
-### Increment C (done, not committed; waits for the owner's word to commit)
+### Increment C (done; committed as cb6a8c0)
 
 - **Done.** `engine/kb/themecheck.py`: `avoid_words(text, df, size, title, topics, limit)` returns the words of the book's vocabulary as a list,
   strongest first (the words of the title, then of the card's topics, then the book's own frequent and rare words, the one used most first
@@ -304,3 +304,53 @@ owner chose to go on to approval after round 1, so the review did not converge. 
   a fault.
 - **Not done.** D. No live call. No security review (none asked): the words are letters only, bounded in number and length by the caller, given as
   data between delimiters that hold a random token no input holds.
+
+### Increment D (done; the owner decided to build the running-offset header first)
+
+- **Run.** Once, at commit cb6a8c0, on the owner's word ("Run it"), after the owner was told what is sent. The six books of the first trial, the
+  models set for the tasks `theme` (gemma, answering as gemma4:12b) and `theme-check` (local, answering as phi4:latest), prompt versions
+  `theme` v3 and `theme-check` v1, nothing filed in the library. The script is kept outside the repository (the first trial's shape, with
+  the new counts). Report outside the repository, mode 600, sha256 `d236b2629b694691c3716123187109bb340f9cb8c231fc4e0ba4203da7428f6b`;
+  the first trial's report is sha256 `844bafe09c361daaff9ed8d8e6dd57750b230151aee72fc7ff09cf67f0d9ae9f`. The script reproduced the first
+  trial's totals from the first report before the run (70 kept of 118, 63 flagged, 354 flagged words). No book stopped; no defect.
+- **Totals, first trial then repeat.** Time 348.2 s, 371.6 s. Calls: `theme` 33, 36; `theme-check` 68, 74. Tokens in 255,934, 292,836; out 18,487,
+  16,622. Themes proposed 118, 88; kept 70, 74; dropped 48, 14. Refusals of a model's answer kept aside (then asked again; no book stopped) 6, 12
+  (10 of the lists of the answer not of one length, 2 of a summary over 600 characters).
+- **Per book (first, then repeat): kept of proposed; themes with a flagged word; flagged words; parts stated of parts given; parts not given.**
+  Sequential analysis (web, 1 piece): 4 of 4, 4 of 4; 4, 4; 12, 8; 13 of 16, 15 of 18; 4, 2. Stigmergy (web, 1): 0 of 1, 1 of 1; 0, 1; 0, 3; 0 of 0,
+  4 of 4; 0, 1. Soft Actor-Critic (PDF, 3 then 4 pieces): 3 of 12, 4 of 8; 3, 3; 10, 7; 13 of 13, 17 of 18; 2, 2. Ising model (web, 4): 20 of 21, 15 of 15; 17, 10; 65,
+  18; 71 of 89, 61 of 73; 11, 2. Hamiltonian Monte Carlo (PDF, 7 then 8): 16 of 24, 16 of 18; 16, 15; 170, 75; 55 of 74, 55 of 65; 6, 15. Complex networks (PDF, 17
+  then 18): 27 of 56, 34 of 42; 23, 31; 97, 94; 81 of 101, 123 of 154; 34, 16.
+- **Reading against the plan's proposal.**
+  1. *No theme dropped for its confidence:* met (29 dropped before, none now). But 17 of the 74 kept have an unreadable confidence (every one is the
+     model's word `one`; kept at 0.5 with a flag, as designed), and all 57 readable confidences are exactly 1.0 (66 of 70 before): the model's
+     confidence carries no information.
+  2. *Themes dropped for the size bound 5 percent or fewer of those proposed:* **not met.** 13 of 88 (14.8 percent; 16 of 118, 13.6 percent, before).
+     All 13 are in PDFs (13 of 68 proposed, 19 percent; none of the 20 proposed in web pages). Sizes of those 13 spans: 7 are 6,007 to 6,517 characters (at most 9 percent over
+     the 6,000 limit), 3 are 7,952 to 8,265, 3 are 10,947, 18,120 and 18,202.
+  3. *Themes with a flagged word 50 percent or fewer of those kept, with fewer words in a flag:* **not met on the share** (64 of 74, 86 percent; 63 of 70,
+     90 percent, before); **met on the words per flagged theme** (3.2 against 5.6; flagged words 205 against 354). Of the 205 flagged words, 139 were
+     words of the list the model was given, so the model used a word it was told to avoid; the other 66 are in the two books whose list was cut at
+     80 words (Hamiltonian Monte Carlo 23 of its 75, complex networks 43 of its 94). The proposal's own next step, where neither the size bound nor the flags
+     are met, is that the model or the prompt is not a fit and the owner decides.
+- **Other numbers asked for.** Parts stated 275 of 332 given (83 percent), before 233 of 293 (80 percent); inferred 57, 60; parts not given
+  (`none`) 38 of 370 (10 percent), before 57 of 350 (16 percent). The example's own words (queen, excluder, brood, honey, supers, bees, worker)
+  appear in no theme, and none of the flagged words is a word of the example's parts.
+- **Measures added after seeing the report (mine, not the plan's; read them as such).** (a) A word of the book's title in the five parts: 14 of 74 themes
+  (19 percent), before 21 of 70 (30 percent). (b) A fixed list of twelve terms of the books' fields that the first trial named (annealing, carlo,
+  hamiltonian, ising, lattice, magnetization, markov, metropolis, monte, spin, spins, stigmergy) in the five parts: 5 of 74 themes (5 words), before 18 of 70
+  (32 words). (c) In the sample of 8 flagged descriptions, I read most of the flagged words as ordinary (direct, power, target, communication,
+  environmental, volume, loops, field) and a few as the field's (integrand, iteration, policy, reward, exploration); the rule flags any word that a book
+  uses five or more times and that at most 15 percent of the books hold, so the share flagged overstates how far the descriptions are in the words
+  of a field.
+- **The sample.** 12 parts marked `stated` and 8 descriptions flagged, chosen with a fixed seed and kept outside the repository, were read by me and
+  are shown to the owner. From the first 330 characters of each excerpt (the report keeps 500), 3 of the 12 `stated` parts are visibly supported and 9 cannot
+  be judged from the start of the excerpt alone; I did not read the whole excerpts.
+- **What cannot be concluded.** One run on six books, one model pair; no estimate of how much a second run would differ. The check model
+  (phi4) marks a part `stated` on its own reading of the excerpt and has not been tested for leniency, so the share stated is not a share
+  correct. The flag is a rule on words, not a judgment of neutrality. The sample is small and chosen by me with a seed.
+- **The owner's decision** (after the reading above and my recommendation, "Go with all your recommendations"): no rewrite step; no further change to
+  the wording of the prompt; build the running-offset block header for the PDFs first, in a new plan with a PDF-only repeat trial and a success test set
+  before the build (size-bound drops 5 percent or fewer of those proposed, in the three PDF books); the library run (F of the earlier plan) waits
+  for that plan's result. Where that test fails, the owner chooses again.
+- **Not done.** The new plan's build and trial (the plan `2026-11-11-show-the-model-where-each-block-sits` is drafted and reviewed once, with no finding). No change to tracked code. No security review (none asked; no new input reached a privileged use).
