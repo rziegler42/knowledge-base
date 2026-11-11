@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "Assumptions and constraints, third bullet; Increment A, step 4; Risks and sensitive actions, second bullet",
+      "problem": "The claimed protection against PID reuse relies on an ordering the referenced implementation does not provide. convert_run calls proc.poll() and proc.wait() before sending \"done\", and models._run already calls proc.wait() during normal completion. These calls can reap the launcher while the watchdog remains armed. If the engine dies then, the watchdog can signal a subsequently reused process-group ID. Merely adding a finally block following the converter's order does not establish the stated safety property.",
+      "severity": "major",
+      "suggestion": "Specify how the launcher remains unreaped until the watchdog has acknowledged termination, including normal completion and exception paths, and add a deterministic ordering test. Correct the claim about convert_run; if this cannot be achieved within scope, explicitly record the remaining race instead of claiming it is prevented."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "The plan still incorrectly claims that its cleanup ordering prevents signaling a reused process-group ID. No drift from the models spec was found; no roadmap candidate is named.",
+  "verdict": "changes_needed"
+}

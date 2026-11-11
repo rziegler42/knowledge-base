@@ -1,0 +1,54 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "findings": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "location": {
+            "type": "string"
+          },
+          "problem": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "major",
+              "minor",
+              "nit"
+            ],
+            "type": "string"
+          },
+          "suggestion": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "location",
+          "problem",
+          "suggestion"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "verdict": {
+      "enum": [
+        "changes_needed",
+        "no_meaningful_changes"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "verdict",
+    "summary",
+    "findings"
+  ],
+  "type": "object"
+}

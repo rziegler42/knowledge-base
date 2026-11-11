@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Increment A, step 3; Completion criterion 3",
+      "problem": "The only specified failure test uses a supervisor program that starts successfully but emits no `ready`. It does not exercise the distinct `Popen` failure path where the watchdog cannot be started at all, after the launcher already exists. A regression in that exception cleanup path could leave an unguarded launcher running while the stated completion criterion still appears covered.",
+      "severity": "major",
+      "suggestion": "Add a separate test that makes watchdog startup raise `OSError` (or uses a missing supervisor executable) and asserts both a watchdog-naming failure and that the launcher/process group is gone."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Increment A, step 7",
+      "problem": "The proposed hand check cannot establish that the helper's 60-second stop killed the engine if the model-call limit is \"short\": `_run` may time out and clean up before the helper reaches its own limit.",
+      "severity": "minor",
+      "suggestion": "Specify a model-call limit longer than 60 seconds, wait for watchdog readiness, and confirm the helper timed out before checking that the launcher and child are gone."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan needs coverage of actual watchdog-start failure; its helper integration check also needs an unambiguous timeout arrangement.",
+  "verdict": "changes_needed"
+}
