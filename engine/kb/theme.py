@@ -170,7 +170,7 @@ def _place(kind, place):
     if not isinstance(place, dict):
         raise KbError("an end of a pointer is not a place")
     if kind == "section":
-        ok = (set(place) == {"path", "paragraph"} and isinstance(place["path"], list) and 1 <= len(place["path"]) <= MAX_PATH
+        ok = (set(place) == {"path", "paragraph"} and isinstance(place["path"], list) and len(place["path"]) <= MAX_PATH   # none: before any heading
               and all(isinstance(t, str) and 0 < len(t) <= convert.PATH_PART_CHARS for t in place["path"])
               and locator._is_int(place["paragraph"], 0))
     elif kind == "page":

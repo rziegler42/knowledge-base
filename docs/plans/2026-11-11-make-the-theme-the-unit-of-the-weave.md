@@ -319,7 +319,7 @@ major. The owner chose to commit and approve after round 2, so the review did no
 - **Not done.** Nothing of B to F. No live call was made. No security review was run (none asked): the surface is a file read and
   checked, with no path, command or network use of any field.
 
-### Increment B (done, not committed; waits for the owner's word to commit)
+### Increment B (done; committed as 7394125)
 
 - **The shapes of a pointer a model can name (step 1).** `{"kind", "start", "end"}`. The kind must be that of the conversion
   (`locator._kind_of`: `section` if it has headings, `page` if it has pages, otherwise `offset`). Each end is the `at` of a locator of
@@ -359,3 +359,60 @@ major. The owner chose to commit and approve after round 2, so the review did no
   nothing was run on real flat text. No security review (none asked): a model's pointer reaches the code only as checked integers and
   strings compared with the block paths, so it cannot read outside the conversion, and its cost is bounded by the size check and by
   `locator.resolve`'s own limit.
+
+### Increment C (done, not committed; waits for the owner's word to commit)
+
+- **Reused (step 1).** From `cardmake.py`: `_prompt` (sections between delimiters that hold a random token no input holds, the rules
+  naming the token), `_TOKEN`, `retry_prompt` (asked once more with the reason in a marked section), `similar` (repeats), the shape of the
+  call (`models.run_job` with a `Job`, a schema file, `AnswerRefused` carrying the reply), and `refused.keep` for the refused answer. Not
+  reused: the journal, the pause for a model that is not being served, and the sampling of pieces. Pieces are rebuilt here because
+  a theme names blocks, so each piece keeps its block numbers.
+- **Done.** New `engine/kb/themeextract.py` (`THEME_JOB` v1, `theme_prompt`, `pieces`, `extract`, `make_for_version`, `ThemeRefused`) and
+  `engine/kb/schemas/theme.json`; `models.OPTIONAL_TASKS` now holds `theme` (left unset by default; a card does not need it);
+  `engine/tests/test_themeextract.py` (41 tests); a paragraph in the README. `make_for_version` files nothing: it returns a
+  generation for `theme.file`. Changes outside the plan's list of areas, each small: `theme.py` (a section pointer may have an empty heading
+  path, because a block before the first heading has one; a test in `test_theme.py`), and three existing assertions that the card jobs are
+  the engine's kinds of work, which now say all kinds except `theme` (`test_models.py` line ~950, `test_cardmake.py` ~1688,
+  `test_cardmake_earlier.py` ~1371).
+- **Decisions made here.** (1) The model names block numbers, never quotes: the prompt shows `<block n>` before each block, code builds
+  the pointer from the numbers and `theme.anchor_of` finds the text; a theme whose numbers are not in the piece is dropped with that reason.
+  (2) Every non-empty part of a description is marked `inferred` here; the later check (Increment D) raises a part to `stated`. (3) A
+  reply of more than 24 themes is a runaway: raised with its answer, not asked again, nothing made, and `make_for_version` keeps it aside.
+  At most 8 themes are asked for in a piece. (4) A book of more than 150 pieces is refused, not sampled. (5) No journal. (6) Of two near-identical
+  themes (blocks overlapping by 80 percent or more, summaries that repeat each other) the one of higher confidence is kept.
+  (7) A part the text says nothing of is the word `none` in the reply and no text in the theme, because the answer check of the model layer
+  refuses an empty item.
+- **A defect the review found, and what it showed.** My first tests replaced `models.run_job` with a fake that skipped the shape check
+  of the real one, and the prompt asked for an empty string for a part the text did not state. The real check refuses an empty item, so most
+  real replies would have been refused whole. The reviewer found it by reading `models._text`. The fake now runs `models._check_answer`
+  as `run_job` does, which made 30 tests fail until the prompt and the tests were changed (the word `none`, read as no text by code). What
+  the tests still do not show: how often a real model answers in the shape, uses `none`, or names blocks that hold. That is what Increment E
+  is for.
+- **Tests first, seen failing.** The module did not exist, so the first run failed on the import. A harness fault (the fake not recorded
+  on a raised refusal) was mine and was fixed in the test.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest` on `test_theme`, `test_themeextract`, `test_models`, `test_card`,
+  `test_cardmake`, `test_cardmake_earlier`, `test_read` and `test_convert`: 987 tests OK. `wb run code-work check`: no problems. No live
+  call; nothing was sent anywhere.
+- **Deliberate breaks.** 34 of `themeextract.py`, all caught and restored byte for byte (scratchpad `breaks_themeextract.py`), and the
+  47 of Increments A and B still caught. One was missed at first and led to removing a check that `theme.anchor_of` already makes.
+- **Read-only on the library (no model, no network).** `themeextract.pieces` on the 175 versions that have a conversion and a card: a
+  median of 3 pieces, at most 24, 559 in all, none near 150. So a run over the library is 559 calls, one for each piece, at a rate the
+  trial will measure.
+- **Review (1 round).** The `reviewer` agent: one blocking finding (the empty item, above), fixed. Not blocking, recorded: (2) a section
+  whose heading path is the same as another's cannot be named, so its themes are dropped with a reason; (3) no bound on the themes of a
+  whole book (`theme.md` has one that scales with the book) other than 24 a reply and 2,000 a generation; (4) a truncated or partial
+  conversion gives themes with no mark of it; (5) no journal, so a failure at piece 40 of 60 loses 39 calls, which Increment F must
+  plan for, and the merge is one pass; (6) the test that a token is not in the input was weak and was replaced by one in which the first
+  token drawn is one that the book holds; (7) only the title is guarded against the words of the untrusted-text marker (open since A).
+  **Second review (2 rounds in all, on the fix only):** no blocking finding; the fake now does what `run_job` does with a reply (shape
+  check, the job's check, cleaned values), and `none` is read as no text only when it is the whole part. Applied: the instruction that
+  no item of any list may be empty now covers every list and not only the five parts; `NONE` and the set of spellings are tied together.
+  Recorded, not applied: an empty or all-blank item in titles, types, summaries, blocks or confidences, which the answer check would
+  refuse, costs the whole book (after one retry) because there is no journal; a spelling such as "none stated" or "(none)" stays as text
+  marked `inferred`; the prompt does not state the shape limits of types, blocks and confidences. What no test can show is whether a
+  real model follows the `none` instruction, which Increment E measures.
+- **For the owner, before Increment E.** You add `"theme": "<name>"` to `tasks` in your config (I never write it), and the model should
+  be one that follows a list-shaped JSON reply; the card notes model is a candidate. The extraction sends the text of the book, piece by
+  piece, to that model.
+- **Not done.** D, E, F. No live call. No security review (none asked): a reply reaches only checked fields, numbers pass a regular
+  expression, the range check and `anchor_of`, and the refused-answer file is written by the existing `refused.keep`.

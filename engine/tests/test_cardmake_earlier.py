@@ -1368,7 +1368,8 @@ class JobTest(unittest.TestCase):
         self.assertEqual(cardmake.MORE_FIELDS, ("topics", "key_ideas"))
 
     def test_the_jobs_are_the_kinds_of_work_the_engine_knows(self):
-        self.assertEqual({cardmake.EARLIER_JOB.name, cardmake.NOTES_JOB.name, cardmake.check_job(1).name, cardmake.MORE_JOB.name}, set(models.TASKS))
+        self.assertEqual({cardmake.EARLIER_JOB.name, cardmake.NOTES_JOB.name, cardmake.check_job(1).name, cardmake.MORE_JOB.name},
+                         set(models.TASKS) - {"theme"})   # `theme` is the kind of work of `themeextract`, not of a card
 
     def test_each_job_has_a_prompt_version(self):
         self.assertEqual((cardmake.EARLIER_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version, cardmake.MORE_JOB.prompt_version),

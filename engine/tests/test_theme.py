@@ -499,6 +499,13 @@ class AnchorTest(unittest.TestCase):
         self.assertEqual((got["start"], got["end"]), (locators.make(CONV, flat, 1), locators.make(CONV, flat, 2)))
         self.assertEqual(got["excerpt_sha256"], words_hash("The second block has a few more words. A third one."))
 
+    def test_a_block_before_the_first_heading_has_an_empty_path_and_can_be_named(self):
+        opening = convert.build([para("Words that come before any heading in a text that has several of them."), heading("First"),
+                                 para("A paragraph under the first heading.")])
+        got = theme.anchor_of(CONV, opening, pointer("section", section([], 1), section([], 1)))
+        self.assertEqual((got["path"], got["start"], got["end"]), ([], locators.make(CONV, opening, 0), locators.make(CONV, opening, 0)))
+        self.assertEqual(theme.find(CONV, opening, got)["status"], "found")
+
     def test_the_anchor_made_is_one_the_form_check_accepts(self):
         got = theme.anchor_of(CONV, self.sec, pointer("section", section(["Introduction"], 1), section(["Method"], 2)))
         t = good_theme()

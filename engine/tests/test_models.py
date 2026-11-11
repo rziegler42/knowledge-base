@@ -947,7 +947,7 @@ class TaskTest(Base):
         self.assertEqual(models.choose(cfg, "card")[0], "other")
 
     def test_the_kinds_of_work_are_named_in_the_engine_with_no_model(self):
-        self.assertEqual(set(models.TASKS), {"card-notes", "card", "card-check", "card-more"})
+        self.assertEqual(set(models.TASKS), {"card-notes", "card", "card-check", "card-more", "theme"})
         self.assertEqual(set(models.REQUIRED_TASKS), {"card-notes", "card", "card-check"})
 
     def test_the_second_round_is_the_one_kind_of_work_that_may_be_left_unset(self):

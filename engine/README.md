@@ -1090,6 +1090,33 @@ start of its block does not hold); the status is `found`, `found_by_text` or `no
 of an anchor, or a text too large to search, is a refusal and not a status), and `theme.check_against` refuses anything but `found`. Run on 8 real converted books
 (4 with sections, 4 PDFs), `anchor_of` and `find` accepted a span of three blocks in each.
 
+**Making the themes of a book** (`kb/themeextract.py`, `kb/schemas/theme.json`; no command uses it yet, and it files nothing).
+`themeextract.make_for_version(store, cfg, book_id)` needs a card that can be read (themes are made after the card), a conversion, and
+a model for a new kind of work, `theme`, that you add to the `tasks` of your config (`"tasks": {…, "theme": "<name>"}`; it is optional
+for cards, and without it the extraction is refused before anything is sent). The converted text is read in pieces of at most 20,000
+bytes, each of whole blocks, every block headed by `<block n>` (a block of more than 3,000 characters is shown cut, and a theme may still
+name it). A piece goes to the model with the title of the book, as data in sections of their own between delimiters that hold a random
+token no input holds, and the model answers with ten lists of the same length, one item for each theme (at most 8 asked): title, type,
+summary, the first and last block that state it, the five parts of a description in words of no field, and a confidence. The model names
+blocks, never quotes: code turns the numbers into a pointer and `theme.anchor_of` finds the text. A theme is dropped, with the piece, its
+title and the reason, if its blocks are not numbers or not in the piece, if its pointer does not hold (two sections with the same
+heading, an excerpt over 6,000 characters or with no words), if its type is `proof` or `definition` (a definition that serves only the
+text), if its title imitates the markers of untrusted text (a title or summary that is empty never gets past the answer check of the model
+layer, but the drafting drops one too), or if its confidence is not a number (a number outside 0 to 1 is put to the nearest end); a type that
+is not one of the five is kept as `other`. Of two themes whose blocks overlap by 80 percent or more and whose summaries repeat each other
+the one of higher confidence is kept. Every non-empty part of a description is marked `inferred`: the model wrote it from the text and no
+check has yet shown that the excerpt supports it. A reply refused for its shape is asked once more with the reason, as for cards, and the
+refusal is kept in the folder `refused` of the index root; a reply of more than 24 themes is a runaway, is not asked again, makes nothing and
+is kept aside (`ThemeRefused`). A book of more than 150 pieces is refused, not sampled. Read-only, on the 175 versions of the library that
+have a conversion and a card: a median of 3 pieces, at most 24, 559 in all, so one call for each piece would be 559 calls. There is no
+journal, so a run that stops makes the book again from its first piece, and the calls already paid for are lost.
+The answer check of the model layer refuses an empty item in a list, so the prompt asks for the word `none` for a part that the text
+says nothing about, and code reads `none` (and `n/a`, `not stated`, `not applicable`, `nothing`, with spaces and full stops around)
+as no text. Known limits: a section whose heading path is the same as another's (two sections called "Notes") cannot be named by a
+pointer, so the themes under it are dropped with that reason; a truncated or partial conversion gives themes with no mark that the end
+is missing; there is no bound on the number of themes of a whole book other than 2,000 in a generation and 24 in a reply; and the merge of
+near-identical themes is one pass and does not compare a theme with those it replaced.
+
 ## Converting what is captured
 
 A version that has been fetched and scanned (or whose scan failed or was skipped) is converted to text by `kb/convert.py`
