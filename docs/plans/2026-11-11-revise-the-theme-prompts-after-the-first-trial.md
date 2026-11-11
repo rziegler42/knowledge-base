@@ -200,7 +200,7 @@ owner chose to go on to approval after round 1, so the review did not converge. 
 
 ## Result
 
-### Increment A (done, not committed; waits for the owner's word to commit)
+### Increment A (done; committed as c6ed985)
 
 - **Done.** In `engine/kb/themeextract.py`, `_confidence` reads what the model wrote and `_draft` keeps the theme whatever it was: no theme is
   dropped for its confidence. Tests in `engine/tests/test_themeextract.py` (47 there, 158 over the three modules of the plan's
@@ -227,3 +227,39 @@ owner chose to go on to approval after round 1, so the review did not converge. 
   in all against 10).
 - **Not done.** B, C and D. No live call. No security review (none asked): a text from a model goes through a bounded regular expression and
   `textutil.clean` into a flag of at most 300 characters.
+
+### Increment B (done, not committed; waits for the owner's word to commit)
+
+- **Done.** In `engine/kb/themeextract.py`: each block of a piece is headed `<block n, length characters>` with the whole length of the block's
+  text in characters (a block shown cut, over 3,000 characters, still gives its whole length); the rules say how a span is measured (the lengths
+  of its blocks added up, plus 2 for each blank line between two blocks) and that it must be at most `theme.MAX_EXCERPT` characters, a number read
+  from the limit that `theme.anchor_of` checks and not copied, and that a theme with a longer span is thrown away; the old sentence about "about
+  6,000 characters" is gone; the prompt version of the `theme` job is `v2`. Tests in `engine/tests/test_themeextract.py` (49 there, 160 over the
+  three modules of the plan's verification) and the README. The form of the header is the plan's.
+- **The arithmetic is the check's.** A test builds a conversion with `convert.build` and shows that the sum the prompt tells the model to make
+  (lengths plus 2 for each blank line) equals `blocks[last].end - blocks[first].start`, and that `theme.anchor_of` accepts a span of exactly that
+  many characters and refuses one character fewer, for four spans. The reviewer read `theme._between` and `convert.build` and confirmed it.
+- **Tests first, seen failing.** 6 failed before the code (no length in the header, no rule, the version `v1`).
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themeextract engine.tests.test_theme
+  engine.tests.test_themecheck`: 160 tests OK. `wb run code-work check`: no problems. No live call.
+- **Deliberate breaks.** 55 of `themeextract.py`, of which 5 of this change, all caught and restored byte for byte (scratchpad
+  `breaks_themeextract.py`); one old break string was updated to the new header.
+- **What it costs, measured read-only on the library (no model, no network).** The longer headers make more pieces: the whole library goes from
+  559 to 597 pieces (7 percent more), the largest book from 24 to 27 (the limit is 150), and the six trial books from 33 to 36 (Soft Actor-Critic 3
+  to 4, Hamiltonian Monte Carlo 7 to 8, the networks paper 17 to 18).
+- **A risk the plan's form carries, found on the six books.** The PDFs break into very small blocks: Soft Actor-Critic has 336 blocks with a
+  median of 6 characters, Hamiltonian Monte Carlo 505 with a median of 9, the networks paper 813 with a median of 24 (the Wikipedia pages have medians
+  of 135 to 196). No block is over the limit alone (the largest is 3,471 characters), so every theme can be named. But a span of 6,000 characters
+  in a PDF can be dozens of blocks, and the rule asks the model to add up dozens of small numbers. The reviewer thinks the concern is real. The
+  alternative is a running offset in each header (for example `<block 12, characters 8400 to 9240>`), so that a span is one subtraction and the
+  blank-line rule goes. It changes the header the plan fixes, so it is not built. **For the owner:** ship B as planned and let the repeat
+  trial (Increment D) measure the drops for the size bound, PDFs apart from web pages; if the PDFs still overrun, the running offset is the next
+  change, as an amendment or a plan of its own. The other way is to amend the plan now and avoid a second live run.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Confirmed: the arithmetic is the check's; the length is in characters of
+  the whole text; the prompt holds nothing contradictory. Recorded, not applied: (2) `pieces` skips a block with no text, which would make the
+  model's sum miss it, but both parsers drop such blocks before `convert.build`, so it is dead code for real conversions; (4) a block shown cut
+  lets the model name a block for text it did not see, as before; (7) a line of the book that looks like a header (`<block 3, 5 characters>`) can sit
+  inside a block and mislead the model, bounded because code resolves the numbers and a wrong span is dropped, and the same class as the book's
+  text steering the model.
+- **Not done.** C and D. No live call. No security review (none asked): the book text is untrusted input to the prompt as before, and nothing from
+  a reply reaches a path, a command or an unchecked field.

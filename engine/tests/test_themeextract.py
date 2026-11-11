@@ -356,19 +356,55 @@ class PromptTest(ExtractCase):
         self.assertEqual(self.sections(prompt)[0], "1111111111111111")
         self.assertNotIn(f"<<<BOOK TEXT {held} BEGIN>>>", prompt)
 
-    def test_the_blocks_are_numbered_so_that_a_theme_can_name_them(self):
+    def headers(self, prompt):
+        """`[(number, length)]` of the block headers of a prompt, in order."""
+        return [(int(i), int(n)) for i, n in re.findall(r"^<block (\d+), (\d+) characters>$", prompt, re.M)]
+
+    def rules(self):
+        prompt = self.fake.calls[0]["prompt"]
+        return prompt[:prompt.index("<<<BOOK TITLE")]
+
+    def test_each_block_is_headed_with_its_number_and_its_length_so_that_a_theme_can_name_it(self):
         self.run_extract([values()])
         prompt = self.fake.calls[0]["prompt"]
-        for index in range(len(ITEMS)):
-            self.assertIn(f"<block {index}>\n", prompt)
-        self.assertLess(prompt.index("<block 1>"), prompt.index("<block 2>"))
+        want = [(b.index, len(b.text)) for b in self.conversion.blocks]
+        self.assertEqual(self.headers(prompt), want)
+        for index, length in want:
+            self.assertIn(f"<block {index}, {length} characters>\n", prompt)
+        self.assertLess(prompt.index("<block 1,"), prompt.index("<block 2,"))
 
-    def test_a_long_block_is_shown_cut_and_a_theme_may_still_name_it(self):
+    def test_a_long_block_is_shown_cut_and_its_header_still_says_its_real_length(self):
         long = "word " * 2000
         self.run_extract([values()], items=[heading("Intro"), para(long)])
         prompt = self.fake.calls[0]["prompt"]
+        real = len(self.conversion.blocks[1].text)
+        self.assertGreater(real, themeextract.MAX_SHOWN)
         self.assertLess(len(prompt), 15000)
         self.assertIn("[…]", prompt)
+        self.assertIn(f"<block 1, {real} characters>\n", prompt)
+
+    def test_the_rules_state_the_limit_on_a_span_and_how_it_is_measured(self):
+        self.run_extract([values()])
+        rules = self.rules()
+        self.assertIn(str(theme.MAX_EXCERPT), rules)
+        self.assertIn("plus 2 for each blank line", rules)
+        with unittest.mock.patch.object(theme, "MAX_EXCERPT", 1234):   # the number is the limit that the check uses, not a copy of it
+            self.run_extract([values()])
+        self.assertIn("1234", self.rules())
+        self.assertNotIn(str(6000), self.rules())
+
+    def test_the_arithmetic_of_the_prompt_is_the_size_that_the_code_checks(self):
+        conversion = convert.build(ITEMS)
+        self.run_extract([values()])
+        lengths = dict(self.headers(self.fake.calls[0]["prompt"]))
+        for first, last in ((1, 2), (1, 4), (2, 5), (0, 5)):
+            told = sum(lengths[i] for i in range(first, last + 1)) + 2 * (last - first)   # the lengths, and 2 for each blank line
+            self.assertEqual(told, conversion.blocks[last].end - conversion.blocks[first].start)
+            pointer = themeextract._pointer(conversion, first, last)
+            with unittest.mock.patch.object(theme, "MAX_EXCERPT", told):
+                theme.anchor_of(REF, conversion, pointer)            # a span of exactly that many characters is accepted
+            with unittest.mock.patch.object(theme, "MAX_EXCERPT", told - 1), self.assertRaises(KbError):
+                theme.anchor_of(REF, conversion, pointer)            # and one more character is not
 
     def test_pieces_end_at_blocks_and_each_is_one_call(self):
         items = [heading("Intro")] + [para(f"Paragraph {n} " + "alpha " * 400) for n in range(30)]
@@ -377,7 +413,7 @@ class PromptTest(ExtractCase):
         self.assertEqual((len(self.fake.calls), got["calls"]), (got["pieces"], got["pieces"]))
         seen = []
         for call in self.fake.calls:
-            seen += [int(n) for n in re.findall(r"^<block (\d+)>$", call["prompt"], re.M)]
+            seen += [int(n) for n in re.findall(r"^<block (\d+), [0-9]+ characters>$", call["prompt"], re.M)]
         self.assertEqual(seen, list(range(len(items))))   # every block once, in order, none split
 
     def test_a_theme_that_names_blocks_of_another_piece_is_dropped(self):
@@ -391,7 +427,7 @@ class PromptTest(ExtractCase):
 
     def test_the_job_asks_for_a_prompt_version_and_a_schema_that_agree_with_its_shape(self):
         job = themeextract.THEME_JOB
-        self.assertEqual((job.name, job.prompt_version, job.schema), ("theme", "v1", "theme.json"))
+        self.assertEqual((job.name, job.prompt_version, job.schema), ("theme", "v2", "theme.json"))
         self.assertEqual(set(job.shape), set(KEYS))
         item = {"type": "array", "items": {"type": "string"}}
         with open(os.path.join(models._project_root(), *models.SCHEMA_DIR, job.schema)) as f:

@@ -1094,8 +1094,11 @@ of an anchor, or a text too large to search, is a refusal and not a status), and
 `themeextract.make_for_version(store, cfg, book_id)` needs a card that can be read (themes are made after the card), a conversion, and
 a model for a new kind of work, `theme`, that you add to the `tasks` of your config (`"tasks": {…, "theme": "<name>"}`; it is optional
 for cards, and without it the extraction is refused before anything is sent). The converted text is read in pieces of at most 20,000
-bytes, each of whole blocks, every block headed by `<block n>` (a block of more than 3,000 characters is shown cut, and a theme may still
-name it). A piece goes to the model with the title of the book, as data in sections of their own between delimiters that hold a random
+bytes, each of whole blocks, every block headed by `<block n, length characters>` (a block of more than 3,000 characters is shown cut, its
+header still gives its whole length, and a theme may still name it). The rules tell the model how long a span may be: the lengths of its
+blocks added up plus 2 for each blank line between two blocks, at most 6,000 characters (the limit that `theme.anchor_of` checks, read from it),
+and that a theme with a longer span is thrown away. The prompt of the `theme` job has the version `v2` since this change (`v1` in the first
+trial, which dropped 16 of 118 themes for a span over the limit). A piece goes to the model with the title of the book, as data in sections of their own between delimiters that hold a random
 token no input holds, and the model answers with ten lists of the same length, one item for each theme (at most 8 asked): title, type,
 summary, the first and last block that state it, the five parts of a description in words of no field, and a confidence. The model names
 blocks, never quotes: code turns the numbers into a pointer and `theme.anchor_of` finds the text. A theme is dropped, with the piece, its
