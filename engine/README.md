@@ -1098,7 +1098,15 @@ bytes, each of whole blocks, every block headed by `<block n, length characters>
 header still gives its whole length, and a theme may still name it). The rules tell the model how long a span may be: the lengths of its
 blocks added up plus 2 for each blank line between two blocks, at most 6,000 characters (the limit that `theme.anchor_of` checks, read from it),
 and that a theme with a longer span is thrown away. The prompt of the `theme` job has the version `v2` since this change (`v1` in the first
-trial, which dropped 16 of 118 themes for a span over the limit). A piece goes to the model with the title of the book, as data in sections of their own between delimiters that hold a random
+trial, which dropped 16 of 118 themes for a span over the limit). Since the version `v3` the prompt also has a third data section,
+`WORDS TO AVOID`: the words of the book's vocabulary (`themecheck.avoid_words`: the words of the title, then of the card's topics, then the
+book's own frequent and rare words, the one used most first; none that half the books hold; at most 80), or the word `none`, and the rules say that
+the five parts of a description must not use any word of the section or any other word that only people of the book's field use, with a worked
+example of a text from a field the library does not hold (beekeeping) and its five parts in general words, and that the answer is about the book's text and not the
+example. The words of the example's own parts are never in the list, so the prompt does not tell the model to avoid a word its example uses.
+`make_and_check_for_version` gives the words; `make_for_version` alone gives none. On the six books of the first trial the list of 80 would have
+held 296 of the 354 words that the first trial flagged (all of them for four books, 78 to 79 percent for the two books whose vocabulary is
+larger than 80 words). A piece goes to the model with the title of the book, as data in sections of their own between delimiters that hold a random
 token no input holds, and the model answers with ten lists of the same length, one item for each theme (at most 8 asked): title, type,
 summary, the first and last block that state it, the five parts of a description in words of no field, and a confidence. The model names
 blocks, never quotes: code turns the numbers into a pointer and `theme.anchor_of` finds the text. A theme is dropped, with the piece, its

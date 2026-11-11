@@ -17,8 +17,6 @@ check gives no valid answer (the answer is refused, asked once more with the rea
 The excerpt and the parts go to the model as data in sections of their own, between delimiters that hold a random token no input holds.
 Nothing here files anything."""
 import copy
-import re
-import unicodedata
 from collections import Counter
 
 from . import KbError, cardmake, convert, models, textutil, theme, themeextract
@@ -26,14 +24,13 @@ from . import KbError, cardmake, convert, models, textutil, theme, themeextract
 FREQUENT_MIN = 5       # occurrences in the book's own text for a word to count as one of its words
 RARE_PERCENT = 15      # the most percent of the books of the library that may hold such a word
 COMMON_SHARE = 2       # a word held by at least one book in this many (half) is common, and is never in a vocabulary
+AVOID_LIMIT = 80       # the most words of a book's vocabulary that the extraction is told to avoid
+AVOID_WORD_MAX = 40    # the longest word it is told to avoid: a run of letters of any length in a book cannot make the prompt too large
 VERDICTS = cardmake.VERDICTS
-_WORD = re.compile(r"[^\W\d_]{4,}")
 THEME_CHECK_SHAPE = {"verdicts": {"type": "strings", "min_items": 1, "max_items": len(theme.PARTS), "max": 16}}
 
 
-def words(text):
-    """The words of a text, in order: runs of four or more letters, after the compatibility forms are folded and the case removed."""
-    return _WORD.findall(unicodedata.normalize("NFKC", text).casefold())
+words = textutil.words   # runs of four or more letters, folded to plain lower case, not stemmed
 
 
 def frequencies(texts):
@@ -64,15 +61,38 @@ def library_frequencies(store):
     return df, size
 
 
+def _common(df, size):
+    """The words held by at least half of the `size` books: never in a vocabulary and never to be avoided."""
+    return {w for w, n in df.items() if n * COMMON_SHARE >= size}
+
+
+def _own_words(text, df, size):
+    """`[(word, uses)]` for the words of a book that occur at least FREQUENT_MIN times in its text and that at most RARE_PERCENT percent of the
+    `size` books hold (`df` counts the book itself), the one used most first, and alphabetical among equals."""
+    own = Counter(words(text))
+    return sorted(((w, n) for w, n in own.items() if n >= FREQUENT_MIN and df.get(w, 0) * 100 <= RARE_PERCENT * size),
+                  key=lambda pair: (-pair[1], pair[0]))
+
+
 def field_vocabulary(text, df, size, title, topics):
     """The vocabulary of a book's field: the set of words of its title, of its topics, and of its own text that occur at least
     FREQUENT_MIN times in it and are held by at most RARE_PERCENT percent of the `size` books (`df` counts the book itself), less the
     common words, which at least half of the books hold."""
-    common = {w for w, n in df.items() if n * COMMON_SHARE >= size}
-    own = Counter(words(text))
-    frequent = {w for w, n in own.items() if n >= FREQUENT_MIN and df.get(w, 0) * 100 <= RARE_PERCENT * size}
     named = set(words(title)) | {w for topic in topics for w in words(topic)}
-    return (named | frequent) - common
+    return (named | {w for w, _ in _own_words(text, df, size)}) - _common(df, size)
+
+
+def avoid_words(text, df, size, title, topics, limit=AVOID_LIMIT):
+    """The words of a book's vocabulary as a list for a model to avoid, strongest first: the words of the title, then those of the topics,
+    then the book's own words (`_own_words`: the one used most first); each once, none of them common or of more than AVOID_WORD_MAX
+    letters, at most `limit`. With `limit` unbounded, they are the words of `field_vocabulary` of that length or less."""
+    common = _common(df, size)
+    out, seen = [], set()
+    for word in [w for part in [title, *topics] for w in words(part)] + [w for w, _ in _own_words(text, df, size)]:
+        if word not in common and word not in seen and len(word) <= AVOID_WORD_MAX:
+            seen.add(word)
+            out.append(word)
+    return out[:limit]
 
 
 def field_flag(neutral, vocabulary):
@@ -170,10 +190,13 @@ def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=No
     version_id, current, ref, conversion = themeextract.prepare(store, book_id, version_id)
     df, size = frequencies if frequencies is not None else library_frequencies(store)
     model = current.get("model") or {}
-    vocabulary = field_vocabulary(conversion.text, df, size, current["title"], list(model.get("topics", [])) + list(model.get("adjacent_topics", [])))
+    topics = list(model.get("topics", [])) + list(model.get("adjacent_topics", []))
+    vocabulary = field_vocabulary(conversion.text, df, size, current["title"], topics)
+    avoid = avoid_words(conversion.text, df, size, current["title"], topics)
     keep = lambda refusal: themeextract._keep(store, refusal, book_id, version_id)
     try:
-        made = themeextract.extract(cfg, book_id, version_id, ref, conversion, current["title"], launcher=launcher, root=root, on_refused=keep)
+        made = themeextract.extract(cfg, book_id, version_id, ref, conversion, current["title"], launcher=launcher, root=root, on_refused=keep,
+                                    avoid=avoid)
         checked = check_themes(cfg, ref, conversion, made["themes"], vocabulary, launcher=launcher, root=root, on_refused=keep)
     except models.AnswerRefused as refusal:
         kept, note = themeextract._keep(store, refusal, book_id, version_id)

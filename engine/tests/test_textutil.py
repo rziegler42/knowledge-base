@@ -207,3 +207,14 @@ class PiecesTest(unittest.TestCase):
         started = time.monotonic()
         textutil.pieces("x" * 5_000_000, 2000)
         self.assertLess(time.monotonic() - started, 5)
+
+
+class WordsTest(unittest.TestCase):
+    def test_a_word_is_a_run_of_letters_of_four_or_more_in_its_plain_lower_case_form(self):
+        self.assertEqual(textutil.words("The Temperature of an ANNEALING schedule: 3.5 x_y \u00e9tat \ufb01nite \uff21\uff2e\uff2e\uff25\uff21\uff2c 123abc"),
+                         ["temperature", "annealing", "schedule", "\u00e9tat", "finite", "anneal"])
+
+    def test_nothing_is_stemmed_and_a_text_with_no_words_has_none(self):
+        self.assertEqual(textutil.words("annealing annealings anneal"), ["annealing", "annealings", "anneal"])
+        self.assertEqual(textutil.words("a b c 12 34 -- ..."), [])
+        self.assertEqual(textutil.words(""), [])

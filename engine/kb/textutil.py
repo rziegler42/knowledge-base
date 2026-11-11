@@ -3,6 +3,7 @@
 Whitespace is collapsed to single spaces; control, direction-mark, zero-width, surrogate, private-use and unassigned
 characters are removed; and the result is cut to a length. Nothing is interpreted, so a stored reason, title or
 caveat cannot carry escape sequences to a terminal or text that reorders what a reader sees."""
+import re
 import unicodedata
 
 _DROPPED = ("Cc", "Cf", "Cs", "Co", "Cn")
@@ -23,6 +24,16 @@ def clean(text, limit, tail=False):
     kept = " ".join("".join(c for c in collapsed if not _hidden(c)).split())  # a hidden character between spaces leaves one
     # cut, and no space left at the cut: what comes back is its own cleaned form (code compares a stored string with it)
     return kept[-limit:].lstrip() if tail else kept[:limit].rstrip()
+
+
+_WORD = re.compile(r"[^\W\d_]{4,}")
+
+
+def words(text):
+    """The words of a text, in order: runs of four or more letters, after the compatibility forms are folded and the case removed. Nothing
+    is stemmed. The same words are used to tell a description from the words of a book's field (`themecheck`) and to tell a model which
+    words to avoid (`themeextract`)."""
+    return _WORD.findall(unicodedata.normalize("NFKC", text).casefold())
 
 
 def _letters(text):

@@ -228,7 +228,7 @@ owner chose to go on to approval after round 1, so the review did not converge. 
 - **Not done.** B, C and D. No live call. No security review (none asked): a text from a model goes through a bounded regular expression and
   `textutil.clean` into a flag of at most 300 characters.
 
-### Increment B (done, not committed; waits for the owner's word to commit)
+### Increment B (done; committed as 4914e53)
 
 - **Done.** In `engine/kb/themeextract.py`: each block of a piece is headed `<block n, length characters>` with the whole length of the block's
   text in characters (a block shown cut, over 3,000 characters, still gives its whole length); the rules say how a span is measured (the lengths
@@ -263,3 +263,44 @@ owner chose to go on to approval after round 1, so the review did not converge. 
   text steering the model.
 - **Not done.** C and D. No live call. No security review (none asked): the book text is untrusted input to the prompt as before, and nothing from
   a reply reaches a path, a command or an unchecked field.
+
+### Increment C (done, not committed; waits for the owner's word to commit)
+
+- **Done.** `engine/kb/themecheck.py`: `avoid_words(text, df, size, title, topics, limit)` returns the words of the book's vocabulary as a list,
+  strongest first (the words of the title, then of the card's topics, then the book's own frequent and rare words, the one used most first
+  and alphabetical among equals), each once, none of them common, none of more than 40 letters, at most 80; with the limit lifted they are the
+  words of `field_vocabulary` of that length or less (the two now share one helper for the "common" rule and one for the book's own words);
+  `make_and_check_for_version` computes the list and gives it to the extraction. `engine/kb/themeextract.py`: the prompt has a third data section,
+  `WORDS TO AVOID` (the words, or `none`), between the title and the text; a rule that the five parts must not use any word of the section or any
+  other word that only people of the book's field use; a fixed worked example (a beekeeping text and its five parts in general words, named
+  as the answer's keys), with the line that the answer is about the book's text and not the example; the words of the example's parts are left
+  out of the list whatever the book is; `extract(..., avoid=())` gives every piece the same words; `make_for_version` alone gives none; the prompt
+  version is `v3`. `engine/kb/textutil.py`: `words`, moved from `themecheck` with its regular expression and its fold unchanged (checked against
+  the committed version). Tests in `test_themeextract.py`, `test_themecheck.py` and `test_textutil.py` (206 over the four modules of the
+  verification), and the README.
+- **Beyond the plan's list, decided here.** (1) A word of more than 40 letters is not put in the list (`AVOID_WORD_MAX`): a run of letters of
+  any length in a book, used five times, could otherwise make the prompt too large. (2) The tokenizer moved to `textutil`, because the prompt and the
+  check both use it and `themecheck` imports `themeextract`; `themecheck.words` is the same function.
+- **Tests first, seen failing.** 18 failed before the code (nothing existed), and 1 more for the 40-letter cap.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_textutil engine.tests.test_themeextract
+  engine.tests.test_theme engine.tests.test_themecheck`: 206 tests OK. `wb run code-work check`: no problems. No live call.
+- **Deliberate breaks.** 107 across three scripts (4 of `textutil.py`, 40 of `themecheck.py`, 63 of `themeextract.py`), all caught and restored byte
+  for byte. Several were first missed or stale and led to changes: the "half the books" rule was written twice and is now one helper; a test of
+  the order of the book's own words passed when the order was wrong (its test word sorted first alphabetically anyway) and was changed.
+- **What the list would have covered, read-only on the first trial's report and the library (no model, no network).** Of the 354 words that the first
+  trial flagged in the six books, the list of 80 holds 296 (84 percent): all of them for four books, 78 and 79 percent for the Hamiltonian Monte
+  Carlo paper (vocabulary of 158 words) and the networks paper (303 words). So a model that obeyed the list perfectly would still leave about a
+  fifth of the first trial's flagged words in the two large books; the flag, which uses the whole vocabulary, would still find them.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Applied: the example's labels are the keys of the answer (`problems:`,
+  `methods:`), because a model could copy the singular names; the docstring says the bounds on the words (letters only, at most 40 letters, at most
+  80) are the caller's, and that the token of `cardmake._prompt` is what keeps a word from closing a section. Recorded, not applied: the words
+  come from the book's text, title and card, so a hostile book can choose which 80 single words reach the section (the same class as the book's
+  text steering the model, accepted in the plan's Risks); a flag still fires on a word of the example's parts (barrier, sizes, members) that a book's
+  vocabulary happens to hold, though the model is not told to avoid it; the rule does not say what to do when no general word exists.
+- **For Increment D, from the review (measures to add to the script, outside the repository).** (a) Count the parts that are `none` (the model
+  may dodge the rule by writing `none`, and `none` is no text, no mark and no flag), beside the parts stated and inferred, before and after.
+  (b) Count flags that are only words of the example's parts apart from the others, so that they are not read as disobedience. (c) The check marks a
+  part `inferred` when the excerpt does not support it, so if the rule makes parts vaguer the share stated may fall: that is a trade-off to read, not
+  a fault.
+- **Not done.** D. No live call. No security review (none asked): the words are letters only, bounded in number and length by the caller, given as
+  data between delimiters that hold a random token no input holds.

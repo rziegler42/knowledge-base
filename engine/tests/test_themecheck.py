@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import re
 import unittest
 import unittest.mock
 
@@ -116,6 +117,55 @@ class VocabularyTest(unittest.TestCase):
     def test_a_library_of_one_has_no_vocabulary_because_every_word_is_common(self):
         df, size = themecheck.frequencies([self.texts[0]])
         self.assertEqual(themecheck.field_vocabulary(self.texts[0], df, size, "annealing", ["energy"]), set())
+
+
+class AvoidWordsTest(unittest.TestCase):
+    def setUp(self):
+        self.texts = library()
+        self.df, self.size = themecheck.frequencies(self.texts)
+
+    def avoid(self, **over):
+        args = dict(text=self.texts[0], df=self.df, size=self.size, title="Simulated Annealing and Cooling",
+                    topics=["optimisation", "metaheuristics", "random search"])
+        args.update(over)
+        return themecheck.avoid_words(**args)
+
+    def test_the_title_first_then_the_topics_then_the_books_own_words_most_often_used_first(self):
+        # as for the vocabulary: search and system are common; energy is held by too many books; stray and unique are used 5 times each
+        self.assertEqual(self.avoid(), ["simulated", "annealing", "cooling", "optimisation", "metaheuristics", "random", "stray", "unique"])
+
+    def test_they_are_the_words_of_the_vocabulary_and_no_others(self):
+        args = dict(text=self.texts[0], df=self.df, size=self.size, title="Simulated Annealing and Cooling",
+                    topics=["optimisation", "metaheuristics", "random search"])
+        self.assertEqual(set(themecheck.avoid_words(limit=10 ** 6, **args)), themecheck.field_vocabulary(**args))
+
+    def test_a_word_is_given_once_and_a_common_word_never(self):
+        got = self.avoid(title="annealing annealing system filler", topics=["annealing", "energy"])
+        self.assertEqual(got.count("annealing"), 1)
+        for common in ("system", "filler", "search"):
+            self.assertNotIn(common, got)
+
+    def test_a_word_of_more_than_forty_letters_is_not_one_to_avoid(self):
+        long_ok, long_bad = "q" * 40, "q" * 41
+        text = " ".join([long_ok] * 6 + [long_bad] * 6 + ["z" * 5000] * 6 + ["shortword"] * 6)
+        df, size = themecheck.frequencies([text] + ["filler"] * 19)
+        got = themecheck.avoid_words(text, df, size, "", [])
+        self.assertEqual(sorted(got), sorted([long_ok, "shortword"]))   # a run of letters of any length cannot make a prompt too large
+        self.assertEqual(themecheck.AVOID_WORD_MAX, 40)
+
+    def test_at_most_the_limit_and_the_strongest_first(self):
+        self.assertEqual(self.avoid(limit=3), ["simulated", "annealing", "cooling"])
+        self.assertEqual(self.avoid(limit=0), [])
+        self.assertEqual(themecheck.AVOID_LIMIT, 80)
+
+    def test_the_limit_defaults_to_eighty_and_the_words_used_most_come_first_among_the_books_own(self):
+        own = [f"qq{a}{b}zz" for a in "abcdefghij" for b in "abcdefghij"]   # a hundred words, each used 6 times
+        text = " ".join(w for w in own for _ in range(6)) + " " + " ".join(["zzfrequent"] * 9)
+        df, size = themecheck.frequencies([text] + ["filler"] * 19)
+        got = themecheck.avoid_words(text, df, size, "", [])
+        self.assertEqual(len(got), 80)
+        self.assertEqual(got[0], "zzfrequent")   # nine uses against six, though it comes last alphabetically
+        self.assertEqual(got[1:4], own[:3])         # the rest in alphabetical order
 
 
 class FlagTest(unittest.TestCase):
@@ -365,6 +415,15 @@ class VersionTest(VersionCase):
         self.assertEqual(got["generation"]["themes"][0]["flags"], [])
         self.assertGreater(got["vocabulary_words"], 0)   # "stopping" is a topic of the card and not a word of the text
         self.assertEqual(themecheck.library_frequencies(self.store)[1], 1)
+
+    def test_the_words_to_avoid_that_the_extraction_is_given_are_those_of_the_vocabulary_in_their_order(self):
+        book, version = self.converted_book()
+        self.make(book, version, [values(row()), verdicts("supports", "supports", "supports", "supports")],
+                  frequencies=({"annealing": 1, "stopping": 1, "search": 1}, 30))
+        prompt = self.fake.calls[0]["prompt"]
+        token = re.search(r"<<<BOOK TITLE ([0-9a-f]+) BEGIN>>>", prompt).group(1)
+        section = re.search(r"<<<WORDS TO AVOID " + token + r" BEGIN>>>\n(.*?)\n<<<WORDS TO AVOID " + token + " END>>>", prompt, re.S).group(1)
+        self.assertEqual(section, "paper annealing stopping bandits search")   # the title, the topics and then the adjacent topics of the card
 
     def test_the_vocabulary_comes_from_the_title_the_topics_of_the_card_and_the_text(self):
         book, version = self.converted_book()
