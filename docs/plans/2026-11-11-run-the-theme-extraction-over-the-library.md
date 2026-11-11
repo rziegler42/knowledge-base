@@ -241,3 +241,34 @@ Reviewer: Codex through the review engine (plan-c1d81cc89b004688), 3 rounds of 3
   book, the same trust as the card journal.
 - **Not done.** Increments C to E. The README and the spec say nothing of the run yet (Increment D). No security review (none asked; no new input reaches a privileged use in a plan: it reads the library and
   writes one record by the card queue's safe functions).
+
+### Increment C (done; committed with the trailer for C)
+
+- **Done.** `engine/kb/themerun.py`: `run(store, cfg, run_id)` works through the books that wait. For each it checks that the book is still active with the same current version and that the conversion in use is the
+  one recorded at the plan (otherwise the book is `dropped`, with the reason `no_longer_active` or `conversion_changed`), then makes and checks its themes with `themecheck.make_and_check_for_version` (the library
+  counted once for the whole run), builds what the record will say and checks it, files the generation with `theme.file`, and saves the record after every book. A book whose answer is refused (`ThemeRefused`), whose
+  step fails (`KbError`) or whose step raises an unexpected error fails with a fixed reason (`refused`, `failed`, or `an unexpected error (<kind>)`) and no message; it stays `waiting` after its first failure and is `failed`
+  after its second; after the last book the run goes round once more (`RETRIES` = 1). Three books in a row that fail for a reason that is not a refused answer (`failed` or unexpected) stop the run; a success or a refused answer ends
+  the row; a dropped book neither ends nor adds to it; the row goes on from the first pass into the second. The books not reached stay `waiting` and the run can be run again. The lock is `cardstate.lock`, one lock for the
+  card queue and the theme run. The models and prompt versions of the config must be those of the plan, checked under the lock before any call. `status(store, run_id)` shows where each book has got to. Both return the counts, the
+  sums of the stats of the books that are done (`totals`: themes, drops by kind, flags by kind, parts stated and inferred, pieces, calls, tokens, seconds) and the items; `run` adds the wall time of the call.
+- **What changed from B.** The record's items have two more keys: `conversion` (the reference of the conversion in use at the plan, so that a changed conversion is seen) and `stats` (a fixed set of counts); the `reason` of an item
+  is now a fixed kind or the name of an error's kind and is checked so, which closes the review of B (no title, reply or message can be kept in it). The record's form was changed in place: no record of the earlier form was ever
+  written to the real index (B's run on the real library had the write switched off).
+- **Tests first.** The tests of the run were written before the code (the first run failed because it did not exist); when run against it three were wrong tests of mine (the wording of the stop message, a script that did not give the sequence
+  I meant) and none showed a defect in the code.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themerun engine.tests.test_themeextract engine.tests.test_theme engine.tests.test_themecheck engine.tests.test_textutil engine.tests.test_cardqueue
+  engine.tests.test_cardstate`: all OK (71 tests of `themerun`; the card queue's and the card state's are in the run because the lock is theirs). `wb run code-work check`: no problems. No live call. The plan of the real library, read-only, is
+  unchanged (175 books, 622 pieces).
+- **Deliberate breaks.** 105 of `themerun.py` over B and C: 104 caught, the file restored byte for byte; the one not caught is equivalent (the 500-character limit on a reason, which the clean-text comparison beside it also enforces). Breaks
+  that were first missed led to tests: three unexpected errors in a row stop the run; a theme with a flag so that the stats can be seen to count it; the flags in the totals. Four breaks went stale when the models check moved under the lock and
+  were updated.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Applied: (F2) what the record will say (`made`, `stats`) is built and checked before the generation is filed, so an error there cannot leave a book filed and marked failed
+  (which would have filed it again on every rerun), with a test; (F3) tests that the count goes on from the first pass into the second and that a dropped book neither ends nor adds to it; (F1) a test of the accepted window below; (F6) the
+  models check is made on the record read under the lock; (F7) `totals` and the wall time in the report; (F8) the "plan again" message is asserted for every kind of change. Recorded, not applied:
+  (F1) **accepted window:** a book whose generation was filed and whose record was not yet saved when the program is killed is made again, as a new generation (at most one book; the newest valid generation is the one read), so the plan's sentence
+  "repeats no book that was filed" holds for every book whose record was saved; (F4) any `KbError` counts toward the stop, so three books in a row with, for example, a full disk or an unreadable conversion stop the run as a server that is down would: this is
+  the plan's wording ("a reason that is not a refused answer"); (F5) a stop spends a retry: a book that failed once before the stop gets one more try on the rerun, and if it fails again it is `failed` and needs a new plan (the README of Increment D must say
+  so); (F7) a failed or dropped book has no stats, so its time and tokens are not in the totals, and `time.monotonic` does not advance while a laptop sleeps (the wall time of the call is reported beside it); refused answers are not counted in the
+  stats (they are kept aside as files in the `refused` folder, of which at most 200 are kept; the report of Increment E counts them from there); the atomicity of `store.file_payload` was not read by the reviewer.
+- **Not done.** Increments D and E. No security review (none asked; a model's reply reaches the library only through the checks of the earlier plan, and the record holds no text of a book or of a reply).

@@ -1,8 +1,8 @@
-import copy
 import json
 import os
 import unittest
 import unittest.mock
+from collections import Counter
 
 from engine.tests.test_themecheck import config
 from engine.tests.test_themeextract import Fake, VersionCase, row, values
@@ -23,7 +23,7 @@ def check(**over):
 def item(book, version, status="done", generation=1, made="both", **over):
     made = {"theme": extraction(), "theme-check": check()} if made == "both" else made
     base = {"book_id": book, "version_id": version, "pieces": 1, "status": status, "attempts": 0, "generation": generation, "reason": "",
-            "made": made}
+            "made": made, "conversion": None, "stats": None}
     base.update(over)
     return base
 
@@ -351,7 +351,8 @@ class RecordTest(PlanCase):
         rec = themerun.read_record(self.index_root(), got["run"])
         self.assertEqual((rec["run"], rec["kind"], rec["again"], rec["extraction"], rec["check"]), (got["run"], "themes", False, extraction(), check()))
         self.assertEqual(rec["items"], [{"book_id": book, "version_id": version, "pieces": got["pieces"], "status": "waiting", "attempts": 0,
-                                         "generation": None, "reason": "", "made": None}])
+                                         "generation": None, "reason": "", "made": None,
+                                         "conversion": themeextract.prepare(self.store, book)[2], "stats": None}])
         raw = open(os.path.join(self.index_root(), cardstate.FOLDER, got["run"], themerun.RECORD)).read()
         for text in ("cools a system", "A paper on annealing", "Annealing", "search"):
             self.assertNotIn(text, raw)
@@ -421,6 +422,394 @@ class RecordTest(PlanCase):
         with self.assertRaises(KbError):
             themerun.write_record(self.index_root(), twice)
         self.assertIsNone(themerun.read_record(self.index_root(), RUN_OLD))
+
+
+def verdicts(*words):
+    return {"verdicts": list(words)}
+
+
+GOOD = [values(row()), verdicts("supports", "supports", "supports", "supports")]   # a book whose one theme is made and checked: two calls
+BAD = {**values(row()), "types": []}                                               # an answer whose lists are not of one length: refused
+REFUSED = [BAD, BAD]                                                              # refused, asked again, refused again: the book fails
+
+
+def scripted(*script):
+    """Stands in for `models.run_job`: a script of replies, exceptions (including an interrupt, which `Fake` would return as a reply), and the calls made."""
+    fake = Fake(*script)
+
+    def call(*a, **k):
+        if fake.script and isinstance(fake.script[0], BaseException) and not isinstance(fake.script[0], Exception):
+            raise fake.script.pop(0)
+        return fake(*a, **k)
+    call.calls, call.script = fake.calls, fake.script
+    return call
+
+
+class RunCase(PlanCase):
+    def books(self, n):
+        for _ in range(n):
+            self.converted_book()
+
+    def planned(self, n):
+        self.books(n)
+        got = self.plan()
+        return got["run"], [b["book_id"] for b in got["to_make"]]
+
+    def run_with(self, run, script, cfg=None):
+        fake = scripted(*script)
+        with unittest.mock.patch.object(models, "run_job", fake):
+            try:
+                return themerun.run(self.store, cfg or config(), run)
+            finally:
+                self.fake = fake
+
+    def items(self, run):
+        return {i["book_id"]: i for i in themerun.read_record(self.index_root(), run)["items"]}
+
+    def raw(self, run):
+        return open(os.path.join(self.index_root(), cardstate.FOLDER, run, themerun.RECORD)).read()
+
+
+class RunTest(RunCase):
+    def test_a_run_makes_the_books_files_their_generations_and_records_what_was_done(self):
+        run, ids = self.planned(2)
+        report = self.run_with(run, GOOD + GOOD)
+        self.assertEqual((report["stopped"], report["passes"], report["counts"]), (None, 1, {"waiting": 0, "done": 2, "failed": 0, "dropped": 0}))
+        self.assertEqual(len(self.fake.calls), 4)
+        for book in ids:
+            item = self.items(run)[book]
+            version = self.store.read_book(book)["current_version"]
+            number, generation = theme.read(self.store, book, version)
+            self.assertEqual((item["status"], item["generation"], item["attempts"], item["reason"]), ("done", number, 0, ""))
+            self.assertEqual(item["made"], {"theme": {"model": "m1:latest", "prompt_version": "v1"}, "theme-check": {"model": "m1:latest", "prompt_version": "v1"}})
+            themes = generation["themes"]
+            marks = [p["mark"] for t in themes for p in t["neutral"].values() if p["mark"]]
+            stats = item["stats"]
+            self.assertEqual((stats["themes"], stats["pieces"], stats["calls"], stats["stated"], stats["inferred"]),
+                             (len(themes), 1, 2, marks.count("stated"), marks.count("inferred")))
+            self.assertEqual(stats["input_tokens"], 2 * RECORD_TOKENS[0])
+            self.assertEqual(stats["output_tokens"], 2 * RECORD_TOKENS[1])
+            self.assertEqual(stats["flags"], dict(Counter(f["kind"] for t in themes for f in t["flags"])))
+            self.assertEqual(stats["dropped"], {})
+        self.assertEqual([i["book_id"] for i in report["items"]], ids)
+
+    def test_a_refused_answer_fails_that_book_and_the_others_go_on_and_the_failed_book_is_tried_once_more_after_the_last(self):
+        run, ids = self.planned(2)
+        report = self.run_with(run, REFUSED + GOOD + GOOD)             # the first book is refused, the second is made, then the first is made
+        self.assertEqual((report["counts"]["done"], report["passes"]), (2, 2))
+        first = self.items(run)[ids[0]]
+        self.assertEqual((first["status"], first["attempts"], first["reason"]), ("done", 1, ""))
+        self.assertEqual(self.items(run)[ids[1]]["attempts"], 0)
+        refused = os.path.join(self.index_root(), "refused")
+        self.assertGreaterEqual(len(os.listdir(refused)), 1)              # the answers were kept aside for the owner
+
+    def test_a_book_refused_in_both_passes_is_failed_with_the_kind_and_the_run_does_not_stop(self):
+        run, ids = self.planned(2)
+        report = self.run_with(run, REFUSED + GOOD + REFUSED)
+        self.assertEqual((report["counts"], report["stopped"]), ({"waiting": 0, "done": 1, "failed": 1, "dropped": 0}, None))
+        failed = self.items(run)[ids[0]]
+        self.assertEqual((failed["status"], failed["attempts"], failed["reason"], failed["generation"], failed["stats"]), ("failed", 2, "refused", None, None))
+        self.assertEqual(theme.generations(self.store, ids[0], self.store.read_book(ids[0])["current_version"]), [])
+        again = self.run_with(run, [])                                     # failed books are not tried again by running again: plan again for them
+        self.assertEqual((again["counts"]["failed"], len(self.fake.calls)), (1, 0))
+
+    def test_a_failed_call_fails_that_book_with_a_fixed_reason_and_the_message_is_not_kept(self):
+        run, ids = self.planned(2)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, [KbError("the server said: secret-title-xyz"), *GOOD])
+        self.assertEqual(report["counts"], {"waiting": 0, "done": 1, "failed": 1, "dropped": 0})
+        self.assertEqual(self.items(run)[ids[0]]["reason"], "failed")
+        self.assertNotIn("secret-title-xyz", self.raw(run))
+        self.assertNotIn("secret-title-xyz", json.dumps(report))
+
+    def test_an_unexpected_error_fails_that_book_and_shows_its_kind_only(self):
+        run, ids = self.planned(2)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, [ValueError("secret-title-xyz"), *GOOD])
+        self.assertEqual(self.items(run)[ids[0]]["reason"], "an unexpected error (ValueError)")
+        self.assertEqual(report["counts"]["done"], 1)
+        self.assertNotIn("secret-title-xyz", self.raw(run) + json.dumps(report))
+
+    def test_three_books_in_a_row_that_fail_for_a_reason_that_is_not_a_refused_answer_stop_the_run(self):
+        run, ids = self.planned(4)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, [KbError("x"), KbError("x"), KbError("x"), *GOOD])
+        self.assertEqual(len(self.fake.calls), 3)                          # the fourth book was not tried
+        self.assertIn("3 books in a row", report["stopped"])
+        self.assertEqual(report["counts"], {"waiting": 1, "done": 0, "failed": 3, "dropped": 0})
+        self.assertEqual(self.items(run)[ids[3]]["status"], "waiting")
+
+    def test_three_unexpected_errors_in_a_row_stop_the_run_too(self):
+        run, ids = self.planned(4)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, [ValueError("x"), TypeError("x"), ValueError("x"), *GOOD])
+        self.assertEqual(len(self.fake.calls), 3)
+        self.assertIn("3 books in a row", report["stopped"])
+        self.assertEqual([self.items(run)[b]["reason"] for b in ids[:3]],
+                         ["an unexpected error (ValueError)", "an unexpected error (TypeError)", "an unexpected error (ValueError)"])
+
+    def test_the_flags_of_the_themes_are_counted_in_the_stats(self):
+        run, ids = self.planned(1)
+        with unittest.mock.patch.object(themecheck, "library_frequencies", return_value=({"annealing": 1, "search": 1}, 30)):
+            report = self.run_with(run, [values(row(problem="annealing of a search space")), verdicts("supports", "supports", "supports", "supports")])
+        generation = theme.read(self.store, ids[0], self.store.read_book(ids[0])["current_version"])[1]
+        flags = dict(Counter(f["kind"] for t in generation["themes"] for f in t["flags"]))
+        self.assertEqual(flags.get("field_words"), 1)                       # the theme is flagged, so the stats have something to count
+        self.assertEqual(self.items(run)[ids[0]]["stats"]["flags"], flags)
+        self.assertEqual(report["totals"]["flags"], flags)
+
+    def test_the_stop_waits_for_the_books_to_be_tried_again_when_they_may_be(self):
+        run, ids = self.planned(4)
+        report = self.run_with(run, [KbError("x"), KbError("x"), KbError("x"), *GOOD])
+        self.assertIn("3 books in a row", report["stopped"])
+        self.assertEqual(report["counts"], {"waiting": 4, "done": 0, "failed": 0, "dropped": 0})   # all four still wait: the run can be run again
+        self.assertEqual([self.items(run)[b]["attempts"] for b in ids], [1, 1, 1, 0])
+        resumed = self.run_with(run, GOOD * 4)
+        self.assertEqual((resumed["stopped"], resumed["counts"]["done"]), (None, 4))
+
+    def test_a_success_or_a_refused_answer_between_failures_means_the_failures_are_not_in_a_row(self):
+        run, ids = self.planned(8)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            # two failures, a success; two failures, a refused answer; a failure, a success: never three in a row
+            report = self.run_with(run, [KbError("x"), KbError("x"), *GOOD, KbError("x"), KbError("x"), *REFUSED, KbError("x"), *GOOD])
+        self.assertIsNone(report["stopped"])
+        self.assertEqual(report["counts"], {"waiting": 0, "done": 2, "failed": 6, "dropped": 0})
+
+    def test_three_refused_books_do_not_stop_the_run(self):
+        run, ids = self.planned(3)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, REFUSED * 3)
+        self.assertEqual((report["stopped"], report["counts"]["failed"]), (None, 3))
+        self.assertEqual({self.items(run)[b]["reason"] for b in ids}, {"refused"})
+
+    def test_a_run_that_is_stopped_and_run_again_repeats_no_finished_book(self):
+        run, ids = self.planned(3)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_with(run, GOOD + GOOD + [KeyboardInterrupt()])
+        self.assertEqual(len(self.fake.calls), 4)
+        self.assertEqual([self.items(run)[b]["status"] for b in ids], ["done", "done", "waiting"])
+        report = self.run_with(run, GOOD)
+        self.assertEqual(len(self.fake.calls), 2)                          # only the book that had not been made
+        self.assertEqual(report["counts"]["done"], 3)
+        self.assertEqual([theme.generations(self.store, b, self.store.read_book(b)["current_version"]) for b in ids], [[1], [1], [1]])
+
+    def test_a_run_killed_after_a_book_is_filed_and_before_it_is_recorded_makes_that_book_again_as_a_new_generation(self):
+        run, ids = self.planned(2)
+        real = theme.file
+
+        def file_then_die(store, generation):
+            real(store, generation)
+            raise KeyboardInterrupt()
+        with unittest.mock.patch.object(theme, "file", file_then_die), self.assertRaises(KeyboardInterrupt):
+            self.run_with(run, GOOD)
+        version = self.store.read_book(ids[0])["current_version"]
+        self.assertEqual((theme.generations(self.store, ids[0], version), self.items(run)[ids[0]]["status"]), ([1], "waiting"))   # filed, not recorded
+        report = self.run_with(run, GOOD + GOOD)
+        self.assertEqual(report["counts"]["done"], 2)
+        self.assertEqual(theme.generations(self.store, ids[0], version), [1, 2])      # made again: the accepted window, one book at most
+        self.assertEqual(self.items(run)[ids[0]]["generation"], 2)
+
+    def test_what_the_record_will_say_is_checked_before_a_book_is_filed(self):
+        run, ids = self.planned(2)
+        bad = {"themes": -1}
+        with unittest.mock.patch.object(themerun, "_stats_of", return_value=bad), unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, GOOD + GOOD)
+        self.assertEqual(report["counts"], {"waiting": 0, "done": 0, "failed": 2, "dropped": 0})
+        for book in ids:
+            self.assertEqual(theme.generations(self.store, book, self.store.read_book(book)["current_version"]), [])   # nothing was filed
+            self.assertEqual(self.items(run)[book]["reason"], "failed")
+
+    def test_the_count_of_failures_in_a_row_goes_on_from_the_first_pass_into_the_second(self):
+        run, ids = self.planned(2)
+        report = self.run_with(run, [KbError("x"), KbError("x"), KbError("x"), *GOOD])   # the first book, the second, then the first again
+        self.assertEqual(len(self.fake.calls), 3)
+        self.assertIn("3 books in a row", report["stopped"])
+        self.assertEqual((self.items(run)[ids[0]]["status"], self.items(run)[ids[0]]["attempts"]), ("failed", 2))
+        self.assertEqual((self.items(run)[ids[1]]["status"], self.items(run)[ids[1]]["attempts"]), ("waiting", 1))
+
+    def test_a_book_dropped_between_failures_neither_ends_nor_adds_to_the_count(self):
+        run, ids = self.planned(4)
+        self.store.set_state(ids[1], "weeded")
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, [KbError("x"), KbError("x"), KbError("x"), *GOOD])
+        self.assertIn("3 books in a row", report["stopped"])
+        self.assertEqual((len(self.fake.calls), report["counts"]["dropped"]), (3, 1))
+
+    def test_the_report_has_the_sums_of_the_books_done_and_the_time_of_the_call(self):
+        run, ids = self.planned(2)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, [values(row(), row(type="proof", title="A proof", blocks="5")), verdicts("supports", "supports", "supports", "supports"), *REFUSED])
+        items = [i for i in self.items(run).values() if i["status"] == "done"]
+        totals = report["totals"]
+        self.assertEqual((totals["books"], totals["themes"], totals["dropped"]), (1, 1, {"proof_or_definition": 1}))
+        self.assertEqual((totals["calls"], totals["pieces"], totals["input_tokens"], totals["output_tokens"]), (2, 1, 2 * RECORD_TOKENS[0], 2 * RECORD_TOKENS[1]))
+        self.assertEqual(totals["stated"], items[0]["stats"]["stated"])
+        self.assertIsInstance(report["elapsed_seconds"], int)
+        self.assertEqual(themerun.status(self.store, run)["totals"], totals)
+
+    def test_a_run_with_nothing_waiting_makes_no_call(self):
+        run, _ = self.planned(1)
+        self.run_with(run, GOOD)
+        report = self.run_with(run, [])
+        self.assertEqual((len(self.fake.calls), report["passes"], report["counts"]["done"]), (0, 0, 1))
+
+    def test_a_book_that_is_no_longer_active_is_dropped_and_reported(self):
+        run, ids = self.planned(2)
+        self.store.set_state(ids[0], "weeded")
+        report = self.run_with(run, GOOD)
+        self.assertEqual(report["counts"], {"waiting": 0, "done": 1, "failed": 0, "dropped": 1})
+        self.assertEqual((self.items(run)[ids[0]]["status"], self.items(run)[ids[0]]["reason"]), ("dropped", "no_longer_active"))
+        self.assertEqual(len(self.fake.calls), 2)
+
+    def test_a_book_with_another_current_version_is_dropped(self):
+        run, ids = self.planned(1)
+        rec = themerun.read_record(self.index_root(), run)
+        rec["items"][0]["version_id"] = "v9"
+        themerun.write_record(self.index_root(), rec)
+        report = self.run_with(run, GOOD)
+        self.assertEqual((report["counts"]["dropped"], self.items(run)[ids[0]]["reason"], len(self.fake.calls)), (1, "no_longer_active", 0))
+
+    def test_a_book_whose_conversion_changed_since_the_plan_is_dropped(self):
+        run, ids = self.planned(1)
+        rec = themerun.read_record(self.index_root(), run)
+        rec["items"][0]["conversion"]["generation"] += 1
+        themerun.write_record(self.index_root(), rec)
+        report = self.run_with(run, GOOD)
+        self.assertEqual((report["counts"]["dropped"], self.items(run)[ids[0]]["reason"], len(self.fake.calls)), (1, "conversion_changed", 0))
+
+    def test_only_one_holder_of_the_lock_runs_at_a_time(self):
+        run, _ = self.planned(1)
+        with cardstate.lock(self.index_root(), run), self.assertRaises(KbError) as cm:
+            self.run_with(run, GOOD)
+        self.assertIn("another run holds the lock", str(cm.exception))
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(self.run_with(run, GOOD)["counts"]["done"], 1)     # and the lock is free again when the holder ends
+
+    def test_the_models_or_prompts_changed_since_the_plan_refuse_the_run_before_any_call(self):
+        run, _ = self.planned(1)
+        other = config()
+        other["models"]["themer"]["model"] = "m9:latest"
+        with self.assertRaises(KbError) as cm:
+            self.run_with(run, GOOD, cfg=other)
+        self.assertIn("plan again", str(cm.exception))
+        other = config()
+        other["models"]["checker"]["model"] = "m9:latest"
+        with self.assertRaises(KbError) as cm:
+            self.run_with(run, GOOD, cfg=other)
+        self.assertIn("plan again", str(cm.exception))
+        with unittest.mock.patch.object(themecheck, "check_job", return_value=unittest.mock.Mock(prompt_version="v7")), self.assertRaises(KbError) as cm:
+            self.run_with(run, GOOD)
+        self.assertIn("plan again", str(cm.exception))
+        with unittest.mock.patch.object(themeextract.THEME_JOB, "prompt_version", "v9"), self.assertRaises(KbError) as cm:
+            self.run_with(run, GOOD)
+        self.assertIn("plan again", str(cm.exception))
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(self.items(run)[next(iter(self.items(run)))]["status"], "waiting")
+
+    def test_a_run_that_does_not_exist_or_a_missing_model_is_refused(self):
+        with self.assertRaises(KbError):
+            self.run_with("20261111t100000z-zzzzzz", GOOD)
+        run, _ = self.planned(1)
+        with self.assertRaises(KbError):
+            self.run_with(run, GOOD, cfg=config(check=False))
+        self.assertEqual(self.fake.calls, [])
+
+    def test_the_library_is_counted_once_for_the_whole_run(self):
+        run, _ = self.planned(3)
+        with unittest.mock.patch.object(themecheck, "library_frequencies", wraps=themecheck.library_frequencies) as counted:
+            self.run_with(run, GOOD * 3)
+        self.assertEqual(counted.call_count, 1)
+
+    def test_a_book_with_no_themes_is_filed_with_an_empty_generation_and_names_the_check_that_was_set(self):
+        run, ids = self.planned(1)
+        report = self.run_with(run, [values()])
+        item = self.items(run)[ids[0]]
+        self.assertEqual((report["counts"]["done"], item["stats"]["themes"], item["stats"]["calls"]), (1, 0, 1))
+        self.assertEqual(item["made"]["theme-check"], {"model": "m2:latest", "prompt_version": themecheck.check_job(1).prompt_version})   # no check was made: the one that was set
+        self.assertEqual(theme.read(self.store, ids[0], self.store.read_book(ids[0])["current_version"])[1]["themes"], [])
+
+    def test_a_theme_dropped_is_counted_by_the_kind_of_reason(self):
+        run, ids = self.planned(1)
+        self.run_with(run, [values(row(), row(type="proof", title="A proof", blocks="5")), verdicts("supports", "supports", "supports", "supports")])
+        self.assertEqual(self.items(run)[ids[0]]["stats"]["dropped"], {"proof_or_definition": 1})
+
+    def test_a_filing_that_fails_fails_the_book_and_the_run_goes_on(self):
+        run, ids = self.planned(2)
+        real, filed = theme.file, []
+
+        def file(store, generation):
+            filed.append(generation["book_id"])
+            if len(filed) == 1:
+                raise KbError("no room")
+            return real(store, generation)
+        with unittest.mock.patch.object(theme, "file", file), unittest.mock.patch.object(themerun, "RETRIES", 0):
+            report = self.run_with(run, GOOD + GOOD)
+        self.assertEqual(filed, ids)
+        self.assertEqual((self.items(run)[ids[0]]["status"], self.items(run)[ids[0]]["reason"]), ("failed", "failed"))
+        self.assertEqual((self.items(run)[ids[1]]["status"], report["counts"]["done"]), ("done", 1))
+        self.assertEqual(theme.generations(self.store, ids[0], self.store.read_book(ids[0])["current_version"]), [])
+
+    def test_the_record_holds_no_text_of_a_book_or_of_a_reply(self):
+        run, _ = self.planned(3)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            self.run_with(run, GOOD + [ValueError("secret-xyz")] + REFUSED)
+        raw = self.raw(run)
+        for text in ("annealing", "cools a system", "Stopping a search", "secret-xyz", "accept a worse state", "A paper"):
+            self.assertNotIn(text, raw)
+
+
+class StatusTest(RunCase):
+    def test_status_shows_where_each_book_has_got_to_and_no_text(self):
+        run, ids = self.planned(2)
+        before = themerun.status(self.store, run)
+        self.assertEqual((before["counts"], [i["status"] for i in before["items"]]), ({"waiting": 2, "done": 0, "failed": 0, "dropped": 0}, ["waiting", "waiting"]))
+        self.assertEqual(before["pieces"], sum(i["pieces"] for i in before["items"]))
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            self.run_with(run, GOOD + REFUSED)
+        after = themerun.status(self.store, run)
+        self.assertEqual(after["counts"], {"waiting": 0, "done": 1, "failed": 1, "dropped": 0})
+        self.assertEqual([(i["book_id"], i["status"], i["reason"]) for i in after["items"]], [(ids[0], "done", ""), (ids[1], "failed", "refused")])
+        self.assertEqual(after["pieces_done"], after["items"][0]["pieces"])
+        self.assertNotIn("annealing", json.dumps(after))
+
+    def test_status_of_a_run_that_does_not_exist_is_a_refusal(self):
+        with self.assertRaises(KbError):
+            themerun.status(self.store, "20261111t100000z-zzzzzz")
+
+
+class CategoryTest(unittest.TestCase):
+    def test_each_reason_for_dropping_a_theme_has_a_kind(self):
+        cases = {"the excerpt is 6437 characters, more than the 6000 a theme may point to": "span_over_limit",
+                 "the blocks are not numbers": "pointer_not_numbers", "the blocks named are not in the piece": "pointer_not_in_piece",
+                 "skipped: a proof": "proof_or_definition", "skipped: a definition that serves only this text": "proof_or_definition",
+                 "merged into a near-identical theme": "merged_near_identical", "unchecked: the answer was refused": "unchecked",
+                 "the theme has no usable title": "unusable_field", "the theme has no summary": "unusable_field", "the excerpt has no words": "other",
+                 "anything else": "other", "": "other"}
+        for reason, kind in cases.items():
+            with self.subTest(reason=reason):
+                self.assertEqual(themerun._category(reason), kind)
+        self.assertEqual(set(cases.values()) - set(themerun.DROP_KINDS), set())
+
+
+class FormOfRunRecordTest(PlanCase):
+    def test_the_fixed_reasons_and_the_stats_are_checked_in_the_form(self):
+        book, version = self.converted_book()
+        stats = {"themes": 1, "dropped": {"span_over_limit": 2}, "flags": {"field_words": 1}, "stated": 3, "inferred": 1, "pieces": 1, "calls": 2,
+                 "input_tokens": 10, "output_tokens": 5, "seconds": 7}
+        ref = {"tool": "kb-html-std", "version": "0.0.1", "generation": 1}
+        for reason in ("", "refused", "failed", "no_longer_active", "conversion_changed", "an unexpected error (ValueError)"):
+            themerun.write_record(self.index_root(), record(RUN_OLD, [item(book, version, reason=reason, conversion=ref, stats=stats)]))
+        bad = [dict(reason="the title of a book"), dict(reason="an unexpected error (Value Error)"), dict(reason="an unexpected error (ValueError) and more"),
+               dict(conversion={**ref, "extra": 1}), dict(conversion={**ref, "generation": -1}), dict(conversion={**ref, "tool": ""}),
+               dict(stats={**stats, "extra": 1}), dict(stats={**stats, "themes": -1}), dict(stats={**stats, "dropped": {"a book title": 1}}),
+               dict(stats={**stats, "flags": {"Field Words": 1}}), dict(stats={**stats, "flags": {"field_words": "1"}}), dict(stats={**stats, "seconds": True}),
+               dict(stats={k: v for k, v in stats.items() if k != "calls"}), dict(stats="many"), dict(conversion="v1")]
+        for over in bad:
+            with self.subTest(over=str(over)[:70]), self.assertRaises(KbError):
+                themerun.write_record(self.index_root(), record(RUN_OLD, [item(book, version, **over)]))
+
+
+RECORD_TOKENS = (10, 5)   # the input and output tokens of the record that `Fake` returns for every call
 
 
 if __name__ == "__main__":

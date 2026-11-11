@@ -18,6 +18,7 @@ import os
 import re
 import secrets
 import time
+from collections import Counter
 
 from . import KbError, card, cardstate, convert, ids, models, textutil, theme, themecheck, themeextract
 
@@ -29,6 +30,16 @@ STATUSES = ("waiting", "done", "failed", "dropped")
 SECONDS_PER_PIECE = (9, 14)       # the time of a piece, with the check of its themes, in the trials (9.5 and 10.6 seconds on PDFs, up to 14 on web pages)
 CHECKS_PER_PIECE = (2.0, 2.5)     # the calls to the check for each piece in the trials (2.05 and 2.5)
 RUNS_READ = 20                    # the records of earlier runs read to see what check a book was made with
+RETRIES = 1                       # a book that fails is tried once more, after the last book
+STOP_AFTER = 3                    # books in a row that fail for a reason that is not a refused answer stop the run
+# What an item says of why it did not finish: a fixed kind, never a title or a piece of a reply or of an error message.
+REASON_KINDS = {"refused": "an answer of a model was refused and kept aside", "failed": "a call or a step failed",
+                "no_longer_active": "the book is no longer active or has another current version",
+                "conversion_changed": "the conversion in use changed since the plan"}
+_UNEXPECTED = re.compile(r"an unexpected error \([A-Za-z_][A-Za-z0-9_]{0,59}\)")
+DROP_KINDS = ("span_over_limit", "pointer_not_numbers", "pointer_not_in_piece", "proof_or_definition", "merged_near_identical", "unchecked",
+              "unusable_field", "other")
+_KIND = re.compile(r"[a-z][a-z_]{0,39}")
 _VERSION_ID = re.compile(r"v[1-9][0-9]{0,5}")
 _ISO = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
@@ -42,9 +53,27 @@ def _how(how):
             and isinstance(how["prompt_version"], str) and models._VERSION.fullmatch(how["prompt_version"]) is not None)
 
 
+def _conversion(c):
+    return (isinstance(c, dict) and set(c) == {"tool", "version", "generation"} and _count(c["generation"], 10 ** 6)
+            and all(isinstance(c[k], str) and 0 < len(c[k]) <= 100 for k in ("tool", "version")))
+
+
+def _stats(s):
+    keys = {"themes", "dropped", "flags", "stated", "inferred", "pieces", "calls", "input_tokens", "output_tokens", "seconds"}
+    return (isinstance(s, dict) and set(s) == keys
+            and all(_count(s[k]) for k in keys - {"dropped", "flags"})
+            and isinstance(s["dropped"], dict) and all(k in DROP_KINDS and _count(v) for k, v in s["dropped"].items())
+            and isinstance(s["flags"], dict) and len(s["flags"]) <= 20
+            and all(isinstance(k, str) and _KIND.fullmatch(k) and _count(v) for k, v in s["flags"].items()))
+
+
+def _reason_ok(reason):
+    return isinstance(reason, str) and (reason == "" or reason in REASON_KINDS or _UNEXPECTED.fullmatch(reason) is not None)
+
+
 def _check_item(i):
     bad = KbError("the record of a run has an item that is not valid")
-    if not isinstance(i, dict) or set(i) != {"book_id", "version_id", "pieces", "status", "attempts", "generation", "reason", "made"}:
+    if not isinstance(i, dict) or set(i) != {"book_id", "version_id", "pieces", "status", "attempts", "generation", "reason", "made", "conversion", "stats"}:
         raise bad
     ids.check_id(i["book_id"])
     if not isinstance(i["version_id"], str) or not _VERSION_ID.fullmatch(i["version_id"]):
@@ -53,10 +82,14 @@ def _check_item(i):
         raise bad
     if i["generation"] is not None and not _count(i["generation"], 10 ** 6):
         raise bad
-    if not isinstance(i["reason"], str) or len(i["reason"]) > 500 or textutil.clean(i["reason"], 500) != i["reason"]:
+    if not isinstance(i["reason"], str) or len(i["reason"]) > 500 or textutil.clean(i["reason"], 500) != i["reason"] or not _reason_ok(i["reason"]):
         raise bad
     made = i["made"]
     if made is not None and not (isinstance(made, dict) and set(made) == {"theme", "theme-check"} and _how(made["theme"]) and _how(made["theme-check"])):
+        raise bad
+    if i["conversion"] is not None and not _conversion(i["conversion"]):
+        raise bad
+    if i["stats"] is not None and not _stats(i["stats"]):
         raise bad
 
 
@@ -168,8 +201,8 @@ def _stamp():
 
 
 def _assess(store, book_id, extraction, again, records):
-    """`("make", version_id, pieces)` or `("skip", reason, version_id)` for a book; a book skipped as already made has the number of the
-    generation that was found as a fourth item."""
+    """`("make", version_id, pieces, reference of the conversion in use)` or `("skip", reason, version_id)` for a book; a book skipped as
+    already made has the number of the generation that was found as a fourth item."""
     book = store.read_book(book_id)
     version_id = book.get("current_version")
     if book.get("state") != "active":
@@ -193,7 +226,17 @@ def _assess(store, book_id, extraction, again, records):
         matches, number = _made_with(store, book_id, version_id, extraction, records)
         if matches:
             return "skip", "already_made", version_id, number
-    return "make", version_id, pieces
+    return "make", version_id, pieces, loaded[0]
+
+
+def _current(cfg):
+    """`(extraction entry, check entry, extraction, check)`: the entries the config sets for the two kinds of work, and the model and prompt
+    version of each now. Both are found before anything is sent."""
+    extraction_entry, check_entry = models.choose(cfg, "theme")[0], models.choose(cfg, "theme-check")[0]
+    entries = models.registry(cfg)
+    return (extraction_entry, check_entry,
+            {"model": entries[extraction_entry]["model"], "prompt_version": themeextract.THEME_JOB.prompt_version},
+            {"model": entries[check_entry]["model"], "prompt_version": themecheck.check_job(1).prompt_version})
 
 
 def plan(store, cfg, book_ids=None, again=False):
@@ -202,10 +245,7 @@ def plan(store, cfg, book_ids=None, again=False):
     and the estimate). Makes no call. A book that is not there, or a model that is not set, is a refusal and nothing is written."""
     if type(again) is not bool:
         raise KbError("again is true or false")
-    extraction_entry, check_entry = models.choose(cfg, "theme")[0], models.choose(cfg, "theme-check")[0]
-    entries = models.registry(cfg)
-    extraction = {"model": entries[extraction_entry]["model"], "prompt_version": themeextract.THEME_JOB.prompt_version}
-    check = {"model": entries[check_entry]["model"], "prompt_version": themecheck.check_job(1).prompt_version}
+    extraction_entry, check_entry, extraction, check = _current(cfg)
     if book_ids is not None:
         for book_id in book_ids:
             store.read_book(book_id)
@@ -224,10 +264,10 @@ def plan(store, cfg, book_ids=None, again=False):
         if broken:
             damaged.append({"book_id": book_id, "title": title, "generations": [n for n, _ in broken]})
         if outcome[0] == "make":
-            _, version_id, pieces = outcome
+            _, version_id, pieces, ref = outcome
             to_make.append({"book_id": book_id, "title": title, "pieces": pieces})
             items.append({"book_id": book_id, "version_id": version_id, "pieces": pieces, "status": "waiting", "attempts": 0, "generation": None,
-                          "reason": "", "made": None})
+                          "reason": "", "made": None, "conversion": dict(ref), "stats": None})
             continue
         reason, version_id = outcome[1], outcome[2]
         counts[reason] += 1
@@ -256,3 +296,156 @@ def plan(store, cfg, book_ids=None, again=False):
                          "check_calls_low": round(pieces_all * CHECKS_PER_PIECE[0]), "check_calls_high": round(pieces_all * CHECKS_PER_PIECE[1]),
                          "basis": f"an estimate from the trials: {low} to {high} seconds a piece with the check of its themes, and "
                                   f"{CHECKS_PER_PIECE[0]} to {CHECKS_PER_PIECE[1]} calls to the check for each piece; a call whose answer is refused is asked once more"}}
+
+
+def _category(reason):
+    """The kind of a reason for which a theme was dropped, from the words the extraction and the check use: one of DROP_KINDS."""
+    if reason.startswith("skipped"):
+        return "proof_or_definition"
+    if reason.startswith("merged"):
+        return "merged_near_identical"
+    if reason.startswith("unchecked"):
+        return "unchecked"
+    if "no usable title" in reason or "has no summary" in reason:
+        return "unusable_field"
+    if "characters, more than" in reason:
+        return "span_over_limit"
+    if "not numbers" in reason:
+        return "pointer_not_numbers"
+    if "not in the piece" in reason:
+        return "pointer_not_in_piece"
+    return "other"
+
+
+def _how_made(got, rec):
+    """The model and prompt version of the extraction and of the check, from the records of the calls. A check that made no call (the book had no
+    theme to check) names the check that was set for the run."""
+    def first(task, fallback):
+        for r in got["records"]:
+            if r.get("task") == task:
+                how = {"model": r.get("model"), "prompt_version": r.get("prompt_version")}
+                return how if _how(how) else fallback
+        return fallback
+    return {"theme": first("theme", rec["extraction"]), "theme-check": first("theme-check", rec["check"])}
+
+
+def _stats_of(got, seconds):
+    themes = got["generation"]["themes"]
+    marks = Counter(p["mark"] for t in themes for p in t["neutral"].values() if p["mark"])
+    return {"themes": len(themes), "dropped": dict(Counter(_category(d["reason"]) for d in got["dropped"])),
+            "flags": dict(Counter(f["kind"] for t in themes for f in t["flags"])), "stated": marks["stated"], "inferred": marks["inferred"],
+            "pieces": got["pieces"], "calls": got["calls"], "input_tokens": sum(r.get("input_tokens") or 0 for r in got["records"]),
+            "output_tokens": sum(r.get("output_tokens") or 0 for r in got["records"]), "seconds": int(seconds)}
+
+
+def _counts(rec):
+    counts = {s: 0 for s in STATUSES}
+    for i in rec["items"]:
+        counts[i["status"]] += 1
+    return counts
+
+
+def _items(rec):
+    return [{k: i[k] for k in ("book_id", "version_id", "pieces", "status", "generation", "reason", "attempts", "made", "stats")} for i in rec["items"]]
+
+
+def _serve(store, cfg, rec, item, frequencies, launcher, root):
+    """Make, check and file the themes of one book, and say what became of it in the item. Returns "done", "dropped", "refused", "failed" or
+    "unexpected". A reason is a fixed kind (`REASON_KINDS`) or the name of the kind of an unexpected error, never a message."""
+    def fail(kind, reason):
+        item["attempts"] += 1
+        item["reason"] = reason
+        item["status"] = "waiting" if item["attempts"] <= RETRIES else "failed"
+        return kind
+
+    def drop(reason):
+        item["status"], item["reason"] = "dropped", reason
+        return "dropped"
+    book_id, version_id = item["book_id"], item["version_id"]
+    try:
+        book = store.read_book(book_id)
+        if book.get("state") != "active" or book.get("current_version") != version_id:
+            return drop("no_longer_active")
+        loaded = convert.load_in_use(store, book_id, version_id)
+        if not loaded or loaded[0] != item["conversion"]:
+            return drop("conversion_changed")
+        started = time.monotonic()
+        got = themecheck.make_and_check_for_version(store, cfg, book_id, version_id, launcher=launcher, root=root, frequencies=frequencies)
+        made, stats = _how_made(got, rec), _stats_of(got, time.monotonic() - started)
+        done = {"status": "done", "generation": 1, "reason": "", "made": made, "stats": stats}
+        _check_item({**item, **done})   # what the record will say is checked before anything is filed, so that a book is not filed and then failed
+        done["generation"] = theme.file(store, got["generation"])
+        item.update(done)
+        return "done"
+    except themeextract.ThemeRefused:
+        return fail("refused", "refused")
+    except KbError:
+        return fail("failed", "failed")
+    except Exception as e:   # whatever one book's data does to the program, the other books go on; only the kind of error is shown
+        return fail("unexpected", f"an unexpected error ({type(e).__name__})")
+
+
+def _totals(rec):
+    """The sums of the stats of the books that are done. A book that failed or was dropped has no stats, so its time and tokens are not here."""
+    done = [i["stats"] for i in rec["items"] if i["status"] == "done" and i["stats"]]
+    out = {k: sum(s[k] for s in done) for k in ("themes", "stated", "inferred", "pieces", "calls", "input_tokens", "output_tokens", "seconds")}
+    out["books"] = len(done)
+    out["dropped"] = dict(sum((Counter(s["dropped"]) for s in done), Counter()))
+    out["flags"] = dict(sum((Counter(s["flags"]) for s in done), Counter()))
+    return out
+
+
+def _report(rec, passes, stopped, elapsed=None):
+    out = {"run": rec["run"], "created": rec["created"], "again": rec["again"], "extraction": rec["extraction"], "check": rec["check"],
+           "passes": passes, "stopped": stopped, "counts": _counts(rec), "totals": _totals(rec), "items": _items(rec)}
+    if elapsed is not None:
+        out["elapsed_seconds"] = elapsed   # the wall time of this call (the seconds of the books are the time of their calls)
+    return out
+
+
+def run(store, cfg, run_id, launcher=None, root=None):
+    """Run a planned run: each book that waits is made, checked and filed as a new generation of themes as soon as it is made, and what became
+    of it is saved in the record. A book that fails does not end the run; the books that failed are tried once more after the last (RETRIES);
+    STOP_AFTER books in a row that fail for a reason that is not a refused answer stop it (a server that is down would fail every book), and
+    the books not yet tried stay waiting. A book that is no longer active, or whose conversion changed since the plan, is dropped and
+    reported. A run that is stopped at any point and run again repeats no finished book. One window is accepted: a book whose generation was
+    filed and whose record was not yet saved when the program was killed is made again, as a new generation (the newest valid generation is the
+    one a reader gets, so the extra one is harmless, and at most one book is made twice). Returns the report; the models and prompt versions
+    must be those of the plan."""
+    index_root = store.cfg["index_root"]
+    _, _, extraction, check = _current(cfg)
+    if read_record(index_root, run_id) is None:
+        raise KbError("there is no run with that name; make one with `themes-run plan`")
+    stopped, in_a_row, passes, frequencies, began = None, 0, 0, None, time.time()
+    with cardstate.lock(index_root, run_id):
+        rec = read_record(index_root, run_id)
+        if rec["extraction"] != extraction or rec["check"] != check:   # the record that is run, read under the lock
+            raise KbError("the models or the prompts of the config are not those of the plan: plan again")
+        while passes <= RETRIES and stopped is None and any(i["status"] == "waiting" for i in rec["items"]):
+            passes += 1
+            for item in rec["items"]:
+                if item["status"] != "waiting":
+                    continue
+                if frequencies is None:
+                    frequencies = themecheck.library_frequencies(store)   # the library is counted once for the whole run
+                outcome = _serve(store, cfg, rec, item, frequencies, launcher, root)
+                write_record(index_root, rec)
+                if outcome in ("failed", "unexpected"):
+                    in_a_row += 1
+                    if in_a_row >= STOP_AFTER:
+                        stopped = f"{STOP_AFTER} books in a row failed for a reason that is not a refused answer: the run is stopped; run it again when the cause is gone"
+                        break
+                elif outcome in ("done", "refused"):
+                    in_a_row = 0
+    return _report(rec, passes, stopped, int(time.time() - began))
+
+
+def status(store, run_id):
+    """Where each book of a run has got to, with no text of any book."""
+    rec = read_record(store.cfg["index_root"], run_id)
+    if rec is None:
+        raise KbError("there is no run with that name")
+    items = _items(rec)
+    return {"run": rec["run"], "created": rec["created"], "again": rec["again"], "extraction": rec["extraction"], "check": rec["check"],
+            "counts": _counts(rec), "totals": _totals(rec), "items": items, "pieces": sum(i["pieces"] for i in items),
+            "pieces_done": sum(i["pieces"] for i in items if i["status"] == "done")}
