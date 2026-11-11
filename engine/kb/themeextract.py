@@ -118,12 +118,32 @@ def _pointer(conversion, first, last):
     return {"kind": kind, "start": at(conversion.blocks[first]), "end": at(conversion.blocks[last])}
 
 
+UNREADABLE_CONFIDENCE = 0.5   # what a theme carries when the model's confidence cannot be read: a guess, and flagged as one
+_NUMBER = re.compile(r"(?<![A-Za-z0-9.])([-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)\s*(%|percent\b)?", re.IGNORECASE)
+_THEN_NUMBER = re.compile(r"\s*[/–—-]\s*[-+]?[0-9.]")   # what follows a number that is a fraction or a range, not one number
+_LEVEL = re.compile(r"\b(high|medium|low)\b", re.IGNORECASE)
+_DENIED = re.compile(r"\b(?:not|no|never)\W+(?:\w+\W+)?$", re.IGNORECASE)   # the words before a level, when it is denied: "not high"
+_LEVELS = {"high": 0.9, "medium": 0.6, "low": 0.3}
+
+
 def _confidence(text):
-    try:
-        value = float(text)
-    except ValueError:
-        return None
-    return min(1.0, max(0.0, value)) if math.isfinite(value) else None
+    """`(value, None)` for a confidence that can be read, or `(UNREADABLE_CONFIDENCE, what was written)` for one that cannot. The first
+    number of the text is read (a comma between digits is a decimal point; a number followed by `%` or the word `percent` is a share; a
+    number outside 0 to 1 is put to the nearest end; a hyphen after a letter is not a minus sign); with no number, the first of the words
+    high, medium and low is 0.9, 0.6 or 0.3. A fraction or a range (`8/10`, `0.5-0.9`) and a denied word (`not high`) are not read: they are
+    unreadable, so that no wrong number is made of them. A theme is never dropped for its confidence."""
+    plain = re.sub(r"(?<=[0-9]),(?=[0-9])", ".", text)
+    found = _NUMBER.search(plain)
+    if found:
+        value = float(found.group(1))
+        if _THEN_NUMBER.match(plain, found.end()):
+            return UNREADABLE_CONFIDENCE, textutil.clean(text, 300) or "(empty)"
+        if math.isfinite(value):
+            return min(1.0, max(0.0, value / 100 if found.group(2) else value)), None
+    level = _LEVEL.search(plain)
+    if level and not _DENIED.search(plain[:level.start()]):
+        return _LEVELS[level.group(1).casefold()], None
+    return UNREADABLE_CONFIDENCE, textutil.clean(text, 300) or "(empty)"
 
 
 def _draft(row, piece, conversion, ref):
@@ -146,13 +166,12 @@ def _draft(row, piece, conversion, ref):
         anchor = theme.anchor_of(ref, conversion, _pointer(conversion, first, last))
     except KbError as e:
         return None, str(e)
-    confidence = _confidence(row["confidence"])
-    if confidence is None:
-        return None, "the confidence is not a number"
+    confidence, unreadable = _confidence(row["confidence"])
+    flags = [{"kind": "confidence_unreadable", "detail": unreadable}] if unreadable else []
     kind = row["type"] if row["type"] in theme.TYPES else "other"   # a theme without a clear type is kept
     neutral = {name: {"text": row[name], "mark": "inferred" if row[name] else None} for name in theme.PARTS}
-    return {"title": title, "type": kind, "summary": row["summary"], "neutral": neutral, "confidence": confidence, "anchor": anchor,
-            "first": first, "last": last}, None
+    return {"title": title, "type": kind, "summary": row["summary"], "neutral": neutral, "confidence": confidence, "flags": flags,
+            "guess": bool(unreadable), "anchor": anchor, "first": first, "last": last}, None
 
 
 def _rows(values):
@@ -176,13 +195,15 @@ def _near(a, b):
 
 
 def _merge(drafts):
-    """`(kept, dropped)`: of two near-identical themes the one of higher confidence is kept (the earlier, on a tie)."""
+    """`(kept, dropped)`: of two near-identical themes the one of higher confidence is kept (the earlier, on a tie). A confidence that was
+    read always beats one that was guessed (`UNREADABLE_CONFIDENCE`), whatever the numbers."""
+    rank = lambda d: (not d["guess"], d["confidence"])
     kept, dropped = [], []
     for draft in drafts:
         twin = next((i for i, k in enumerate(kept) if _near(k, draft)), None)
         if twin is None:
             kept.append(draft)
-        elif draft["confidence"] > kept[twin]["confidence"]:
+        elif rank(draft) > rank(kept[twin]):
             dropped.append((kept[twin], f"merged into the near-identical theme {draft['title']!r}"))
             kept[twin] = draft
         else:
@@ -237,7 +258,7 @@ def extract(cfg, book_id, version_id, ref, conversion, title, launcher=None, roo
     for draft in kept:
         made = {"id": f"t{len(themes) + 1}", "book_id": book_id, "version_id": version_id, "conversion": dict(conversion_ref),
                 "anchor": draft["anchor"], "title": draft["title"], "type": draft["type"], "summary": draft["summary"],
-                "neutral": draft["neutral"], "confidence": draft["confidence"], "made": draft["made"], "flags": []}
+                "neutral": draft["neutral"], "confidence": draft["confidence"], "made": draft["made"], "flags": list(draft["flags"])}
         try:
             theme.check_theme(made, book_id, version_id)
         except KbError as e:

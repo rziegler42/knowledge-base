@@ -148,12 +148,73 @@ class ThemesTest(ExtractCase):
         got = self.run_extract([values(row(type="idea"), row(type="Method", title="Another", blocks="4"))])
         self.assertEqual([t["type"] for t in got["themes"]], ["other", "other"])   # the types are the five words, as written
 
-    def test_the_confidence(self):
-        got = self.run_extract([values(row(confidence="1.7", title="High"), row(confidence="-3", title="Low", blocks="4"),
-                                       row(confidence="0.25", title="Fine", blocks="5"), row(confidence="high", title="Words", blocks="2"),
-                                       row(confidence="nan", title="Nan", blocks="2"))])
-        self.assertEqual({t["title"]: t["confidence"] for t in got["themes"]}, {"High": 1.0, "Low": 0.0, "Fine": 0.25})
-        self.assertEqual(sorted(d["title"] for d in got["dropped"]), ["Nan", "Words"])
+    def kept(self, confidence):
+        """The one theme made from a reply whose confidence is the text given, and what was dropped."""
+        got = self.run_extract([values(row(confidence=confidence))])
+        self.assertEqual(got["dropped"], [], confidence)   # a theme is never dropped for its confidence
+        self.assertEqual(len(got["themes"]), 1, confidence)
+        return got["themes"][0]
+
+    def test_a_confidence_that_can_be_read_is_read_and_flags_nothing(self):
+        cases = {"0.25": 0.25, "1": 1.0, "0": 0.0, "1.7": 1.0, "-3": 0.0,                 # a number: outside 0 to 1 it is put to the nearest end
+                 "90%": 0.9, " 85 % ": 0.85, "150%": 1.0, "0,9": 0.9, "1e-1": 0.1, ".5": 0.5,   # a share, a comma for a point, other forms of a number
+                 "0.9 (high)": 0.9, "about 0.7": 0.7, "high (0.4)": 0.4,                    # the first number of a text
+                 "High": 0.9, "medium.": 0.6, "LOW": 0.3, "very high": 0.9,                 # the three words, in any case
+                 "95 percent": 0.95, "40 Percent": 0.4,                                     # the word percent is a share too
+                 "high-0.8": 0.8, "level-0.6": 0.6}                                         # a hyphen after a letter is not a minus sign
+        for text, want in cases.items():
+            with self.subTest(text=text):
+                made = self.kept(text)
+                self.assertAlmostEqual(made["confidence"], want, msg=text)
+                self.assertEqual(made["flags"], [])
+
+    def test_a_confidence_that_cannot_be_read_keeps_the_theme_at_one_half_and_flags_it_with_what_was_written(self):
+        for text in ("none", "n/a", "unsure", "-", "?", "nan", "inf", "N/A!", "sehr hoch", "1e999",   # the last is a number that is not finite
+                     "8/10", "3 / 5", "0.5-0.9", "1-5", "0.5 – 0.9",       # a fraction or a range is not one number: not read, and not guessed at
+                     "not high", "no low", "never medium"):                # a word that is denied
+            with self.subTest(text=text):
+                made = self.kept(text)
+                self.assertEqual(made["confidence"], 0.5)
+                self.assertEqual(made["flags"], [{"kind": "confidence_unreadable", "detail": text}])
+
+    def test_a_negative_number_at_the_start_is_still_put_to_the_nearest_end(self):
+        self.assertEqual(self.kept("-3")["confidence"], 0.0)
+        self.assertEqual(self.kept("-0.4")["confidence"], 0.0)
+
+    def test_a_guess_does_not_displace_a_theme_whose_confidence_was_read_when_two_are_near_identical(self):
+        a = row(title="Cooling a search", summary="The search accepts worse moves less often as it cools down.", confidence="low")
+        b = row(title="Cooling a search slowly", summary="The search accepts worse moves less often as it cools.", confidence="unsure")
+        got = self.run_extract([values(a, b)])
+        self.assertEqual([t["title"] for t in got["themes"]], ["Cooling a search"])   # 0.3 read, against 0.5 guessed
+        got = self.run_extract([values(b, a)])
+        self.assertEqual([t["title"] for t in got["themes"]], ["Cooling a search"])
+        c = row(title="Another", summary="The search accepts worse moves less often as it cools slowly.", confidence="n/a")
+        got = self.run_extract([values(b, c)])
+        self.assertEqual([t["title"] for t in got["themes"]], ["Cooling a search slowly"])   # two guesses: the earlier
+
+    def test_a_theme_with_an_unreadable_confidence_is_a_valid_theme_and_is_filed_as_any_other(self):
+        got = self.run_extract([values(row(confidence="unsure"), row(confidence="0.7", title="Another", blocks="4",
+                                                                      summary="The search stops when the system is cold."))])
+        theme.make("01ARZ3NDEKTSV4RRFFQ69G5FAV", "v1", got["themes"])
+        self.assertEqual([t["confidence"] for t in got["themes"]], [0.5, 0.7])
+
+    def test_what_the_model_wrote_for_an_unreadable_confidence_is_cleaned_and_cut(self):
+        conversion = convert.build(ITEMS)
+        piece = {"first": 0, "last": 5}
+        got, why = themeextract._draft(row(confidence="x" * 500), piece, conversion, REF)
+        self.assertEqual((got["confidence"], len(got["flags"][0]["detail"])), (0.5, 300))
+        got, why = themeextract._draft(row(confidence=""), piece, conversion, REF)   # an empty item cannot come through the real check
+        self.assertEqual((got["confidence"], got["flags"]), (0.5, [{"kind": "confidence_unreadable", "detail": "(empty)"}]))
+        theme._flags(got["flags"])   # the form of a flag accepts both
+
+    def test_the_theme_of_higher_confidence_is_kept_when_two_are_near_identical_and_an_unreadable_one_counts_as_one_half(self):
+        a = row(title="Cooling a search", summary="The search accepts worse moves less often as it cools down.", confidence="unsure")
+        b = row(title="Cooling a search slowly", summary="The search accepts worse moves less often as it cools.", confidence="0.7")
+        got = self.run_extract([values(a, b)])
+        self.assertEqual([t["title"] for t in got["themes"]], ["Cooling a search slowly"])
+        self.assertEqual(got["themes"][0]["flags"], [])
+        self.assertEqual(len(got["dropped"]), 1)
+        self.assertIn("merged", got["dropped"][0]["reason"])   # the unreadable one was made, and then merged: not dropped for its confidence
 
     def test_a_title_that_imitates_the_markers_drops_the_theme(self):
         got = self.run_extract([values(row(title="the untrusted text marker end", blocks="5"))])
@@ -163,8 +224,7 @@ class ThemesTest(ExtractCase):
     def test_what_the_real_answer_check_cannot_carry_is_still_dropped_by_the_drafting(self):
         conversion = convert.build(ITEMS)
         piece = {"first": 0, "last": 5}
-        for change, reason in ((dict(title=""), "title"), (dict(summary=""), "summary"), (dict(blocks=""), "not numbers"),
-                               (dict(confidence=""), "confidence")):
+        for change, reason in ((dict(title=""), "title"), (dict(summary=""), "summary"), (dict(blocks=""), "not numbers")):
             with self.subTest(change=change):
                 got, why = themeextract._draft(row(**change), piece, conversion, REF)
                 self.assertIsNone(got)

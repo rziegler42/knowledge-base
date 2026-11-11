@@ -1102,8 +1102,14 @@ blocks, never quotes: code turns the numbers into a pointer and `theme.anchor_of
 title and the reason, if its blocks are not numbers or not in the piece, if its pointer does not hold (two sections with the same
 heading, an excerpt over 6,000 characters or with no words), if its type is `proof` or `definition` (a definition that serves only the
 text), if its title imitates the markers of untrusted text (a title or summary that is empty never gets past the answer check of the model
-layer, but the drafting drops one too), or if its confidence is not a number (a number outside 0 to 1 is put to the nearest end); a type that
-is not one of the five is kept as `other`. Of two themes whose blocks overlap by 80 percent or more and whose summaries repeat each other
+layer, but the drafting drops one too). A theme is never dropped for its confidence: the first number of what the model wrote is read (a
+comma between digits is a decimal point, a number followed by `%` or the word `percent` is a share, a number outside 0 to 1 is put to the
+nearest end, a hyphen after a letter is not a minus sign), and with no number the first of the words `high`, `medium` and `low` is 0.9, 0.6
+or 0.3. A fraction or a range (`8/10`, `0.5-0.9`) and a denied word (`not high`) are not read, and nothing else is: they are unreadable, and the
+theme is kept with the confidence 0.5 and a flag `confidence_unreadable` whose detail is what the model wrote (the first trial dropped 29 of
+118 themes for it). Known limit: a text such as `5 (50%)` is read by its first number. When two near-identical themes are merged, a
+confidence that was read beats one that was guessed, whatever the numbers.
+A type that is not one of the five is kept as `other`. Of two themes whose blocks overlap by 80 percent or more and whose summaries repeat each other
 the one of higher confidence is kept. Every non-empty part of a description is marked `inferred`: the model wrote it from the text and no
 check has yet shown that the excerpt supports it. A reply refused for its shape is asked once more with the reason, as for cards, and the
 refusal is kept in the folder `refused` of the index root; a reply of more than 24 themes is a runaway, is not asked again, makes nothing and

@@ -219,6 +219,14 @@ class CheckTest(unittest.TestCase):
         self.assertIsNot(got["themes"][0], self.theme)
         self.assertNotEqual(got["themes"][0], before)
 
+    def test_the_flags_a_theme_already_has_are_kept_and_the_new_ones_follow(self):
+        flagged = copy.deepcopy(self.theme)
+        flagged["flags"] = [{"kind": "confidence_unreadable", "detail": "unsure"}]
+        fake = Fake(verdicts("supports", "supports", "supports", "supports"))
+        with unittest.mock.patch.object(models, "run_job", fake):
+            got = themecheck.check_themes(config(), REF, self.conversion, [flagged], {"state"})
+        self.assertEqual([f["kind"] for f in got["themes"][0]["flags"]], ["confidence_unreadable", "field_words"])
+
     def test_every_verdict_but_supports_leaves_the_part_inferred(self):
         got = self.check([verdicts("partly", "no", "no", "partly")])
         self.assertEqual(set(self.marks(got).values()), {"inferred", None})

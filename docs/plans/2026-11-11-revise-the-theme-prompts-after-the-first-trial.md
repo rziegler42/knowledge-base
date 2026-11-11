@@ -200,4 +200,30 @@ owner chose to go on to approval after round 1, so the review did not converge. 
 
 ## Result
 
-Empty until work starts.
+### Increment A (done, not committed; waits for the owner's word to commit)
+
+- **Done.** In `engine/kb/themeextract.py`, `_confidence` reads what the model wrote and `_draft` keeps the theme whatever it was: no theme is
+  dropped for its confidence. Tests in `engine/tests/test_themeextract.py` (47 there, 158 over the three modules of the plan's
+  verification), one test in `test_themecheck.py` (a flag the theme already has is kept and the check's flags follow), and the README.
+- **The rules as built.** The first number is read (a comma between digits is a point; `%` or the word `percent` after it makes it a share; a
+  number outside 0 to 1 goes to the nearest end; a hyphen after a letter is not a minus sign, so `high-0.8` is 0.8 and `-3` at the start is
+  still 0.0); with no number the first of `high`, `medium`, `low` is 0.9, 0.6, 0.3. Anything else is unreadable: the theme is kept with 0.5 and
+  a flag `{"kind": "confidence_unreadable", "detail": <what was written>}`, and an empty text is named `(empty)`.
+- **Beyond the plan's list, from the review, and decided here.** (1) A fraction or a range (`8/10`, `3 / 5`, `0.5-0.9`, `1-5`) and a denied
+  word (`not high`, `no low`, `never medium`) are unreadable and not read: the review traced them to wrong numbers with no flag (`8/10`
+  read as 1.0). (2) The word `percent` counts as `%`. (3) In a merge of near-identical themes a confidence that was read beats one that was
+  guessed, whatever the numbers: a guessed 0.5 would otherwise displace a stated 0.3. The plan says "the one of higher confidence is kept";
+  this ranks a guess below any confidence read.
+- **Tests first, seen failing.** 21 failed before the first code (a theme with an unreadable confidence was dropped, and nothing but a plain number
+  was read); 13 more were added after the review and failed before the second change.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themeextract engine.tests.test_theme
+  engine.tests.test_themecheck`: 158 tests OK. `wb run code-work check`: no problems. No live call.
+- **Deliberate breaks.** 50 of `themeextract.py`, of which 17 of this increment, all caught and restored byte for byte (scratchpad
+  `breaks_themeextract.py`). Four old break strings no longer matched the changed code and were updated, not dropped.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Applied: the misreads above (1) and the merge rule (3), with tests for
+  each. Recorded, not applied: `5 (50%)` is read by its first number (1.0), which is in the README as a known limit; the empty-text case is tested
+  only through `_draft`, because the real answer check refuses an empty item; and the 0.5 for an unreadable confidence stays a guess,
+  flagged as one. The reviewer found no path that drops a theme for its confidence and no way for the flag to fail the form of a flag (at most 3 flags
+  in all against 10).
+- **Not done.** B, C and D. No live call. No security review (none asked): a text from a model goes through a bounded regular expression and
+  `textutil.clean` into a flag of at most 300 characters.
