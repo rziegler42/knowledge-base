@@ -417,7 +417,7 @@ major. The owner chose to commit and approve after round 2, so the review did no
 - **Not done.** D, E, F. No live call. No security review (none asked): a reply reaches only checked fields, numbers pass a regular
   expression, the range check and `anchor_of`, and the refused-answer file is written by the existing `refused.keep`.
 
-### Increment D (done, not committed; waits for the owner's word to commit)
+### Increment D (done; committed as 0e9211d)
 
 - **Reused (step 1).** From the cards: the verdict words and the shape of the check (`cardmake.VERDICTS`, the job with one verdict for
   each item, `card-check`'s rule that a verdict is one of the three words after strip and fold), `_prompt` and `retry_prompt`. Not
@@ -473,3 +473,65 @@ major. The owner chose to commit and approve after round 2, so the review did no
   different model is the better choice if you have one. The check sends each excerpt and the parts to that model.
 - **Not done.** E and F. No live call. No security review (none asked): the excerpt and the parts reach only the prompt of the second
   model, in delimited data sections, and only the verdict words come back into any field.
+
+### Increment E (run on 2026-11-11; the owner decided to revise the prompts and repeat the trial)
+
+- **What was sent, and said beforehand.** For each piece of the six books, the title and up to 20 KB of the book's text to the model set
+  for `theme`; for each theme, its excerpt and up to five short sentences to the model set for `theme-check`; in the clear to the owner's
+  server, as card work goes, and nothing else. The owner added `"theme": "gemma"` and `"theme-check": "local"` to `tasks` and said "run it".
+  The models that answered were `gemma4:12b` and `phi4:latest`. Nothing was filed in the library.
+- **Provenance.** Run once on 2026-11-11 at commit `0e9211d`, by a script kept outside the repository (it calls
+  `themecheck.make_and_check_for_version` for each book with the frequencies of the library, times each call, and writes a report), prompts
+  `theme` v1 and `theme-check` v1. The report is outside the repository, mode 600, 130,684 bytes, sha256
+  **`844bafe09c361daaff9ed8d8e6dd57750b230151aee72fc7ff09cf67f0d9ae9f`**, and holds the numbers below and, for each kept theme, its
+  parts, marks, flags and the start of its excerpt. The books were the owner's choice from my proposal.
+- **Cost.** 348 seconds for six books, 33 extraction calls (mean 6.5 s) and 68 check calls (mean 1.8 s), 255,934 tokens in and 18,487 out.
+  So the whole library (559 pieces) would be about an hour for the extraction and about as long again for the checks, at the themes found
+  here, and more if themes that were dropped are kept. No book failed; 6 replies were refused for their shape (1 in HMC, 5 in the networks
+  paper) and kept aside, and each was asked again and accepted.
+- **The numbers by book** (pieces; themes kept of proposed; themes per 1,000 tokens, tokens taken as characters over 4; seconds; kept themes
+  flagged for the field's words; parts marked stated of parts with text):
+  Sequential analysis, 1 piece, 4 of 4, 1.63, 18 s, 4 of 4, 13 of 16. Stigmergy, 1 piece, 0 of 1, 0, 7 s, none kept. Soft Actor-Critic, 3
+  pieces, 3 of 12, 0.23, 26 s, 3 of 3, 13 of 13. Ising model, 4 pieces, 20 of 21, 1.24, 57 s, 17 of 20, 71 of 89. Hamiltonian Monte Carlo, 7
+  pieces, 16 of 24, 0.50, 82 s, 16 of 16, 55 of 74. Complex networks, 17 pieces, 27 of 56, 0.35, 158 s, 23 of 27, 81 of 101. **In all:
+  70 kept of 118 proposed, 0.49 themes per 1,000 tokens, 63 of 70 flagged (90 percent), 233 of 293 parts stated (80 percent).**
+  The earlier throwaway experiment found a median of 0.42 themes per 1,000 tokens. No runaway, no merge of near-identical themes, no
+  theme dropped as `unchecked`.
+- **Why 48 of 118 themes were dropped.** *29 for "the confidence is not a number"* (25 percent of all proposed; 1, 7, 6 and 15 in four
+  books): my drafting drops a theme if its confidence does not parse, and the model does not always give a number. *16 for an excerpt over
+  6,000 characters* (13 of them in the networks paper, up to 18,230 characters): the model names a span of blocks it cannot measure. *1 for blocks
+  not in the piece, 2 for a proof or a definition that serves only the text.* Of the 116 themes that reached the pointer step, 99 (85 percent)
+  had a pointer that held; every kept theme's anchor was checked by code and holds.
+- **What the kept themes look like.** Types: 37 concept, 21 method, 10 finding, 2 problem. Confidence: 66 of 70 are exactly 1.0, so it
+  carries no information. The median excerpt is 2,315 characters (largest 5,725). Marks by part: problem 57 of 65 stated, method 61
+  of 67, provides 56 of 64, needs 39 of 63, limits 20 of 34. Words flagged most: degree, target, phase, integration, correlations, energy,
+  attachment, lattice, exponents, typical, curvature, trajectories; the flags hold 5.6 words on average and some hold 12 to 16.
+  I read a sample of 10 themes against their excerpts (shown to the owner). The summaries and the descriptions are accurate to the text in
+  nine; one theme is a bibliography (a list of references of the Ising article), kept as "Historical and Mathematical Foundations of the
+  Ising Model", with parts marked `stated` that the list does not state, which shows that the prompt's "skip references" is not obeyed and that
+  the check marked a bibliography's parts as supported.
+- **What this says, and what it does not.**
+  (1) **The descriptions in words of no field use the field's words.** 90 percent of the kept themes are flagged, and the sample shows
+  real terms (Ising, Hamiltonian, Monte Carlo, Markov, Metropolis, degree distribution, power-law exponents, spontaneous magnetization,
+  phase space). The flag is informative here (it finds real leaks, with a few generic words such as "target", "typical", "sets"). The weave
+  needs descriptions that match across fields; with the field's vocabulary in them they will mostly match within a field. This model, with this
+  prompt, does not meet "in words that name no field" (the prompt for themes gives the same instruction as the card prompt, which the
+  cards' own descriptions did not meet either).
+  (2) **A quarter of the proposed themes are lost to a defect of mine**: dropping a theme because its confidence is not a number loses the
+  theme and keeps nothing, and the confidence that does parse is almost always 1.0.
+  (3) **Fourteen percent of the proposed themes are lost to the size bound**, because the model cannot see how long a block is.
+  (4) **The check marks 80 percent of parts as stated**, including the parts of a bibliography; one clear wrong case in ten is too few to say
+  how lenient it is, and the owner's reading of more `stated` parts against their excerpts is what shows it.
+  What cannot be concluded: six books chosen by me from a library of 175, one run, one first reply per piece from one extraction model and
+  one checking model, the sample of ten read by two people at most, no repetition, and no comparison with another model or another prompt.
+- **Recommendation (given before the owner's decision).** Do not run Increment F now. Make three changes to the method and repeat this
+  trial on the same six books, so the numbers can be compared: (a) a theme is never dropped for its confidence (an unreadable one is
+  kept with a neutral value and a flag, or the field is dropped from what the prompt asks); (b) each block in the prompt shows its length
+  in characters, so that a span can be kept under the bound; (c) the descriptions in words of no field get a second try: a prompt with a
+  worked example, or a rewrite step that is given the words the flag found and asked to say the same without them, or a larger model for that
+  step. Those are changes to Increments C and D (a plan of their own, or a revision of this one), not to the trial. The check's leniency and
+  the bibliography blocks are for the owner to judge from more samples before deciding on (d), a rule that skips blocks that are only
+  references.
+- **Owner's decision (2026-11-11):** "Go with your recommendation": do not go on to Increment F now; revise the method and repeat the trial
+  on the same six books. The changes are to Increments C and D of this approved plan, so they are made under a plan of their own
+  (`2026-11-11-revise-the-theme-prompts-after-the-first-trial`). This plan stays `In Progress` and Increment F is not started.
