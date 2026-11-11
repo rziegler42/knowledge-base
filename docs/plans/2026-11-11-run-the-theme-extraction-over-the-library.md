@@ -203,3 +203,41 @@ Reviewer: Codex through the review engine (plan-c1d81cc89b004688), 3 rounds of 3
   confidences that were read, so they beat any guessed 0.5 and any read confidence below 1.0 in the merge of near-identical themes, and, since the model writes `one` for nearly everything, the confidence
   still carries almost no signal; nothing else reads the confidence or the flag now (`confidence_unreadable` is read only in `themeextract.py`; the specs say a weak theme is weighted down by it, which is not built).
 - **Not done.** Increments B to E. No security review (none asked; the text is a model reply of at most 12 characters, read by a fixed pattern into one of two numbers).
+
+### Increment B (done; committed with the trailer for B)
+
+- **Done.** A new `engine/kb/themerun.py`: `plan(store, cfg, book_ids=None, again=False)` writes a record of the run and returns the books to make (with title and pieces), the
+  books left out with the reason (`inactive`, `no_card`, `no_conversion`, `too_long`, `already_made`), the skipped books whose check is another or not known, the books with a damaged
+  generation, the pieces, the calls that can be counted, the models and prompt versions, and the estimate with its basis. It refuses a missing model, a model switch that is off and a book
+  that is not there before anything is written. `write_record` and `read_record` check the form of the record on writing and on reading; the record holds ids, counts, reasons and the models
+  and prompt versions of each book's calls, and no text of a book or of a reply (titles are in the summary that is shown and not in the record). The new tests are `engine/tests/test_themerun.py`.
+- **How it reuses the card queue's code.** The record is the file `theme-run.json` in the run's folder under `card-runs` of the index root, written and read with `cardstate._put` and `_get`
+  (private names used from another module: no change to `cardstate`, which is outside this increment's areas), so it has their protections (no link followed, a private folder, one rename, mode 600).
+  The card manifest's own checks are card-specific and were not reused; `themerun` has its own. The lock of `cardstate` is for Increment C; because it is one lock for the whole folder, a
+  theme run and a card run cannot run at the same time, which is wanted (both drive the same server) and is to be said in the README with the command line (D). A card run's folder and a theme
+  run's folder can hold each other's files side by side without either reading the other's; a test shows it.
+- **Tests first.** The tests were written before the module; they failed because it did not exist (the first run was one import error), and when they were run against it two real gaps showed:
+  a generation with no themes must be judged by the newest record of the version and not by any record that matches, and a record of another generation is no evidence of the check.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themerun engine.tests.test_themeextract engine.tests.test_theme engine.tests.test_themecheck
+  engine.tests.test_textutil`: 249 tests OK (38 of the planner). `wb run code-work check`: no problems. No live call.
+- **Deliberate breaks.** 53 of `themerun.py`: 52 caught, the file restored byte for byte. One is not caught and is equivalent: the 500-character limit on a reason in an item, which the check that the
+  reason is its own cleaned text also enforces. Nine were first missed and led to tests (a malformed check entry in an item, the cap on the records read, an item that is not done taken as
+  evidence, one theme of another prompt among several, the limit of exactly `MAX_PIECES`, the books named checked before any is looked at, a name that is taken, a title not cleaned and cut). One redundant
+  condition was removed (`generation is not None` in `_done_item`: both callers compare the generation).
+- **Read-only on the real library (no model, no network, the record not written; the script switched the write off and no file was found afterwards).** The plan took 2.5 seconds: 175 books to make
+  (622 pieces: the estimate is 5,598 to 8,708 seconds, 1.6 to 2.4 hours, and 1,244 to 1,555 calls to the check), 1 book left out for having no card, none inactive, none without a conversion, none too long,
+  none already made (no book has themes yet), none with a damaged generation. The largest books are the HTTP RFC (29 pieces), the networks paper and PaLM (18 each).
+- **The model names, checked.** The skip rule compares the model name that a call reports with the `model` of the config entry. In both trials the one name the server reported for each task is exactly
+  the config entry's `model` (compared in a script that printed only whether they match), so the rule can fire on this server; had they differed, every book would have been made again, never skipped wrongly.
+- **A difference from the plan's wording, for the owner.** Step 1 listed "one whose newest generation is damaged (to make)". The code follows the plan's own rule (the newest *valid* generation, which is what a
+  reader gets): a book whose only generation is damaged is made; a book with an older generation that matches and a newer one that is damaged is skipped, and the plan lists the damaged one under `damaged`
+  so that it is seen. A test shows each. If the owner wants such a book made again, `--again` does it.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Applied: the point above (the damaged generation is listed, with a test); a test that a plan reaches no model (`models.run_job` and `models.call` patched to fail);
+  two items for one version are refused in the form; a test with a card run's folder present. Recorded, not applied: (1) only `KbError` is caught around a book's card, conversion and pieces, as in the card queue's
+  plan, so an unexpected error in one book stops the plan loudly before anything is written (Increment C's run treats an unexpected error as that book's failure); (2) the `reason` field of an item is free text
+  up to 500 characters, and in B it is always empty: **Increment C must keep the reasons to a fixed set of kinds and never put a title or a fragment of a reply there**; (3) the form accepts a `done`
+  item with no generation or no `made` (the callers compare, so it is harmless); (4) `_earlier_records` scans every folder of the card runs and is bounded only by the count of theme records it finds; (5) a
+  crash leaves `.theme-run.json.*.tmp` files that nothing cleans, as with the card manifest; (6) whoever can write the 0600 record can forge a `done` item for a generation with no themes and make the plan skip that
+  book, the same trust as the card journal.
+- **Not done.** Increments C to E. The README and the spec say nothing of the run yet (Increment D). No security review (none asked; no new input reaches a privileged use in a plan: it reads the library and
+  writes one record by the card queue's safe functions).
