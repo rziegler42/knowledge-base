@@ -173,3 +173,40 @@ Empty until a review is asked for.
   offset from the book's position, and the multi-piece test and a break cover that.
 - **Not done.** Increment B (the trial, which needs the owner's word and a statement of what is sent). No security review (none asked; no new input reaches a
   privileged use: the numbers are computed from the converted text).
+
+### Increment B (done; the success test is not met; the owner chose to go on to a plan for the library run)
+
+- **Run.** Once, at commit cd126b6, on the owner's word ("Run it") after the owner was told what is sent. The three PDFs, the models set for `theme` (gemma,
+  answering as gemma4:12b) and `theme-check` (local, answering as phi4:latest), prompt versions `theme` v4 and `theme-check` v1, nothing filed. The script is
+  kept outside the repository (the repeat trial's, cut to these books, and counting the sizes of the spans dropped). Report outside the repository, mode 600,
+  sha256 `2cb5f921fc76cd3c1821210dd0c7c2eb58d86dc253dbe803ab8ad98430a02913`; the repeat trial's report is sha256 `d236b2629b694691c3716123187109bb340f9cb8c231fc4e0ba4203da7428f6b`.
+  The script reproduced the repeat trial's numbers for these three books from that report before the run (68 proposed, 13 dropped for the size bound, the same 13 sizes).
+- **A book stopped.** The Soft Actor-Critic paper stopped: an answer to one of its pieces was refused (`the lists of the answer are not all of the same length`)
+  and, asked again, refused again, so the run of the book ended and it has no themes in this trial. In the repeat trial the same book completed (4 kept of 8 proposed).
+  Answers refused and kept aside, per book (this trial, then the repeat): Soft Actor-Critic 3, 1; Hamiltonian Monte Carlo 3, 3; complex networks 7, 5; 13 and 9 in all
+  (12 of the 13 were lists of unequal length, one a method over 300 characters). The refusals are of the same kinds as before, and one trial cannot say whether the
+  header raises their number.
+- **Per book (this trial, then the repeat): kept of proposed; dropped.** Soft Actor-Critic: stopped; 4 of 8 (3 for the size bound at 6,302, 6,517 and 10,947, 1 a proof).
+  Hamiltonian Monte Carlo: 24 of 25 (1 for the size bound, at 6,658); 16 of 18 (2 for the size bound). Complex networks: 41 of 48 (5 for the size bound, at
+  6,437, 7,952, 8,265, 12,311 and 18,230, and 2 for `the blocks are not numbers`); 34 of 42 (8 for the size bound).
+- **Reading against the success test.**
+  1. *No book stops:* **not met** (one of three).
+  2. *Themes dropped for the size bound 5 percent or fewer of those proposed:* **not met.** 6 of 73 proposed (8.2 percent) in the two books that completed. The repeat trial's
+     13 of 68 (19 percent) is for three books and so is not the like of it; for the same two books it was 10 of 60 (16.7 percent). So the share about halved and did not reach 5 percent.
+     The spans dropped for the limit: before, in these two books, 6,007, 6,030, 6,292, 6,300, 6,332 (all at most 6 percent over), 7,952, 8,233, 8,265, 18,120 and 18,202; now 6,437
+     (7 percent over), 6,658 (11 percent over), 7,952, 8,265, 12,311 and 18,230. The near misses fell from five to two; the spans far over the limit (more than 30 percent) fell from five
+     to four, and two of those four have exactly the sizes of two of the earlier spans (7,952 and 8,265): the model names those spans again.
+  3. *New, not in the plan:* 2 of the 73 proposed (one with no title) were dropped because their `blocks` were not numbers; there were none in the 88 of the repeat trial. The report keeps only
+     the reason, not what the model wrote, so what it wrote is not known; whether it wrote offsets where block numbers were wanted cannot be said.
+- **Other numbers, for the two books that completed (this trial, then the repeat).** Themes kept 65, 50. Themes with a flagged word 61 of 65 (94 percent), 46 of 50 (92 percent); flagged
+  words 227, 169. Parts stated 239 of 293 given (82 percent), 178 of 219 (81 percent); inferred 54, 41; not given 32, 31. Unreadable confidences 45 of 65 (69 percent: the model's word `one` in 44,
+  `one.0` in 1), 8 of 50 (16 percent). The example's own words appear in no theme. Calls: `theme` 26, 26; `theme-check` 65, 50. Tokens in 243,897, 215,343; out 13,294, 11,431. Time: 298.4 s
+  for the two books, 250.7 s before; 317.6 s for the three, 284.5 s before.
+- **What cannot be concluded.** One run on three books and one model pair. The stop of a book and the 13 against 9 refusals could be sampling and could be the longer header; one trial does not separate them.
+  Whether the offsets fixed the near misses or the model happened to name shorter spans this time is not known; the repeated sizes suggest that for the spans far over the limit the model ignores it
+  and that a header cannot fix them.
+- **The owner's decision** (after the reading above and my recommendation, "Go with your recommendation"): stop changing the prompt; go on with the prompt `v4` as it is to a plan for the
+  library run (Increment F of `2026-11-11-make-the-theme-the-unit-of-the-weave`), which is to handle a book whose answers are refused without ending the run, keep a journal, give an estimate
+  and settle what is done with the model's confidence (`one` in 69 percent of these themes). The fallbacks named in this plan (a header that says the last block reachable, a retry
+  that tells the model its span is too long) are not built. The Soft Actor-Critic stop is not repeated on its own.
+- **Not done.** The plan for the library run. No change to tracked code; no security review (none asked).
