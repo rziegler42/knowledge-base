@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Assumptions and constraints, item 4; Risks and sensitive actions",
+      "problem": "The plan says the library has 175 eligible books and 622 pieces, but the project README says the library has about 80 books and 79 cards. Since eligibility requires a current card, this makes the stated scope, time estimate, network-disclosure figure, and expected live-run report inconsistent with the documented library state.",
+      "severity": "major",
+      "suggestion": "Reconcile the counts before approval: cite the current read-only planning result and its date, or replace the fixed figures with the count `themes-run plan` will produce. Update the estimate and privacy disclosure to use that reconciled count."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Non-goals; Assumptions and constraints, item 1; Increment B, step 1",
+      "problem": "The non-goal says not to remake a book whose themes were made with the configured extraction prompt and model, but the specified skip rule examines only the newest valid generation. Thus a book with an older matching generation and a newer generation made with a different model or prompt is explicitly planned again. That can cause unrequested model calls across the library.",
+      "severity": "major",
+      "suggestion": "Choose and state one invariant. Either qualify the non-goal to say “whose newest valid generation” or change the skip rule and tests to recognize any valid matching generation; also state which generation remains active when the latter rule skips the book."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan aligns with the named roadmap candidate and theme spec, but its live-run sizing conflicts with the documented library state and its remaking rule is internally inconsistent.",
+  "verdict": "changes_needed"
+}
