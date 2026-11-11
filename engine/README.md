@@ -1058,6 +1058,24 @@ asked once more with the reason, and the card fails only if that answer is refus
 real books, on a server that serves a small and a larger model: a short page made its card in a few seconds once the model was
 loaded, a three-piece paper in under a minute, and a 13-piece paper (12 read) in under two minutes.
 
+## Themes
+
+A theme is an idea-level piece of what a version says: a title, a summary in the source's words, a description in words of no field in
+five parts (problem, method, needs, provides, limits), each part marked `stated` or `inferred`, an anchor that points back to one
+contiguous stretch of the converted text, a type (`problem`, `method`, `finding`, `concept` or `other`), a confidence from 0 to 1, how it
+was made and a list of flags (`docs/specs/theme.md`). So far the engine holds the form of a theme and its keeping (`kb/theme.py`,
+`engine/tests/test_theme.py`); it does not make themes yet, and no command uses them (the plan
+`2026-11-11-make-the-theme-the-unit-of-the-weave`, Increment A).
+
+The themes of a version are filed together as a generation, a payload `derived/theme/<n>` holding the one file `themes.json`, read-only
+and marked untrusted, through the same incoming area as a card. A new generation is the next number and never changes an earlier one. A
+generation read without a number is the newest one that passes its check (its payload against its hashes, the file, and the form of every
+theme), and one read by its number is refused if it fails. A read without a number skips a newer generation that fails its check and
+returns an older one without saying so, so `theme.damaged` lists the generations of a version that fail, with the reason. The check refuses a key that is not in the form, text over its limit or not in
+the cleaned form, a part with text and no mark or with a mark and no text, two themes with one id, a theme of another book or version, and
+an anchor whose ends are not locators of one kind made against the conversion the theme names, or whose end of a page or an offset comes
+before its start. Whether an anchor holds in the text is not checked here. Everything read from a file of themes is data from outside.
+
 ## Converting what is captured
 
 A version that has been fetched and scanned (or whose scan failed or was skipped) is converted to text by `kb/convert.py`

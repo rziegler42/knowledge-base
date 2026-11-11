@@ -279,4 +279,42 @@ major. The owner chose to commit and approve after round 2, so the review did no
 
 ## Result
 
-Empty until work starts.
+### Increment A (done, not committed; waits for the owner's word to commit)
+
+- **Reused (step 1).** From `card.py`: the shape of `generations`, `file` and `read` (a payload `derived/<tool>/<n>`, one JSON file,
+  `store.file_payload` with `untrusted=True`, `store.verify_payload` on reading, `models._loads` for strict JSON), the cleaned form of
+  text (`textutil.clean`, and `textutil.title` for the title), and the checks of a record's model and prompt version (`models._valid_model`,
+  `models._VERSION`). From `locator.py`: `check` for each end of an anchor and the patterns of the conversion. Not reused: card's
+  rule that a read without a number refuses when the newest fails; the plan says the newest that passes is read, so this differs on purpose.
+- **Done.** New `engine/kb/theme.py` (the form of a generation and of a theme as the plan's table gives it, `check_theme`, `validate`,
+  `make`, `generations`, `file`, `read`, and `damaged`), new `engine/tests/test_theme.py` (43 tests), and a section "Themes" in
+  `engine/README.md`. No other tracked file changed. No model call, no command and no other module uses the new module yet.
+- **Tests first.** The module did not exist, so the first run failed on the import. One test then failed on the first implementation
+  (a read without a number gave only a general reason, hiding "nothing else in the payload"); the module was changed to carry the newest
+  generation's reason, not the test weakened.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_theme engine.tests.test_card`: 138 tests OK.
+  `wb run code-work check`: no problems.
+- **Deliberate breaks.** 26, each caught and restored byte for byte (scratchpad `breaks_theme.py`): the rules of marks (3), duplicate ids,
+  the kinds and conversion of the ends, a theme of another book, the bound on themes, a boolean confidence, the order of the ends of an
+  offset and of a page, the sizes on filing and on reading, the list of damaged generations, the marker-words guard of the title, the
+  cleaned form of text, the excerpt hash, reusing a generation number, filing as trusted, not verifying the payload, another file in
+  the payload, a book of another version on reading, not skipping an invalid newest generation, a link taken as a generation, a boolean
+  as a generation number, no check before filing. Two were missed at first: `math.isfinite` was redundant (the range check already
+  refuses nan and infinity) and was removed; a boolean generation number was refused by another layer with another message, and the test
+  now asserts the message.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Applied: (1) the end of an anchor of kind page or offset may not come
+  before its start (a section cannot be ordered without the text, so it is left to B), with tests; (2) `theme.damaged` lists the
+  generations that fail, because a read without a number otherwise rolls back silently to an older one, and the README says so;
+  (3) a test that could pass for the wrong reason on the size check at reading was replaced by one that cannot; (5) the comment on the
+  size limits now says a theme at every limit is about 9 KB; (7) an unused import removed. Not applied: (4) the checks are asserted by
+  the kind of refusal, not by the one check that fired, which the reviewer called adequate; (6) see below.
+- **For the owner.** The limits I added that the plan's table did not give, and which you may change: at most 2,000 themes and 8 MB for a
+  generation, at most 10 flags with a kind of 1 to 40 and a detail of 1 to 300 characters, and a heading path of at most 6 parts of 1 to
+  80 characters.
+- **For Increments B to F.** (a) The anchor `path` is not tied to the `path` in a section locator; B decides whether they must agree.
+  (b) `validate` accepts a generation with no themes, so a later failed or empty extraction, once filed, would become the active
+  generation and hide an earlier one with themes: C and F decide whether an empty result is filed. (c) Only the title is guarded against the
+  words of an untrusted-text marker; when themes are shown, the summary, the neutral parts and the flags need the same guard that
+  `card._shown` gives card text.
+- **Not done.** Nothing of B to F. No live call was made. No security review was run (none asked): the surface is a file read and
+  checked, with no path, command or network use of any field.
