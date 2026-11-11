@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "required": [
+    "verdicts"
+  ],
+  "additionalProperties": false
+}

@@ -360,7 +360,7 @@ major. The owner chose to commit and approve after round 2, so the review did no
   strings compared with the block paths, so it cannot read outside the conversion, and its cost is bounded by the size check and by
   `locator.resolve`'s own limit.
 
-### Increment C (done, not committed; waits for the owner's word to commit)
+### Increment C (done; committed as 3eb7df2)
 
 - **Reused (step 1).** From `cardmake.py`: `_prompt` (sections between delimiters that hold a random token no input holds, the rules
   naming the token), `_TOKEN`, `retry_prompt` (asked once more with the reason in a marked section), `similar` (repeats), the shape of the
@@ -416,3 +416,60 @@ major. The owner chose to commit and approve after round 2, so the review did no
   piece, to that model.
 - **Not done.** D, E, F. No live call. No security review (none asked): a reply reaches only checked fields, numbers pass a regular
   expression, the range check and `anchor_of`, and the refused-answer file is written by the existing `refused.keep`.
+
+### Increment D (done, not committed; waits for the owner's word to commit)
+
+- **Reused (step 1).** From the cards: the verdict words and the shape of the check (`cardmake.VERDICTS`, the job with one verdict for
+  each item, `card-check`'s rule that a verdict is one of the three words after strip and fold), `_prompt` and `retry_prompt`. Not
+  reused: the notes and quotes of the card grounding (a theme is checked against its excerpt, not against notes) and `cardmarks`
+  (it counts marks of cards).
+- **Done.** New `engine/kb/themecheck.py` (`words`, `frequencies`, `library_frequencies`, `field_vocabulary`, `field_flag`, `check_job`,
+  `check_prompt`, `check_themes`, `make_and_check_for_version`), `engine/kb/schemas/theme-check.json`, `engine/tests/test_themecheck.py`
+  (35 tests); `models.OPTIONAL_TASKS` now also holds `theme-check`; `theme.excerpt_text`; in `themeextract.py`, `_ask` takes the job and
+  `prepare` is split out of `make_for_version` (same behaviour); the three assertions about the card's kinds of work now exclude both
+  theme kinds; a paragraph in the README. Nothing is filed by the new code.
+- **Deviation from the plan, stated.** The plan's fixture for the vocabulary is four small books. With four books no word can pass the
+  15 percent rule (one book of four is 25 percent), so the fixture has twenty small books, and the boundaries of each constant are tested on
+  both sides (4 and 5 occurrences; 3 of 20 books and 4 of 20; 10 of 20 and 9 of 20).
+- **Decisions made here.** (1) A part is `stated` only when the check says `supports`; `partly` and `no` leave it `inferred`. (2) One call
+  for each theme that has a part with text; parts with no text are not asked about, and a theme with none is flagged `no_description`. (3) A
+  theme whose check is refused twice is dropped as `unchecked` and both refusals are kept aside; a call that fails is raised. (4) A flag does not
+  change a mark and does not drop a theme. (5) The anchor of every theme is checked against the text, and both models are found, before
+  the first call. (6) The vocabulary is the plan's rule as written.
+- **Tests first, seen failing.** The module did not exist (import error). Two tests of mine were wrong against the algorithm and were
+  corrected before the code (a string-literal precedence slip in the fixture, and one expectation in the 9-of-20 case).
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest` on `test_theme`, `test_themeextract`, `test_themecheck`,
+  `test_models`, `test_card`, `test_cardmake`, `test_cardmake_earlier`, `test_read`, `test_convert`: 1022 tests OK. `wb run code-work
+  check`: no problems. No live call; nothing sent anywhere.
+- **Deliberate breaks.** 32 of `themecheck.py`, all caught and restored byte for byte (scratchpad `breaks_themecheck.py`), after two were
+  missed at first (a test of the compatibility forms that `casefold` already handled, and no test of the library counted from the store);
+  the 81 of Increments A, B and C still hold.
+- **What the rule does on the real library (read-only, no model, no network).** The library is 175 books and 42,263 distinct words; 328
+  words are common. A book's vocabulary has a median of 47 words (2 to 442). Applied to the neutral fields of the existing cards, the rule
+  flags 174 of 175; with the title alone it flags 119, with the title and topics 173, and the constants of the text rule (5 to 40
+  occurrences, 15 to 2 percent) change the number by 1 or 2, so they hardly matter. Of the 1,445 words flagged, 822 come from the card's
+  topics, 425 only from the text and 198 from the title. The most flagged are mostly terms of a field (training, distributed, neural,
+  transformer, stochastic, reinforcement, quantum, hash, cryptographic) with some generic words (search, language, memory, critical, scaling).
+  Reading: the rule finds the field's words that the cards let through, and has some false flags from generic topic words. It says nothing
+  yet about the descriptions of themes: the prompt for themes gives the same instruction as the card prompt (no name of a field, game,
+  product or person), so whether they leak less is what Increment E measures. If E shows the flag fires on nearly every theme it carries
+  no information, and the owner then decides the constants; I have not changed them.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Applied: (1) my README said the descriptions of themes are made under
+  a stricter prompt, which the prompts do not show, and the claim is removed; the most flagged words were listed and read, as it
+  suggested; (6, in part) `library_frequencies` counts one text at a time instead of holding them all, and a book file that cannot be read is
+  left out; (7) a comment in a test. Recorded, not applied: (2) the model and prompt version of the check are in the records that
+  `make_and_check_for_version` returns and not in the generation, because the plan's form of a theme has no field for them, so the rule of
+  Increment F that skips a book "made with the same prompt version and models" cannot see the check, and F must keep the records beside the
+  generation or the plan must be revised; (3) a failed call during the checks loses the extraction and the checks before it (no journal; one call
+  for each theme makes it about one more call for each theme); (4) the prompt calls a part supported if the excerpt "clearly leads to it",
+  which widens `stated` toward inference as the card check does, so E should read a sample of `stated` parts against their excerpts; (5) a
+  text in the book that tells the checking model to say `supports` could raise marks wrongly, which delimiters and a rule against
+  following the data make harder and no test can show; (6) the rest: a book that is not current or not active is not in the count, so the
+  count of the checked book can be one low, the whole library is counted again for every book unless `frequencies` is passed (F passes
+  it), the skip of inactive books is not tested, and the library is counted from the conversion in use, which is what the plan calls the
+  newest of the current version only if they coincide; (8) a theme that arrives with ten flags drops with that reason.
+- **For the owner, before Increment E.** You add `"theme-check": "<name>"` to `tasks` as well as `"theme"` (I never write the config). The
+  check is a judgment of whether an excerpt states a sentence, and the extraction model is a poor judge of its own output, so a second,
+  different model is the better choice if you have one. The check sends each excerpt and the parts to that model.
+- **Not done.** E and F. No live call. No security review (none asked): the excerpt and the parts reach only the prompt of the second
+  model, in delimited data sections, and only the verdict words come back into any field.

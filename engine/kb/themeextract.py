@@ -190,11 +190,12 @@ def _merge(drafts):
     return kept, dropped
 
 
-def _ask(cfg, name, prompt, launcher, root, on_refused):
-    """One call for the job. An answer refused for its shape is asked once more with the reason, and the first refusal is given to
-    `on_refused` (an error in it is ignored). A runaway is not asked again, and it, like a second refusal, is raised."""
+def _ask(cfg, name, prompt, launcher, root, on_refused, job=THEME_JOB):
+    """One call for a job (the extraction, unless another is given). An answer refused for its shape is asked once more with the reason,
+    and the first refusal is given to `on_refused` (an error in it is ignored). A runaway is not asked again, and it, like a second
+    refusal, is raised."""
     try:
-        return models.run_job(cfg, name, prompt, THEME_JOB, launcher=launcher, root=root)
+        return models.run_job(cfg, name, prompt, job, launcher=launcher, root=root)
     except models.AnswerRefused as refusal:
         if str(refusal).startswith("runaway"):
             raise
@@ -203,7 +204,7 @@ def _ask(cfg, name, prompt, launcher, root, on_refused):
                 on_refused(refusal)
             except Exception:   # keeping the answer is for the owner to read: it must not stop the extraction or hide the refusal
                 pass
-        return models.run_job(cfg, name, cardmake.retry_prompt(prompt, str(refusal)), THEME_JOB, launcher=launcher, root=root)
+        return models.run_job(cfg, name, cardmake.retry_prompt(prompt, str(refusal)), job, launcher=launcher, root=root)
 
 
 def extract(cfg, book_id, version_id, ref, conversion, title, launcher=None, root=None, on_refused=None):
@@ -264,10 +265,9 @@ def _keep(store, refusal, book_id, version_id):
         return None, "the answer could not be kept: " + textutil.clean(str(e), 200)
 
 
-def make_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None):
-    """The themes of one version (the current one, if none is named), made and checked but not filed: `extract`'s result and, under
-    `generation`, the generation for `theme.file`. Themes are made after the card, so a version with no card that can be read is
-    refused, and so is one with no conversion; both before anything is sent. A refused answer is kept aside and raised as `ThemeRefused`."""
+def prepare(store, book_id, version_id=None):
+    """`(version id, the current card, the reference of the conversion in use, the conversion)` of a version (the current one, if none is
+    named). Themes are made after the card, so a version with no card that can be read is refused, and so is one with no conversion."""
     version_id = version_id or store.read_book(book_id).get("current_version")
     if not version_id:
         raise KbError("the book has no version")
@@ -278,7 +278,14 @@ def make_for_version(store, cfg, book_id, version_id=None, launcher=None, root=N
     loaded = convert.load_in_use(store, book_id, version_id)
     if loaded is None:
         raise KbError("the version has no conversion to make themes from")
-    ref, conversion, _ = loaded
+    return version_id, current, loaded[0], loaded[1]
+
+
+def make_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None):
+    """The themes of one version (the current one, if none is named), made but not checked or filed: `extract`'s result and, under
+    `generation`, the generation for `theme.file`. A version with no card or no conversion is refused before anything is sent. A refused
+    answer is kept aside and raised as `ThemeRefused`."""
+    version_id, current, ref, conversion = prepare(store, book_id, version_id)
     try:
         got = extract(cfg, book_id, version_id, ref, conversion, current["title"], launcher=launcher, root=root,
                       on_refused=lambda refusal: _keep(store, refusal, book_id, version_id))

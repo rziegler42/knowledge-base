@@ -274,6 +274,15 @@ def check_against(ref, conversion, anchor):
     return anchor
 
 
+def excerpt_text(ref, conversion, anchor):
+    """The text of the excerpt an anchor points to (whole blocks, from the block at its start to the block at its end), if the anchor
+    holds in the conversion `ref` names as it is stored; otherwise a refusal. At most MAX_EXCERPT characters."""
+    check_against(ref, conversion, anchor)
+    first = locator.resolve(anchor["start"], ref, conversion)["block"]
+    last = locator.resolve(anchor["end"], ref, conversion)["block"]
+    return conversion.text[conversion.blocks[first].start:conversion.blocks[last].end]
+
+
 def generations(store, book_id, version_id):
     """The numbers of the generations filed for a version, lowest first. A folder whose name is not a plain number, or is a link, is
     ignored."""

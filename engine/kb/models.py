@@ -124,8 +124,9 @@ def _entry(name, e):
 
 
 REQUIRED_TASKS = ("card-notes", "card", "card-check")  # the kinds of model work that a card needs; the engine attaches no model to any of them
-OPTIONAL_TASKS = ("card-more", "theme")  # the kinds that may be left unset: the work is then not done, and that is said. `theme` makes the
-# themes of a book (`themeextract`); a card does not need it
+OPTIONAL_TASKS = ("card-more", "theme", "theme-check")  # the kinds that may be left unset: the work is then not done, and that is said.
+# `theme` makes the themes of a book (`themeextract`) and `theme-check` checks what a description says against the excerpt
+# (`themecheck`); a card needs neither
 TASKS = REQUIRED_TASKS + OPTIONAL_TASKS
 EMBED_TASKS = ("card-embed",)  # the kind of work that turns text into vectors: it names an entry of the kind embedding, no card task may
 

@@ -1117,6 +1117,26 @@ pointer, so the themes under it are dropped with that reason; a truncated or par
 is missing; there is no bound on the number of themes of a whole book other than 2,000 in a generation and 24 in a reply; and the merge of
 near-identical themes is one pass and does not compare a theme with those it replaced.
 
+**Checking the descriptions of themes** (`kb/themecheck.py`, `kb/schemas/theme-check.json`; no command uses it yet, and it files
+nothing). `themecheck.make_and_check_for_version(store, cfg, book_id)` makes the themes (above) and then checks each one in two ways. It
+needs a second new kind of work in your config, `"theme-check": "<name>"` (optional for cards; without it nothing is sent, and both models
+are found before the first call). *The words of the field:* a book's vocabulary is the words of its title, of the topics and adjacent
+topics of its card, and the words that occur at least 5 times in its text while at most 15 percent of the books of the library hold them,
+less the words that half of the books or more hold (a word is a run of four or more letters, folded to plain lower case, not stemmed). A
+description that holds a word of the vocabulary as a whole word is flagged (`field_words`, with the words found) and kept. *Support:* a
+second model is shown the excerpt and the parts of the description that have text, and says for each whether the excerpt supports it
+(`supports`, `partly`, `no`); a part it says is supported is marked `stated`, every other stays `inferred`. One call for each theme. A
+check whose answer is refused, asked once more with the reason and refused again, drops its theme as `unchecked` and the refusals are
+kept aside; the others go on. A theme with no part of a description is not asked about and is flagged `no_description`. The anchor of every
+theme is checked against the text before anything is sent. Read-only, on the 175 cards of the library, the vocabulary of a book has a
+median of 47 words, and applied to the neutral fields of the existing cards it flags 174 of 175 (the title alone 119, the title and topics
+173, so the words of the text hardly change the number). Of the 1,445 words flagged in them, 822 come from the card's topics, 425 only from
+the text and 198 from the title; the most often flagged are mostly terms of a field (training, distributed, neural, transformer,
+stochastic, reinforcement, quantum, hash) with some generic ones (search, language, memory, critical). So the rule finds the field's words
+that the card prompt lets through, with some false flags. The prompt for themes gives the same instruction (no name of a field, game,
+product or person), so whether the descriptions of themes do better is not known; Increment E measures it. The flag is a reason to look
+and not a verdict. A book whose conversion cannot be read is left out of the count of the library.
+
 ## Converting what is captured
 
 A version that has been fetched and scanned (or whose scan failed or was skipped) is converted to text by `kb/convert.py`
