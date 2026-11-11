@@ -23,7 +23,7 @@ MAX_SUB_PROBLEMS = 5
 MAX_SUB_CHARS = 1000
 DEFAULT_LIMIT = 5
 MAX_LIMIT = 10
-MAX_REPLY = 60000  # characters of the printed reply; the helper reads at most 65,536
+MAX_REPLY = 61000  # characters of the printed reply; the helper reads at most 65,536
 _SAME = ("model", "query_prefix", "cards_searched", "stale", "without_vector")  # what every search of one reply must agree on
 
 

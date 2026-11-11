@@ -67,12 +67,22 @@ def match_expression(query):
     return quote_words(words_of(query))
 
 
+def _spelling(words):
+    return re.compile("|".join(re.escape(w) for w in words), re.IGNORECASE)
+
+
+def spells(text, words):
+    """Whether one of `words` is spelled in `text`, by the rule `excerpt_of` uses to find its place: a substring, in any case, within
+    the first SCAN_CHARS characters of the text on one line. The index matches whole words with accents ignored, so the two can differ."""
+    return bool(words) and _spelling(words).search(" ".join(text.split()), 0, SCAN_CHARS) is not None
+
+
 def excerpt_of(text, words):
     """At most EXCERPT_CHARS characters of `text` on one line, around the first place one of `words` is spelled in it."""
     flat = " ".join(text.split())
     if len(flat) <= EXCERPT_CHARS:
         return flat
-    found = re.compile("|".join(re.escape(w) for w in words), re.IGNORECASE).search(flat, 0, SCAN_CHARS)
+    found = _spelling(words).search(flat, 0, SCAN_CHARS)
     start = max(0, (found.start() if found else 0) - EXCERPT_CHARS // 3)
     if start:
         after = flat.find(" ", start, start + 40)  # begin at a word

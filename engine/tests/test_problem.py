@@ -11,7 +11,7 @@ from engine.tests.test_vectors import TABLE, SearchCase, with_embedding
 
 from kb import KbError, card, catalog, problem, search, vectors
 
-MERGED_KEYS = {"book_id", "version_id", "generation", "is_current", "added", "score", "matched", "excerpt_field", "partial", "grounding",
+MERGED_KEYS = {"book_id", "version_id", "generation", "is_current", "added", "score", "matched", "excerpt_field", "excerpt_mark", "partial", "grounding",
                "citation", "untrusted", "excerpt", "found_by"}
 
 
@@ -187,7 +187,7 @@ class SizeTest(ProblemCase):
         got = self.run_search(["Q-A", "Q-B", "Q-C", "Q-D", "Q-NEG"], limit=10)
         self.assertGreaterEqual(len(got["books"]), 10)
         self.assertLess(len(problem.render(got)), problem.MAX_REPLY)
-        self.assertEqual(problem.MAX_REPLY, 60000)
+        self.assertEqual(problem.MAX_REPLY, 61000)  # raised from 60,000 when the entry gained `excerpt_mark`: 50 entries of 1,216 characters
         # the most that a reply can hold is 25 books (five sub-problems of five results; at the largest limit of 10 there can be 50 finds
         # but a book is held once, and the library's own cards bound it): the largest entry here, times 50, must still fit
         largest = max(len(json.dumps(b, indent=1)) for b in got["books"])

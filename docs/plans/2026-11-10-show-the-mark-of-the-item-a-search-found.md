@@ -147,4 +147,40 @@ applied. Round 2: no meaningful findings, converged.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The mark of the excerpt's item in a search result
+
+- **Step 1, the facts, confirmed.** Before the change, the test of a card with topics `alpha one`, `beta quokka`, `gamma three` showed the
+  excerpt `alpha one ; beta quokka ; gamma three` (the whole joined text, three items), so a window does cross items. The substring case
+  (`topical sweets` before `the topic of bees`, query `topic`) is a test that passes after the change with the earlier item shown and
+  marked, as the contract says. A fact found while reading: a topic is at most 60 characters and a key idea at most 300 (`MODEL_SHAPE`
+  in `engine/kb/card.py`), both under the 400 of an excerpt, so the item-based excerpt is always the whole item and is never cut.
+- **Done.** `engine/kb/catalog.py`: `result_of` takes `(field, excerpt, mark)` from `pick` and gives every result `excerpt_mark`;
+  `_item_excerpt` cuts the excerpt of `topics` and `ideas` from the first item (in card order) that `search.spells` accepts, and gives
+  the mark of that item from `grounding`; when no item spells a word, or the card has no marks, the excerpt is cut from the joined text as
+  before and the mark is `null` (with no marks the excerpt is still the one item). `engine/kb/search.py`: `spells` and `_spelling`, the
+  rule `excerpt_of` already used, now shared. `engine/kb/vectors.py`: its `pick` gives `None` as the third value. Caveats and every other
+  field give `null`. The spec line (`docs/specs/card.md`, Searching the catalog) and the README paragraph on a result say it.
+- **Deviation, decided by the owner.** `engine/kb/problem.py` `MAX_REPLY` is raised from 60,000 to 61,000 characters (README and spec text
+  changed with it, and the value pinned in `test_problem`). The new key adds about 24 characters to an entry, and an existing test
+  (`test_five_sub_problems_at_the_largest_limit_over_many_cards_fit_in_the_bound`) requires 50 of the largest entries to fit: 50 entries of
+  1,216 characters are 60,800, and before the key the margin was under 1 percent. The plan did not name this change. I stopped and
+  put three options to the owner (raise the bound, change the test's factor from 50 to 25, or leave the key out of `problem-search`);
+  the owner chose to raise it. The helper reads at most 65,536.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_catalog engine.tests.test_search
+  engine.tests.test_vectors engine.tests.test_problem engine.tests.test_card`: 459 tests, OK (13 new in `ExcerptMarkTest`, one in
+  `test_vectors`; `MERGED_KEYS` of `test_problem` gains the key); `wb run code-work check`: no problems. The new tests were seen failing
+  first (missing key, and the joined window). 11 deliberate breaks, each from green and the files restored byte for byte, were each
+  caught: the mark of the first item, of the field, the marks swapped, the excerpt cut from the joined text again, a mark for a caveat,
+  a mark for a field with none, a mark invented for a card with no marks, the first item taken when none spells a word, a mark given to a
+  result by meaning, the key dropped from a problem-search entry, and a case-sensitive spelling rule. Two were first missed (a defensive
+  check of the mark's value, which cannot be reached through a validated card and was removed instead of tested; and the case rule, for
+  which `test_the_case_of_the_query_does_not_matter` was added). A read-only `card-search` on the library (words `sampling`, `clustering`,
+  `regression`, `search`) gave `inferred` and `stated` marks on topic and key-idea excerpts, and the `inferred` case (`hierarchical
+  sampling`) is `[inferred]` in the card's own text. No model was called; the search by meaning was not run on the library.
+- **Review.** Independent `reviewer`, one exchange, no blocking finding and no security risk named. It could not run anything and did
+  not read the new tests or the document edits. Its three notes: the Result must be written (done here); `test_search.py` is among the
+  modules named and is unchanged, which is fine because its tests pass; and the fall back to the joined text with `null` when the index
+  matched an item the substring rule does not see is as the plan specifies. It noted that the `MAX_REPLY` change is not in the plan,
+  which the Deviation above records.
+- **Not done.** No security review (the owner was told none was recommended); the search by meaning on the library; marks for caveats
+  (Deferred work).

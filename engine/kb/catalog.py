@@ -231,6 +231,23 @@ def _matched(conn, row_id, words, columns):
             and conn.execute("SELECT 1 FROM cards_fts WHERE cards_fts MATCH ? AND rowid = ?", ("{" + field + "} : (" + any_word + ")", row_id)).fetchone()]
 
 
+_ITEM_LISTS = {"topics": "topics", "ideas": "key_ideas"}  # the catalog's column of a list of marked items: the key of the model part and of the marks
+
+
+def _item_excerpt(made, column, words):
+    """For a column that holds a list of marked items (topics, key ideas): the excerpt cut from the first item, in the order of the card,
+    that holds a spelling of a query word by the rule `excerpt_of` uses, and the mark of that item. So the excerpt and the mark are of one
+    item. `None` if no item spells a word (the index also matches with accents ignored) or the card carries no marks; the caller then
+    cuts the excerpt from all the items as it does for any other field. The marks are read only after `card.validate`, which requires one
+    for each item."""
+    key = _ITEM_LISTS[column]
+    marks = (made.get("grounding") or {}).get(key)
+    for number, item in enumerate((made["model"] or {}).get(key, [])):
+        if fulltext.spells(item, words):
+            return card._shown(fulltext.excerpt_of(item, words)), marks[number]["mark"] if marks else None
+    return None
+
+
 def damaged():
     return KbError(f"the catalog holds a card that is not valid or does not belong to its row: run `{COMMAND}` to build it again")
 
@@ -239,8 +256,9 @@ def result_of(row, score, matched, pick):
     """One result from a row of the catalog `(id, book_id, version_id, generation, is_current, added, citation, card)`: the keyword
     search and the search by meaning both build theirs here, so that a result has the same keys, the same checks and the same markers
     whichever found it. Everything printed comes from the checked card, or is checked against it: a row altered after the build is
-    refused. `score` is the search's own; `matched` lists the fields that matched; `pick(card)` gives the field the excerpt is from
-    and the excerpt, as text with no marker (or `None` and an empty one)."""
+    refused. `score` is the search's own; `matched` lists the fields that matched; `pick(card)` gives the field the excerpt is from,
+    the excerpt, as text with no marker (or `None` and an empty one), and `excerpt_mark`: `stated` or `inferred` when the excerpt is the
+    text of one topic or key idea of the card, and `None` otherwise. The mark is one of two fixed words, never text of the card."""
     row_id, row_book, row_version, generation, current, added, cite, stored = row
     try:
         made = json.loads(stored)
@@ -249,9 +267,9 @@ def result_of(row, score, matched, pick):
                 or not (added == "" or card._ISO.fullmatch(added)) or type(generation) is not int or generation < 1
                 or current not in (0, 1)):
             raise damaged()
-        excerpt_field, excerpt = pick(made)
+        excerpt_field, excerpt, excerpt_mark = pick(made)
         return {"book_id": row_book, "version_id": row_version, "generation": generation, "is_current": bool(current),
-                "added": added, "score": score, "matched": matched, "excerpt_field": excerpt_field,
+                "added": added, "score": score, "matched": matched, "excerpt_field": excerpt_field, "excerpt_mark": excerpt_mark,
                 "partial": made["partial"], "grounding": card.grounding_counts(made), "citation": cite, "untrusted": True,
                 "excerpt": f"{fulltext.MARKER}\n{excerpt}",
                 "text": f"{fulltext.MARKER}\n{card.render(made)}\n{citation.END_MARKER}"}
@@ -291,8 +309,12 @@ def search(index_root, query, limit=DEFAULT_LIMIT, book_id=None, within="all"):
 
         def pick(made, fields=fields):
             if not fields:
-                return None, ""
-            return fields[0], card._shown(fulltext.excerpt_of(_fields(made)[FIELDS.index(fields[0])], words))
+                return None, "", None
+            if fields[0] in _ITEM_LISTS:
+                one = _item_excerpt(made, fields[0], words)
+                if one:
+                    return fields[0], one[0], one[1]
+            return fields[0], card._shown(fulltext.excerpt_of(_fields(made)[FIELDS.index(fields[0])], words)), None
 
         results.append(result_of((row_id, row_book, row_version, generation, current, added, cite, stored), float(rank), fields, pick))
     return results

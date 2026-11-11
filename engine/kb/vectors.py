@@ -480,7 +480,7 @@ def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, 
     results = []
     for score, key, field in ranked[:limit]:
         def pick(made, field=field):
-            return CATALOG_NAMES[field], card._shown(fulltext.excerpt_of(made["model"][field], []))
+            return CATALOG_NAMES[field], card._shown(fulltext.excerpt_of(made["model"][field], [])), None
 
         results.append(catalog.result_of(by_card[key][:8], score, [CATALOG_NAMES[field]], pick))
     return {"meaning": True, "model": meta["model"], "query_prefix": "query_prefix" in entry, "cards_searched": len(usable), "stale": stale,

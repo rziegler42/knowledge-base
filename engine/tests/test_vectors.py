@@ -927,6 +927,11 @@ class ResultTest(SearchCase):
         self.assertTrue(first["excerpt"].startswith(search.MARKER + "\n"))
         self.assertIs(first["untrusted"], True)
 
+    def test_a_result_by_meaning_has_the_mark_key_and_it_is_none(self):
+        for r in self.find("Q-A")["results"]:
+            self.assertIn("excerpt_mark", r)
+            self.assertIsNone(r["excerpt_mark"])
+
     def test_the_result_for_the_same_card_is_the_keyword_result_apart_from_the_score_and_what_matched(self):
         (keyword,) = catalog.search(self.store.cfg["index_root"], "one problem", within="neutral")
         (first, _) = self.find("Q-A")["results"]

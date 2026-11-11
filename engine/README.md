@@ -779,7 +779,11 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   same library gives the same order after a rebuild. A search reads only the catalog, so it works with the bulk root away, and it is
   stopped after ten seconds.
 - **A result** gives the card: its text, rendered as `card-show` renders it, between the untrusted-text markers (a field that holds
-  the words of a marker is withheld); an excerpt of the first field that matched, on one line behind the marker; which fields
+  the words of a marker is withheld); an excerpt of the first field that matched, on one line behind the marker (for topics and key
+  ideas the excerpt is the one item that holds a spelling of a query word, found as a substring in any case, and not a window over
+  the joined items); `excerpt_mark`, `stated` or `inferred`, the mark of that item, and `null` for an excerpt of any other field
+  (caveats too), for a card that carries no marks, and when no item spells a word (the index also matches with accents ignored, and
+  then the excerpt is cut from all the items as for any other field); which fields
   matched (on the side that was searched); the facts that hold no free text: the book and version, the generation of the card,
   whether it is for the book's current version, the date the book was added, the score (smaller is better), whether the card is
   partial, and `grounding`: how many of its items are `stated` and how many `inferred` (`{"stated": 4, "inferred": 6}`), or
@@ -856,7 +860,7 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   book's title. **Nothing is set aside by field**: no card says which field a book belongs to (every shelf is `default`), so the caller
   sets aside the books of the problem's own field. Everything that can be refused is refused before the first sub-problem is sent (the
   count, the length and the text of the sub-problems, the limit, the launcher, a missing or foreign file of vectors); a search that fails
-  later fails the whole command and prints nothing. The reply is measured as it will be printed, and one of more than 60,000 characters
+  later fails the whole command and prints nothing. The reply is measured as it will be printed, and one of more than 61,000 characters
   is refused before anything is printed, with a lower limit named, because the helper that an agent calls reads at most 65,536
   characters and a cut reply is not valid JSON. If the cards or the vectors change between two sub-problems the command is refused.
   `--launcher` is the absolute path of an executable file, for a caller whose `PATH` does not hold `wb`; without it `wb` is looked for

@@ -173,6 +173,12 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 
 - **[proposed]** The catalog is searched by keyword and by meaning. A result gives the card, a score, the date the book was added,
   and how complete its source was, for example that the shelf is still being seeded.
+- **[proposed]** Built in the engine: a keyword result carries `excerpt_mark`, the mark (`stated` or `inferred`) of the topic or key
+  idea that its excerpt shows, so that the mark is known where the card's text is not shown (`problem-search` keeps no card text). For
+  those two fields the excerpt is the one item that holds a spelling of a query word, not a window over the joined items. It is `null`
+  for any other field (caveats included, until the owner decides what to do with them), for a card without marks, for a match the
+  excerpt rule does not see (accents), and for every result of a search by meaning (whose neutral sentences have no `inferred` mark in
+  the library).
 - **[proposed]** Built in the engine: `card-search QUERY --meaning` searches by meaning over the three embedded neutral fields of a
   card (problem, approach, provides). The query is turned into a vector by the embedding model of the config, each card is ranked by
   the cosine to its closest field (larger is closer), and a result is a keyword result with that cosine as its score and the field
@@ -183,7 +189,7 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 - **[proposed]** Built in the engine: `problem-search -- SUB ...` puts a problem to the search by meaning as one to five
   sub-problems (the caller restates and splits the problem; the engine calls no chat model). Each is searched as above and the reply
   holds each sub-problem's ranked books and one list in which each book appears once, with its best result without the card text
-  (a reply over 60,000 characters is refused) and the sub-problems that returned it with the rank and score of each. **The engine
+  (a reply over 61,000 characters is refused) and the sub-problems that returned it with the rank and score of each. **The engine
   sets nothing aside by field**: no card says which field a book belongs to (every shelf is `default`), so the caller sets aside the
   books of the problem's own field. An agent in a project reaches it through the `kb` helper (`wb run kb problem-search`), which sends
   the sub-problems to the embedding model of the config and to nothing else, and through the skill `pose-a-problem` that the package

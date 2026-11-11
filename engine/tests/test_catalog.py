@@ -291,6 +291,120 @@ class MarkInResultTest(GroundedCardsTest):
         self.assertEqual(self.find("inferred"), [])
 
 
+class ExcerptMarkTest(GroundedCardsTest):
+    """`excerpt_mark`: the mark of the topic or key idea that the excerpt shows, and nothing otherwise (the plan
+    `2026-11-10-show-the-mark-of-the-item-a-search-found`)."""
+
+    def marked(self, title, model, **marks):
+        """A grounded card whose items have the marks given by field (`topics=["stated", "inferred"]`); the others are all inferred."""
+        book, version = self.carded(title=title, filed=False)
+        entry = lambda m: {"mark": m, "notes": ["1.1"] if m == "stated" else [], "quote": "q" if m == "stated" else None}
+        g = {f: [entry(m) for m in marks.get(f, ["inferred"] * len(model[f]))] for f in ("topics", "key_ideas", "caveats")}
+        g["neutral_limits"] = entry("inferred") if model["neutral_limits"] else None
+        g["dropped"] = {"topics": 0, "key_ideas": 0, "caveats": 0, "neutral_limits": 0 if model["neutral_limits"] else 1}
+        card.file(self.store, card.make(self.store, book, version, model=copy.deepcopy(model), records=[], grounding=g))
+        return book
+
+    def one(self, query):
+        self.rebuild()
+        (result,) = catalog.search(self.store.cfg["index_root"], query)
+        return result
+
+    @staticmethod
+    def shown(result):
+        return result["excerpt"].split("\n", 1)[1]
+
+    def test_every_result_has_the_key_and_it_is_a_fixed_word_or_nothing(self):
+        self.carded(title="Old format", model=dict(MODEL, topics=["quokka"]))
+        self.marked("New format", dict(MODEL, topics=["quokka"]), topics=["stated"])
+        self.carded(title="Quokka title only", model=None)
+        self.rebuild()
+        results = catalog.search(self.store.cfg["index_root"], "quokka")
+        self.assertEqual(len(results), 3)
+        for r in results:
+            self.assertIn(r["excerpt_mark"], ("stated", "inferred", None))
+        self.assertEqual(sorted(str(r["excerpt_mark"]) for r in results), ["None", "None", "stated"])
+
+    def test_a_topic_gives_its_own_mark_whichever_place_it_has_in_the_list(self):
+        model = dict(MODEL, topics=["first quokka", "second wombat", "third numbat"])
+        self.marked("Mixed", model, topics=["stated", "inferred", "stated"])
+        for query, mark, topic in (("quokka", "stated", "first quokka"), ("wombat", "inferred", "second wombat"), ("numbat", "stated", "third numbat")):
+            with self.subTest(query=query):
+                r = self.one(query)
+                self.assertEqual((r["excerpt_field"], r["excerpt_mark"], self.shown(r)), ("topics", mark, topic))
+
+    def test_the_reverse_order_gives_the_reverse_marks(self):
+        model = dict(MODEL, topics=["first quokka", "second wombat"])
+        self.marked("Mixed", model, topics=["inferred", "stated"])
+        self.assertEqual(self.one("quokka")["excerpt_mark"], "inferred")
+        self.assertEqual(self.one("wombat")["excerpt_mark"], "stated")
+
+    def test_a_key_idea_gives_its_own_mark(self):
+        model = dict(MODEL, key_ideas=["idea about a quokka", "idea about a wombat", "idea about a numbat"])
+        self.marked("Ideas", model, key_ideas=["stated", "inferred", "stated"])
+        r = self.one("wombat")
+        self.assertEqual((r["excerpt_field"], r["excerpt_mark"], self.shown(r)), ("ideas", "inferred", "idea about a wombat"))
+        self.assertEqual(self.one("numbat")["excerpt_mark"], "stated")
+
+    def test_the_excerpt_is_the_one_item_and_not_a_window_over_its_neighbours(self):
+        model = dict(MODEL, topics=["alpha one", "beta quokka", "gamma three"])
+        self.marked("Crossing", model, topics=["stated", "inferred", "stated"])
+        r = self.one("quokka")
+        self.assertEqual(self.shown(r), "beta quokka")  # the joined text "alpha one ; beta quokka ; gamma three" is under 400 characters
+        self.assertEqual(r["excerpt_mark"], "inferred")
+
+    def test_a_word_in_two_items_of_different_marks_shows_the_first_in_card_order(self):
+        model = dict(MODEL, topics=["quokka in a first item", "quokka in a second item"])
+        self.marked("Twice", model, topics=["inferred", "stated"])
+        r = self.one("quokka")
+        self.assertEqual((self.shown(r), r["excerpt_mark"]), ("quokka in a first item", "inferred"))
+
+    def test_a_word_that_is_part_of_a_longer_word_in_an_earlier_item_is_what_the_excerpt_shows_and_marks(self):
+        model = dict(MODEL, topics=["topical sweets", "the topic of bees"])  # the index matches the token "topic" of the second item only
+        self.marked("Substring", model, topics=["stated", "inferred"])
+        r = self.one("topic")
+        self.assertEqual((self.shown(r), r["excerpt_mark"]), ("topical sweets", "stated"))
+
+    def test_the_case_of_the_query_does_not_matter(self):
+        self.marked("Case", dict(MODEL, topics=["first Quokka", "second wombat"]), topics=["stated", "inferred"])
+        r = self.one("QUOKKA")
+        self.assertEqual((self.shown(r), r["excerpt_mark"]), ("first Quokka", "stated"))
+
+    def test_a_match_the_text_does_not_spell_that_way_keeps_the_excerpt_as_it_was_and_has_no_mark(self):
+        model = dict(MODEL, topics=["café society", "other topic"])
+        self.marked("Accents", model, topics=["stated", "inferred"])
+        r = self.one("cafe")  # found because accents are ignored; the excerpt rule does not see the word
+        self.assertEqual((r["excerpt_field"], r["excerpt_mark"], self.shown(r)), ("topics", None, "café society ; other topic"))
+
+    def test_a_caveat_has_a_mark_on_the_card_and_none_in_the_result(self):
+        model = dict(MODEL, caveats=["the quokka claim is dated"])
+        self.marked("Caveat", model, caveats=["stated"])
+        r = self.one("quokka")
+        self.assertEqual((r["excerpt_field"], r["excerpt_mark"], self.shown(r)), ("caveats", None, "the quokka claim is dated"))
+        self.assertEqual(r["grounding"], {"stated": 1, "inferred": 6})  # topics 2, key ideas 3 and the limit are inferred
+
+    def test_a_field_with_no_marked_items_gives_none(self):
+        self.marked("Summary", dict(MODEL, summary="a quokka summary"))
+        r = self.one("quokka")
+        self.assertEqual((r["excerpt_field"], r["excerpt_mark"]), ("summary", None))
+
+    def test_a_card_of_the_earlier_form_and_a_card_with_no_model_part_give_none(self):
+        self.carded(title="Old format", model=dict(MODEL, topics=["quokka topic"]))
+        self.carded(title="Quokka without a model part", model=None)
+        self.rebuild()
+        results = catalog.search(self.store.cfg["index_root"], "quokka")
+        self.assertEqual(len(results), 2)
+        self.assertEqual({r["excerpt_mark"] for r in results}, {None})
+        self.assertEqual({r["excerpt_field"] for r in results}, {"topics", "title"})
+
+    def test_the_longest_key_idea_a_card_allows_is_shown_whole_with_its_mark(self):
+        longest = "word " * 58 + "xxx quokka"  # 300 characters, the most a key idea may have: under the 400 of an excerpt
+        self.assertEqual(len(longest), 300)
+        self.marked("Long", dict(MODEL, key_ideas=["short one", longest, "short three"]), key_ideas=["stated", "inferred", "stated"])
+        r = self.one("quokka")
+        self.assertEqual((self.shown(r), r["excerpt_mark"]), (longest, "inferred"))
+
+
 class FailureTest(CatalogCase):
     def test_a_failure_while_building_leaves_the_old_catalog_as_it_was(self):
         self.carded(title="One")
