@@ -489,7 +489,10 @@ hand; nothing in the engine writes it:
   against it). A schema is a tracked file in `engine/kb/schemas/`, passed to the bridge by its path relative to the
   project root; the bridge reads that one file and nothing else, and refuses a path with a link in it.
 - A call that runs past its time limit (the entry's `timeout`, 600 s by default, plus 15 s), or prints more than 2 MB, is killed
-  with whatever it started. A reply must be bridge contract version 2: `contract` the integer 2, `ok` a real boolean, `vendor`
+  with whatever it started. So is a call whose engine is killed (for example by the `kb` helper's 60-second limit): a watchdog
+  that the engine starts beside the launcher, outside its process group, kills the launcher's group when the engine dies. The
+  guarantee starts when the watchdog says it is ready, a few milliseconds after the launcher starts; an engine killed before that
+  leaves the launcher to the entry's own timeout. A reply must be bridge contract version 2: `contract` the integer 2, `ok` a real boolean, `vendor`
   `ollama`, a valid model name, non-empty text and both token counts.
 
 Not covered. Starting the bridge costs about a tenth of a second, and a call is dominated by the server loading and running the

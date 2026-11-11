@@ -21,6 +21,7 @@ import json, os, subprocess, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
 plan = json.load(open(os.path.join(here, "plan.json")))
 json.dump(sys.argv[1:], open(os.path.join(here, "args.json"), "w"))
+open(os.path.join(here, "launcher.pid"), "w").write(str(os.getpid()))
 if not plan.get("noread"):
     open(os.path.join(here, "stdin.bin"), "wb").write(sys.stdin.buffer.read())
 open(os.path.join(here, "cwd.txt"), "w").write(os.getcwd())
@@ -303,6 +304,122 @@ class ProcessTest(Base):
         with mock.patch.object(models, "GRACE", 0):
             message = self.refused("a" * models.MAX_PROMPT, cfg=config(local=entry(timeout=1)))
         self.assertIn("time", message)
+
+
+DRIVER = """
+import json, sys
+sys.path.insert(0, {engine!r})
+from kb import models
+cfg, launcher, root = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3]
+models.call(cfg, "local", "a question", launcher=launcher, root=root)
+"""
+
+
+def gone(pid, seconds=5):
+    """True when no process has this pid within `seconds`."""
+    end = time.monotonic() + seconds
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        if time.monotonic() >= end:
+            return False
+        time.sleep(0.05)
+
+
+class WatchdogTest(Base):
+    def spy(self):
+        """Every process that models starts, in order: the launcher first, then its watchdog."""
+        real, made = subprocess.Popen, []
+
+        def popen(*args, **kw):
+            proc = real(*args, **kw)
+            made.append(proc)
+            return proc
+
+        patch = mock.patch.object(models.subprocess, "Popen", popen)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return made
+
+    def kill_leftovers(self, *pids):
+        for pid in pids:
+            try:
+                os.kill(pid, 9)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    def test_a_launcher_does_not_outlive_an_engine_that_is_killed(self):
+        self.plan(child=True, sleep=60)
+        driver = os.path.join(self.dir, "driver.py")
+        with open(driver, "w") as f:
+            f.write(DRIVER.format(engine=ENGINE_DIR))
+        proc = subprocess.Popen([sys.executable, "-I", driver, json.dumps(config()), self.launcher, self.root], start_new_session=True)
+        self.addCleanup(proc.wait)
+        self.addCleanup(self.kill_leftovers, proc.pid)
+        for _ in range(200):  # the launcher has read its prompt, so the watchdog was ready before it was fed
+            if self.seen("child.pid"):
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the call did not reach the launcher")
+        launcher, child = int(self.seen("launcher.pid")), int(self.seen("child.pid"))
+        self.addCleanup(self.kill_leftovers, launcher, child)
+        os.kill(proc.pid, 9)  # no chance to clean up
+        proc.wait()
+        self.assertTrue(gone(launcher), "the launcher is still running")
+        self.assertTrue(gone(child), "the child of the launcher is still running")
+
+    def test_a_watchdog_that_does_not_say_ready_stops_the_call_and_the_launcher(self):
+        self.plan(child=True, sleep=60)  # a launcher that stays up until it is killed, whatever happens to its pipes
+        silent = os.path.join(self.dir, "silent.py")
+        with open(silent, "w") as f:
+            f.write("import time\ntime.sleep(60)\n")
+        made = self.spy()
+        began = time.monotonic()
+        with mock.patch.object(models, "SUPERVISOR", silent), mock.patch.object(models, "WATCHDOG_WAIT", 0.5):
+            message = self.refused()
+        self.assertLess(time.monotonic() - began, 10)  # the launcher is killed, not waited for until its 60 seconds are up
+        self.assertIn("watchdog", message)
+        self.addCleanup(self.kill_leftovers, *[p.pid for p in made])
+        self.assertTrue(gone(made[0].pid), "the launcher is still running")
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(made[0].pid, 0)
+        self.assertTrue(gone(made[1].pid), "the silent watchdog is still running")
+
+    def test_a_watchdog_that_cannot_be_started_stops_the_call_and_the_launcher(self):
+        self.plan(child=True, sleep=60)
+        made = self.spy()
+        began = time.monotonic()
+        with mock.patch.object(models, "_PYTHON", os.path.join(self.dir, "no-such-python")):
+            message = self.refused()
+        self.assertLess(time.monotonic() - began, 10)
+        self.assertIn("watchdog", message)
+        self.addCleanup(self.kill_leftovers, *[p.pid for p in made])
+        self.assertEqual(len(made), 1)
+        self.assertTrue(gone(made[0].pid), "the launcher is still running")
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(made[0].pid, 0)
+
+    def test_an_error_inside_a_call_still_stops_the_launcher_and_ends_the_watchdog(self):
+        self.plan(child=True, sleep=60)
+        made = self.spy()
+        with mock.patch.object(models.threading.Thread, "start", side_effect=RuntimeError("no thread")):
+            with self.assertRaises(RuntimeError):
+                self.call()
+        self.addCleanup(self.kill_leftovers, *[p.pid for p in made])
+        self.assertTrue(gone(made[0].pid), "the launcher is still running")
+        with self.assertRaises(ProcessLookupError):
+            os.killpg(made[0].pid, 0)
+        self.assertEqual(made[1].returncode, 0)  # told "done" once the launcher was gone
+
+    def test_a_normal_call_tells_its_watchdog_it_is_done(self):
+        made = self.spy()
+        self.call()
+        self.addCleanup(self.kill_leftovers, *[p.pid for p in made])
+        self.assertEqual(len(made), 2)
+        self.assertEqual(made[1].returncode, 0)  # told "done", not stopped by a closed pipe (3) or by its clock (4)
 
 
 class ReplyTest(Base):

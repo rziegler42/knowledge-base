@@ -10,10 +10,12 @@ import json
 import math
 import os
 import re
+import select
 import stat
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -26,6 +28,10 @@ MAX_OUT = 2_000_000   # what is read from the bridge: its reply object, with the
 MAX_ERR = 4096
 DEFAULT_TIMEOUT = 600  # the bridge's own default, in seconds
 GRACE = 15             # seconds more than the bridge's time limit before the engine stops it
+SUPERVISOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "supervisor.py")  # the watchdog that outlives the engine
+WATCHDOG_WAIT = 5      # seconds the engine waits for the watchdog to say it is ready
+WATCHDOG_MARGIN = 10   # seconds more than the engine's own limit before the watchdog stops the launcher itself
+_PYTHON = sys.executable
 CONTRACT = 2
 VENDOR = "ollama"
 BRIDGE = "ask-ollama"
@@ -246,76 +252,140 @@ def _kill(proc):
         pass
 
 
+def _start_watchdog(pid, seconds):
+    """Start the watchdog of `supervisor.py` for the process group of `pid`, and wait for it to say it is ready. It kills that
+    group if the pipe to it closes without the word "done" (the engine died, however), or after `seconds`. Raises `KbError`
+    when it cannot be started or does not say ready; the caller then stops the launcher."""
+    try:
+        dog = subprocess.Popen([_PYTHON, "-I", "-S", SUPERVISOR, str(pid), str(seconds)], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise KbError("the call was stopped: its watchdog could not be started") from None
+    try:
+        ready, _, _ = select.select([dog.stdout], [], [], WATCHDOG_WAIT)
+        line = dog.stdout.readline() if ready else b""
+    except (OSError, ValueError):
+        line = b""
+    finally:
+        dog.stdout.close()
+    if line != b"ready\n":
+        dog.kill()
+        dog.wait()
+        dog.stdin.close()
+        raise KbError("the call was stopped: its watchdog did not start")
+    return dog
+
+
+def _end_watchdog(dog, done=True):
+    """Tell the watchdog the launcher is gone and make sure it has ended. With `done` false (the launcher could not be
+    stopped), the pipe is closed with no word, so the watchdog kills the launcher's group itself."""
+    try:
+        if done:
+            dog.stdin.write(b"done\n")
+        dog.stdin.close()
+    except (OSError, ValueError):  # ValueError: already closed, when the cleanup runs a second time
+        pass
+    try:
+        dog.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        dog.kill()
+        dog.wait()
+
+
 def _run(argv, data, root, limit):
     """Run the bridge and return (exit code, standard output, standard error, why it was stopped or None). The process and
-    whatever it started are killed when it runs past `limit` seconds or prints more than MAX_OUT bytes."""
+    whatever it started are killed when it runs past `limit` seconds or prints more than MAX_OUT bytes, and when the engine
+    dies once the watchdog is ready (a few milliseconds after the start)."""
     try:
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=root,
                                 shell=False, close_fds=True, start_new_session=True)
     except OSError as e:
         raise KbError("the launcher could not be started: " + textutil.clean(e.strerror or "error", 100)) from None
-    kept = {"out": b"", "err": b""}
-    over = threading.Event()
+    try:
+        dog = _start_watchdog(proc.pid, limit + WATCHDOG_MARGIN)
+    except BaseException:
+        _kill(proc)
+        proc.wait()
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            stream.close()
+        raise
+    try:
+        kept = {"out": b"", "err": b""}
+        over = threading.Event()
 
-    def feed():
-        try:
-            proc.stdin.write(data)
-        except (OSError, ValueError):
-            pass
-        finally:
+        def feed():
             try:
-                proc.stdin.close()
+                proc.stdin.write(data)
+            except (OSError, ValueError):
+                pass
+            finally:
+                try:
+                    proc.stdin.close()
+                except (OSError, ValueError):
+                    pass
+
+        def pump(stream, key, cap, stops):
+            try:
+                got = stream.read(cap + 1)
+                kept[key] = got[:cap]
+                if len(got) > cap:
+                    if stops:
+                        over.set()
+                    else:
+                        while stream.read(65536):
+                            pass
             except (OSError, ValueError):
                 pass
 
-    def pump(stream, key, cap, stops):
-        try:
-            got = stream.read(cap + 1)
-            kept[key] = got[:cap]
-            if len(got) > cap:
-                if stops:
-                    over.set()
-                else:
-                    while stream.read(65536):
-                        pass
-        except (OSError, ValueError):
-            pass
-
-    threads = [threading.Thread(target=feed), threading.Thread(target=pump, args=(proc.stdout, "out", MAX_OUT, True)),
-               threading.Thread(target=pump, args=(proc.stderr, "err", MAX_ERR, False))]
-    for t in threads:
-        t.daemon = True
-        t.start()
-    deadline = time.monotonic() + limit
-    why = None
-    while True:
-        if over.is_set():
-            why = "output"
-            break
-        if not threads[1].is_alive() and not threads[2].is_alive():
-            try:
-                proc.wait(timeout=max(0.05, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired:
+        threads = [threading.Thread(target=feed), threading.Thread(target=pump, args=(proc.stdout, "out", MAX_OUT, True)),
+                   threading.Thread(target=pump, args=(proc.stderr, "err", MAX_ERR, False))]
+        for t in threads:
+            t.daemon = True
+            t.start()
+        deadline = time.monotonic() + limit
+        why = None
+        while True:
+            if over.is_set():
+                why = "output"
+                break
+            if not threads[1].is_alive() and not threads[2].is_alive():
+                try:
+                    proc.wait(timeout=max(0.05, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    why = "time"
+                break
+            if time.monotonic() >= deadline:
                 why = "time"
-            break
-        if time.monotonic() >= deadline:
-            why = "time"
-            break
-        threads[1].join(0.02)
-    if why:
-        _kill(proc)
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        _kill(proc)
-    for t in threads:
-        t.join(2)
-    for stream in (proc.stdin, proc.stdout, proc.stderr):
+                break
+            threads[1].join(0.02)
+        if why:
+            _kill(proc)
         try:
-            stream.close()
-        except (OSError, ValueError):
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _kill(proc)
+        _end_watchdog(dog, done=proc.returncode is not None)  # first of the cleanup: the sooner, the shorter the window
+        for t in threads:
+            t.join(2)
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+        return proc.returncode, kept["out"], kept["err"], why
+    except BaseException:  # nothing it started may outlive a call that fails for a reason of the engine's own
+        _kill(proc)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
             pass
-    return proc.returncode, kept["out"], kept["err"], why
+        _end_watchdog(dog, done=proc.returncode is not None)
+        for stream in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+        raise
 
 
 def _no_repeats(pairs):
