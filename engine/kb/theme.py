@@ -7,9 +7,12 @@ A theme belongs to one version of one book and to one generation. The themes of 
 generation is never changed. As for cards, the newest generation that passes its check is the active one, and a generation can be read
 by its number.
 
-This module holds the form of a theme and of a generation, their check, and their filing and reading. It makes no model call and does
-not look at the book: finding the anchor in the text is `theme_anchor`'s work, and making themes is the extraction's. A theme read from
-a file is untrusted data, so every piece of text in it must already be in the form `textutil.clean` gives."""
+This module holds the form of a theme and of a generation, their check, their filing and reading, and the finding of an anchor in a
+conversion. It makes no model call; making themes is the extraction's. A model names where a theme comes from by a pointer
+(`{"kind", "start", "end"}`, each end the `at` of a locator of the conversion's kind), and code, not the model, finds the exact text:
+`anchor_of` turns a pointer into an anchor, `find` finds a stored anchor again in a conversion (the same one or another), and
+`check_against` refuses an anchor that does not hold. A span is whole blocks, from the block of the start to the block of the end.
+A theme read from a file is untrusted data, so every piece of text in it must already be in the form `textutil.clean` gives."""
 import json
 import os
 import re
@@ -24,6 +27,7 @@ MAX_FILE = 8 * 1024 * 1024    # bytes of one generation: 2,000 themes of about 3
 MAX_THEMES = 2000             # themes in one generation; the bound that catches a runaway is the extraction's, and is lower
 MAX_GENERATION = 999_999
 MAX_PATH = 6                  # headings in the path of an anchor, as in a locator
+MAX_EXCERPT = 6000            # characters of the converted text that one theme may point to, from the start of its first block to the end of its last
 TYPES = ("problem", "method", "finding", "concept", "other")   # `other` is a theme without a clear type, and it is kept
 MARKS = ("stated", "inferred")
 PARTS = ("problem", "method", "needs", "provides", "limits")
@@ -159,6 +163,115 @@ def validate(gen):
 def make(book_id, version_id, themes):
     """A generation of themes for a version, checked."""
     return validate({"format": FORMAT, "book_id": book_id, "version_id": version_id, "themes": list(themes)})
+
+
+def _place(kind, place):
+    """The place of one end of a pointer, in the form a locator of that kind has it, or a refusal."""
+    if not isinstance(place, dict):
+        raise KbError("an end of a pointer is not a place")
+    if kind == "section":
+        ok = (set(place) == {"path", "paragraph"} and isinstance(place["path"], list) and 1 <= len(place["path"]) <= MAX_PATH
+              and all(isinstance(t, str) and 0 < len(t) <= convert.PATH_PART_CHARS for t in place["path"])
+              and locator._is_int(place["paragraph"], 0))
+    elif kind == "page":
+        ok = set(place) == {"page", "block"} and locator._is_int(place["page"], 1) and locator._is_int(place["block"], 1)
+    else:
+        ok = set(place) == {"offset"} and locator._is_int(place["offset"], 0)
+    if not ok:
+        raise KbError(f"an end of a pointer is not a place of the kind {kind!r}")
+    return place
+
+
+def _block(conversion, kind, place):
+    """The index of the one block at a place of a pointer, or a refusal."""
+    found = locator._place({"kind": kind, "at": _place(kind, place)}, conversion)
+    if not found:
+        raise KbError("the conversion has no block at that place")
+    if len(found) > 1:
+        raise KbError("more than one block of the conversion is at that place")
+    return found[0]
+
+
+def _between(ref, conversion, first, last):
+    """The anchor for the blocks from `first` to `last` of a conversion `ref` names. The excerpt is at most MAX_EXCERPT characters and
+    has words; its hash is that of its words, lower-cased, without punctuation, joined by single spaces."""
+    blocks = conversion.blocks
+    size = blocks[last].end - blocks[first].start   # of the converted text, with the blank line between blocks; measured before it is copied
+    if size > MAX_EXCERPT:
+        raise KbError(f"the excerpt is {size} characters, more than the {MAX_EXCERPT} a theme may point to")
+    text = conversion.text[blocks[first].start:blocks[last].end]
+    words = locator.words(text)
+    if not words:
+        raise KbError("the excerpt has no words")
+    anchor = {"start": locator.make(ref, conversion, first), "end": locator.make(ref, conversion, last),
+              "path": list(blocks[first].path), "excerpt_sha256": locator._hash(words)}
+    _anchor(anchor, {k: ref[k] for k in ("tool", "version", "generation")})
+    return anchor
+
+
+def anchor_of(ref, conversion, pointer):
+    """The anchor for a pointer a model named, in the conversion `ref` names: `{"kind", "start", "end"}`, the kind that of the
+    conversion (section, page or offset), each end the place a locator of that kind has (a heading path and a paragraph, a page and a
+    block, a character offset). The span is the whole blocks from the block at the start to the block at the end; an offset only
+    chooses its block. A pointer that names no block, more than one, a kind other than the conversion's, an end before its start, an
+    excerpt over MAX_EXCERPT characters or with no words is refused."""
+    if not isinstance(pointer, dict) or set(pointer) != {"kind", "start", "end"}:
+        raise KbError("a pointer has exactly a kind, a start and an end")
+    kind = pointer["kind"]
+    if not isinstance(kind, str) or kind not in locator.KINDS:
+        raise KbError("a pointer is of a kind this reader does not know")
+    if kind != locator._kind_of(conversion):
+        raise KbError(f"the pointer is of the kind {kind!r} and the conversion is of the kind {locator._kind_of(conversion)!r}")
+    first, last = _block(conversion, kind, pointer["start"]), _block(conversion, kind, pointer["end"])
+    if last < first:
+        raise KbError("the end of a pointer comes before its start")
+    return _between(ref, conversion, first, last)
+
+
+def _form(anchor):
+    """The conversion an anchor was made against, after its form is checked."""
+    if not isinstance(anchor, dict) or set(anchor) != set(_ANCHOR):
+        raise KbError("the anchor does not have the keys of an anchor")
+    own = _end(anchor["start"])["conversion"]
+    _anchor(anchor, own)
+    return own
+
+
+def find(ref, conversion, anchor):
+    """Find a stored anchor again in the conversion `ref` names, which may be the one it was made against or another. Returns
+    `{"status", "anchor", "reason"}`: `found` (both ends are at their places in the same conversion and the text between them is the text
+    that was anchored), `found_by_text` (the ends were found by their words in another conversion, and the text between them is still
+    the text that was anchored; `anchor` is the anchor made against this one), or `not_found` (`anchor` is None and `reason` says why).
+    The text is the same only if the hash of the whole excerpt found equals the stored one, and an anchor in the conversion it was made
+    against is `found` only if it is also exactly the anchor code makes for that text (its path and both ends). An anchor that is not
+    in the form of an anchor, and a text too large to search (`locator.resolve` refuses it), are refusals (`KbError`), not a status."""
+    own = _form(anchor)
+    lost = lambda why: {"status": "not_found", "anchor": None, "reason": why}
+    start = locator.resolve(anchor["start"], ref, conversion)
+    end = locator.resolve(anchor["end"], ref, conversion)
+    if start["status"] == "not_found" or end["status"] == "not_found":
+        return lost("an end of the anchor is not in the text")
+    first, last = start["block"], end["block"]
+    if last < first:
+        return lost("the end of the anchor is found before its start")
+    try:
+        made = _between(ref, conversion, first, last)
+    except KbError as e:
+        return lost(str(e))
+    if made["excerpt_sha256"] != anchor["excerpt_sha256"]:
+        return lost("the text between the ends is not the text that was anchored")
+    same = own == {k: ref[k] for k in ("tool", "version", "generation")} and start["status"] == end["status"] == "found"
+    if same and made != anchor:  # the text is right, but the path or an end is not what code would have made for it
+        return lost("the path or places of the anchor are not those of the text between its ends")
+    return {"status": "found" if same else "found_by_text", "anchor": made, "reason": ""}
+
+
+def check_against(ref, conversion, anchor):
+    """The anchor, if it holds in the conversion `ref` names as it is stored; otherwise a refusal."""
+    got = find(ref, conversion, anchor)
+    if got["status"] != "found":
+        raise KbError("the anchor does not hold in the text: " + (got["reason"] or "it is found only by its words"))
+    return anchor
 
 
 def generations(store, book_id, version_id):

@@ -279,7 +279,7 @@ major. The owner chose to commit and approve after round 2, so the review did no
 
 ## Result
 
-### Increment A (done, not committed; waits for the owner's word to commit)
+### Increment A (done; committed as d68f6d8)
 
 - **Reused (step 1).** From `card.py`: the shape of `generations`, `file` and `read` (a payload `derived/<tool>/<n>`, one JSON file,
   `store.file_payload` with `untrusted=True`, `store.verify_payload` on reading, `models._loads` for strict JSON), the cleaned form of
@@ -318,3 +318,44 @@ major. The owner chose to commit and approve after round 2, so the review did no
   `card._shown` gives card text.
 - **Not done.** Nothing of B to F. No live call was made. No security review was run (none asked): the surface is a file read and
   checked, with no path, command or network use of any field.
+
+### Increment B (done, not committed; waits for the owner's word to commit)
+
+- **The shapes of a pointer a model can name (step 1).** `{"kind", "start", "end"}`. The kind must be that of the conversion
+  (`locator._kind_of`: `section` if it has headings, `page` if it has pages, otherwise `offset`). Each end is the `at` of a locator of
+  that kind: for `section`, `{"path": [headings, 1 to 6, each 1 to 80 characters], "paragraph": n}` (the heading itself is paragraph 0;
+  the numbers are those `convert.build` gives); for `page`, `{"page": p, "block": b}` (the block counts from 1 among the blocks of the
+  page); for `offset`, `{"offset": n}` (a character offset in the converted text, which must lie inside a block and not in the blank line
+  between two). The span is the whole blocks from the block at the start to the block at the end; an offset only chooses its block. A
+  span may cross sections and pages; its path is that of its first block.
+- **Done.** In `engine/kb/theme.py`: `anchor_of` (pointer to anchor), `find` (a stored anchor found again in a conversion, with the status
+  `found`, `found_by_text` or `not_found` and a reason), `check_against` (refuses all but `found`), and `MAX_EXCERPT` = 6,000. 30 new
+  tests in `engine/tests/test_theme.py` (73 in all there). A paragraph in the engine README. `locator.py` and `convert.py` are used
+  and not changed.
+- **Decisions made here.** (1) The size bound of 6,000 characters is measured on the converted text from the start of the first block
+  to the end of the last, the blank line between blocks counted, and it is checked before the text is copied; the plan's "1 to 6,000
+  characters" is read as this, and the lower bound is "has words". (2) The anchor's heading path must be that of the first block: in
+  the conversion the anchor was made against, `find` calls an anchor `found` only if it is exactly the anchor code makes for that text,
+  so a false path, or an end that is not at the start of its block, does not hold (this answers the question left from Increment A).
+  (3) `find` returns a status for an anchor that does not hold, and refuses (`KbError`) an anchor that is not in the form of an anchor and
+  a text too large to search.
+- **Tests first, seen failing.** The functions did not exist, so the new tests failed on the missing names. Later tests (the false path,
+  an end in the middle of a block, the size known before the copy) were each seen failing before the code that makes them pass.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_theme engine.tests.test_read
+  engine.tests.test_card engine.tests.test_convert`: 389 tests OK. There is no `test_locator`; locators are tested through
+  `test_read` and `test_convert`. `wb run code-work check`: no problems.
+- **Deliberate breaks.** 21 of the new code and the 26 of Increment A, all caught and restored byte for byte (scratchpad
+  `breaks_theme_b.py`, `breaks_theme.py`). Two of B's were missed at first: an inverted span was refused only by accident as an empty
+  excerpt (the test now asserts the reason), and no test took an anchor found only by its words to `check_against` (added).
+- **On real books (read-only, nothing written, no model, no network).** `anchor_of`, `find` and `check_against` on a span of three
+  blocks of each of 8 converted books of the library, 4 with sections and 4 PDFs: all accepted as `found`. No flat text was in the
+  sample, so the kind `offset` is tested on invented text only.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Applied: (1) `find` compared the hash only, so a false path or a
+  non-canonical end held (decision 2 above, with tests); (2) the size is computed before the text is copied, so a pointer across a huge
+  book does not copy it first (a test with a text that refuses to be sliced); (3) the docstring of `find` says which cases are refusals;
+  (4) the meaning of the size bound is stated (decision 1); (6) tests of `find` on pages and a flat text. Not applied: the refusal tests of
+  the places of a pointer assert that a refusal happens and not which rule fired, which the reviewer called acceptable given the breaks.
+- **Not done.** C to F. The reviewer could not check non-ASCII text against the test helper `words_hash` (the tests use ASCII), and
+  nothing was run on real flat text. No security review (none asked): a model's pointer reaches the code only as checked integers and
+  strings compared with the block paths, so it cannot read outside the conversion, and its cost is bounded by the size check and by
+  `locator.resolve`'s own limit.

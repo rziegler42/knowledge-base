@@ -1076,6 +1076,20 @@ the cleaned form, a part with text and no mark or with a mark and no text, two t
 an anchor whose ends are not locators of one kind made against the conversion the theme names, or whose end of a page or an offset comes
 before its start. Whether an anchor holds in the text is not checked here. Everything read from a file of themes is data from outside.
 
+A model names where a theme comes from by a pointer, `{"kind", "start", "end"}`, and code finds the text. The kind is that of the
+conversion (`section`, `page` or `offset`) and each end is the place a locator of that kind has: a heading path and a paragraph number
+(the heading itself is paragraph 0), a page and a block on it, or a character offset. `theme.anchor_of` turns a pointer into an anchor:
+the span is the whole blocks from the block at the start to the block at the end (an offset only chooses its block), the two ends are
+locators made by code, the heading path is that of the first block, and the hash covers the whole excerpt (its words, lower-cased,
+without punctuation, joined by single spaces). It refuses a pointer that names no block or more than one (two sections with the same
+heading), is of another kind than the conversion, has its end before its start, or gives an excerpt of more than 6,000 characters of
+the converted text (the blank line between two blocks counts) or with no words; the size is known before the text is copied. `theme.find` finds a stored anchor again in a conversion, the same or another (a reconversion), by its locators and then
+by their words, and accepts the result only if the hash of the whole excerpt found equals the stored one (and, in the conversion the
+anchor was made against, only if it is exactly the anchor code makes for that text, so a false heading path or an end that is not at the
+start of its block does not hold); the status is `found`, `found_by_text` or `not_found` with a reason (an anchor that is not in the form
+of an anchor, or a text too large to search, is a refusal and not a status), and `theme.check_against` refuses anything but `found`. Run on 8 real converted books
+(4 with sections, 4 PDFs), `anchor_of` and `find` accepted a span of three blocks in each.
+
 ## Converting what is captured
 
 A version that has been fetched and scanned (or whose scan failed or was skipped) is converted to text by `kb/convert.py`

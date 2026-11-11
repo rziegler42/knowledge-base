@@ -1,13 +1,16 @@
+import hashlib
 import json
 import math
 import os
+import re
 import stat
 import unittest
 import unittest.mock
 
 from engine.tests.test_store import StoreCase, make_writable, read_json
 
-from kb import KbError, theme
+from kb import KbError, convert, theme
+from kb import locator as locators   # the helper `locator` below builds a locator by hand
 
 CONV = {"tool": "pdftotext", "version": "1.0", "generation": 1}
 
@@ -419,6 +422,270 @@ class ReadRefusalTest(ThemeCase):
         with self.assertRaises(KbError) as cm:
             theme.read(self.store, book, version)
         self.assertIn("check", str(cm.exception))
+
+
+def words_hash(text):
+    """The hash of a whole excerpt as the plan defines it: its words, lower-cased, without punctuation, joined by single spaces."""
+    return hashlib.sha256(" ".join(re.findall(r"\w+", text.lower())).encode()).hexdigest()
+
+
+def heading(text, level=1):
+    return {"kind": "heading", "level": level, "text": text}
+
+
+def para(text, page=None):
+    item = {"kind": "paragraph", "level": None, "text": text}
+    if page is not None:
+        item["page"] = page
+    return item
+
+
+INTRO_1 = "Annealing cools a system slowly so that it settles into a state of low energy."
+INTRO_2 = "A random search accepts worse moves with a probability that falls as the temperature falls."
+METHOD_1 = "The schedule lowers the temperature by a fixed factor at each step of the search."
+METHOD_2 = "The search stops when no move has been accepted for a long while and the system is cold."
+SECTION_ITEMS = [heading("Introduction"), para(INTRO_1), para(INTRO_2), heading("Method"), para(METHOD_1), para(METHOD_2)]
+# blocks: 0 heading Introduction, 1 and 2 its paragraphs 1 and 2, 3 heading Method, 4 and 5 its paragraphs 1 and 2
+
+
+def section(path, paragraph):
+    return {"path": path, "paragraph": paragraph}
+
+
+def pointer(kind, start, end):
+    return {"kind": kind, "start": start, "end": end}
+
+
+class AnchorTest(unittest.TestCase):
+    def setUp(self):
+        self.sec = convert.build(SECTION_ITEMS)
+
+    def span(self, conversion, first, last):
+        return conversion.text[conversion.blocks[first].start:conversion.blocks[last].end]
+
+    def test_a_pointer_to_one_paragraph(self):
+        got = theme.anchor_of(CONV, self.sec, pointer("section", section(["Introduction"], 1), section(["Introduction"], 1)))
+        self.assertEqual(got, {"start": locators.make(CONV, self.sec, 1), "end": locators.make(CONV, self.sec, 1),
+                               "path": ["Introduction"], "excerpt_sha256": words_hash(INTRO_1)})
+
+    def test_a_pointer_to_several_paragraphs_covers_them_whole(self):
+        got = theme.anchor_of(CONV, self.sec, pointer("section", section(["Introduction"], 1), section(["Introduction"], 2)))
+        self.assertEqual(got["start"], locators.make(CONV, self.sec, 1))
+        self.assertEqual(got["end"], locators.make(CONV, self.sec, 2))
+        self.assertEqual(got["excerpt_sha256"], words_hash(INTRO_1 + " " + INTRO_2))
+
+    def test_a_pointer_may_run_across_sections_and_the_path_is_that_of_the_start(self):
+        got = theme.anchor_of(CONV, self.sec, pointer("section", section(["Introduction"], 2), section(["Method"], 1)))
+        self.assertEqual(got["path"], ["Introduction"])
+        self.assertEqual(got["end"], locators.make(CONV, self.sec, 4))
+        self.assertEqual(got["excerpt_sha256"], words_hash(INTRO_2 + " Method " + METHOD_1))
+
+    def test_the_heading_is_paragraph_zero_of_its_section(self):
+        got = theme.anchor_of(CONV, self.sec, pointer("section", section(["Method"], 0), section(["Method"], 1)))
+        self.assertEqual((got["start"], got["end"]), (locators.make(CONV, self.sec, 3), locators.make(CONV, self.sec, 4)))
+        self.assertEqual(got["excerpt_sha256"], words_hash("Method " + METHOD_1))
+
+    def test_a_pointer_in_a_pdf_names_pages_and_blocks(self):
+        pages = convert.build([para("First page, first block, with some words in it.", 1), para("First page, second block, with other words.", 1),
+                               para("Second page, first block, with yet more words.", 2)], pages=2)
+        got = theme.anchor_of(CONV, pages, pointer("page", {"page": 1, "block": 2}, {"page": 2, "block": 1}))
+        self.assertEqual((got["start"], got["end"], got["path"]), (locators.make(CONV, pages, 1), locators.make(CONV, pages, 2), []))
+        self.assertEqual(got["excerpt_sha256"], words_hash("First page, second block, with other words. Second page, first block, with yet more words."))
+
+    def test_a_pointer_in_a_flat_text_names_offsets_and_takes_the_blocks_they_are_in(self):
+        flat = convert.build([para("The first block has a few words."), para("The second block has a few more words."), para("A third one.")])
+        second, third = flat.blocks[1], flat.blocks[2]
+        got = theme.anchor_of(CONV, flat, pointer("offset", {"offset": second.start + 4}, {"offset": third.start}))
+        self.assertEqual((got["start"], got["end"]), (locators.make(CONV, flat, 1), locators.make(CONV, flat, 2)))
+        self.assertEqual(got["excerpt_sha256"], words_hash("The second block has a few more words. A third one."))
+
+    def test_the_anchor_made_is_one_the_form_check_accepts(self):
+        got = theme.anchor_of(CONV, self.sec, pointer("section", section(["Introduction"], 1), section(["Method"], 2)))
+        t = good_theme()
+        t["book_id"], t["version_id"], t["anchor"] = "b", "v1", got
+        theme.check_theme(t, "b", "v1")
+
+    def refused(self, conversion, bad, message=None):
+        with self.assertRaises(KbError) as cm:
+            theme.anchor_of(CONV, conversion, bad)
+        if message:
+            self.assertIn(message, str(cm.exception))
+
+    def test_a_pointer_that_is_not_a_pointer(self):
+        ok = pointer("section", section(["Introduction"], 1), section(["Introduction"], 2))
+        for bad in (None, "x", [], {}, dict(ok, extra=1), {k: v for k, v in ok.items() if k != "end"}, dict(ok, start=None),
+                    dict(ok, start=[]), dict(ok, kind=None), dict(ok, kind="line")):
+            with self.subTest(bad=bad):
+                self.refused(self.sec, bad)
+
+    def test_a_pointer_of_another_kind_than_the_conversion(self):
+        self.refused(self.sec, pointer("page", {"page": 1, "block": 1}, {"page": 1, "block": 1}), "kind")
+        self.refused(self.sec, pointer("offset", {"offset": 1}, {"offset": 2}), "kind")
+        pages = convert.build([para("Some words on a page.", 1)], pages=1)
+        self.refused(pages, pointer("section", section(["Introduction"], 1), section(["Introduction"], 1)), "kind")
+
+    def test_the_places_of_a_section_pointer(self):
+        good = section(["Introduction"], 1)
+        for bad in (section(["Nowhere"], 1), section(["Introduction"], 9), section([], 1), section("Introduction", 1), section(["Introduction"] * 7, 1),
+                    section([1], 1), section(["Introduction"], True), section(["Introduction"], -1), section(["Introduction"], "1"),
+                    {"path": ["Introduction"]}, dict(good, extra=1), {"page": 1, "block": 1}):
+            with self.subTest(bad=bad):
+                self.refused(self.sec, pointer("section", bad, good))
+                self.refused(self.sec, pointer("section", good, bad))
+
+    def test_a_heading_with_no_such_paragraph(self):
+        self.refused(self.sec, pointer("section", section(["Method"], 3), section(["Method"], 3)), "no block")
+
+    def test_the_end_may_not_come_before_the_start(self):
+        self.refused(self.sec, pointer("section", section(["Introduction"], 2), section(["Introduction"], 1)), "before")
+        self.refused(self.sec, pointer("section", section(["Method"], 1), section(["Introduction"], 1)), "before")
+
+    def test_the_places_of_a_page_pointer(self):
+        pages = convert.build([para("First block on the first page.", 1), para("Only block on the second page.", 2)], pages=2)
+        good = {"page": 1, "block": 1}
+        for bad in ({"page": 3, "block": 1}, {"page": 1, "block": 2}, {"page": 0, "block": 1}, {"page": 1, "block": 0}, {"page": True, "block": 1},
+                    {"page": 1}, {"page": "1", "block": 1}, {"offset": 1}):
+            with self.subTest(bad=bad):
+                self.refused(pages, pointer("page", bad, good))
+                self.refused(pages, pointer("page", good, bad))
+        self.refused(pages, pointer("page", {"page": 2, "block": 1}, {"page": 1, "block": 1}), "before")
+
+    def test_the_places_of_an_offset_pointer(self):
+        flat = convert.build([para("The first block."), para("The second block.")])
+        first, second = flat.blocks
+        good = {"offset": first.start}
+        for bad in ({"offset": flat.chars}, {"offset": flat.chars + 100}, {"offset": first.end}, {"offset": -1}, {"offset": True},
+                    {"offset": "1"}, {"offset": 1.0}, {}, {"block": 1}):
+            with self.subTest(bad=bad):
+                self.refused(flat, pointer("offset", bad, good))
+                self.refused(flat, pointer("offset", good, bad))  # first.end is in the blank line between the blocks
+        self.refused(flat, pointer("offset", {"offset": second.start}, {"offset": first.start}), "before")
+
+    def test_a_conversion_with_no_text_has_nothing_to_point_to(self):
+        self.refused(convert.build([]), pointer("offset", {"offset": 0}, {"offset": 0}))
+
+    def test_a_place_that_more_than_one_block_has_is_refused(self):
+        twice = convert.build([heading("Notes"), para("First notes with several words in them."), heading("Notes"), para("Second notes with other words.")])
+        self.refused(twice, pointer("section", section(["Notes"], 1), section(["Notes"], 1)), "more than one")
+
+    def test_an_excerpt_over_the_limit_is_refused_and_one_at_the_limit_is_not(self):
+        ok = pointer("section", section(["Introduction"], 1), section(["Introduction"], 1))
+        with unittest.mock.patch.object(theme, "MAX_EXCERPT", len(INTRO_1) - 1):
+            self.refused(self.sec, ok, "characters")
+        with unittest.mock.patch.object(theme, "MAX_EXCERPT", len(INTRO_1)):
+            theme.anchor_of(CONV, self.sec, ok)
+        self.assertEqual(theme.MAX_EXCERPT, 6000)
+
+    def test_the_size_of_the_excerpt_is_known_before_the_text_is_copied(self):
+        class Untouched(str):
+            def __getitem__(self, key):
+                raise AssertionError("the text was copied before the size was checked")
+
+        self.sec.text = Untouched(self.sec.text)
+        ok = pointer("section", section(["Introduction"], 1), section(["Method"], 2))
+        with unittest.mock.patch.object(theme, "MAX_EXCERPT", 50):
+            self.refused(self.sec, ok, "characters")
+
+    def test_an_excerpt_with_no_words_is_refused(self):
+        empty = convert.build([heading("Symbols"), para("* * * - - -")])
+        self.refused(empty, pointer("section", section(["Symbols"], 1), section(["Symbols"], 1)), "no words")
+
+
+class FindTest(unittest.TestCase):
+    A = "Annealing cools a system slowly so that it settles into a state of low energy."
+    B = "A random search accepts worse moves with a probability that falls as the temperature falls."
+    C = "The schedule lowers the temperature by a fixed factor at each step of the search until it is cold."
+
+    def setUp(self):
+        self.one = convert.build([heading("Introduction"), para(self.A), para(self.B), para(self.C)])
+        self.anchor = theme.anchor_of(CONV, self.one, pointer("section", section(["Introduction"], 1), section(["Introduction"], 3)))
+        self.ref2 = dict(CONV, generation=2)
+
+    def test_an_anchor_is_found_in_the_conversion_it_was_made_against(self):
+        got = theme.find(CONV, self.one, self.anchor)
+        self.assertEqual((got["status"], got["anchor"]), ("found", self.anchor))
+        theme.check_against(CONV, self.one, self.anchor)
+
+    def test_a_stored_hash_that_does_not_match_the_text_is_not_found_and_is_refused(self):
+        wrong = dict(self.anchor, excerpt_sha256="c" * 64)
+        got = theme.find(CONV, self.one, wrong)
+        self.assertEqual((got["status"], got["anchor"]), ("not_found", None))
+        self.assertTrue(got["reason"])
+        with self.assertRaises(KbError):
+            theme.check_against(CONV, self.one, wrong)
+
+    def test_text_that_has_changed_is_not_found(self):
+        changed = convert.build([heading("Introduction"), para(self.A), para("Something else entirely is said in this paragraph now."), para(self.C)])
+        self.assertEqual(theme.find(CONV, changed, self.anchor)["status"], "not_found")
+        with self.assertRaises(KbError):
+            theme.check_against(CONV, changed, self.anchor)
+
+    def test_a_conversion_that_splits_the_text_differently_finds_the_same_excerpt_by_its_hash(self):
+        merged = convert.build([heading("Introduction"), para(self.A), para(self.B + " " + self.C)])
+        got = theme.find(self.ref2, merged, self.anchor)
+        self.assertEqual(got["status"], "found_by_text")
+        new = got["anchor"]
+        self.assertEqual(new["excerpt_sha256"], self.anchor["excerpt_sha256"])
+        self.assertEqual((new["start"], new["end"]), (locators.make(self.ref2, merged, 1), locators.make(self.ref2, merged, 2)))
+        theme.check_against(self.ref2, merged, new)  # and the new anchor holds in the new conversion as it stands
+
+    def test_a_conversion_whose_blocks_hold_more_text_than_the_excerpt_is_not_found(self):
+        longer = convert.build([heading("Introduction"), para(self.A), para(self.B + " " + self.C + " And a good deal more is said after it.")])
+        got = theme.find(self.ref2, longer, self.anchor)
+        self.assertEqual((got["status"], got["anchor"]), ("not_found", None))
+
+    def test_an_end_that_is_not_in_the_text_is_not_found(self):
+        other = convert.build([heading("Introduction"), para("Nothing like the first one is written here at all, so it cannot be found.")])
+        self.assertEqual(theme.find(self.ref2, other, self.anchor)["status"], "not_found")
+
+    def test_an_end_found_before_the_start_is_not_found(self):
+        flipped = convert.build([heading("Introduction"), para(self.C), para(self.B), para(self.A)])
+        got = theme.find(self.ref2, flipped, self.anchor)
+        self.assertEqual(got["status"], "not_found")
+        self.assertIn("before its start", got["reason"])
+
+    def test_an_anchor_with_a_false_heading_path_does_not_hold_even_if_the_text_is_right(self):
+        false = dict(self.anchor, path=["Nowhere"])
+        theme._anchor(false, CONV)  # it is well formed
+        got = theme.find(CONV, self.one, false)
+        self.assertEqual((got["status"], got["anchor"]), ("not_found", None))
+        self.assertIn("path or places", got["reason"])
+        with self.assertRaises(KbError):
+            theme.check_against(CONV, self.one, false)
+
+    def test_an_end_that_is_not_where_its_block_starts_does_not_hold_in_a_flat_text(self):
+        flat = convert.build([para("The first block has a few words in it."), para("The second block has a few more words."),
+                              para("The third block closes the text with some words.")])
+        made = theme.anchor_of(CONV, flat, pointer("offset", {"offset": flat.blocks[0].start}, {"offset": flat.blocks[2].start}))
+        self.assertEqual(theme.find(CONV, flat, made)["status"], "found")
+        inside = dict(made, start=locators.at_offset(CONV, flat, flat.blocks[0].start + 4))  # a place in the middle of the first block
+        got = theme.find(CONV, flat, inside)
+        self.assertEqual(got["status"], "not_found")
+        with self.assertRaises(KbError):
+            theme.check_against(CONV, flat, inside)
+
+    def test_an_anchor_is_found_again_in_a_pdf_and_in_a_flat_text(self):
+        pages = convert.build([para("First page, first block, with some words in it.", 1), para("First page, second block, with other words.", 1),
+                               para("Second page, first block, with yet more words.", 2)], pages=2)
+        flat = convert.build([para("The first block has a few words in it."), para("The second block has a few more words.")])
+        for conversion, ptr in ((pages, pointer("page", {"page": 1, "block": 2}, {"page": 2, "block": 1})),
+                                (flat, pointer("offset", {"offset": 0}, {"offset": flat.blocks[1].start}))):
+            with self.subTest(kind=ptr["kind"]):
+                made = theme.anchor_of(CONV, conversion, ptr)
+                got = theme.find(CONV, conversion, made)
+                self.assertEqual((got["status"], got["anchor"]), ("found", made))
+
+    def test_an_anchor_found_only_by_its_words_does_not_hold_as_it_is_stored(self):
+        merged = convert.build([heading("Introduction"), para(self.A), para(self.B + " " + self.C)])
+        self.assertEqual(theme.find(self.ref2, merged, self.anchor)["status"], "found_by_text")
+        with self.assertRaises(KbError) as cm:
+            theme.check_against(self.ref2, merged, self.anchor)  # the stored locators were made against the first conversion
+        self.assertIn("only by its words", str(cm.exception))
+
+    def test_an_anchor_that_is_not_an_anchor_is_refused(self):
+        for bad in (None, {}, dict(self.anchor, extra=1), dict(self.anchor, start="x"), dict(self.anchor, excerpt_sha256="no")):
+            with self.subTest(bad=bad), self.assertRaises(KbError):
+                theme.find(CONV, self.one, bad)
 
 
 if __name__ == "__main__":
