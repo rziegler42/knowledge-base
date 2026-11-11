@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Increment C, Completion criterion 3",
+      "problem": "The fixed worked example is required to contain no word of each book's vocabulary, but that vocabulary is dynamically derived from each book's title, card topics, and text. A single fixed example cannot guarantee this across the six trial books (or future books), so the criterion cannot be reliably implemented or verified as written.",
+      "severity": "major",
+      "suggestion": "Either remove the requirement that the fixed example avoid every book vocabulary, or define the example text as filtered/reselected against the computed vocabulary for the specific prompt and test that behavior."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan aligns with the named roadmap candidate and theme spec, but its fixed-example acceptance criterion is not satisfiable for dynamic per-book vocabularies.",
+  "verdict": "changes_needed"
+}
