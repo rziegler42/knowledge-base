@@ -168,6 +168,8 @@ _THEN_NUMBER = re.compile(r"\s*[/–—-]\s*[-+]?[0-9.]")   # what follows a num
 _LEVEL = re.compile(r"\b(high|medium|low)\b", re.IGNORECASE)
 _DENIED = re.compile(r"\b(?:not|no|never)\W+(?:\w+\W+)?$", re.IGNORECASE)   # the words before a level, when it is denied: "not high"
 _LEVELS = {"high": 0.9, "medium": 0.6, "low": 0.3}
+_SPELLED = re.compile(r"\s*(one|zero)(?:\.0)?\.?\s*", re.IGNORECASE)   # the whole text is the word for 1 or for 0, as a model writes it in letters
+_SPELLED_VALUES = {"one": 1.0, "zero": 0.0}
 
 
 def _confidence(text):
@@ -175,7 +177,11 @@ def _confidence(text):
     number of the text is read (a comma between digits is a decimal point; a number followed by `%` or the word `percent` is a share; a
     number outside 0 to 1 is put to the nearest end; a hyphen after a letter is not a minus sign); with no number, the first of the words
     high, medium and low is 0.9, 0.6 or 0.3. A fraction or a range (`8/10`, `0.5-0.9`) and a denied word (`not high`) are not read: they are
-    unreadable, so that no wrong number is made of them. A theme is never dropped for its confidence."""
+    unreadable, so that no wrong number is made of them. The word `one` or `zero`, alone (with `.0` or a full stop after it), is 1.0 or 0.0:
+    a model that writes the number in letters is read (in any case, with spaces round it, the full stop touching the word), and `one of them`, `someone`, `one .` and the like are not. A theme is never dropped for its confidence."""
+    spelled = _SPELLED.fullmatch(text)
+    if spelled:
+        return _SPELLED_VALUES[spelled.group(1).casefold()], None
     plain = re.sub(r"(?<=[0-9]),(?=[0-9])", ".", text)
     found = _NUMBER.search(plain)
     if found:

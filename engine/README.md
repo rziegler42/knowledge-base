@@ -1120,7 +1120,8 @@ text), if its title imitates the markers of untrusted text (a title or summary t
 layer, but the drafting drops one too). A theme is never dropped for its confidence: the first number of what the model wrote is read (a
 comma between digits is a decimal point, a number followed by `%` or the word `percent` is a share, a number outside 0 to 1 is put to the
 nearest end, a hyphen after a letter is not a minus sign), and with no number the first of the words `high`, `medium` and `low` is 0.9, 0.6
-or 0.3. A fraction or a range (`8/10`, `0.5-0.9`) and a denied word (`not high`) are not read, and nothing else is: they are unreadable, and the
+or 0.3. The word `one` or `zero` alone (also `one.0`, `zero.`) is 1.0 or 0.0, because a model wrote `one` for 69 percent of the confidences
+in the trial on three PDFs; `one of them` or `someone` is not read. A fraction or a range (`8/10`, `0.5-0.9`) and a denied word (`not high`) are not read, and nothing else is: they are unreadable, and the
 theme is kept with the confidence 0.5 and a flag `confidence_unreadable` whose detail is what the model wrote (the first trial dropped 29 of
 118 themes for it). Known limit: a text such as `5 (50%)` is read by its first number. When two near-identical themes are merged, a
 confidence that was read beats one that was guessed, whatever the numbers.

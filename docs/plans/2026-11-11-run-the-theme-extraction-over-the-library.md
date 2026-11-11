@@ -183,4 +183,23 @@ Reviewer: Codex through the review engine (plan-c1d81cc89b004688), 3 rounds of 3
 
 ## Result
 
-Empty until work starts.
+### Increment A (done; committed with the trailer for A)
+
+- **Done.** `engine/kb/themeextract.py`: `_confidence` first tests the whole text against `_SPELLED` (`one` or `zero`, in any case, optionally followed by `.0`, then optionally a full stop
+  that touches it, with spaces round it); a match is 1.0 or 0.0 with no flag. Everything else is read as before. The docstring and the engine README say so, with the figure that led to it (the model wrote `one`
+  for 45 of 65 confidences in the trial on three PDFs). Tests in `test_themeextract.py`: 11 new readable cases (`one`, `One`, `ONE`, ` one. `, `one.0`, `ONE.0`, `one.0.`, `zero`, `ZERO`, `Zero.0`, `zero.`),
+  15 new cases that stay unreadable (`one of them`, `not one`, `someone`, `ninety`, `one.5`, `one or two`, `one hundred`, `twelve`, `once`, `zeros`, `none.0`, `o n e`, `zero zero`, `one .`, `one.0 .`), and a direct
+  test of `_confidence` with spaces and a tab round the word.
+- **Tests first, seen failing.** The nine readable cases of the first draft failed before the code; the unreadable cases pass before and after, as guards. Two cases of mine were wrong tests and were
+  removed (`zero point five` is over the 12 characters the answer check allows, and `one high` is already read by the `high` rule); one more, `one .0`, is read as 0.0 by the existing first-number rule
+  and was removed: that is old behaviour and I did not change it.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_textutil engine.tests.test_themeextract engine.tests.test_theme engine.tests.test_themecheck`: 211 tests OK.
+  `wb run code-work check`: no problems. No live call.
+- **Deliberate breaks.** 14 new: 13 caught. One, reading the spelled word after the number pattern, is not caught and is equivalent (the number pattern cannot match any text the word pattern accepts: in `one.0`
+  the `0` follows a `.` that follows a letter, which its look-behind rejects); the reviewer agreed. One break (spaces round the word) was first missed because the answer check trims spaces before `_confidence`
+  sees them, which led to the direct test. The 63 earlier breaks of the module and the 16 of the header are still caught.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. Applied: the pattern let a space come between `.0` and the full stop (`one.0 .`), which the plan and README did not name; it now must touch the word, with a
+  guard test; plain `ONE` and `ZERO` are cases. Recorded, not applied: `\s` is Unicode white space, so a no-break space round the word is accepted (harmless); reading `one` as 1.0 means the 45 themes now rank as
+  confidences that were read, so they beat any guessed 0.5 and any read confidence below 1.0 in the merge of near-identical themes, and, since the model writes `one` for nearly everything, the confidence
+  still carries almost no signal; nothing else reads the confidence or the flag now (`confidence_unreadable` is read only in `themeextract.py`; the specs say a weak theme is weighted down by it, which is not built).
+- **Not done.** Increments B to E. No security review (none asked; the text is a model reply of at most 12 characters, read by a fixed pattern into one of two numbers).

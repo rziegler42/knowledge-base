@@ -161,7 +161,9 @@ class ThemesTest(ExtractCase):
                  "0.9 (high)": 0.9, "about 0.7": 0.7, "high (0.4)": 0.4,                    # the first number of a text
                  "High": 0.9, "medium.": 0.6, "LOW": 0.3, "very high": 0.9,                 # the three words, in any case
                  "95 percent": 0.95, "40 Percent": 0.4,                                     # the word percent is a share too
-                 "high-0.8": 0.8, "level-0.6": 0.6}                                         # a hyphen after a letter is not a minus sign
+                 "high-0.8": 0.8, "level-0.6": 0.6,                                         # a hyphen after a letter is not a minus sign
+                 "one": 1.0, "One": 1.0, " one. ": 1.0, "one.0": 1.0, "ONE.0": 1.0, "one.0.": 1.0,   # the whole text is the word for 1 or for 0
+                 "zero": 0.0, "Zero.0": 0.0, "zero.": 0.0, "ONE": 1.0, "ZERO": 0.0}
         for text, want in cases.items():
             with self.subTest(text=text):
                 made = self.kept(text)
@@ -171,11 +173,18 @@ class ThemesTest(ExtractCase):
     def test_a_confidence_that_cannot_be_read_keeps_the_theme_at_one_half_and_flags_it_with_what_was_written(self):
         for text in ("none", "n/a", "unsure", "-", "?", "nan", "inf", "N/A!", "sehr hoch", "1e999",   # the last is a number that is not finite
                      "8/10", "3 / 5", "0.5-0.9", "1-5", "0.5 – 0.9",       # a fraction or a range is not one number: not read, and not guessed at
-                     "not high", "no low", "never medium"):                # a word that is denied
+                     "not high", "no low", "never medium",                 # a word that is denied
+                     "one of them", "not one", "someone", "ninety", "one.5", "one or two", "one hundred", "twelve", "once", "zeros",
+                     "none.0", "o n e", "zero zero", "one .", "one.0 ."):                         # the word for a number is read only when it is the whole text
             with self.subTest(text=text):
                 made = self.kept(text)
                 self.assertEqual(made["confidence"], 0.5)
                 self.assertEqual(made["flags"], [{"kind": "confidence_unreadable", "detail": text}])
+
+    def test_the_word_for_a_number_is_read_with_spaces_round_it_when_it_is_given_to_the_reader_directly(self):
+        for text, want in (("  one  ", 1.0), ("\tzero.", 0.0), (" One.0 ", 1.0)):
+            self.assertEqual(themeextract._confidence(text), (want, None), text)
+        self.assertEqual(themeextract._confidence("one of them"), (themeextract.UNREADABLE_CONFIDENCE, "one of them"))
 
     def test_a_negative_number_at_the_start_is_still_put_to_the_nearest_end(self):
         self.assertEqual(self.kept("-3")["confidence"], 0.0)
