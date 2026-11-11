@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Increment A, Steps 1–3; Completion criterion 1",
+      "problem": "The plan delegates the actual theme schema to the draft `theme.md` without resolving its open/proposed details. It therefore never defines the allowed type values (including how an untyped theme is represented), field limits, generation record encoding, anchor-pointer shape, or the exact definition of a malformed field. The promised tests for wrong types and lengths cannot be written deterministically from this plan.",
+      "severity": "major",
+      "suggestion": "Add a settled schema table (including bounds and representations) to the plan or a referenced accepted spec, and make the acceptance tests enumerate that schema."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment D, Steps 1–3 and Completion criterion 4",
+      "problem": "The required production check for a field's vocabulary has no source of vocabulary or algorithm. The only specified list is one made for a test. Since the current card design explicitly has no field label on cards, this does not define how a real book is assigned a vocabulary to check, so the criterion cannot be implemented or measured consistently.",
+      "severity": "major",
+      "suggestion": "Specify the production vocabulary source and ownership—for example, an explicit per-book/shelf field vocabulary or a reproducible derived list—and define the matching/flagging rules and report semantics."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Increment C outcome and Increment F outcome/Step 1; Completion criterion 6",
+      "problem": "The plan permits extraction for any converted book and requires the library run for every book with a conversion. This conflicts with the accepted card specification, which states that themes are extracted after the card. The plan neither requires a card nor records an intentional change to that ordering.",
+      "severity": "major",
+      "suggestion": "Make a current card a prerequisite and limit the run accordingly, or explicitly amend the card specification and describe how themes for cardless books are handled."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Increment A outcome/Steps 2–3 and Increment F, Step 1",
+      "problem": "The plan supports append-only generations but never defines an active generation or restoring one. Yet Increment F relies on an undefined “current generation” for idempotence. This also omits the generation-selection behavior specified in `theme.md`, leaving later indexing and reruns without a canonical generation.",
+      "severity": "major",
+      "suggestion": "Define and test active-generation selection, validation, and restoration in Increment A, then use that precise identity in Increment F’s resume/idempotence rule."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has unresolved operational and schema decisions that prevent deterministic implementation, and its bulk-run eligibility drifts from the accepted card ordering.",
+  "verdict": "changes_needed"
+}

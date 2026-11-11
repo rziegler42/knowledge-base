@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Assumptions and constraints, “The form of a theme” table; Increment B",
+      "problem": "The stored anchor is specified only as a locator/place plus a hash of its first twelve words. It does not retain the exact start and end of the contiguous span or a hash of the full excerpt. This drifts from theme.md’s specified anchor and makes the promised exact-span validation and reliable re-anchoring ambiguous.",
+      "severity": "major",
+      "suggestion": "Define the anchor schema with a typed part locator, explicit start and end offsets/ranges, heading path, and a full-excerpt hash; make Increment A validate all of them and Increment B test re-anchoring using that full hash."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Increment D, “The vocabulary of a book’s field” and Step 2",
+      "problem": "The production vocabulary check is still not reproducibly defined: “frequent,” “rare,” the corpus scope, tokenization/normalization, thresholds, and the common-word list are deferred to implementation and its Result. A test cannot establish one predetermined behavior from this plan.",
+      "severity": "major",
+      "suggestion": "Specify the complete deterministic vocabulary algorithm and its constants/list source in the plan before implementation, then have the fixture test assert that defined algorithm."
+    },
+    {
+      "id": "R2-F3",
+      "location": "Assumptions and constraints (line 77); Completion criterion 6; Increment F",
+      "problem": "The plan excludes every book without a conversion, including pointer-only books, despite theme.md specifying themes from a pointer-only book’s captured snapshot (marked partial) and the roadmap candidate calling for themes for each book. The library run therefore has no required outcome or report entry for that class.",
+      "severity": "major",
+      "suggestion": "Either include pointer-only books by extracting from their snapshots and marking the themes partial, or explicitly record and justify a scope change in the governing spec/roadmap and require the run report to list them as skipped."
+    },
+    {
+      "id": "R2-F4",
+      "location": "Increment D, Step 2",
+      "problem": "The planned test says a failed support check “leaves the theme unmarked,” but the settled theme form and completion criterion require every non-empty neutral part to carry either a stated or inferred mark. It does not say whether such output is dropped, retained outside a generation, or filed despite being malformed.",
+      "severity": "major",
+      "suggestion": "Specify one outcome for a failed support check—normally drop the affected part/theme and record its reason—and make the schema, extraction behavior, and test agree."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan has unresolved anchor, deterministic vocabulary, coverage, and failed-check semantics gaps.",
+  "verdict": "changes_needed"
+}
