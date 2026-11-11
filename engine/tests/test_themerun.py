@@ -1,13 +1,20 @@
+import contextlib
+import io
 import json
 import os
+import subprocess
+import sys
 import unittest
 import unittest.mock
 from collections import Counter
 
+from engine.tests import ENGINE_DIR
 from engine.tests.test_themecheck import config
 from engine.tests.test_themeextract import Fake, VersionCase, row, values
 
 from kb import KbError, card, cardstate, models, theme, themecheck, themeextract, themerun
+from kb import __main__ as kbmain
+from kb import config as kbconfig
 
 RUN_OLD, RUN_NEW = "20261110t100000z-aaaaaa", "20261111t100000z-bbbbbb"
 
@@ -807,6 +814,109 @@ class FormOfRunRecordTest(PlanCase):
         for over in bad:
             with self.subTest(over=str(over)[:70]), self.assertRaises(KbError):
                 themerun.write_record(self.index_root(), record(RUN_OLD, [item(book, version, **over)]))
+
+
+class CommandTest(RunCase):
+    """`python3 -m kb themes-run`: in this process against a real temporary library (the models are the fake of the other tests), and once as a real command."""
+
+    def setUp(self):
+        super().setUp()
+        saved = kbconfig.load()
+        saved.update(config())
+        kbconfig.save(saved)
+
+    def kb(self, *args, script=()):
+        out, err = io.StringIO(), io.StringIO()
+        self.asked = scripted(*script)
+        with unittest.mock.patch.object(models, "run_job", self.asked), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = kbmain.main(["themes-run", *args])
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_plan_run_and_status_run_through_the_command_line_and_print_numbers_and_ids_and_titles_only(self):
+        self.books(2)
+        code, out, err = self.kb("plan")
+        self.assertEqual((code, err, self.asked.calls), (0, "", []))   # the plan, as a command, sends nothing
+        planned = json.loads(out)
+        self.assertEqual((planned["books"], planned["pieces"] > 0), (2, True))
+        self.assertEqual({b["title"] for b in planned["to_make"]}, {"A paper on annealing"})   # the titles are in the plan that is shown
+        run = planned["run"]
+        code, out, err = self.kb("run", run, script=GOOD + GOOD)
+        self.assertEqual((code, err), (0, ""))
+        report = json.loads(out)
+        self.assertEqual((report["counts"]["done"], report["stopped"]), (2, None))
+        code, out, err = self.kb("status", run)
+        self.assertEqual((code, err, json.loads(out)["counts"]["done"]), (0, "", 2))
+        for text in (out, json.dumps(report)):
+            self.assertNotIn("cools a system", text)
+
+    def test_plan_takes_the_books_to_plan_and_again(self):
+        a = self.converted_book()[0]
+        self.converted_book()
+        code, out, _ = self.kb("plan", "--book", a)
+        self.assertEqual((code, [b["book_id"] for b in json.loads(out)["to_make"]]), (0, [a]))
+        code, out, _ = self.kb("plan", "--again")
+        self.assertEqual((code, json.loads(out)["again"]), (0, True))
+
+    def test_the_exit_code_of_a_run_is_one_when_a_book_failed_and_the_error_output_says_so(self):
+        run, _ = self.planned(2)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            code, out, err = self.kb("run", run, script=REFUSED + GOOD)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out)["counts"], {"waiting": 0, "done": 1, "failed": 1, "dropped": 0})
+        self.assertIn("1 book", err)
+
+    def test_the_exit_code_of_a_run_that_was_stopped_is_one_and_the_reason_is_on_the_error_output(self):
+        run, _ = self.planned(4)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            code, out, err = self.kb("run", run, script=[KbError("x"), KbError("x"), KbError("x")])
+        self.assertEqual(code, 1)
+        self.assertIn("3 books in a row", err)
+        self.assertIn("3 books in a row", json.loads(out)["stopped"])
+
+    def test_a_run_that_was_stopped_with_no_book_failed_yet_still_exits_with_one(self):
+        run, _ = self.planned(4)
+        code, out, err = self.kb("run", run, script=[KbError("x"), KbError("x"), KbError("x")])   # the books that failed once wait for another try
+        self.assertEqual(json.loads(out)["counts"], {"waiting": 4, "done": 0, "failed": 0, "dropped": 0})
+        self.assertEqual(code, 1)
+        self.assertIn("3 books in a row", err)
+
+    def test_status_opens_the_library_to_read_and_the_plan_and_the_run_to_write(self):
+        run, _ = self.planned(1)
+        opened = []
+        real = kbmain.Store.open
+        with unittest.mock.patch.object(kbmain.Store, "open", side_effect=lambda *a, **k: opened.append((a, k)) or real(*a, **k)):
+            self.kb("status", run)
+            self.kb("plan")
+            self.kb("run", run, script=GOOD)
+        self.assertEqual(opened, [((), {"write": False}), ((), {}), ((), {})])
+
+    def test_a_refusal_is_printed_and_the_exit_code_is_two(self):
+        code, out, err = self.kb("run", "nosuchrun")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("refused:", err)
+        code, _, err = self.kb("status", "nosuchrun")
+        self.assertEqual(code, 2)
+        self.assertIn("refused:", err)
+
+    def test_no_option_names_a_model_a_server_or_an_address_and_nothing_is_sent(self):
+        run, _ = self.planned(1)
+        for args in (["plan", "--model", "x"], ["plan", "--server", "x"], ["plan", "--address", "x"], ["run", run, "--model", "x"],
+                     ["run", run, "--passes", "2"], ["status", run, "--server", "x"], ["plan", "--path", "x"], ["status", run, "--address", "x"], []):
+            with self.subTest(args=args):
+                self.assertEqual(self.kb(*args, script=GOOD)[0], 2)
+        self.assertEqual(self.items(run)[next(iter(self.items(run)))]["status"], "waiting")   # none of them ran anything
+
+    def test_a_plan_sends_nothing_when_it_is_run_as_a_command(self):
+        self.books(1)
+        env = dict(os.environ, KB_CONFIG_DIR=self.cfg)
+        done = subprocess.run([sys.executable, "-m", "kb", "themes-run", "plan"], cwd=ENGINE_DIR, env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout)["books"], 1)
+        bad = subprocess.run([sys.executable, "-m", "kb", "themes-run", "plan", "--model", "x"], cwd=ENGINE_DIR, env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(bad.returncode, 2)
 
 
 RECORD_TOKENS = (10, 5)   # the input and output tokens of the record that `Fake` returns for every call

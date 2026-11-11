@@ -109,6 +109,22 @@ or conversion; they have their own specs.
   marked so that they do not create strong, useless "alike" threads.
 - **[idea]** When a new version leaves a section unchanged, as shown by the excerpt hash, its themes are reused and not re-extracted.
 
+### A run over the library
+
+What is built now, from the plan `2026-11-11-run-the-theme-extraction-over-the-library` (the commands are in the engine README).
+
+- **[proposed]** A run is planned, then run. The plan makes no model call: it lists the books to make themes for (active, with a card that can be read and a
+  conversion in use) and the others with a reason, counts the pieces, and estimates the time. The run makes, checks and files a new generation of themes for
+  each book as soon as it is made, one book at a time, and saves a record after every book. Its records are derived and can be deleted without losing a theme.
+- **[proposed]** A book is skipped when the newest valid generation of its current version was made with the prompt version and the model now set for the extraction. The
+  model and prompt version of the check are not in a generation, so the skip rule cannot see them; the record of each book names them, and the plan lists the skipped
+  books whose check is another or not known, so that the owner can ask for them again.
+- **[proposed]** A book that fails does not end the run, and is tried once more after the last book. Three books in a row failing for a reason that is not a refused answer
+  stop the run (a server that is down would fail every book), and the books not reached stay waiting. A book that is no longer active, or whose conversion changed since
+  the plan, is dropped and reported. A run stopped at any point and run again makes no book twice whose record was saved.
+- **[proposed]** The theme run and the card queue share one lock, so they never run together against one index root. The lock does not guard a second index root
+  or another machine that uses the same model server.
+
 - **[agreed]** A theme is described in English whatever the source's language. The excerpt stays in the source's own words, and the
   citation shows the language. The embedding model should be multilingual (`card.md`).
 

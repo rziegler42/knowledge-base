@@ -6,6 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
+from . import themerun
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -91,6 +92,19 @@ def main(argv=None):
     cqr.add_argument("--passes", type=int, default=cardqueue.PASS_CAP, help=f"at most this many passes (1 to 10, default {cardqueue.PASS_CAP})")
     cqt = cqs.add_parser("status", help="where each book of a run has got to; no book text")
     cqt.add_argument("run", help="the name of the run")
+    tr = sub.add_parser("themes-run", help="make the themes of many books: plan a run (a snapshot of the books to make themes for, and why the "
+                                           "others are left out; nothing is sent), run it, and see where it has got to; book text goes to the "
+                                           "models the tasks setting names for theme and theme-check; no model, server or address is an argument")
+    trs = tr.add_subparsers(dest="action", required=True)
+    trp = trs.add_parser("plan", help="plan a run for the active books that have a card and a conversion and no themes made with this prompt and "
+                                      "model; sends nothing")
+    trp.add_argument("--book", action="append", dest="books", metavar="BOOK_ID", help="limit the plan to this book (repeat for more)")
+    trp.add_argument("--again", action="store_true", help="include books whose themes were made with this prompt and model, to make another generation")
+    trr = trs.add_parser("run", help="run a planned run: each book is made, checked and filed as a new generation; a book that fails does not end the "
+                                     "run; it can be stopped and run again")
+    trr.add_argument("run", help="the name of the run that `plan` printed")
+    trt = trs.add_parser("status", help="where each book of a run has got to; no book text")
+    trt.add_argument("run", help="the name of the run")
     sw = sub.add_parser("card-show", help="the card of a book, with its text between the untrusted-text markers")
     sw.add_argument("book_id")
     sw.add_argument("--version", help="the version (default: the book's current version)")
@@ -193,6 +207,23 @@ def main(argv=None):
             if args.action == "run" and out["counts"]["failed"]:
                 print(f"{out['counts']['failed']} book could not be carded", file=sys.stderr)
                 return 1
+            return 0
+        if args.command == "themes-run":
+            store = Store.open() if args.action != "status" else Store.open(write=False)
+            if args.action == "plan":
+                out = themerun.plan(store, config.load(), book_ids=args.books, again=args.again)
+            elif args.action == "run":
+                out = themerun.run(store, config.load(), args.run)
+            else:
+                out = themerun.status(store, args.run)
+            print(json.dumps(out, indent=1))
+            if args.action == "run":
+                if out["stopped"]:
+                    print(out["stopped"], file=sys.stderr)
+                    return 1
+                if out["counts"]["failed"]:
+                    print(f"{out['counts']['failed']} book could not be given themes", file=sys.stderr)
+                    return 1
             return 0
         if args.command == "card-index":
             counts = catalog.rebuild(Store.open())

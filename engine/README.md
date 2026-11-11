@@ -1063,9 +1063,10 @@ loaded, a three-piece paper in under a minute, and a 13-piece paper (12 read) in
 A theme is an idea-level piece of what a version says: a title, a summary in the source's words, a description in words of no field in
 five parts (problem, method, needs, provides, limits), each part marked `stated` or `inferred`, an anchor that points back to one
 contiguous stretch of the converted text, a type (`problem`, `method`, `finding`, `concept` or `other`), a confidence from 0 to 1, how it
-was made and a list of flags (`docs/specs/theme.md`). So far the engine holds the form of a theme and its keeping (`kb/theme.py`,
-`engine/tests/test_theme.py`); it does not make themes yet, and no command uses them (the plan
-`2026-11-11-make-the-theme-the-unit-of-the-weave`, Increment A).
+was made and a list of flags (`docs/specs/theme.md`). The engine holds the form of a theme and its keeping (`kb/theme.py`,
+`engine/tests/test_theme.py`), makes and checks themes with models (`kb/themeextract.py`, `kb/themecheck.py`) and makes them for the whole library with
+`python3 -m kb themes-run` (`kb/themerun.py`); nothing reads them yet, not search, links or the walk (the plans
+`2026-11-11-make-the-theme-the-unit-of-the-weave` and `2026-11-11-run-the-theme-extraction-over-the-library`).
 
 The themes of a version are filed together as a generation, a payload `derived/theme/<n>` holding the one file `themes.json`, read-only
 and marked untrusted, through the same incoming area as a card. A new generation is the next number and never changes an earlier one. A
@@ -1090,7 +1091,7 @@ start of its block does not hold); the status is `found`, `found_by_text` or `no
 of an anchor, or a text too large to search, is a refusal and not a status), and `theme.check_against` refuses anything but `found`. Run on 8 real converted books
 (4 with sections, 4 PDFs), `anchor_of` and `find` accepted a span of three blocks in each.
 
-**Making the themes of a book** (`kb/themeextract.py`, `kb/schemas/theme.json`; no command uses it yet, and it files nothing).
+**Making the themes of a book** (`kb/themeextract.py`, `kb/schemas/theme.json`; it files nothing itself: `themes-run`, below, makes, checks and files).
 `themeextract.make_for_version(store, cfg, book_id)` needs a card that can be read (themes are made after the card), a conversion, and
 a model for a new kind of work, `theme`, that you add to the `tasks` of your config (`"tasks": {…, "theme": "<name>"}`; it is optional
 for cards, and without it the extraction is refused before anything is sent). The converted text is read in pieces of at most 20,000
@@ -1139,8 +1140,8 @@ pointer, so the themes under it are dropped with that reason; a truncated or par
 is missing; there is no bound on the number of themes of a whole book other than 2,000 in a generation and 24 in a reply; and the merge of
 near-identical themes is one pass and does not compare a theme with those it replaced.
 
-**Checking the descriptions of themes** (`kb/themecheck.py`, `kb/schemas/theme-check.json`; no command uses it yet, and it files
-nothing). `themecheck.make_and_check_for_version(store, cfg, book_id)` makes the themes (above) and then checks each one in two ways. It
+**Checking the descriptions of themes** (`kb/themecheck.py`, `kb/schemas/theme-check.json`; it files nothing itself: `themes-run`, below,
+makes, checks and files). `themecheck.make_and_check_for_version(store, cfg, book_id)` makes the themes (above) and then checks each one in two ways. It
 needs a second new kind of work in your config, `"theme-check": "<name>"` (optional for cards; without it nothing is sent, and both models
 are found before the first call). *The words of the field:* a book's vocabulary is the words of its title, of the topics and adjacent
 topics of its card, and the words that occur at least 5 times in its text while at most 15 percent of the books of the library hold them,
@@ -1158,6 +1159,34 @@ stochastic, reinforcement, quantum, hash) with some generic ones (search, langua
 that the card prompt lets through, with some false flags. The prompt for themes gives the same instruction (no name of a field, game,
 product or person), so whether the descriptions of themes do better is not known; Increment E measures it. The flag is a reason to look
 and not a verdict. A book whose conversion cannot be read is left out of the count of the library.
+
+**A run over the library** (`kb/themerun.py`; `python3 -m kb themes-run plan`, `run <run>` and `status <run>`; no option names a model, a server or an
+address). It makes the themes of many books, one book at a time, with the two models the tasks setting of your config names for `theme` and `theme-check`.
+*`plan`* sends nothing. It lists the books to make: the active books whose current version has a card that can be read and a conversion in use; and it
+leaves out, with the reason, a book that is not active, has no card that can be read, has no conversion, has more pieces than `MAX_PIECES` (150), or whose newest
+valid generation of themes was made with the prompt version of the extraction and the model that the config names for `theme` now (`already_made`; `--again` makes it
+anyway). The rule compares the model name that a call reports with the `model` of the config entry; on this server the two are the same (checked on the trials of
+2026-11-11), and if another server reports another name, no book would be skipped as made and a rerun would make finished books again. That skip rule sees the
+extraction only, because a generation does not hold the model and prompt version of the check; each book's record does, so the plan
+also lists the skipped books whose newest record names another check, or has none (`check_unknown`; the records are derived and may be lost, and then every skipped
+book is listed). It also lists books with a damaged generation (a reader passes over one, so an older generation that matches still counts), the pieces, the calls that can
+be counted (one for each piece), the models and prompt versions, and an estimate of the time from the trials (two trials on six books and on three PDFs, with the
+models of 2026-11-11, so a rough guide and no more): 9 to 14 seconds a piece, with two to two and a half calls to the check for each piece (the library of 175 books has
+622 pieces: about 1.6 to 2.4 hours). `--book` limits the plan to the books named. The plan writes a record,
+`theme-run.json`, in the folder of the run under `card-runs` of the index root: derived and disposable, with ids, counts, fixed reasons and the model and prompt version of
+each book's calls, and no text of a book or of a reply.
+*`run`* is what sends: for each piece of each book, its title, the words to avoid and up to 20 KB of its text to the model set for `theme`, and for each theme found its
+excerpt (at most 6,000 characters) and up to five short sentences to the model set for `theme-check`, in the clear to the server the config names. Each book is made, checked
+and filed as a new generation as soon as it is made, and the record is saved after every book. A book whose answer is refused (the answer is kept aside in the folder `refused`,
+of which at most 200 files are kept), whose step fails or that raises an unexpected error fails alone, with a fixed reason and no message, and the others go on; after the last
+book the run goes round once more for the books that failed. Three books in a row that fail for a reason that is not a refused answer stop the run (a server that is down would
+otherwise fail every book): the books not reached stay waiting, and the command exits with 1 and says why. A book that is no longer active, or whose conversion changed
+since the plan, is dropped and reported. The run can be stopped at any point and run again: no book whose record was saved is made again. A book whose generation was filed
+and whose record was not yet saved when the program was killed is made again as a new generation (at most one book; the newest valid generation is the one read). A stop spends
+a retry: a book that failed once before the stop gets one more try when the run is run again, and if it fails again it is `failed` and needs a new `plan`. The models and
+prompt versions in the config must be those of the plan (otherwise it is refused: plan again). There is one lock for the card queue and for a theme run, so they cannot run
+at the same time. The command prints the report (the counts, the sums of the books done and the items) and exits with 1 when a book failed or the run stopped, and with 2 on a refusal.
+*`status`* shows where each book has got to, with no text. The library is counted for the words of the fields once for a whole run.
 
 ## Converting what is captured
 

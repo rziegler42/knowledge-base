@@ -272,3 +272,26 @@ Reviewer: Codex through the review engine (plan-c1d81cc89b004688), 3 rounds of 3
   so); (F7) a failed or dropped book has no stats, so its time and tokens are not in the totals, and `time.monotonic` does not advance while a laptop sleeps (the wall time of the call is reported beside it); refused answers are not counted in the
   stats (they are kept aside as files in the `refused` folder, of which at most 200 are kept; the report of Increment E counts them from there); the atomicity of `store.file_payload` was not read by the reviewer.
 - **Not done.** Increments D and E. No security review (none asked; a model's reply reaches the library only through the checks of the earlier plan, and the record holds no text of a book or of a reply).
+
+### Increment D (done; committed with the trailer for D)
+
+- **Done.** `engine/kb/__main__.py`: `python3 -m kb themes-run plan [--book BOOK_ID ...] [--again]`, `run <run>` and `status <run>`, following `cards-queue`: no option names a model, a server or an address; `plan` and
+  `run` open the library to write and `status` to read; the report is printed as JSON; a refusal is printed as `refused:` with the exit code 2; `run` exits with 1 when a book failed and when the run was stopped
+  (and says why on the error output), where `cards-queue` exits with 1 only for a failed book (a stopped theme run can leave books waiting and none failed). `engine/README.md`: the paragraph "A run over the library"
+  (what `plan` lists and writes, what `run` sends, the failure, retry, stop, dropped and rerun rules, the lock, the exit codes, the estimate and what it rests on, the limit of the skip rule), and the openings of three
+  places that said no command used the themes. `docs/specs/theme.md`: a subsection "A run over the library" with four statements of what is built, each marked `[proposed]` as the spec marks the assistant's statements;
+  they describe built behaviour and change no direction.
+- **Tests first.** The command tests (`CommandTest`, 9 tests) were written before the command and failed with usage errors. Three gaps were found by the breaks and closed (see below).
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themerun engine.tests.test_cardqueue engine.tests.test_cardstate engine.tests.test_package engine.tests.test_setup
+  engine.tests.test_themeextract engine.tests.test_theme engine.tests.test_themecheck`: 463 tests OK, of which 53 are skipped (old package tests that need a workbench checkout variable; none of the 80 tests of
+  `themerun` is skipped). `wb run code-work check`: no problems. No live call. **Not run:** the rest of the suite (the other test modules that use the command line): the change adds one import and one sub-parser, and
+  a break of `__main__` would show in the command tests that were run; what could break outside is another command if the new import failed. `python3 -m kb themes-run --help` was run from the engine folder and
+  prints its help, which loads the whole module, so the import works; the help of the other commands was not run.
+- **Deliberate breaks.** 13 of the wiring in `__main__.py`, all caught, the file restored byte for byte. Three were first missed and led to tests: a stopped run with no failed book still exits with 1; the option
+  tests use the name of a real run, so that they cannot be refused for another reason; `status` opens the library to read.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. It confirmed the parity with `cards-queue`, that titles reach the terminal only cleaned (`textutil.clean`) and JSON-escaped, and that each figure and rule in the
+  README and the spec matches `themerun.py`. Applied: a sentence left over in the opening of the Themes section of the README ("it does not make themes yet, and no command uses them") was replaced; the README now says that the
+  skip rule rests on the model name a call reports being the config's `model` (true on this server, checked on the trials) and that the estimate rests on two trials; the spec says the lock holds "against one index root"
+  and not against another index root or machine that uses the same model server; the command test checks that `plan` made no call and that the titles are in the plan shown. Recorded, not applied: the project README and other
+  specs were not searched for the same stale statements ("no command", library counts); the project README's library figures are still out of date (deferred above).
+- **Not done.** Increment E, the run over the library (it needs the owner's word and the plan shown first). No security review (none asked; the command adds no input that reaches a privileged use).
