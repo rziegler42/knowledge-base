@@ -1,0 +1,63 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-11T14:48:15Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "Partly: the owner chose a named scale and a lean-wide default but not the level names or per-level behaviour, so the record now lists these as left open for the weave spec and the build plan, and does not invent them."
+    },
+    {
+      "at": "2026-11-11T14:48:15Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Fair: added a provenance line with the method, the commit and the conclusion, and said that no versioned program was run."
+    }
+  ],
+  "format": 1,
+  "generation": 4,
+  "kind": "adr",
+  "path": "docs/decisions/2026-11-11-the-library-equips-a-research-agent-to-extrapolate.md",
+  "rounds": [
+    {
+      "at": "2026-11-11T14:48:00Z",
+      "bridge": "ask-codex",
+      "document_sha256": "549be32c9bdfc387103d1e61f2f68cc81514dd483f2a3f12f9a6f594156634ac",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "6751a3d453974feafae422465cfdb075f71f0da045346274453aedd48386c424",
+      "usage": {
+        "input_tokens": 158802,
+        "output_tokens": 1819,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "e512417cd3b07e32f263657fe193ffd89e424417ff8a28ddfbf72d369691c0ac",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

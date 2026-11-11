@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "docs/decisions/2026-11-11-the-library-equips-a-research-agent-to-extrapolate.md:28",
+      "problem": "The central narrow-to-wide setting and its distance bound are not defined sufficiently to guide a later implementation or evaluation. The record supplies no named levels, no meaning for intermediate levels, and no rule for the bounds that weighting sets; “large range” and “leans wide” are subjective.",
+      "severity": "major",
+      "suggestion": "Define the scale’s permitted names and observable behavior, including how each level constrains distance and what the default selects, or explicitly defer these settings to a named follow-up decision before implementation."
+    },
+    {
+      "id": "R1-F2",
+      "location": "docs/decisions/2026-11-11-the-library-equips-a-research-agent-to-extrapolate.md:61-70",
+      "problem": "The Evidence section does not meet the decisions index’s provenance requirement: it identifies files and a commit, but not what was run or tool versions, and it does not state a conclusion from the listed inspection.",
+      "severity": "major",
+      "suggestion": "Add a provenance line naming the inspection command or method, relevant tool version(s), commit, and the conclusion supported by the reviewed sources."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The proposed decision has two material gaps: its new agent settings are not actionable, and its evidence provenance is incomplete.",
+  "verdict": "changes_needed"
+}
