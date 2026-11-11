@@ -421,48 +421,95 @@ class PromptTest(ExtractCase):
         self.assertNotIn(f"<<<BOOK TEXT {held} BEGIN>>>", prompt)
 
     def headers(self, prompt):
-        """`[(number, length)]` of the block headers of a prompt, in order."""
-        return [(int(i), int(n)) for i, n in re.findall(r"^<block (\d+), (\d+) characters>$", prompt, re.M)]
+        """`[(number, start, end)]` of the block headers of a prompt, in order."""
+        return [(int(i), int(a), int(b)) for i, a, b in re.findall(r"^<block (\d+), characters (\d+) to (\d+)>$", prompt, re.M)]
 
     def rules(self):
         prompt = self.fake.calls[0]["prompt"]
         return prompt[:prompt.index("<<<BOOK TITLE")]
 
-    def test_each_block_is_headed_with_its_number_and_its_length_so_that_a_theme_can_name_it(self):
+    def test_each_block_is_headed_with_its_number_and_where_it_starts_and_ends_in_the_piece(self):
         self.run_extract([values()])
         prompt = self.fake.calls[0]["prompt"]
-        want = [(b.index, len(b.text)) for b in self.conversion.blocks]
+        blocks = self.conversion.blocks
+        want = [(b.index, b.start - blocks[0].start, b.end - blocks[0].start) for b in blocks]
         self.assertEqual(self.headers(prompt), want)
-        for index, length in want:
-            self.assertIn(f"<block {index}, {length} characters>\n", prompt)
+        self.assertEqual(want[0][1], 0)                       # the first block of a piece starts at 0
+        for index, start, end in want:
+            self.assertIn(f"<block {index}, characters {start} to {end}>\n", prompt)
         self.assertLess(prompt.index("<block 1,"), prompt.index("<block 2,"))
+        self.assertNotRegex(prompt, r"<block \d+, \d+ characters>")   # the form that gave only the length is gone
 
-    def test_a_long_block_is_shown_cut_and_its_header_still_says_its_real_length(self):
+    def test_the_offsets_of_a_piece_count_from_its_own_first_block(self):
+        items = [heading("Intro")] + [para(f"Paragraph {n} " + "alpha " * 400) for n in range(30)]
+        self.run_extract([values()] * 20, items=items)
+        self.assertGreater(len(self.fake.calls), 1)
+        blocks = self.conversion.blocks
+        for call in self.fake.calls:
+            got = self.headers(call["prompt"])
+            origin = blocks[got[0][0]].start
+            self.assertEqual(got[0][1], 0)
+            self.assertEqual(got, [(b, blocks[b].start - origin, blocks[b].end - origin) for b, _, _ in got])
+        self.assertGreater(blocks[-1].start, 10000)           # the numbers of the book are large; none of them is in a header
+        self.assertLess(max(end for call in self.fake.calls for _, _, end in self.headers(call["prompt"])), 20000)
+
+    def test_a_long_block_is_shown_cut_and_its_header_still_says_where_it_really_ends(self):
         long = "word " * 2000
         self.run_extract([values()], items=[heading("Intro"), para(long)])
         prompt = self.fake.calls[0]["prompt"]
-        real = len(self.conversion.blocks[1].text)
-        self.assertGreater(real, themeextract.MAX_SHOWN)
+        block = self.conversion.blocks[1]
+        self.assertGreater(len(block.text), themeextract.MAX_SHOWN)
         self.assertLess(len(prompt), 15000)
         self.assertIn("[…]", prompt)
-        self.assertIn(f"<block 1, {real} characters>\n", prompt)
+        self.assertIn(f"<block 1, characters {block.start} to {block.end}>\n", prompt)
+        self.assertEqual(block.end - block.start, len(block.text))   # the real end, not the end of the part shown
+
+    def test_a_block_of_no_text_that_a_piece_leaves_out_still_counts_in_the_offsets(self):
+        conversion = convert.build(ITEMS)
+        blocks = list(conversion.blocks)
+        blocks[2] = blocks[2]._replace(text="  ")             # a block that is only white space: no header, no text
+        (piece,) = themeextract.pieces(convert.Conversion(blocks, conversion.quality, conversion.pages, conversion.title))
+        got = self.headers(piece["text"])
+        self.assertEqual([n for n, _, _ in got], [0, 1, 3, 4, 5])
+        self.assertEqual(got[2][1], blocks[3].start - blocks[0].start)
+        told = got[2][2] - got[1][1]                          # the end of block 3 less the start of block 1, as the rules say
+        self.assertEqual(told, blocks[3].end - blocks[1].start)
+        self.assertGreater(told, len(blocks[1].text) + len(blocks[3].text) + 2)   # the lengths added up would have been short of it
+        pointer = themeextract._pointer(conversion, 1, 3)
+        with unittest.mock.patch.object(theme, "MAX_EXCERPT", told):
+            theme.anchor_of(REF, conversion, pointer)
+        with unittest.mock.patch.object(theme, "MAX_EXCERPT", told - 1), self.assertRaises(KbError):
+            theme.anchor_of(REF, conversion, pointer)
+
+    def test_a_piece_starts_at_0_even_when_the_book_opens_with_a_block_of_no_text(self):
+        conversion = convert.build(ITEMS)
+        blocks = list(conversion.blocks)
+        blocks[0] = blocks[0]._replace(text=" ")
+        (piece,) = themeextract.pieces(convert.Conversion(blocks, conversion.quality, conversion.pages, conversion.title))
+        got = self.headers(piece["text"])
+        self.assertEqual(got[0], (1, 0, blocks[1].end - blocks[1].start))   # the first block shown is the first of the piece
+        self.assertEqual(got[1][1], blocks[2].start - blocks[1].start)
 
     def test_the_rules_state_the_limit_on_a_span_and_how_it_is_measured(self):
         self.run_extract([values()])
         rules = self.rules()
         self.assertIn(str(theme.MAX_EXCERPT), rules)
-        self.assertIn("plus 2 for each blank line", rules)
+        self.assertIn('the number after "to" in the header of its last block', rules)
+        self.assertIn('the number after "characters" in the header of its first block', rules)
+        self.assertNotIn("plus 2", rules)                     # the rule that added the lengths is gone
+        self.assertNotIn("<block 12, 840 characters>", rules)
+        self.assertIn("<block 12, characters 8400 to 9240>", rules)
         with unittest.mock.patch.object(theme, "MAX_EXCERPT", 1234):   # the number is the limit that the check uses, not a copy of it
             self.run_extract([values()])
         self.assertIn("1234", self.rules())
         self.assertNotIn(str(6000), self.rules())
 
-    def test_the_arithmetic_of_the_prompt_is_the_size_that_the_code_checks(self):
+    def test_the_subtraction_of_the_prompt_is_the_size_that_the_code_checks(self):
         conversion = convert.build(ITEMS)
         self.run_extract([values()])
-        lengths = dict(self.headers(self.fake.calls[0]["prompt"]))
-        for first, last in ((1, 2), (1, 4), (2, 5), (0, 5)):
-            told = sum(lengths[i] for i in range(first, last + 1)) + 2 * (last - first)   # the lengths, and 2 for each blank line
+        spans = {n: (a, b) for n, a, b in self.headers(self.fake.calls[0]["prompt"])}
+        for first, last in ((1, 2), (1, 4), (2, 5), (0, 5), (3, 3)):
+            told = spans[last][1] - spans[first][0]           # the end of the last block less the start of the first
             self.assertEqual(told, conversion.blocks[last].end - conversion.blocks[first].start)
             pointer = themeextract._pointer(conversion, first, last)
             with unittest.mock.patch.object(theme, "MAX_EXCERPT", told):
@@ -477,8 +524,13 @@ class PromptTest(ExtractCase):
         self.assertEqual((len(self.fake.calls), got["calls"]), (got["pieces"], got["pieces"]))
         seen = []
         for call in self.fake.calls:
-            seen += [int(n) for n in re.findall(r"^<block (\d+), [0-9]+ characters>$", call["prompt"], re.M)]
+            seen += [n for n, _, _ in self.headers(call["prompt"])]
         self.assertEqual(seen, list(range(len(items))))   # every block once, in order, none split
+
+    def test_a_piece_with_the_longer_headers_still_holds_at_most_the_bytes_it_is_allowed(self):
+        items = [heading("Intro")] + [para("x" * 7) for _ in range(5000)]   # tiny blocks: the headers are most of the text
+        for piece in themeextract.pieces(convert.build(items)):
+            self.assertLessEqual(len(piece["text"].encode("utf-8")), themeextract.PIECE_BYTES)
 
     def test_a_theme_that_names_blocks_of_another_piece_is_dropped(self):
         items = [heading("Intro")] + [para(f"Paragraph {n} " + "alpha " * 400) for n in range(30)]
@@ -491,7 +543,7 @@ class PromptTest(ExtractCase):
 
     def test_the_job_asks_for_a_prompt_version_and_a_schema_that_agree_with_its_shape(self):
         job = themeextract.THEME_JOB
-        self.assertEqual((job.name, job.prompt_version, job.schema), ("theme", "v3", "theme.json"))
+        self.assertEqual((job.name, job.prompt_version, job.schema), ("theme", "v4", "theme.json"))
         self.assertEqual(set(job.shape), set(KEYS))
         item = {"type": "array", "items": {"type": "string"}}
         with open(os.path.join(models._project_root(), *models.SCHEMA_DIR, job.schema)) as f:

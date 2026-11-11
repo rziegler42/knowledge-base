@@ -139,4 +139,37 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A (done; committed with the trailer for A)
+
+- **Done.** `engine/kb/themeextract.py`: each block of a piece is headed `<block n, characters a to b>`, where `a` and `b` are the block's `start` and
+  `end` in the converted text less the `start` of the first block of the piece (so a piece starts at 0, and a later piece counts from its own first
+  block); a block shown cut gives where it really ends; a block of no text that the piece leaves out still counts, because the numbers are the
+  converted text's own. The intro of the rules describes the header, the rule on the span says that its length is the number after `to` in the header
+  of its last block less the number after `characters` in the header of its first (the old rule that adds the lengths and 2 for each blank line is gone),
+  and the limit is still read from `theme.MAX_EXCERPT`. The prompt version is `v4`. The module docstring and the engine README say so, and the README records
+  that the repeat trial, with `v3`, still dropped 13 of 88 themes. Tests in `test_themeextract.py`: the header against the blocks; offsets that count from
+  the piece's own first block; a long block shown cut; a block of no text in the middle; a book that opens with a block of no text; the rules (the two phrases,
+  the example header, no "plus 2", the limit read from `theme`); the subtraction of the prompt against `theme.anchor_of` (a span of exactly that size is
+  accepted and one character fewer of limit is refused); every block once, in order; a piece of tiny blocks within `PIECE_BYTES`; the version.
+- **Tests first, seen failing.** Eight failed before the code (the new header form was absent); the guard on the bytes of a piece passed before and after,
+  as a guard should.
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_textutil engine.tests.test_themeextract engine.tests.test_theme
+  engine.tests.test_themecheck`: 210 tests OK. `wb run code-work check`: no problems. No live call.
+- **Deliberate breaks.** 16 new (an offset of the whole book; an end without the blank line; an end from the text shown; a start shifted; the origin of a piece
+  the first block of the book, not reset, shifted, taken from block 0 or from the block before; the old header form; the old arithmetic in the rules; the wrong
+  number named; the limit not read from `theme`; the version left; the byte limit doubled; the old form in the intro) and the 63 earlier: all caught, the file
+  restored byte for byte. One new break was first missed (the origin of the first piece taken from block 0): it led to a test of a book that opens with a block
+  of no text. One break was invalid code and was rewritten. Six earlier breaks had gone stale with the old header text and were updated to the new code.
+- **Read-only measure, no model, no network.** Pieces of the whole library (175 books, one skipped for having no conversion that could be read): 597 with the length
+  header, 622 with the offsets (4.2 percent more; PDFs 235 to 244, web pages 362 to 378). The three PDFs of the trial keep their 4, 8 and 18 pieces. The largest book
+  is 29 pieces; none is near `MAX_PIECES` (150). So the library run is about 4 percent longer.
+- **Review (1 round).** The `reviewer` agent: no blocking finding. It confirmed that the header numbers are what `theme._between` measures, for the first block of a
+  later piece, after a block of no text, and for a cut block; that no other code, test or document outside the plans still uses the old form; that `PIECE_BYTES`
+  and its comment still hold; and that the version is recorded from the job. Recorded, not applied: (1) a line in a book that looks like a header (`<block 3,
+  characters 0 to 10>`) is not marked as not one; this was so with the old form, the effect is a wrong span that `anchor_of` refuses or that makes a theme
+  point at other text, no path to a command, a file or an unchecked field was found, and one rules sentence is to be added only if the trial shows the problem;
+  (2) the wording "less" is terse: whether a live model subtracts correctly is what Increment B measures; (3) the rule "use only numbers shown in this piece" is
+  checked as a range, so the number of a block left out of the piece is accepted (as before this increment); (4) the tests of a first block at 0 cannot tell the
+  offset from the book's position, and the multi-piece test and a break cover that.
+- **Not done.** Increment B (the trial, which needs the owner's word and a statement of what is sent). No security review (none asked; no new input reaches a
+  privileged use: the numbers are computed from the converted text).
