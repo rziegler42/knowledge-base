@@ -332,7 +332,7 @@ the scan as well (and so all three), and prints what it put back, version by ver
 the conversion again, and each tool is run again only if its **version** is not the one that made the output already filed; the
 output of another version is not adopted, it is kept beside the new one as the next generation (`derived/<tool>/2`), and a tool
 whose version did not change is not run again. So a tool whose script changes must carry a new version: the plain extractor carries
-the engine's version (`kb.__version__`, now 0.0.2), the scan tool a label of its own (`approvals.SCAN_VERSION`, now 0.0.5, so that
+the engine's version (`kb.__version__`, now 0.0.2), the scan tool a label of its own (`approvals.SCAN_VERSION`, now 0.0.9, so that
 changing the scan does not re-label and re-convert the extractor), the article extractor's wrapper the number after `kb` in its
 version, and a test fails when a script's text changes without a new label. A version that has not been fetched, and a book that is
 not active, are left alone; a book named that is not there is a refusal before anything is changed; a version whose state cannot
