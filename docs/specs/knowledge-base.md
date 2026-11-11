@@ -32,6 +32,17 @@ This spec is the overview. The detail lives in topic specs, each with its own ma
 module gives its agent access to the library during brainstorming, specs, decisions, roadmaps and plans, so the agent can bring in
 ideas, patterns and facts that are not obvious, even from a web search, and follow them into new concepts.
 
+**Purpose [agreed].** The library supports research across many, possibly unrelated, fields, to find novel concepts that are not
+obvious. It is more than a search engine. Its reader is mostly a research agent working for the owner, and sometimes the owner. The
+agent, not the library, decides whether a concept it finds is worth pursuing; the library does not judge novelty. An agent's own
+knowledge is common and a deep dive only interpolates between known solutions, so the library aims to help it extrapolate: to see how
+ideas from separate fields fit together and to reach a field outside its search parameters that can shape a solution in a new way.
+One theme is the unit it offers. It offers distant material the agent did not ask for as well as answering what it asks, most of that
+material will be noise, and that is accepted if each item is cheap to skim. The agent sets two things on a call: a weighting from
+narrow to wide, as a short named scale (narrow behaves like an ordinary search engine, wide casts a net over many non-obvious topics,
+and the default leans wide), and a distance, the number of steps along threads to travel within the bounds the weighting sets. The
+decision is `2026-11-11-the-library-equips-a-research-agent-to-extrapolate`, which also lists what is left open.
+
 **Success test [agreed].** A brainstorm is better because the library was consulted. If the agent does not return information that
 helps the brainstorm, the owner stops using it. The previous standalone generator failed this test: it produced few novel
 findings.
@@ -98,7 +109,14 @@ an MCP door onto the reading interface.
   **theme** is a derived chunk of meaning inside a book, pointing back to an excerpt for citing. The **catalog** is the searchable
   set of **cards**, each describing one book. The **weave** is the exploratory layer connecting themes across shelves, and a
   **thread** is one connection between two themes.
-- **[proposed]** A **hop** is one step of the agent's walk from a card to its book to adjacent cards. It needs no weave.
+- **[agreed]** One unit, one name. The unit that the library offers an agent and that a thread joins is the **theme**, as `theme.md`
+  defines it (idea-level, with an anchor to an excerpt and a neutral description of its own). The owner may say *idea* or *key idea*
+  and means the same unit. The key ideas that a card holds today are the early, coarse form of themes: plain text of at most 300
+  characters with a quote and a mark, and no neutral description or anchor of their own. The decision
+  `2026-11-11-the-library-equips-a-research-agent-to-extrapolate` says *idea* where this spec says *theme*.
+- **[proposed]** A **hop** is one step of the agent's walk. Before threads exist a step goes from a card to its book to adjacent cards
+  and needs no weave; once threads exist a step follows a thread. **[agreed]** The agent's distance setting counts steps along
+  threads.
 - **[proposed]** The **library report** is the state-of-the-library output, and the **integrity check** is the check that the
   library's files match what it records. Both are specified in `library.md`.
 - **[agreed]** The project, the capability, the module and its command are all named `knowledge-base`, so an agent runs
@@ -106,7 +124,7 @@ an MCP door onto the reading interface.
   suggested `library` for the module and command and withdrew it: in a software project "search the library" can be read as code
   libraries, and the workbench's routing text for this module says "knowledge base".
 - **[proposed]** Words avoided, because they are overloaded here or in the workbench: for a theme, *unit*, *passage*, *idea* and
-  *concept*; and generally *module*, *reference*, *topic*, *entry*, *note* and *chunk*.
+  *concept* (*idea* also collides with the mark `[idea]`; the owner's *idea* means a theme, above); and generally *module*, *reference*, *topic*, *entry*, *note* and *chunk*.
 - **[proposed]** An item in a book is **captured** (a copy of content lives in the book) or a **pointer** (an address plus the exact
   version meant). "Reference" is avoided because the workbench uses it for `docs/references/`.
 
@@ -233,9 +251,12 @@ The weave is specified in `weave.md`, and all of it is exploratory. This section
 
 - **[idea]** The problem: three unrelated shelves A, B and C, and a problem D with little relation to any of them, where a part
   from each, combined, gives a novel solution that would be very hard to find otherwise. The weave is meant to find that.
-- **[idea]** A thread connects two themes, possibly across shelves. The weave is built in stages, only as far as the evidence says
-  is needed. A first cross-field experiment (evidence note 10) showed that search over neutral descriptions finds the source field
-  for some transfers without any weave, and that the home field's own version of an idea often hides it.
+- **[agreed]** A thread connects two themes, possibly across shelves, and the weave is meant to carry the agent from a theme it found
+  to distant themes it did not ask for. Links must not be limited to strongly paired themes, or the library becomes a search engine again.
+- **[idea]** The weave is built in stages, only as far as the evidence says is needed. A first cross-field experiment (evidence note
+  10) showed that search over neutral descriptions finds the source field for some transfers without any weave, and that the home
+  field's own version of an idea often hides it. That experiment, and the trial that followed it, measured the retrieval of known
+  transfers, not whether an agent can extrapolate, so they do not settle which stage is needed (`weave.md`).
 
 ### Beyond one library
 
@@ -274,10 +295,13 @@ All of these are provisional until the spec is approved. The topic specs hold th
 - Whether cards and themes alone are enough or book text must be searched too, and the matching mechanism and budget defaults.
   An early experiment found papers in the text that card search missed.
 - What a thread is in the weave, and whether weights or several weaves are needed.
+- The names and behaviour of the levels of the narrow-to-wide scale, how a level bounds the distance, which level is the default, and
+  what a step is counted in (the decision lists these as left open). How to tell whether the library helps an agent extrapolate.
 - How the workbench would treat a local model, a plain-completion bridge and an MCP layer, which are workbench questions.
 ## Governing decisions and references
 
-- Decisions: none recorded in this repository yet. The rules above come from the workbench decisions and specs named in
+- Decisions: `2026-11-04-knowledge-base-is-a-standalone-package` and
+  `2026-11-11-the-library-equips-a-research-agent-to-extrapolate`. The rules above come from the workbench decisions and specs named in
   "Assumptions and constraints" (`knowledge-tools`, `model-bridge`, `2026-10-20-fixed-store-location`,
   `2026-10-22-model-calls-go-through-vendor-bridges`, `2026-10-21-module-code-lives-in-modules`), which this project adopts and
   will restate in a decision of its own when the owner accepts them.

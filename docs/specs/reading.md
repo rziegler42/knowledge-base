@@ -127,6 +127,12 @@ cover, or the module declaration's exact form, which is designed in the module's
 
 ### The brainstorm report
 
+- **[agreed]** The decision `2026-11-11-the-library-equips-a-research-agent-to-extrapolate` adds a second use: a research agent asks
+  the library to offer distant themes it did not ask for, with a weighting (a short named scale, default leaning wide) and a distance
+  (steps along threads), and expects most of what comes back to be noise that is cheap to skim. **[proposed]** This is a separate
+  read operation from the search, returning one theme per item with its mark, its citation and the route taken, and it is not yet
+  specified. How its output relates to the three tiers below is open. The "hops" of this section are the card walk; the distance
+  setting counts steps along threads (`knowledge-base.md`).
 - **[agreed]** The agent follows hops from a card to its book to adjacent cards within a fixed budget, then reports what it
   found and recommends when and where to continue. It does not go past the budget unasked.
 - **[agreed]** The brainstorm report is sorted into three tiers: **on topic**, **adjacent** and **improves on the idea**. Where nothing useful

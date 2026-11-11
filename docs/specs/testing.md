@@ -134,6 +134,12 @@ Each group names what must hold. The other specs hold the detail.
   nothing else, and `--check` sends nothing. The plan `2026-11-10-trial-of-cross-field-search` states the reading of the numbers. It
   is not the standard transfer set above: it uses twelve synthetic problems against the library as it is, and the papers of the
   transfer set are not fetched.
+- **[agreed]** The measures above test retrieval, and the purpose of the library is to help a research agent extrapolate to ideas that
+  are not obvious (`2026-11-11-the-library-equips-a-research-agent-to-extrapolate`). A rank of a known book does not show that.
+  Whether a find is novel or worth pursuing is the agent's and the owner's judgment and no automated measure replaces it.
+- **[idea]** One measure that needs no judge, not decided: of the themes the library offers for a problem, the share that an ordinary
+  search of the agent's own question would already have returned. A high share means the library is behaving as a search engine. It
+  says nothing about whether the rest are useful.
 - **[idea]** A second corpus with more variety than the first, because the first extraction test was small and mostly one field.
   The transfer set has 4 to 8 papers per shelf and eight transfers, so a larger one with held-out queries would settle what it could not.
 

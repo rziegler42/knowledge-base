@@ -14,6 +14,22 @@ Each statement carries one of three marks:
 
 **This spec was revised after the first cross-field transfer experiment** (see "Evidence"). The experiment measured how far search over neutral descriptions gets on its own, before any weave exists. It does not decide how much of this spec is needed, and every statement below that is not marked [agreed] is still a hypothesis.
 
+## Purpose
+
+**[agreed]** Set by the decision `2026-11-11-the-library-equips-a-research-agent-to-extrapolate`; the points below are the owner's.
+
+- The weave helps a research agent find novel, non-obvious concepts across fields. The agent, not the library, decides whether a find
+  is worth pursuing, and the weave judges nothing for it.
+- The aim is to extrapolate and not to interpolate. The agent's own knowledge is common, and the larger gap is seeing how ideas from
+  separate fields fit together, and that a field outside its search parameters can shape a solution.
+- The unit is one theme and a thread joins two themes. The owner's word *idea* means the same unit. The key ideas that cards hold
+  today are the early, coarse form of themes (`knowledge-base.md`, "Vocabulary").
+- The weave carries the agent from a theme a search found to distant themes it did not ask for. Its links must not be limited to
+  strongly paired themes, or it becomes a search engine again. Weak and cross-field links are the point.
+- The agent sets a weighting (narrow, medium, wide or similar, a short named scale; the default leans wide) and a distance (steps
+  along threads, within the bounds the weighting sets). Noise is expected and accepted if each item is cheap to skim. The names and
+  behaviour of the levels, how a level bounds the distance and what a step counts are open.
+
 ## Scope
 
 A thread connects two themes, possibly from different shelves. The weave is the set of threads, with the ledger of pairs judged.
@@ -91,6 +107,11 @@ tested. It does not cover how themes are made or how the agent searches, which h
   query time.
 - **[proposed]** The decision between the stages is made on measures (see "Testing"), not on enthusiasm. This spec stays at the
   level of hypothesis until then.
+- **[proposed]** The measures so far do not fit the purpose above. The cross-field experiments and the trial of cross-field search
+  measured the retrieval of known transfers, the rank of a book the owner expected, and the rating of pairs by fit. None measured
+  whether an agent extrapolates, so they do not show that Stage 0 is enough or that a stage above it is needed. Which stage to build
+  is open until a measure for that exists, and a gate of the form "build the next stage only if search alone fails on retrieval" no
+  longer stands.
 
 ### Finding candidate pairs
 
@@ -237,6 +258,13 @@ All of these are provisional until the spec is approved and the experiment has r
 - The weave is rebuildable from the themes, and the books are untouched.
 
 ## Open questions
+
+- The names and behaviour of the levels of the narrow-to-wide scale, which level is the default, how a level bounds the distance, and
+  what a step is counted in (which kinds of thread).
+- How to get themes: build them as `theme.md` designs them (an anchor and a neutral description each), or promote the key ideas of
+  the cards, which today are plain text of at most 300 characters in the book's own terms with no neutral description of their own.
+  Today the field-free fields are single strings on the book.
+- How to tell whether the weave helps an agent extrapolate, since no measure of that exists yet.
 
 - Which stage of the weave is needed at all, which the cross-field experiment decides.
 - What a thread is, whether weights or several weaves are needed, and how the kinds combine.
