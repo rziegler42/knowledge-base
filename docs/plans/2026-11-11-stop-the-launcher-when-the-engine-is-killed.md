@@ -1,6 +1,6 @@
 # Stop the launcher when the engine is killed
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-11
 Candidate: none (a correction that follows from Low finding 1 of the security review recorded in the Result of 2026-11-10-pose-a-problem-to-the-search-by-meaning.md)
 Specs: models
@@ -90,7 +90,7 @@ Reviewer: Codex through the review engine (plan-0038b5650df7cf0d), 3 rounds of 3
 
 ## Result
 
-### Increment A (done, not committed; waits for the owner's word to commit)
+### Increment A (done; committed as f5b751c)
 
 - **Done.** `engine/kb/models.py`: `_run` starts the watchdog `supervisor.py` straight after the launcher (`_start_watchdog`, which waits up to `WATCHDOG_WAIT` = 5 s for `ready` and raises `KbError` naming the watchdog if it cannot be started or does not say it), gives it the launcher's pid and `limit + WATCHDOG_MARGIN` (10 s), and tells it "done" first of the cleanup once the launcher has been waited for (`_end_watchdog`). The whole body of `_run` after the watchdog is ready has a cleanup on any exception (kill the launcher, wait, end the watchdog, close the pipes). `supervisor.py` is unchanged. `engine/tests/test_models.py`: the fake launcher also writes `launcher.pid`; new `DRIVER`, `gone()` and `WatchdogTest` (5 tests). `engine/README.md`: one sentence (with the start-up window). The models spec states nothing on how a call is stopped, so it is not edited.
 - **Tests first, seen failing.** The kill test failed for the right reason (the launcher was still running after the engine was killed). The other tests failed because the names they patch did not exist yet, which is a weaker reason; they were then checked by the deliberate breaks below.
