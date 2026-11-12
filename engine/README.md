@@ -1099,7 +1099,7 @@ bytes, each of whole blocks, every block headed by `<block n, characters a to b>
 piece (counted from the start of the piece, so the first block starts at 0; a block of more than 3,000 characters is shown cut, its
 header still gives where it really ends, and a theme may still name it). The rules tell the model how long a span may be: the number after `to` in
 the header of its last block less the number after `characters` in the header of its first, at most 6,000 characters (the limit that
-`theme.anchor_of` checks, read from it), and that a theme with a longer span is thrown away. The offsets are the ones `theme.anchor_of` measures
+`theme.anchor_of` checks, read from it), and that a theme with a longer span is thrown away (the prompt is unchanged, though a longer span is now cut and not dropped: see below). The offsets are the ones `theme.anchor_of` measures
 a span by, so the model's subtraction is the size the code checks, with the blank lines between blocks and with any block of no text that a
 piece leaves out. The prompt of the `theme` job had the version `v2` when each block was headed with its length alone (`v1` in the first
 trial, which dropped 16 of 118 themes for a span over the limit; the repeat trial, with `v3`, still dropped 13 of 88, all in PDFs, whose blocks are small
@@ -1116,9 +1116,12 @@ token no input holds, and the model answers with ten lists of the same length, o
 summary, the first and last block that state it, the five parts of a description in words of no field, and a confidence. The model names
 blocks, never quotes: code turns the numbers into a pointer and `theme.anchor_of` finds the text. A theme is dropped, with the piece, its
 title and the reason, if its blocks are not numbers or not in the piece, if its pointer does not hold (two sections with the same
-heading, an excerpt over 6,000 characters or with no words), if its type is `proof` or `definition` (a definition that serves only the
+heading, a first block that is over 6,000 characters alone, or an excerpt with no words), if its type is `proof` or `definition` (a definition that serves only the
 text), if its title imitates the markers of untrusted text (a title or summary that is empty never gets past the answer check of the model
-layer, but the drafting drops one too). A theme is never dropped for its confidence: the first number of what the model wrote is read (a
+layer, but the drafting drops one too). **A span of more than 6,000 characters is not dropped but cut** to the longest run of blocks from its first block that fits (counted as the code counts a span,
+with the blank lines between), and the theme carries the flag `span_cut`, with what was named and what was kept (`named 8994 characters in blocks 12 to 45; kept 5010 characters in blocks 12 to 31`). The anchor is over the cut span,
+so the check of support reads the cut excerpt, and a part that only the cut-off blocks supported stays `inferred`; the theme is merged and ordered by the cut span. If the longest run that fits has no words, or the first block is over the limit alone, the theme is dropped with the reason it
+had before. This applies to a web page as to a PDF. A trial on 12 of the 40 PDFs of the owner's local library (not in the repository) found 10 spans over the limit in 155 themes proposed, 1.02 to 2.3 times the limit, and a cut would have kept a median 49 percent of each; the themes already made are not changed by it. A theme is never dropped for its confidence: the first number of what the model wrote is read (a
 comma between digits is a decimal point, a number followed by `%` or the word `percent` is a share, a number outside 0 to 1 is put to the
 nearest end, a hyphen after a letter is not a minus sign), and with no number the first of the words `high`, `medium` and `low` is 0.9, 0.6
 or 0.3. The word `one` or `zero` alone (also `one.0`, `zero.`) is 1.0 or 0.0, because a model wrote `one` for 69 percent of the confidences

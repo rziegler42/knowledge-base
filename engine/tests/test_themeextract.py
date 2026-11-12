@@ -131,7 +131,9 @@ class ThemesTest(ExtractCase):
         self.assertEqual(got["themes"], [])
         self.assertIn("more than one", got["dropped"][0]["reason"])
 
-    def test_a_span_over_the_limit_drops_the_theme(self):
+    def test_a_span_whose_first_block_is_over_the_limit_alone_drops_the_theme(self):
+        # a span over the limit is cut to the blocks that fit (see CutTest); here not even the first block fits, so nothing can be kept
+        self.assertGreater(len(INTRO_1), 50)
         with unittest.mock.patch.object(theme, "MAX_EXCERPT", 50):
             got = self.run_extract([values(row(blocks="1-2"))])
         self.assertEqual(got["themes"], [])
@@ -271,6 +273,147 @@ class ThemesTest(ExtractCase):
         got = self.run_extract([values(row(title="Whole", summary="One view of the whole introduction.", blocks="1-2"),
                                        row(title="Part", summary="A narrower view that differs a great deal in its words.", blocks="2"))])
         self.assertEqual(len(got["themes"]), 2)
+
+
+def sized(n, marker=""):
+    """A text of exactly n characters made of words, beginning with `marker` (a word) if one is given."""
+    if marker:
+        return marker + " " + sized(n - len(marker) - 1)
+    return "a" + " a" * ((n - 1) // 2) if n % 2 else "aa" + " a" * ((n - 2) // 2)
+
+
+def blocks_of(*sizes):
+    """Items for a conversion whose blocks (paragraphs, so block i is item i) are exactly these sizes, each beginning with its own word."""
+    items = [para(sized(n, f"mark{i}")) for i, n in enumerate(sizes)]
+    assert [len(i["text"]) for i in items] == list(sizes)
+    return items
+
+
+class CutTest(ExtractCase):
+    """A span over the limit is cut to the longest run of blocks from its first that fits, and flagged; the spans are made exact."""
+
+    def theme_of(self, sizes, blocks, **over):
+        got = self.run_extract([values(row(blocks=blocks, **over))], items=blocks_of(*sizes))
+        return got
+
+    def excerpt(self, got):
+        return theme.excerpt_text(REF, self.conversion, got["themes"][0]["anchor"])
+
+    def test_the_blocks_of_the_conversions_of_these_tests_are_the_sizes_asked_for(self):
+        conv = convert.build(blocks_of(2998, 3001, 100))
+        self.assertEqual([len(b.text) for b in conv.blocks], [2998, 3001, 100])
+        self.assertEqual([conv.blocks[i + 1].start - conv.blocks[i].end for i in range(2)], [2, 2])   # the blank line between blocks
+        self.assertEqual(conv.blocks[1].end - conv.blocks[0].start, 2998 + 2 + 3001)
+
+    def test_a_span_of_exactly_the_limit_is_kept_whole_with_no_flag(self):
+        got = self.theme_of((2998, 3000), "0-1")
+        self.assertEqual((len(got["themes"]), got["dropped"]), (1, []))
+        self.assertEqual(len(self.excerpt(got)), 6000)
+        self.assertEqual(got["themes"][0]["flags"], [])
+
+    def test_a_span_one_character_over_the_limit_is_cut_to_the_first_block_and_flagged(self):
+        got = self.theme_of((2998, 3001), "0-1")
+        self.assertEqual((len(got["themes"]), got["dropped"]), (1, []))
+        cut = self.excerpt(got)
+        self.assertEqual(len(cut), 2998)
+        self.assertTrue(cut.startswith("mark0 "))
+        self.assertNotIn("mark1", cut)
+        self.assertEqual(got["themes"][0]["flags"], [{"kind": "span_cut", "detail": "named 6001 characters in blocks 0 to 1; kept 2998 characters in blocks 0 to 0"}])
+
+    def test_a_span_far_over_the_limit_keeps_the_blocks_that_fit(self):
+        got = self.theme_of((1000,) * 10, "0-9")
+        cut = self.excerpt(got)
+        self.assertEqual(len(cut), 5 * 1000 + 4 * 2)   # five blocks and the blank lines between them; six would be 6,010
+        self.assertIn("mark4", cut)
+        self.assertNotIn("mark5", cut)
+        self.assertEqual(got["themes"][0]["flags"], [{"kind": "span_cut", "detail": "named 10018 characters in blocks 0 to 9; kept 5008 characters in blocks 0 to 4"}])
+
+    def test_the_cut_begins_at_the_first_block_named_and_not_at_the_first_of_the_piece(self):
+        got = self.theme_of((1000,) * 10, "3-9")
+        cut = self.excerpt(got)
+        self.assertTrue(cut.startswith("mark3 "))
+        self.assertIn("mark7", cut)
+        self.assertNotIn("mark8", cut)
+        self.assertIn("blocks 3 to 9; kept", got["themes"][0]["flags"][0]["detail"])
+        self.assertTrue(got["themes"][0]["flags"][0]["detail"].endswith("in blocks 3 to 7"))
+
+    def test_a_first_block_that_is_over_the_limit_alone_is_dropped_with_its_reason(self):
+        got = self.theme_of((6500, 100), "0-1")
+        self.assertEqual(got["themes"], [])
+        self.assertEqual(len(got["dropped"]), 1)
+        self.assertEqual(got["dropped"][0]["reason"], "the excerpt is 6602 characters, more than the 6000 a theme may point to")   # the span named, not a cut of it
+        got = self.theme_of((6500,), "0")
+        self.assertEqual(got["themes"], [])
+        self.assertEqual(got["dropped"][0]["reason"], "the excerpt is 6500 characters, more than the 6000 a theme may point to")
+
+    def test_a_single_block_within_the_limit_is_kept_with_no_flag(self):
+        got = self.theme_of((6000,), "0")
+        self.assertEqual((len(got["themes"]), got["themes"][0]["flags"]), (1, []))
+
+    def test_a_first_block_with_no_words_followed_by_blocks_with_words_is_kept_inside_the_cut(self):
+        items = [para("!!!")] + blocks_of(4000, 3000)[0:2]
+        got = self.run_extract([values(row(blocks="0-2"))], items=items)
+        self.assertEqual(len(got["themes"]), 1)
+        cut = self.excerpt(got)
+        self.assertTrue(cut.startswith("!!!"))
+        self.assertIn("mark0", cut)
+        self.assertNotIn("mark1", cut)
+        self.assertEqual(got["themes"][0]["flags"][0]["kind"], "span_cut")
+
+    def test_a_cut_whose_longest_prefix_has_no_words_is_dropped_with_the_reason_it_has_now(self):
+        items = [para("!!!"), para("???"), para(sized(6000, "mark2"))]
+        got = self.run_extract([values(row(blocks="0-2"))], items=items)
+        self.assertEqual(got["themes"], [])
+        self.assertEqual(len(got["dropped"]), 1)
+        self.assertIn("no words", got["dropped"][0]["reason"])
+
+    def test_the_flag_comes_after_the_flag_of_an_unreadable_confidence(self):
+        got = self.theme_of((2998, 3001), "0-1", confidence="unsure")
+        self.assertEqual([f["kind"] for f in got["themes"][0]["flags"]], ["confidence_unreadable", "span_cut"])
+
+    def test_the_anchor_is_over_the_cut_span_and_the_theme_passes_the_form_check(self):
+        got = self.theme_of((1000,) * 10, "0-9")
+        anchor = got["themes"][0]["anchor"]
+        from kb import locator
+        self.assertEqual(anchor["excerpt_sha256"], locator._hash(locator.words(self.excerpt(got))))
+        theme.make("01ARZ3NDEKTSV4RRFFQ69G5FAV", "v1", got["themes"])
+        self.assertLessEqual(len(got["themes"][0]["flags"][0]["detail"]), theme.MAX_DETAIL)
+
+    def test_a_cut_theme_is_merged_and_ordered_by_its_cut_span_and_not_by_the_span_named(self):
+        same = dict(summary="The search accepts worse moves less often as it cools.")
+        merged = self.run_extract([values(row(blocks="0-9", **same), row(title="Another name for it", blocks="0-4", **same))], items=blocks_of(*(1000,) * 10))
+        self.assertEqual(len(merged["themes"]), 1)   # cut to blocks 0 to 4 it is the same as the other, which named them
+        self.assertEqual(len(merged["dropped"]), 1)
+        self.assertTrue(merged["dropped"][0]["reason"].startswith("merged"))
+        ordered = self.run_extract([values(row(title="Late", blocks="5-6", summary="Something else is said about the later blocks."),
+                                           row(title="Early", blocks="0-9", summary="The first part of the text says what comes first."))],
+                                   items=blocks_of(*(1000,) * 10))
+        self.assertEqual([t["title"] for t in ordered["themes"]], ["Early", "Late"])
+
+    def test_two_themes_with_the_same_cut_span_keep_the_order_they_were_named_in_and_not_the_order_of_the_spans_named(self):
+        # X names blocks 0 to 9 and is cut to 0 to 4; Y names 0 to 4. By the cut span they are equal and keep the order of the answer (X, Y);
+        # by the span named Y (0 to 4) would come before X (0 to 9)
+        got = self.run_extract([values(row(title="X", blocks="0-9", summary="The first part of the text says what comes first."),
+                                       row(title="Y", blocks="0-4", summary="Something else altogether is said about the later parts."))],
+                               items=blocks_of(*(1000,) * 10))
+        self.assertEqual([t["title"] for t in got["themes"]], ["X", "Y"])
+        self.assertEqual(got["dropped"], [])
+
+    def test_the_prompt_and_its_version_are_unchanged(self):
+        self.assertEqual(themeextract.THEME_JOB.prompt_version, "v4")
+        self.assertIn("a theme whose span is longer is thrown away, so name fewer blocks", themeextract.theme_prompt("T", "text", 1, 1))
+
+    def test_a_cut_is_made_when_a_theme_is_drafted_from_a_saved_answer_too(self):
+        journal = themeextract.PieceJournal()
+        items = blocks_of(*(1000,) * 10)
+        fake = JournalFake(values(row(blocks="0-9")))
+        with unittest.mock.patch.object(models, "run_job", fake):
+            themeextract.extract(config(), "01ARZ3NDEKTSV4RRFFQ69G5FAV", "v1", REF, convert.build(items), "A paper on annealing", journal=journal)
+        again = JournalFake()
+        with unittest.mock.patch.object(models, "run_job", again):
+            got = themeextract.extract(config(), "01ARZ3NDEKTSV4RRFFQ69G5FAV", "v1", REF, convert.build(items), "A paper on annealing", journal=journal)
+        self.assertEqual(again.calls, [])
+        self.assertEqual(got["themes"][0]["flags"][0]["kind"], "span_cut")
 
 
 class ReplyTest(ExtractCase):

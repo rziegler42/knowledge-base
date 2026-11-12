@@ -948,6 +948,18 @@ class StatusTest(RunCase):
             themerun.status(self.store, "20261111t100000z-zzzzzz")
 
 
+class CutThemeCountsTest(unittest.TestCase):
+    def test_a_cut_theme_is_counted_in_the_flags_and_a_span_with_no_block_that_fits_in_the_drops(self):
+        made = {"themes": [{"neutral": {"problem": {"mark": "stated"}}, "flags": [{"kind": "span_cut", "detail": "named 6001 characters in blocks 0 to 1; kept 2998 characters in blocks 0 to 0"}]}]}
+        got = {"generation": made, "dropped": [{"reason": "the excerpt is 6500 characters, more than the 6000 a theme may point to"}], "pieces": 1, "calls": 2,
+               "records": [{"input_tokens": 1, "output_tokens": 1}]}
+        stats = themerun._stats_of(got, 3)
+        self.assertEqual(stats["flags"], {"span_cut": 1})
+        self.assertEqual(stats["dropped"], {"span_over_limit": 1})
+        themerun._check_item({"book_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "version_id": "v1", "pieces": 1, "status": "done", "attempts": 0, "generation": 1, "reason": "",
+                              "made": {"theme": extraction(), "theme-check": check()}, "conversion": None, "stats": stats})   # and the record accepts it
+
+
 class CategoryTest(unittest.TestCase):
     def test_each_reason_for_dropping_a_theme_has_a_kind(self):
         cases = {"the excerpt is 6437 characters, more than the 6000 a theme may point to": "span_over_limit",

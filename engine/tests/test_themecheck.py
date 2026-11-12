@@ -5,7 +5,7 @@ import re
 import unittest
 import unittest.mock
 
-from engine.tests.test_themeextract import ITEMS, REF, RECORD, Fake, JournalFake, VersionCase, heading, para, row, values
+from engine.tests.test_themeextract import ITEMS, REF, RECORD, Fake, JournalFake, VersionCase, blocks_of, heading, para, row, values
 
 from kb import KbError, convert, models, theme, themecheck, themeextract
 
@@ -406,6 +406,25 @@ class CheckTest(unittest.TestCase):
         self.assertNotIn("theme-check", models.REQUIRED_TASKS)
         models.registry(config())
         models.registry(config(check=False))
+
+
+class CutThemeCheckTest(unittest.TestCase):
+    def test_the_check_model_reads_the_cut_excerpt_and_not_the_blocks_that_were_cut_off(self):
+        conversion = convert.build(blocks_of(*(1000,) * 10))
+        fake = Fake(values(row(blocks="0-9")))
+        with unittest.mock.patch.object(models, "run_job", fake):
+            made = themeextract.extract(config(), BOOK, "v1", REF, conversion, "A paper on annealing")
+        self.assertEqual(made["themes"][0]["flags"][0]["kind"], "span_cut")
+        asking = Fake(verdicts("supports", "partly", "no", "supports"))
+        with unittest.mock.patch.object(models, "run_job", asking):
+            checked = themecheck.check_themes(config(), REF, conversion, made["themes"], set())
+        prompt = asking.calls[0]["prompt"]
+        self.assertIn("mark0", prompt)
+        self.assertIn("mark4", prompt)
+        self.assertNotIn("mark5", prompt)
+        self.assertNotIn("mark9", prompt)
+        self.assertEqual([f["kind"] for f in checked["themes"][0]["flags"]], ["span_cut"])   # the check keeps the flag
+        self.assertEqual(checked["themes"][0]["neutral"]["problem"]["mark"], "stated")
 
 
 class FrequenciesOfTheLibraryTest(VersionCase):

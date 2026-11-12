@@ -103,6 +103,9 @@ or conversion; they have their own specs.
 
 - **[proposed]** Themes are extracted after the card, as a later pipeline stage in priority order, section by section within the
   model's context budget (pieces of about 8,000 to 16,000 tokens). The model proposes themes, each with an anchor.
+- **[proposed]** An excerpt may be at most 6,000 characters. A theme whose blocks span more is not dropped but cut to the longest run of blocks from its first block that fits, and it carries a flag
+  `span_cut` that says what was named and what was kept; its anchor is over the cut span and the check of support reads the cut excerpt, so a part that only the cut-off blocks supported stays `inferred`. A theme whose first block is over the limit alone,
+  or whose longest run that fits has no words, is dropped. A trial on 12 of the PDFs of the owner's local library (not in the repository) found that the spans the model named over the limit were 1.02 to 2.3 times the limit. The themes made before the cut keep their drops.
 - **[proposed]** Every anchor is checked against the text: the excerpt must exist at the anchor, and its hash is recorded. A theme
   whose anchor does not hold is rejected, so a theme cannot cite text that is not there.
 - **[proposed]** The model does not quote its own start and end. It names the section or paragraph a theme comes from (or, for another kind of source, the equivalent that its profile gives: a line

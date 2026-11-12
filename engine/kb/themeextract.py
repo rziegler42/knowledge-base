@@ -5,7 +5,7 @@ A book that has a current card and a conversion is read in pieces, each made of 
 answers with lists, one item for each theme it finds: a title, a type, a summary, the first and last block that state the theme, the
 five parts of a description in words of no field, and a confidence. The model never writes a quote or an anchor. It names blocks, code
 turns the numbers into a pointer, and `theme.anchor_of` finds the text, so a theme whose blocks are not in the piece, or do not hold, is
-dropped with its reason. Proofs and definitions that serve only the text, which the model marks by their type, are dropped; near-identical
+dropped with its reason; a span of more than `theme.MAX_EXCERPT` characters is cut to the blocks from its first that fit, and flagged `span_cut`. Proofs and definitions that serve only the text, which the model marks by their type, are dropped; near-identical
 themes of a book are merged.
 
 The text of the book and the title go to the model as data, in sections of their own between delimiters that hold a random token no
@@ -213,8 +213,30 @@ def _confidence(text):
     return UNREADABLE_CONFIDENCE, textutil.clean(text, 300) or "(empty)"
 
 
+def _cut(conversion, first, last):
+    """`(last block kept, flag)` for the blocks `first` to `last` of a conversion when their span is over `theme.MAX_EXCERPT` characters: the
+    longest run of blocks from `first` that fits, counted as `theme` counts a span (the start of the first block to the end of the last,
+    with the blank lines between), and the flag `span_cut` that says what was named and what was kept. `(last, None)` when the span fits,
+    and `(None, None)` when the first block is over the limit alone (nothing can be kept). A run that has no words is not told here: the
+    anchor refuses it, as it refuses any excerpt with no words."""
+    blocks = conversion.blocks
+    named = blocks[last].end - blocks[first].start
+    if named <= theme.MAX_EXCERPT:
+        return last, None
+    if blocks[first].end - blocks[first].start > theme.MAX_EXCERPT:
+        return None, None
+    kept = first
+    while kept < last and blocks[kept + 1].end - blocks[first].start <= theme.MAX_EXCERPT:
+        kept += 1
+    detail = (f"named {named} characters in blocks {first} to {last}; "
+              f"kept {blocks[kept].end - blocks[first].start} characters in blocks {first} to {kept}")
+    return kept, {"kind": "span_cut", "detail": detail}
+
+
 def _draft(row, piece, conversion, ref):
-    """`(draft, None)` for a theme of a reply that is kept, or `(None, reason)` for one that is dropped."""
+    """`(draft, None)` for a theme of a reply that is kept, or `(None, reason)` for one that is dropped. A span over the size limit is not
+    dropped but cut (`_cut`) to the blocks that fit, and the theme carries the flag `span_cut`, unless its first block is over the limit
+    alone, which is dropped with the reason `theme.anchor_of` gives."""
     title = textutil.title(row["title"], theme.MAX_TITLE)
     if not title:
         return None, "the theme has no usable title"
@@ -229,12 +251,17 @@ def _draft(row, piece, conversion, ref):
     last = int(named.group(2)) if named.group(2) is not None else first
     if not piece["first"] <= first <= piece["last"] or not piece["first"] <= last <= piece["last"]:
         return None, "the blocks named are not in the piece"
-    try:   # a range that runs backwards is refused here too, with its reason
+    kept, cut_flag = _cut(conversion, first, last)   # a range that runs backwards has a negative size, so it is not cut: the anchor refuses it, with its reason
+    if kept is not None:
+        last = kept   # with none to keep (the first block is over the limit alone) the anchor below refuses the span named, with the reason
+    try:
         anchor = theme.anchor_of(ref, conversion, _pointer(conversion, first, last))
     except KbError as e:
         return None, str(e)
     confidence, unreadable = _confidence(row["confidence"])
     flags = [{"kind": "confidence_unreadable", "detail": unreadable}] if unreadable else []
+    if cut_flag:
+        flags.append(cut_flag)
     kind = row["type"] if row["type"] in theme.TYPES else "other"   # a theme without a clear type is kept
     neutral = {name: {"text": row[name], "mark": "inferred" if row[name] else None} for name in theme.PARTS}
     return {"title": title, "type": kind, "summary": row["summary"], "neutral": neutral, "confidence": confidence, "flags": flags,
