@@ -1,7 +1,7 @@
 # Theme weave
 
 Status: Active
-Updated: 2026-11-11
+Updated: 2026-11-12
 
 ## Purpose
 
@@ -26,8 +26,12 @@ The library holds 176 books, 175 of them with a card and 174 with vectors. A car
 (each marked as stated by the book or inferred by a model, with a verbatim quote that was checked), and a description of the book's
 problem, approach, what it needs, what it provides and where it would not work, in words of no field. A search by keyword and a search
 by meaning rank books, and `problem-search` merges the books found for up to five sub-problems. The vectors cover three of those
-descriptions, which are single strings on the book. Themes, as `docs/specs/theme.md` designs them, are not built: the key ideas of a
-card are their early, coarse form, with no field-free description of their own, no vectors, and no links between them. A trial of
+descriptions, which are single strings on the book. Themes, as `docs/specs/theme.md` designs them, are built and made for the library:
+1,913 themes in 175 of the books (made on 2026-11-11 and 2026-11-12 by the extraction and the check of `engine/kb/themeextract.py` and
+`themecheck.py`). Each has a title, a type, a summary, a description of five parts in words of no field, an anchor into the book, a
+confidence, a mark of stated or inferred on each part, and flags. They have no vectors and no links between them yet. The flag for a
+word of the book's field is a rough reason to look: it is raised on 27 percent of the themes, and the limit it uses is a judgement with
+no ground truth. A trial of
 cross-field search measured retrieval of known transfers and found search alone looked enough on that measure, with caveats; it did
 not measure extrapolation. The weave spec (`docs/specs/weave.md`) is a draft that now states the purpose and lists what is open.
 
