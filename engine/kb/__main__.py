@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import themerun
+from . import themerun, themereflag
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -105,6 +105,13 @@ def main(argv=None):
     trr.add_argument("run", help="the name of the run that `plan` printed")
     trt = trs.add_parser("status", help="where each book of a run has got to; no book text")
     trt.add_argument("run", help="the name of the run")
+    rf = sub.add_parser("themes-reflag", help="give the themes already made the flags of the rule now in force, without a call to a model: plan "
+                                              "(read only: the books whose flags would change) or run (a new generation for each of them)")
+    rfs = rf.add_subparsers(dest="action", required=True)
+    rfs.add_parser("plan", help="the books whose themes would get other flags, the books left out and why, and the themes flagged before and after; "
+                                "writes nothing")
+    rfs.add_parser("run", help="file the themes of each of those books as the next generation, with the new flags and all else as it was; it can "
+                               "be run again and then files nothing")
     sw = sub.add_parser("card-show", help="the card of a book, with its text between the untrusted-text markers")
     sw.add_argument("book_id")
     sw.add_argument("--version", help="the version (default: the book's current version)")
@@ -224,6 +231,16 @@ def main(argv=None):
                 if out["counts"]["failed"]:
                     print(f"{out['counts']['failed']} book could not be given themes", file=sys.stderr)
                     return 1
+            return 0
+        if args.command == "themes-reflag":
+            if args.action == "plan":
+                out = themereflag.plan(Store.open(write=False))
+            else:
+                out = themereflag.run(Store.open())
+            print(json.dumps(out, indent=1))
+            if args.action == "run" and out["failed"]:
+                print(f"{len(out['failed'])} books could not be given the new flags", file=sys.stderr)
+                return 1
             return 0
         if args.command == "card-index":
             counts = catalog.rebuild(Store.open())

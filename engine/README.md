@@ -1150,7 +1150,7 @@ description that holds a word of the *flag* vocabulary as a whole word is flagge
 5 percent of the books or more hold (`themecheck.FLAG_SHARE`, `flag_vocabulary`; a word that no book holds is kept), whatever the word's source, and the words the extraction is told to
 avoid are still those of the whole vocabulary. The 5 percent is a judgement and not a measurement: a read-only count over the 1,913 themes of the 175 books on 2026-11-12 showed that
 the vocabulary without this limit flagged 1,479 of them (77.3 percent), and with the limit of 1, 3, 5, 8 and 15 percent it would flag 4.0, 18.0, 27.4, 40.3 and 63.1 percent; there is no
-ground truth of leak or no leak. The themes made before this limit carry the earlier flags until they are flagged again (a command for that, `themes-reflag`, is the next increment of the plan and is not built yet). *Support:* a
+ground truth of leak or no leak. The themes made before this limit carry the earlier flags until they are flagged again with `themes-reflag` (below). *Support:* a
 second model is shown the excerpt and the parts of the description that have text, and says for each whether the excerpt supports it
 (`supports`, `partly`, `no`); a part it says is supported is marked `stated`, every other stays `inferred`. One call for each theme. A
 check whose answer is refused, asked once more with the reason and refused again, drops its theme as `unchecked` and the refusals are
@@ -1164,6 +1164,15 @@ that the card prompt lets through, with some false flags. The prompt for themes 
 product or person), so whether the descriptions of themes do better is not known; Increment E measures it (the figures in this paragraph from "Read-only, on the 175 cards" are those of the
 flag before the limit of 5 percent). The flag is a reason to look
 and not a verdict. A book whose conversion cannot be read is left out of the count of the library.
+
+**The flags again** (`kb/themereflag.py`; `python3 -m kb themes-reflag plan` and `run`; no option names a model, a server or an address, and nothing is sent to a model). The flag `field_words` of a theme is
+worked out from its description and the book's flag vocabulary, so it can be worked out again. *`plan`* reads and writes nothing: for each active book that has a card that can be read, a conversion
+in use and themes, it takes the newest valid generation and works out the flags by the rule now in force (the flags other than `field_words` stay as they are and in their order, then the flag of the
+description, if any). It prints the books whose flags would change (with the themes of each and how many are flagged before and after), how many books would not change, the books left out with the reason
+(`inactive`, `no_themes`, `damaged` when every generation fails its check, `no_card`, `no_conversion`, `unreadable` when the book could not be read, which does not stop the others) and the themes flagged before and after. *`run`* files, for each book to change, its themes as the next generation, with everything but the flags as it
+was (`made` included, so `themes-run` still skips the book); the older generations are never changed. A book that fails does not end the run; it is reported with a fixed reason and no message. It holds the
+lock that the card queue and the theme run hold. A second run files nothing, because the flags then match. The command exits with 1 when a book failed. Read-only, on 2026-11-12, over the library as it
+stands: 166 books would change, 9 would not and 1 has no themes; 1,479 of the 1,913 themes are flagged and 525 (27.4 percent) would be.
 
 **A run over the library** (`kb/themerun.py`; `python3 -m kb themes-run plan`, `run <run>` and `status <run>`; no option names a model, a server or an
 address). It makes the themes of many books, one book at a time, with the two models the tasks setting of your config names for `theme` and `theme-check`.
