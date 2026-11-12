@@ -1,0 +1,159 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-12T11:49:02Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The risks section now holds a security review checkpoint that asks the owner once before work starts and runs a review only on request"
+    },
+    {
+      "at": "2026-11-12T11:49:02Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Increment C verification now names the two card tests that the plan relied on and says the result is recorded"
+    },
+    {
+      "at": "2026-11-12T11:50:56Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "The reuse key is now the digest of the task prompt built before any call, so an answer accepted at the retry is reused; the tests of Increment B name that case"
+    },
+    {
+      "at": "2026-11-12T11:52:14Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R3-F1",
+      "reason": "Verified that the prompt builder puts a random token in each prompt; the reuse key is now a hash of the fixed inputs and the plan tests two real extractions"
+    }
+  ],
+  "format": 1,
+  "generation": 10,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-12-keep-the-pieces-of-a-book-when-one-is-refused.md",
+  "rounds": [
+    {
+      "at": "2026-11-12T11:48:52Z",
+      "bridge": "ask-codex",
+      "document_sha256": "499a7a318eacdbb3f3f9d49a093a4c1a03e3b496277f22cbe0a97dbab4973b12",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "f24d78ac894149d608693717f808c8269ab6f5d1978fef623ecc0aba0f13dff2",
+      "usage": {
+        "input_tokens": 248376,
+        "output_tokens": 3044,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-12T11:50:45Z",
+      "bridge": "ask-codex",
+      "document_sha256": "bc111607e40862955fcdf64f4a7140b8ce6961c68732f73c3ccb1975146d2e83",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "7bcd9e8090290646fa56e3002a8d3b9739e44f4626cc56d05f1ab3e84a2df02e",
+      "usage": {
+        "input_tokens": 414318,
+        "output_tokens": 3362,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-12T11:51:24Z",
+      "bridge": "ask-codex",
+      "document_sha256": "ad716f900751254b1af8d7f518ccdb22316eb904db75eaa22d2d74bf43e98a7b",
+      "file": "round-3.json",
+      "findings": [
+        {
+          "id": "R3-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 3,
+      "profile": "second-opinion",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "adc858f353ec8295f6a6f9159846f215ddfb41b4e26af42bb31a95cacb3e9825",
+      "usage": {
+        "input_tokens": 209162,
+        "output_tokens": 493,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-12T11:54:23Z",
+      "bridge": "ask-codex",
+      "document_sha256": "9262404bf2262d422c87e16bb434041d1736b5a90cdb1b7a53074c6da8f10637",
+      "file": "round-4.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 4,
+      "profile": "second-opinion",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "be156ff3b7475212d9a745f6ca2a3dcc18ec60674c4f87f830e426b310bbb452",
+      "usage": {
+        "input_tokens": 184675,
+        "output_tokens": 352,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "8cd27adea9fdcfebc8007dbb72b697fd0aea6fa3075c0a6af54689b2afb87c81",
+  "window": {
+    "bound": 4,
+    "first": 1
+  }
+}

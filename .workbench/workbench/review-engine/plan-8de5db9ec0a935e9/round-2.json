@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-12-keep-the-pieces-of-a-book-when-one-is-refused.md:42-45,87-90",
+      "problem": "The journal’s matching key is undefined for an answer accepted on `_ask`’s retry. `_ask` sends the original prompt, then—after a shape refusal—a different retry prompt containing the refusal reason. A single field claimed to be the digest of “the exact prompt that was sent” cannot represent both calls, while the resumed extraction compares it to the newly built original prompt. The plan explicitly requires saving this retry-success case, so an implementation must either violate the stated digest rule or fail to reuse that saved answer.",
+      "severity": "major",
+      "suggestion": "Define a stable reuse key as the digest of the original task prompt, separate from any actual-call prompt digests/records, or explicitly store and validate both prompts. Add tests for a retry-accepted entry being reused when the original task prompt is unchanged and invalidated when its task inputs change."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The retry-success journal entry needs an unambiguous prompt-identity rule before the plan can reliably preserve and reuse it.",
+  "verdict": "changes_needed"
+}

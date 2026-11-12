@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "docs/plans/2026-11-12-keep-the-pieces-of-a-book-when-one-is-refused.md:42-45",
+      "problem": "The reuse key hashes the task prompt exactly as theme_prompt builds it, but theme_prompt calls cardmake._prompt, which inserts a fresh random token on every call. Identical book inputs therefore produce different digests on subsequent passes or runs, so the first saved entry is discarded and no pieces are reused. This remains a defect independently of the retry-prompt issue fixed in round 2.",
+      "severity": "major",
+      "suggestion": "Define a stable reuse key that excludes the random delimiter token while covering the task's rules and inputs, or persist and safely reuse the original delimiter when rebuilding the prompt. Add a test using the real prompt builder across two separate extractions with unchanged inputs and verify that saved pieces cause no model calls."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "The prompt digest changes randomly between runs, preventing the planned journal reuse.",
+  "verdict": "changes_needed"
+}
