@@ -28,6 +28,7 @@ numbers and not all zeros. A theme read from the file is checked as a theme is (
 
 The citation line is the card's (`catalog.citation_of`) with the section of the theme's anchor and the language, which no card or theme
 records, so it says `Language: not recorded`."""
+import copy
 import fcntl
 import json
 import math
@@ -68,6 +69,7 @@ _SCHEMA = (
 )
 _HEX = set("0123456789abcdef")
 _DIMENSION = re.compile(r"[0-9]{1,4}")
+_BUILT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\+00:00")   # the time as the build writes it (UTC, to the second)
 _VERSION = re.compile(r"v[1-9][0-9]{0,5}")
 _THEME_ID = theme._ID   # the ids a theme may have, as the form of a theme says (the engine makes t1, t2 and so on)
 _SECTION_DROP = str.maketrans("", "", '"[]>\\')   # the characters with which a heading could close the brackets or the quotation marks of a line
@@ -162,7 +164,7 @@ def _meta(conn):
         raise KbError(f"the file of theme vectors cannot be read ({e}): {_AGAIN}") from None
     if (set(rows) != set(_META_KEYS) or not all(isinstance(v, str) for v in rows.values()) or rows["format"] != str(FORMAT)
             or not _DIMENSION.fullmatch(rows["dimension"]) or not 1 <= int(rows["dimension"]) <= models.MAX_DIMENSION
-            or not models._valid_model(rows["model"]) or not models._valid_model(rows["configured"]) or len(rows["built"]) > 40
+            or not models._valid_model(rows["model"]) or not models._valid_model(rows["configured"]) or not _BUILT.fullmatch(rows["built"])
             or len(rows["document_prefix_sha256"]) != 64 or set(rows["document_prefix_sha256"]) - _HEX):
         raise KbError(f"the file of theme vectors does not say which model made it: {_AGAIN}")
     return rows
@@ -470,6 +472,19 @@ def _shown(value):
     return card._shown(value)
 
 
+def anchor_shown(anchor):
+    """The anchor of a theme as a result shows it: a copy in which each heading of the path, and of the path of an end that is a locator
+    of a section, is shown as every text of the file is (`_shown`: cleaned, and withheld whole if it holds the words of a marker). A heading
+    is text of a book. Everything else (the kinds, the numbers, the conversion, the hashes) is as the theme holds it, and the anchor given
+    (the row's) is not changed."""
+    shown = copy.deepcopy(anchor)
+    shown["path"] = [_shown(part) for part in shown["path"]]
+    for end in ("start", "end"):
+        if shown[end]["kind"] == "section":
+            shown[end]["at"]["path"] = [_shown(part) for part in shown[end]["at"]["path"]]
+    return shown
+
+
 def render(row):
     """The theme of a row as text for a reader, without a marker: its title and type, its summary, and each part that has text with its
     mark. Everything in it is model output or text of a book, so it is shown only between the untrusted-text markers."""
@@ -491,7 +506,7 @@ def result_of(row, score, field):
     mark = made["neutral"][field]["mark"] if field in theme.PARTS else None
     return {"book_id": row["book_id"], "version_id": row["version_id"], "theme_id": row["theme_id"], "theme_generation": row["theme_generation"],
             "card_generation": row["card_generation"], "book_title": _shown(row["book_title"]), "theme_title": _shown(made["title"]), "type": made["type"],
-            "summary": _shown(made["summary"]), "confidence": made["confidence"], "anchor": made["anchor"], "score": score, "matched": [field],
+            "summary": _shown(made["summary"]), "confidence": made["confidence"], "anchor": anchor_shown(made["anchor"]), "score": score, "matched": [field],
             "excerpt_field": field, "excerpt_mark": mark, "flags": [{"kind": _shown(f["kind"]), "detail": _shown(f["detail"])} for f in made["flags"]],
             "citation": row["citation"], "untrusted": True, "excerpt": f"{fulltext.MARKER}\n{_shown(fulltext.excerpt_of(text, []))}",
             "text": f"{fulltext.MARKER}\n{render(row)}\n{reading.END_MARKER}"}
