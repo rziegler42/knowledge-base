@@ -5,7 +5,7 @@ import re
 import unittest
 import unittest.mock
 
-from engine.tests.test_themeextract import ITEMS, REF, RECORD, Fake, VersionCase, heading, para, row, values
+from engine.tests.test_themeextract import ITEMS, REF, RECORD, Fake, JournalFake, VersionCase, heading, para, row, values
 
 from kb import KbError, convert, models, theme, themecheck, themeextract
 
@@ -391,6 +391,30 @@ class VersionTest(VersionCase):
         self.assertEqual(len(got["records"]), 3)
         self.assertEqual(theme.generations(self.store, book, version), [])
         self.assertEqual(theme.file(self.store, generation), 1)
+
+    def test_a_journal_keeps_the_extraction_and_the_check_is_asked_again(self):
+        book, version = self.converted_book()
+        journal = themeextract.PieceJournal()
+        frequencies = ({"annealing": 1, "search": 1}, 30)
+        fake = JournalFake(values(row()), verdicts("supports", "supports", "supports", "supports"))
+        with unittest.mock.patch.object(models, "run_job", fake):
+            first = themecheck.make_and_check_for_version(self.store, config(), book, version, frequencies=frequencies, journal=journal)
+        self.assertEqual([e["piece"] for e in journal.entries], [1])
+        again = JournalFake(verdicts("supports", "supports", "supports", "supports"))
+        with unittest.mock.patch.object(models, "run_job", again):
+            second = themecheck.make_and_check_for_version(self.store, config(), book, version, frequencies=frequencies, journal=journal)
+        self.assertEqual([c["job"].name for c in again.calls], ["theme-check"])   # the extraction is not asked for again
+        self.assertEqual(second["generation"]["themes"], first["generation"]["themes"])
+        self.assertEqual((second["pieces"], second["calls"]), (first["pieces"], first["calls"]))
+
+    def test_a_book_whose_check_call_fails_keeps_its_extraction_in_the_journal(self):
+        book, version = self.converted_book()
+        journal = themeextract.PieceJournal()
+        fake = JournalFake(values(row()), KbError("the server is down"))   # a refused check only drops the theme; a failed call fails the book
+        with unittest.mock.patch.object(models, "run_job", fake):
+            with self.assertRaises(KbError):
+                themecheck.make_and_check_for_version(self.store, config(), book, version, frequencies=({}, 30), journal=journal)
+        self.assertEqual([e["piece"] for e in journal.entries], [1])
 
     def test_both_models_are_found_before_anything_is_sent(self):
         book, version = self.converted_book()

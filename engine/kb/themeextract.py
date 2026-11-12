@@ -14,10 +14,13 @@ marked `inferred` here, because the model wrote it from the text and no check ha
 step). A reply of more than CEILING themes is a runaway: nothing is made from it, it is not asked again, and the caller keeps it aside.
 
 This module files nothing. `make_for_version` returns a generation for the caller to file with `theme.file`."""
+import copy
+import hashlib
+import json
 import math
 import re
 
-from . import KbError, card, cardmake, convert, locator, models, refused, textutil, theme
+from . import KbError, card, cardmake, convert, locator, models, refused, textutil, theme, themejournal
 
 PIECE_BYTES = 20_000     # a piece of the book, in bytes, as for cards: with the rules it fits a window of about 32 KB
 MAX_SHOWN = 3000         # characters of one block shown to the model; a longer block is cut, and a theme may still name it
@@ -80,12 +83,26 @@ def example_words():
     return {w for name in theme.PARTS for w in textutil.words(EXAMPLE_PARTS[name])}
 
 
+def _listed(avoid):
+    """The words to avoid that the prompt lists: those given, less any word that the worked example's own parts use."""
+    return [w for w in avoid if w not in example_words()]
+
+
+def piece_key(title, piece, number, total, avoid=()):
+    """The key under which the answer for a piece is saved and found again (64 hex digits): the sha256 of the inputs of its prompt, which
+    are the title, the words to avoid as the prompt lists them, the text of the piece, its number and the number of pieces. It is not a
+    digest of the prompt, because `cardmake._prompt` puts a fresh random token in every prompt, so the same inputs give another text each
+    time. The rules text is not in it: it is the prompt version of the job, which the saved record names and which changes with the rules."""
+    inputs = {"title": title, "avoid": _listed(avoid), "text": piece, "number": number, "total": total}
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True).encode("ascii")).hexdigest()
+
+
 def theme_prompt(title, piece, number, total, avoid=()):
     """The prompt that asks for the themes of one piece of a book. `avoid` are words of the book's field that the five parts of a description
     must not use; they are given as data in a section of their own, less any word that the worked example's own parts use, or the word
     `none`. The caller bounds them: `themecheck.avoid_words` gives at most 80 words of at most 40 letters, and letters only. This function only
     keeps a word out of the section that the example uses, and relies on the token of `cardmake._prompt` so that no word can close a section."""
-    listed = [w for w in avoid if w not in example_words()]
+    listed = _listed(avoid)
     example = " ".join(f"{_EXAMPLE_KEYS[name]}: {EXAMPLE_PARTS[name]};" for name in theme.PARTS)   # named as the keys of the answer are
     rules = ("You are helping to build an index of ideas for a library. Below are three sections of data: the book's title, words of "
              f"its field to avoid, and piece {number} of {total} of its text, made of blocks that each start with a line like <block 12, characters 8400 to 9240>, which gives "
@@ -278,19 +295,87 @@ def _ask(cfg, name, prompt, launcher, root, on_refused, job=THEME_JOB):
         return models.run_job(cfg, name, cardmake.retry_prompt(prompt, str(refusal)), job, launcher=launcher, root=root)
 
 
-def extract(cfg, book_id, version_id, ref, conversion, title, launcher=None, root=None, on_refused=None, avoid=()):
+class PieceJournal:
+    """The accepted answers of the pieces of one book, as `themejournal` keeps them: `entries`, in the order of the pieces. `save`, if
+    given, is called with the entries each time an answer is added, so that it is kept before the next piece is asked; an entry is in
+    `entries` only once `save` has kept it. With no `save` the answers are held in memory only."""
+
+    def __init__(self, entries=None, save=None):
+        self.entries = list(entries or [])
+        self._save = save
+
+    @classmethod
+    def for_book(cls, index_root, book_id, version_id):
+        """The journal of a book in the index root. A file that cannot be read is not used (the book is made from its first piece, and the
+        file is replaced when the first answer is added)."""
+        try:
+            entries = themejournal.read(index_root, book_id, version_id) or []
+        except KbError:
+            entries = []
+        return cls(entries, save=lambda kept: themejournal.write(index_root, book_id, version_id, kept))
+
+    def drop_from(self, index):
+        """Forget the entry at `index` (from 0) and the ones after it."""
+        del self.entries[index:]
+
+    def add(self, key, out):
+        """Keep the accepted answer `out` (`values` and `record`) of the next piece under `key`. A failure to keep it is raised."""
+        entry = {"piece": len(self.entries) + 1, "key": key, "values": copy.deepcopy(out["values"]), "record": copy.deepcopy(out["record"])}
+        kept = self.entries + [entry]
+        if self._save is not None:
+            try:
+                self._save(kept)
+            except KbError as e:
+                raise KbError("the answer for the piece could not be kept: " + textutil.clean(str(e), 200)) from None
+        self.entries = kept
+
+
+def _saved_answer(saved, key, entry_name, model):
+    """The saved entry as an answer (`values` and `record`) if it is for these inputs, this entry of the registry with this model and
+    this prompt version of the job, and its values pass the check of the job; otherwise None."""
+    record = saved["record"]
+    if saved["key"] != key or record["registry"] != entry_name or record["model"] != model \
+            or record["prompt_version"] != THEME_JOB.prompt_version:
+        return None
+    try:
+        checked = models._check_answer(json.dumps(saved["values"]), THEME_JOB.shape)
+        if THEME_JOB.check is not None:
+            THEME_JOB.check(checked)
+    except KbError:
+        return None
+    return {"values": checked, "record": copy.deepcopy(record)}
+
+
+def extract(cfg, book_id, version_id, ref, conversion, title, launcher=None, root=None, on_refused=None, avoid=(), journal=None):
     """The themes of a converted book. `ref` names the conversion (tool, version, generation). Returns `{"themes", "dropped", "records",
     "pieces", "calls"}`: themes in the form of `theme.py` (ids t1, t2 and so on), the themes that were dropped with the piece, the title
     as given and the reason, the record of each call, and the number of pieces and of calls. The model is the one the config sets for
     the kind of work `theme`, found before anything is sent; a book with no text, or of more than MAX_PIECES pieces, is refused before
-    anything is sent. A call that fails, a second refused answer and a runaway are raised, and nothing is returned."""
+    anything is sent. A call that fails, a second refused answer and a runaway are raised, and nothing is returned.
+
+    With a `journal` (`PieceJournal`) a piece whose saved answer is for the same inputs, entry, model and prompt version is not asked
+    for again: its saved answer and record are used as a fresh answer is, so the result is the one a run in a single go would give
+    (`records` and `calls` count the saved ones). The first piece whose saved answer is not for the piece now, and every one after it,
+    is forgotten and asked for. Each answer accepted is added to the journal before the next piece is asked; a refused or failed
+    answer is not."""
     name, _ = models.choose(cfg, "theme")
+    model = models.registry(cfg)[name]["model"]
     found = pieces(conversion)
     if len(found) > MAX_PIECES:
         raise KbError(f"the book has {len(found)} pieces, more than the {MAX_PIECES} that one run reads")
     records, drafts, dropped = [], [], []
     for number, piece in enumerate(found, start=1):
-        out = _ask(cfg, name, theme_prompt(title, piece["text"], number, len(found), avoid), launcher, root, on_refused)
+        out = None
+        if journal is not None:
+            key = piece_key(title, piece["text"], number, len(found), avoid)
+            if number <= len(journal.entries):
+                out = _saved_answer(journal.entries[number - 1], key, name, model)
+                if out is None:
+                    journal.drop_from(number - 1)
+        if out is None:
+            out = _ask(cfg, name, theme_prompt(title, piece["text"], number, len(found), avoid), launcher, root, on_refused)
+            if journal is not None:
+                journal.add(key, out)
         record = {**out["record"], "task": THEME_JOB.name}
         records.append(record)
         for row in _rows(out["values"]):
@@ -352,14 +437,14 @@ def prepare(store, book_id, version_id=None):
     return version_id, current, loaded[0], loaded[1]
 
 
-def make_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None):
+def make_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None, journal=None):
     """The themes of one version (the current one, if none is named), made but not checked or filed: `extract`'s result and, under
     `generation`, the generation for `theme.file`. A version with no card or no conversion is refused before anything is sent. A refused
-    answer is kept aside and raised as `ThemeRefused`."""
+    answer is kept aside and raised as `ThemeRefused`. A `journal` (`PieceJournal`) is given to `extract`."""
     version_id, current, ref, conversion = prepare(store, book_id, version_id)
     try:
         got = extract(cfg, book_id, version_id, ref, conversion, current["title"], launcher=launcher, root=root,
-                      on_refused=lambda refusal: _keep(store, refusal, book_id, version_id))
+                      on_refused=lambda refusal: _keep(store, refusal, book_id, version_id), journal=journal)
     except models.AnswerRefused as refusal:
         kept, note = _keep(store, refusal, book_id, version_id)
         raise ThemeRefused(str(refusal), kept, note) from None

@@ -596,6 +596,240 @@ class RefusalBeforeSendTest(ExtractCase):
         models.registry({"models_on": True, "models": config()["models"]})   # a config without it is as good as before
 
 
+class JournalFake(Fake):
+    """A `Fake` whose record names the prompt version of the job and the entry, as a real call's does, and that notes what `probe` says
+    when each call is made (the saved pieces then)."""
+
+    def __init__(self, *script, probe=None):
+        super().__init__(*script)
+        self.probe, self.probed = probe, []
+
+    def __call__(self, cfg, name, prompt, job, launcher=None, root=None):
+        self.probed.append(self.probe() if self.probe else None)
+        out = super().__call__(cfg, name, prompt, job, launcher=launcher, root=root)
+        out["record"] = {**out["record"], "prompt_version": job.prompt_version, "registry": name}
+        return out
+
+
+def uneven():
+    """An answer the shape check refuses (the lists are not all of one length)."""
+    bad = values(row(), row(title="Two"))
+    bad["types"] = ["method"]
+    return bad
+
+
+PIECE_BLOCKS = ("1", "2-3", "4-5")   # three pieces when PIECE_BYTES is 260: blocks 0-1, 2-3 and 4-5
+
+
+def reply(n, **over):
+    return values(row(title=f"Theme {n}", blocks=PIECE_BLOCKS[n - 1], summary=f"The text of piece {n} says something of its own.", **over))
+
+
+class JournalTest(ExtractCase):
+    def setUp(self):
+        patch = unittest.mock.patch.object(themeextract, "PIECE_BYTES", 260)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.saves = []
+        self.journal = self.new_journal()
+
+    def new_journal(self, entries=None):
+        return themeextract.PieceJournal(entries, save=lambda e: self.saves.append(copy.deepcopy(e)))
+
+    def go(self, script, journal=None, items=ITEMS, cfg=None, title="A paper on annealing", **kw):
+        fake = JournalFake(*script, probe=lambda: len(self.saves))
+        conversion = convert.build(items)
+        self.fake = fake
+        with unittest.mock.patch.object(models, "run_job", fake):
+            return themeextract.extract(cfg or config(), "01ARZ3NDEKTSV4RRFFQ69G5FAV", "v1", REF, conversion, title,
+                                        journal=journal if journal is not None else self.journal, **kw)
+
+    def whole(self):
+        return [reply(1), reply(2), reply(3)]
+
+    def test_each_accepted_answer_is_saved_before_the_next_piece_is_asked(self):
+        got = self.go(self.whole())
+        self.assertEqual(got["pieces"], 3)
+        self.assertEqual(self.fake.probed, [0, 1, 2])
+        self.assertEqual([len(s) for s in self.saves], [1, 2, 3])
+        self.assertEqual([e["piece"] for e in self.journal.entries], [1, 2, 3])
+        for e in self.journal.entries:
+            self.assertRegex(e["key"], r"[0-9a-f]{64}")
+            self.assertEqual(e["record"]["prompt_version"], themeextract.THEME_JOB.prompt_version)
+
+    def test_a_piece_with_a_saved_answer_is_not_asked_for_again_even_with_a_new_prompt_token(self):
+        # the prompt of a piece holds a random token, so the same inputs give another text; the saved pieces are found all the same
+        first = self.go(self.whole())
+        again = self.go([], journal=self.new_journal(copy.deepcopy(self.journal.entries)))
+        self.assertEqual(self.fake.calls, [])
+        for key in ("themes", "dropped", "records", "pieces", "calls"):
+            self.assertEqual(again[key], first[key], key)
+
+    def test_a_book_made_in_two_goes_is_the_book_made_in_one(self):
+        oneshot = self.go(self.whole(), journal=self.new_journal())
+        self.journal = self.new_journal()
+        with self.assertRaises(models.AnswerRefused):
+            self.go([reply(1), reply(2), uneven(), uneven()])
+        self.assertEqual([e["piece"] for e in self.journal.entries], [1, 2])   # the refused answer is not saved
+        got = self.go([reply(3)])
+        self.assertEqual(len(self.fake.calls), 1)
+        self.assertIn("piece 3 of 3", self.fake.calls[0]["prompt"])
+        for key in ("themes", "dropped", "records", "pieces", "calls"):
+            self.assertEqual(got[key], oneshot[key], key)
+
+    def test_a_failed_call_and_a_runaway_are_not_saved(self):
+        with self.assertRaises(KbError):
+            self.go([reply(1), KbError("the server is down")])
+        self.assertEqual([e["piece"] for e in self.journal.entries], [1])
+        self.journal = self.new_journal()
+        runaway = models.AnswerRefused("runaway: too many items", "{}", dict(RECORD), "theme")
+        with self.assertRaises(models.AnswerRefused):
+            self.go([reply(1), runaway])
+        self.assertEqual([e["piece"] for e in self.journal.entries], [1])
+        self.assertEqual(len(self.fake.calls), 2)   # a runaway is not asked again
+
+    def test_an_answer_refused_once_and_accepted_at_the_retry_is_saved_once_and_reused(self):
+        self.go([uneven(), reply(1), reply(2), reply(3)])
+        self.assertEqual(len(self.fake.calls), 4)
+        self.assertEqual([e["piece"] for e in self.journal.entries], [1, 2, 3])
+        self.assertIn("LAST REFUSAL", self.fake.calls[1]["prompt"])
+        self.go([], journal=self.new_journal(copy.deepcopy(self.journal.entries)))
+        self.assertEqual(self.fake.calls, [])
+
+    def asked_after(self, change, expected, **kw):
+        """Make the book, then make it again with `change` and the saved pieces: the number of calls the second go makes."""
+        self.go(self.whole())
+        saved = copy.deepcopy(self.journal.entries)
+        self.saves.clear()
+        journal = self.new_journal(saved)
+        self.go(self.whole()[-expected:] if expected else [], journal=journal, **{**kw, **change})
+        self.assertEqual(len(self.fake.calls), expected)
+        return journal
+
+    def test_a_changed_title_asks_for_every_piece_again(self):
+        self.asked_after({"title": "Another paper"}, 3)
+
+    def test_a_changed_word_to_avoid_asks_for_every_piece_again(self):
+        self.asked_after({"avoid": ("zebra",)}, 3)
+
+    def test_a_changed_text_asks_for_that_piece_and_the_ones_after_it_only(self):
+        other = [ITEMS[0], ITEMS[1], para(INTRO_2.replace("worse", "WORSE")), *ITEMS[3:]]   # a word of the same length, so the pieces stay as they were
+        journal = self.asked_after({"items": other}, 2)
+        self.assertEqual([e["piece"] for e in journal.entries], [1, 2, 3])
+
+    def test_a_changed_number_of_pieces_asks_for_every_piece_again(self):
+        # two blocks more at the end: the first three pieces keep their text, and only the number of pieces (3 to 4) is different
+        self.go(self.whole())
+        longer = [*ITEMS, heading("Notes"), para("Closing notes about the cooling schedule, long enough to make a piece of their own here.")]
+        self.assertEqual(len(themeextract.pieces(convert.build(longer))), 4)
+        self.assertEqual([p["text"] for p in themeextract.pieces(convert.build(longer))[:3]], [p["text"] for p in themeextract.pieces(convert.build(ITEMS))])
+        self.go([*self.whole(), values()], journal=self.new_journal(copy.deepcopy(self.journal.entries)), items=longer)
+        self.assertEqual(len(self.fake.calls), 4)
+
+    def test_another_model_or_entry_or_prompt_version_asks_for_every_piece_again(self):
+        self.go(self.whole())
+        saved = self.journal.entries
+        other_model = {"models_on": True, "models": {"themer": {"bridge": "ask-ollama", "server": "srv", "model": "m2:latest"}},
+                       "tasks": {"theme": "themer"}}
+        other_entry = {"models_on": True, "models": {"another": {"bridge": "ask-ollama", "server": "srv", "model": "m1:latest"}},
+                       "tasks": {"theme": "another"}}
+        for cfg in (other_model, other_entry):
+            with self.subTest(cfg=cfg["tasks"]):
+                self.go(self.whole(), journal=self.new_journal(copy.deepcopy(saved)), cfg=cfg)
+                self.assertEqual(len(self.fake.calls), 3)
+        old = copy.deepcopy(saved)
+        for e in old:
+            e["record"]["prompt_version"] = "v3"
+        self.go(self.whole(), journal=self.new_journal(old))
+        self.assertEqual(len(self.fake.calls), 3)
+
+    def test_a_saved_answer_that_the_job_would_refuse_is_asked_for_again(self):
+        self.go(self.whole())
+        saved = copy.deepcopy(self.journal.entries)
+        saved[1]["values"]["types"] = []   # the lists are not of one length
+        self.go(self.whole()[1:], journal=self.new_journal(saved))
+        self.assertEqual(len(self.fake.calls), 2)
+
+    def test_a_saved_answer_that_fails_the_shape_of_the_job_is_asked_for_again(self):
+        self.go(self.whole())
+        first = copy.deepcopy(self.journal.entries)
+        for name, change in (("a key missing", lambda v: v.pop("limits")), ("a key not expected", lambda v: v.update(extra=["x"])),
+                             ("an item that is not text", lambda v: v.update(titles=[5])), ("an item that is too long", lambda v: v.update(titles=["x" * 5000]))):
+            with self.subTest(name):
+                saved = copy.deepcopy(first)
+                change(saved[1]["values"])
+                self.go(self.whole()[1:], journal=self.new_journal(saved))
+                self.assertEqual(len(self.fake.calls), 2)
+
+    def test_a_saved_answer_with_a_bad_row_drops_that_theme_as_a_fresh_one_does(self):
+        self.go(self.whole())
+        saved = copy.deepcopy(self.journal.entries)
+        saved[0]["values"]["blocks"] = ["40-41"]
+        got = self.go([], journal=self.new_journal(saved))
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(len(got["dropped"]), 1)
+        self.assertIn("not in the piece", got["dropped"][0]["reason"])
+        self.assertEqual(len(got["themes"]), 2)
+
+    def test_a_save_that_fails_stops_the_extraction_and_the_journal_is_what_was_saved(self):
+        calls = []
+
+        def save(entries):
+            calls.append(len(entries))
+            if len(entries) == 3:
+                raise KbError("the saved pieces could not be written")
+
+        journal = themeextract.PieceJournal(save=save)
+        with self.assertRaises(KbError) as cm:
+            self.go(self.whole(), journal=journal)
+        self.assertIn("kept", str(cm.exception))
+        self.assertEqual(calls, [1, 2, 3])
+        self.assertEqual([e["piece"] for e in journal.entries], [1, 2])
+
+    def test_with_no_journal_nothing_is_saved_or_changed(self):
+        fake = JournalFake(*self.whole())
+        with unittest.mock.patch.object(models, "run_job", fake):
+            got = themeextract.extract(config(), "01ARZ3NDEKTSV4RRFFQ69G5FAV", "v1", REF, convert.build(ITEMS), "A paper on annealing")
+        self.assertEqual((got["pieces"], got["calls"], self.saves), (3, 3, []))
+
+    def test_the_key_is_made_of_the_inputs_and_not_of_the_prompt_text(self):
+        key = themeextract.piece_key("Title", "Some text", 2, 5, ("alpha", "beta"))
+        self.assertEqual(key, themeextract.piece_key("Title", "Some text", 2, 5, ("alpha", "beta")))
+        for other in (("Other", "Some text", 2, 5, ("alpha", "beta")), ("Title", "Some texts", 2, 5, ("alpha", "beta")),
+                      ("Title", "Some text", 3, 5, ("alpha", "beta")), ("Title", "Some text", 2, 6, ("alpha", "beta")),
+                      ("Title", "Some text", 2, 5, ("beta", "alpha")), ("Title", "Some text", 2, 5, ("alpha",))):
+            self.assertNotEqual(key, themeextract.piece_key(*other))
+        # a word that the worked example uses is left out of the prompt, so it is left out of the key
+        word = sorted(themeextract.example_words())[0]
+        self.assertEqual(themeextract.piece_key("Title", "Some text", 2, 5, ("alpha", word)), themeextract.piece_key("Title", "Some text", 2, 5, ("alpha",)))
+        self.assertNotEqual(themeextract.theme_prompt("Title", "Some text", 2, 5), themeextract.theme_prompt("Title", "Some text", 2, 5))   # the token
+
+    def test_the_journal_of_a_book_is_read_and_written_in_the_index_root(self):
+        import tempfile
+        from kb import themejournal
+        with tempfile.TemporaryDirectory() as tmp:
+            root = os.path.join(os.path.realpath(tmp), "index")
+            os.mkdir(root, 0o700)
+            book = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+            journal = themeextract.PieceJournal.for_book(root, book, "v1")
+            self.assertEqual(journal.entries, [])
+            fake = JournalFake(*self.whole())
+            with unittest.mock.patch.object(models, "run_job", fake):
+                themeextract.extract(config(), book, "v1", REF, convert.build(ITEMS), "A paper on annealing", journal=journal)
+            self.assertEqual(len(themejournal.read(root, book, "v1")), 3)
+            self.assertEqual(len(themeextract.PieceJournal.for_book(root, book, "v1").entries), 3)
+            # a file that cannot be read is not used, and is replaced by the first piece saved
+            path = os.path.join(root, "card-runs", "theme-journal", f"{book}-v1.json")
+            os.chmod(path, 0o644)
+            unread = themeextract.PieceJournal.for_book(root, book, "v1")
+            self.assertEqual(unread.entries, [])
+            fake = JournalFake(*self.whole())
+            with unittest.mock.patch.object(models, "run_job", fake):
+                themeextract.extract(config(), book, "v1", REF, convert.build(ITEMS), "A paper on annealing", journal=unread)
+            self.assertEqual(len(fake.calls), 3)
+            self.assertEqual(len(themejournal.read(root, book, "v1")), 3)
+
+
 class VersionCase(StoreCase):
     def converted_book(self, with_card=True):
         book = self.store.create_book(title="A paper on annealing", kind="preprint")
@@ -670,6 +904,19 @@ class VersionTest(VersionCase):
         self.assertTrue(cm.exception.kept)
         self.assertTrue(os.path.exists(os.path.join(self.store.cfg["index_root"], "refused", cm.exception.kept)))
         self.assertEqual(theme.generations(self.store, book, version), [])
+
+    def test_a_journal_given_to_the_version_is_used_and_kept(self):
+        book, version = self.converted_book()
+        journal = themeextract.PieceJournal()
+        fake = JournalFake(values(row()))
+        with unittest.mock.patch.object(models, "run_job", fake):
+            first = themeextract.make_for_version(self.store, config(), book, version, journal=journal)
+        self.assertEqual([e["piece"] for e in journal.entries], [1])
+        again = JournalFake()
+        with unittest.mock.patch.object(models, "run_job", again):
+            second = themeextract.make_for_version(self.store, config(), book, version, journal=journal)
+        self.assertEqual(again.calls, [])
+        self.assertEqual(second["generation"]["themes"], first["generation"]["themes"])
 
     def test_a_runaway_is_kept_aside_and_makes_no_theme(self):
         book, version = self.converted_book()

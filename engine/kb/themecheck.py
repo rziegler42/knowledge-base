@@ -180,11 +180,12 @@ def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=N
     return {"themes": kept, "dropped": dropped, "records": records, "calls": len(records)}
 
 
-def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None, frequencies=None):
+def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None, frequencies=None, journal=None):
     """The themes of one version (the current one, if none is named), made and checked but not filed: the result of `check_themes` and
     of the extraction put together, and under `generation` the generation for `theme.file`. Both models are found before anything is
     sent. `frequencies` is `(document frequencies, number of books)` of the library, counted from the store when it is not given. A
-    refused answer is kept aside and raised as `ThemeRefused`."""
+    refused answer is kept aside and raised as `ThemeRefused`. A `journal` (`themeextract.PieceJournal`) keeps the answers of the extraction, so
+    that a book made again asks only for the pieces it has no answer for; the check is asked again for every theme."""
     models.choose(cfg, "theme")
     models.choose(cfg, "theme-check")
     version_id, current, ref, conversion = themeextract.prepare(store, book_id, version_id)
@@ -196,7 +197,7 @@ def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=No
     keep = lambda refusal: themeextract._keep(store, refusal, book_id, version_id)
     try:
         made = themeextract.extract(cfg, book_id, version_id, ref, conversion, current["title"], launcher=launcher, root=root, on_refused=keep,
-                                    avoid=avoid)
+                                    avoid=avoid, journal=journal)
         checked = check_themes(cfg, ref, conversion, made["themes"], vocabulary, launcher=launcher, root=root, on_refused=keep)
     except models.AnswerRefused as refusal:
         kept, note = themeextract._keep(store, refusal, book_id, version_id)
