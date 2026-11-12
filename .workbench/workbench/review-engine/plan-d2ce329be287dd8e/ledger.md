@@ -3,9 +3,9 @@
 This file is a rendering of state.json for people. It is never read back.
 
 - Kind: plan
-- Rounds in this window: 3 of 3 rounds (ceiling 5)
-- Rounds in all: 3
-- Decisions recorded: 5
+- Rounds in this window: 4 of 4 rounds (ceiling 5)
+- Rounds in all: 4
+- Decisions recorded: 6
 - Closed: no
 
 ## Rounds
@@ -13,6 +13,7 @@ This file is a rendering of state.json for people. It is never read back.
 - Round 1, 2026-11-12T15:16:52Z: the reviewer said changes_needed, the engine read changes_needed, 4 findings, model gpt-5.6-terra
 - Round 2, 2026-11-12T15:19:03Z: the reviewer said changes_needed, the engine read changes_needed, 1 findings, model gpt-5.6-terra
 - Round 3, 2026-11-12T15:19:56Z: the reviewer said no_meaningful_changes, the engine read no_meaningful_changes, 0 findings, model gpt-6.1-sol
+- Round 4, 2026-11-12T18:14:24Z: the reviewer said changes_needed, the engine read changes_needed, 1 findings, model gpt-6.1-sol
 
 ## Decisions
 
@@ -21,3 +22,4 @@ This file is a rendering of state.json for people. It is never read back.
 - R1-F3: applied on 2026-11-12T15:18:04Z: The build now reads only the list of active books and, for each, its card and its themes, with a test that no other file of a book is opened, and says how a missing card or theme is counted
 - R1-F4: applied on 2026-11-12T15:18:04Z: The plan now separates the two behaviours: a build makes every vector and replaces an unusable or mismatched file only when whole, and a search refuses such a file
 - R2-F1: applied on 2026-11-12T15:19:38Z: The file now stores the theme id, the book and version and the whole anchor with its excerpt hash, the search returns them, and the tests include a row whose anchor is malformed
+- R4-F1: applied on 2026-11-12T18:15:03Z: The report of C kept only the top five. Step 1 now takes a full baseline of 50 results, scores, counts and the query vectors from the unchanged code, and step 5 compares the new search against it w...

@@ -51,6 +51,7 @@ close one of their texts is, each with its citation, its mark of stated or infer
 3. The commands `theme-vectors` and `theme-search` exist, take no model, server or address, and print what the tests say. The theme and models specs and the engine README say what is built.
 4. The vectors have been built over the library on the owner's word, and eight searches have been run and shown to the owner with the top results and the counts (texts sent, vectors, stale, without vector, time); the report is outside the repository with its sha256 and the Result holds the numbers.
 5. The owner has the Result and has decided what comes next.
+6. (Added after Increment C, with B-A.) The search reads the vectors of the file one row at a time and holds only what it needs for each theme, so that its memory does not grow with the number of vectors; it returns exactly what it returned before (same themes, same order, same scores, same counts); and the build holds the vectors as packed bytes and not as lists of floats. A test shows the memory does not grow with the vectors, and a test of the same file at the real size (the real library, a fake embedding call, a throwaway folder) shows the peak memory of the search and of the build.
 
 ## Increments
 
@@ -80,6 +81,23 @@ close one of their texts is, each with its citation, its mark of stated or infer
 **Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themevectors engine.tests.test_vectors engine.tests.test_theme engine.tests.test_catalog` and `wb run code-work check`, and the module that tests the command line, found by search. No live call.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-12-search-the-themes-by-meaning#B`.
 
+### Increment B-A — Read the vectors one row at a time (added after Increment C)
+
+**Why:** the scale test of Increment C (the real library, a fake embedding call with random vectors of the real dimension of 2,560, a throwaway folder) showed that a search peaks at about 2.5 GB and takes 6.3 seconds because it reads all 11,791 vectors into memory as lists of floats, and that a build peaks at 1.4 GB for the same reason. The tests use vectors of 4 numbers and could not show it. A research agent that searches often should not need 2.5 GB.
+**Outcome:** `search` keeps in memory only the query's vector, the rows of the themes (small) and, for each theme, the best score so far with the text it was for; the build holds each vector as packed bytes. The search returns exactly what it returned.
+**Dependencies:** B. The file built in Increment C is not changed, and no text is sent to any model for this increment.
+**Affected areas:** `engine/kb/themevectors.py` (`read_vectors` becomes a loop over a new generator `iter_vectors`; `search`; `_old_vectors` and `build` keep the packed bytes of a vector); `engine/tests/test_themevectors.py`; the sentence on memory in the engine README. Nothing else: the form of the file, the commands, the results and the counts are as they were.
+**Steps:**
+1. The baseline, taken first, before any test or code is written (the report of Increment C kept only the top five of each search, so it cannot serve): on the owner's word, with the code of `814e2b5` unchanged, run the eight searches of Increment C against the file built in Increment C with `limit` 50 and keep, outside the repository (mode 600, cited by sha256), for each search the query vector as returned by the embedding server, the 50 results (theme key, score, matched text, excerpt field) and the counts (`themes_searched`, `stale`, `without_vector`). Only the eight query sentences go to the embedding server, each once. Say what is sent and wait for the word before the run.
+2. Write the tests first and see them fail. (a) The same results: for a library of several themes with chosen vectors, the ranking, scores, matched texts, `stale` and `without_vector` of the new search equal those of a reference that reads every vector with `read_vectors` and ranks as the search did, including ties (two texts of one theme with equal scores go to the first in the order of the fields; two themes with equal scores go to the first by key), whatever the order in which the rows are read; the tests already in the file keep passing unchanged.
+   (b) The search holds no list of all the vectors: it does not call `read_vectors`, and a test with `tracemalloc` on a file of about 2,000 vectors of 256 numbers shows that the peak memory of the search is a small fraction of what holding the vectors as lists of floats would take (the bound is stated in the test), and does not grow when the number of vectors is doubled. (c) A row that is damaged, whose hash is not the theme's, or whose theme is not in the file is counted in `stale` and left out, as before, and a vector row that is not what the engine writes is still refused before the query is sent. (d) The build keeps a vector as packed bytes: a build over a library with a kept and a made vector gives the file it gave, byte for byte in the vectors table (shown by comparing the rows with those of a build by the earlier code, stored in the test), and `tracemalloc` shows its peak is a fraction of what lists would take.
+3. Write `iter_vectors` and change `search`, `read_vectors` and the build; run the tests; break the code on purpose, one break at a time (the tie order depending on the order of the rows, a stale vector counted as used, a vector read but not unit length, the field with the best score not kept, a theme counted twice, the list of all vectors kept again, the bytes of a kept vector changed), and restore each.
+4. Run the test of the real size again (the real library, a fake embedding call with random vectors of dimension 2,560, a throwaway folder that is deleted): the peak memory of the build and of the search and the time of the search, to put in the Result against 1.4 GB, 2.5 GB and 6.3 seconds.
+5. Compare the new search against the baseline of step 1 with no further call: it is given the stored query vector in place of the embedding call (the embedding call replaced in the test, as the tests do), against the same file, and must return the same 50 results in the same order with the same scores and the same counts, for all eight searches. Any difference stops the increment.
+6. Update the sentence on the memory of a search in the README.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themevectors engine.tests.test_vectors engine.tests.test_theme` and `wb run code-work check`; the real-size test of step 4; the comparison with the baseline of step 5. The baseline of step 1 is the only live work and waits for the owner's word.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-12-search-the-themes-by-meaning#B-A`.
+
 ### Increment C — Build over the library and look at what it returns
 
 **Outcome:** the vectors of the library's themes exist and the owner has seen what eight searches return.
@@ -95,7 +113,7 @@ close one of their texts is, each with its citation, its mark of stated or infer
 
 ## Verification for the plan as a whole
 
-Each increment's recorded verification still stands unless a later increment changed its inputs. Increment B changes only the new module and the command line, so the tests of the card vectors are run in A and B to show that the shared functions behave as they did. The live work is Increment C.
+Each increment's recorded verification still stands unless a later increment changed its inputs. Increment B changes only the new module and the command line, so the tests of the card vectors are run in A and B to show that the shared functions behave as they did. The live work is Increment C. Increment B-A changes how the search and the build hold the vectors in memory and nothing they return, so the 50 results of each of the eight searches of Increment C, taken again with the unchanged code in step 1 of B-A, are compared with the new search's in step 5 of B-A.
 
 ## Risks and sensitive actions
 

@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R4-F1",
+      "location": "Increment B-A, step 4; Increment C, step 3 and Result",
+      "problem": "B-A requires comparing all 50 results and their scores against Increment C's report, but C only requires and records the top five. The stated baseline cannot verify the remaining 45 results or their order.",
+      "severity": "major",
+      "suggestion": "Before changing the search, capture all 50 results, scores and counts using the existing implementation and preserve the query vectors. Compare the new implementation against that baseline using the same file and query vectors."
+    }
+  ],
+  "format": 1,
+  "round": 4,
+  "summary": "The new increment's full-result comparison lacks the required baseline.",
+  "verdict": "changes_needed"
+}
