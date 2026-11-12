@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Assumptions and constraints — “The sample”; Completion criteria 2; Increment A, steps 1 and 4",
+      "problem": "The claimed reproducible sample is only recomputed from the live library’s currently qualifying PDFs. The plan does not require the external sample/report to record the selected book IDs together with the version and conversion identity used. A changed active conversion, or a book changing eligibility, can therefore produce a different input while retaining the same seed and report hash.",
+      "severity": "major",
+      "suggestion": "Require the trial report to record the selected book IDs, version IDs, and conversion references/hashes, and have reruns use that recorded manifest (or explicitly report unavailable/changed inputs)."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment A, step 1",
+      "problem": "The fake-model check requires spans of exactly 6,000 and 6,001 characters while running against two actual sampled PDF conversions. Block boundaries in those conversions need not contain either exact span, so this verification can be impossible despite correct measurement code.",
+      "severity": "major",
+      "suggestion": "Test the boundary cases with a constructed conversion/fixture whose block offsets create those spans, and separately use sampled PDFs for the fake-model integration check."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan aligns with the theme spec and the cited library-run result, but its reproducibility record and required boundary verification need correction.",
+  "verdict": "changes_needed"
+}

@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Assumptions and constraints 2 and 6; Completion criterion 2",
+      "problem": "The manifest pins books, versions, conversions and converted-text hashes, but not all inputs to the extraction prompt. The current card supplies the title and topics, and the live library supplies the frequency data used to derive words to avoid; the configured model/prompt can also change. A rerun using the preserved conversions can therefore send materially different prompts while appearing to be the same trial, undermining the intended comparison and reproducibility.",
+      "severity": "major",
+      "suggestion": "Record and reuse (or explicitly report and stop on changes to) the extraction model identity and prompt version, the selected card generation/content identity, and the derived words-to-avoid or the exact frequency snapshot used to derive them. Include their hashes or values in the manifest/report."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The revised conversion manifest resolves the earlier sample-identity issue, but prompt inputs remain unpinned.",
+  "verdict": "changes_needed"
+}
