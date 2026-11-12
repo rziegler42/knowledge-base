@@ -147,4 +147,14 @@ is not named, because nothing outside the theme modules and the run changed; wha
 
 ## Result
 
-Empty until work starts.
+### Increment A (the file of the journal; committed)
+
+- **Done.** New `engine/kb/themejournal.py` (`write`, `read`, `remove`; folder `card-runs/theme-journal/`, file `<book>-<version>.json`) and `engine/tests/test_themejournal.py` (40 tests). It reuses the safe file functions and the entry check of `cardstate` and changes nothing in it.
+  The reuse key is a field the module keeps and checks as 64 hex digits; making it is Increment B's. Writing also reads back what it is about to write and refuses values that would not read back equal (a tuple, a key that is not text, a repeated key).
+- **Verification as run.** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themejournal` printed `Ran 40 tests ... OK`; `engine.tests.test_cardstate` (shares the functions; not changed) `Ran 38 tests ... OK`; `wb run code-work check` printed `checked 33 plans / check found no problems`. Tests first: the first run failed because the module did not exist.
+  Deliberate breaks: 24 one-line breaks of `themejournal.py`, each run against the tests, the file restored identical (sha256 prefix `c34cb7e1421d`). All were caught but one: removing `allow_nan=False` is not caught, because the read-back check refuses NaN too (two checks guard one thing); I left both.
+  The break "another folder name" was first missed, because the tests read the name from the module; a test for the documented path was added.
+- **Review.** The independent `reviewer` agent (read-only), one round, no blocking finding. Applied: a test for another user's file (by patching `getuid`, so the folders are refused too; the file's own check is the same function); the read-back check at write; a `RecursionError` at write is a `KbError`, with a test that makes `json.dumps` raise it (on this Python, 3.15, nesting 5,000 deep neither fails to write nor to read, so a deep value cannot reach it); the unused import removed.
+  Not applied: the coupling to `cardstate._check_entry` through a fake entry (the plan names this reuse; a change in `cardstate` is caught by `test_themejournal` because the tests use valid and invalid records). Increment B must pass only data from `_rows` and `_draft`, and its test that a saved journal reads back equal to what was written uses the real shapes.
+- **Not run.** The whole suite; no live call. No security review (the owner was asked in the report and did not ask; the reviewer found no concrete exposure and noted that nothing in the repository records the question having been put).
+- **Not done.** Increments B, C and D.
