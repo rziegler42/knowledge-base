@@ -188,7 +188,8 @@ rules, which this spec depends on.
   separate program, batches the texts within the bridge's limits and the size of a reply it can read, checks every reply (the model
   the bridge reported, the number of vectors, the dimension of the entry, finite numbers, no vector of zeros) and refuses the whole
   call if one is wrong. The file of vectors (`card.md`, "Where it is stored") records the model and the dimension that made it, holds
-  one model at a time, and is replaced, never mixed, when the model changes.
+  one model at a time, and is replaced, never mixed, when the model changes. The file of the vectors of the themes (`theme.md`, "Search and reading") is
+  made with the entry that `card-embed` names too, and records the model, the dimension and the document prefix in the same way.
 - **[proposed]** Built in the engine: an embedding entry may carry a `query_prefix` and a `document_prefix`, each text of 1 to 400
   printable characters (a line break is allowed; no control, format or private-use character, which does not make the text sure to be
   what it looks like), and `kb.models.embed` puts the one for the kind of text (a query,

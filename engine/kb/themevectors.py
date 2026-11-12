@@ -30,6 +30,7 @@ The citation line is the card's (`catalog.citation_of`) with the section of the 
 records, so it says `Language: not recorded`."""
 import fcntl
 import json
+import math
 import os
 import re
 import shutil
@@ -43,6 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import KbError, card, catalog, ids, models, textutil, theme, vectors
+from . import read as reading
+from . import search as fulltext  # the limits of a result and the marker of untrusted text: the same as the search of the text
 
 INDEX_FILE = "theme-vectors.sqlite"
 LOCK_FILE = "theme-vectors.lock"
@@ -66,7 +69,7 @@ _SCHEMA = (
 _HEX = set("0123456789abcdef")
 _DIMENSION = re.compile(r"[0-9]{1,4}")
 _VERSION = re.compile(r"v[1-9][0-9]{0,5}")
-_THEME_ID = re.compile(r"t[1-9][0-9]{0,5}")
+_THEME_ID = theme._ID   # the ids a theme may have, as the form of a theme says (the engine makes t1, t2 and so on)
 _SECTION_DROP = str.maketrans("", "", '"[]>\\')   # the characters with which a heading could close the brackets or the quotation marks of a line
 _AGAIN = f"run `{COMMAND}` to build it again"
 
@@ -195,8 +198,9 @@ def read_themes(conn):
         if (not isinstance(version_id, str) or not _VERSION.fullmatch(version_id) or not isinstance(theme_id, str) or not _THEME_ID.fullmatch(theme_id)
                 or type(cg) is not int or cg < 1 or type(tg) is not int or tg < 1 or not isinstance(title, str) or not title or len(title) > 400
                 or not isinstance(citation, str) or not citation or len(citation) > MAX_CITATION or not isinstance(blob, str)
-                or not isinstance(hashes, str)):
-            raise bad
+                or not isinstance(hashes, str)
+                or textutil.title(title, len(title)) != title or textutil.clean(citation, len(citation)) != citation):
+            raise bad   # a title that is not clean or holds the words of a marker, or a line that is not clean, is not what the engine wrote
         try:
             made = json.loads(blob)
             by_field = json.loads(hashes)
@@ -244,11 +248,14 @@ def citation_line(base, path):
     heading is text between brackets, and a reader of the line must take it as such."""
     names = []
     for part in list(path)[:MAX_SECTIONS]:
-        name = textutil.title(part, MAX_SECTION_CHARS).translate(_SECTION_DROP).strip() if isinstance(part, str) else ""
+        name = textutil.clean(textutil.title(part, MAX_SECTION_CHARS).translate(_SECTION_DROP), MAX_SECTION_CHARS) if isinstance(part, str) else ""
         if name:
             names.append(name)
-    section = f" Section [{' > '.join(names)}]." if names else ""
-    return f"{base}.{section} {LANGUAGE}"
+    joined = " > ".join(names)
+    if joined and not textutil.title(joined, len(joined)):   # headings that are clean on their own can hold the words of a marker together
+        joined = card.WITHHELD
+    section = f" Section [{joined}]." if names else ""
+    return textutil.clean(f"{base}.{section} {LANGUAGE}", MAX_CITATION)   # the line is clean as a whole, as `read_themes` requires of it
 
 
 def texts_of(made):
@@ -436,3 +443,89 @@ def build(store, cfg, again=False, launcher=None, root=None):
                 shutil.rmtree(folder, ignore_errors=True)
     return {**counts, "vectors": len(vector_rows), "kept": kept, "made": made, "texts_sent": len(todo), "model": model,
             "dimension": entry["dimension"], "replaced": reason is not None}
+
+
+def _shown(value):
+    """A text of the file as it is shown: cleaned, and withheld if its letters hold the words of an untrusted-text marker (as a card is shown)."""
+    return card._shown(value)
+
+
+def render(row):
+    """The theme of a row as text for a reader, without a marker: its title and type, its summary, and each part that has text with its
+    mark. Everything in it is model output or text of a book, so it is shown only between the untrusted-text markers."""
+    made = row["theme"]
+    lines = [f"{_shown(made['title'])} ({made['type']})", f"Summary: {_shown(made['summary'])}"]
+    for name in theme.PARTS:
+        part = made["neutral"][name]
+        if part["text"]:
+            lines.append(f"{name} [{part['mark']}]: {_shown(part['text'])}")
+    return "\n".join(lines)
+
+
+def result_of(row, score, field):
+    """One result from a theme read from the file (`read_themes`): the theme's id and place, its whole anchor, its summary, the text that
+    matched (`field`) as the excerpt with the mark of that part (`stated` or `inferred`, or `None` for the summary and the whole
+    description), the citation, the flags and the generations. The mark is one of two fixed words, never text of the theme."""
+    made = row["theme"]
+    text = texts_of(made)[field]
+    mark = made["neutral"][field]["mark"] if field in theme.PARTS else None
+    return {"book_id": row["book_id"], "version_id": row["version_id"], "theme_id": row["theme_id"], "theme_generation": row["theme_generation"],
+            "card_generation": row["card_generation"], "book_title": _shown(row["book_title"]), "theme_title": _shown(made["title"]), "type": made["type"],
+            "summary": _shown(made["summary"]), "confidence": made["confidence"], "anchor": made["anchor"], "score": score, "matched": [field],
+            "excerpt_field": field, "excerpt_mark": mark, "flags": [{"kind": _shown(f["kind"]), "detail": _shown(f["detail"])} for f in made["flags"]],
+            "citation": row["citation"], "untrusted": True, "excerpt": f"{fulltext.MARKER}\n{_shown(fulltext.excerpt_of(text, []))}",
+            "text": f"{fulltext.MARKER}\n{render(row)}\n{reading.END_MARKER}"}
+
+
+def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, root=None):
+    """Search by meaning. The query is turned into a vector by the embedding model that the config sets for `card-embed` (with the entry's
+    query prefix, if it has one), and each theme is ranked by the cosine between it and the closest of the theme's vectors, larger being
+    closer. Returns `{"meaning", "model", "query_prefix", "built", "themes_searched", "stale", "without_vector", "results"}`: one result for
+    each theme, at most `limit`. A vector is used only if it is a vector of the entry's dimension that is finite and not all zeros, its theme
+    is in the file, and its text still hashes to the hash the theme row holds for that text: any other is left out and counted in `stale`,
+    and a theme with no vector that can be used is counted in `without_vector`. Refused before the query is sent: a query that is not text,
+    a limit out of range, no file or a file that is not the engine's, a file for another model, dimension or document prefix, a row that is
+    not what the engine writes. Refused after it: a reply for the query from another model than the one that made the vectors, or a vector
+    for the query with no length. Reads the file read-only and writes nothing; only the query goes to the model. The file shows the themes
+    as of its build."""
+    if type(limit) is not int or not 1 <= limit <= fulltext.MAX_LIMIT:
+        raise KbError(f"the limit must be a whole number from 1 to {fulltext.MAX_LIMIT}")
+    query = vectors._query(query)
+    name, _ = models.choose(cfg, "card-embed")
+    entry = models.registry(cfg)[name]
+    with closing(connect(path_of(index_root), readonly=True)) as conn:
+        meta = check_entry(conn, entry)
+        rows = read_themes(conn)
+        stored = read_vectors(conn, entry["dimension"], lenient=True)
+    got = models.embed(cfg, name, [query], launcher=launcher, root=root, kind="query")
+    if got["model"] != meta["model"]:
+        raise KbError(f"the model that answered for the query ({textutil.clean(got['model'], 60)}) is not the one that made the vectors; "
+                      f"run `{COMMAND}` to build them again")
+    q = vectors._unit(got["vectors"][0])
+    if q is None:
+        raise KbError("the vector for the query has no length")
+    by_theme = {(r["book_id"], r["version_id"], r["theme_id"]): r for r in rows}
+    usable, stale = {}, 0
+    for v in stored:
+        key = (v["book_id"], v["version_id"], v["theme_id"])
+        row = by_theme.get(key)
+        unit = None
+        if row is not None and v["vector"] is not None and row["hashes"].get(v["field"]) == v["text_sha256"]:
+            unit = vectors._unit(v["vector"])
+        if unit is None:
+            stale += 1
+        else:
+            usable.setdefault(key, {})[v["field"]] = unit
+    ranked = []
+    for key, fields in usable.items():
+        best, best_field = None, None
+        for field in FIELDS:  # in this order, so that a tie goes to the first
+            if field in fields:
+                cosine = max(-1.0, min(1.0, math.fsum(a * b for a, b in zip(q, fields[field]))))
+                if best is None or cosine > best:
+                    best, best_field = cosine, field
+        ranked.append((round(best, 12), key, best_field))
+    ranked.sort(key=lambda r: (-r[0], r[1]))
+    return {"meaning": True, "model": meta["model"], "query_prefix": "query_prefix" in entry, "built": meta["built"], "themes_searched": len(usable),
+            "stale": stale, "without_vector": sum(1 for key in by_theme if key not in usable),
+            "results": [result_of(by_theme[key], score, field) for score, key, field in ranked[:limit]]}

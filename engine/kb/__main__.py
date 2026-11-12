@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import themerun, themereflag
+from . import themerun, themereflag, themevectors
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -120,6 +120,15 @@ def main(argv=None):
     cv = sub.add_parser("card-vectors", help="make the vectors of the cards (three neutral fields of each) with the embedding model that the config "
                                              "sets for card-embed; a vector whose text has not changed is kept; the text of those fields goes to that model")
     cv.add_argument("--again", action="store_true", help="make every vector again")
+    tv = sub.add_parser("theme-vectors", help="make the vectors of the themes (the summary, the whole description and each of the five parts of "
+                                              "every theme, up to seven texts) with the embedding model that the config sets for card-embed; a vector "
+                                              "whose text has not changed is kept; those texts go to that model")
+    tv.add_argument("--again", action="store_true", help="make every vector again")
+    ts = sub.add_parser("theme-search", help="search the themes by meaning: the query is any text (a sentence or two about a problem), turned into "
+                                             "a vector by the embedding model that the config sets for card-embed (the query goes to that model), "
+                                             "and the themes are ranked by the closeness of their closest text; needs `theme-vectors` run first")
+    ts.add_argument("query")
+    ts.add_argument("--limit", type=int, default=catalog.DEFAULT_LIMIT, help=f"at most this many themes (1 to {catalog.MAX_LIMIT})")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -255,6 +264,17 @@ def main(argv=None):
             if counts["left_out"]:
                 print(f"{counts['left_out']} book or card could not be read and has no vectors", file=sys.stderr)
                 return 1
+            return 0
+        if args.command == "theme-vectors":
+            counts = themevectors.build(Store.open(), config.load(), again=args.again)
+            print(json.dumps(counts))
+            if counts["unreadable"]:
+                print(f"{counts['unreadable']} book could not be read and has no vectors", file=sys.stderr)
+                return 1
+            return 0
+        if args.command == "theme-search":
+            cfg = config.load()
+            print(json.dumps(themevectors.search(cfg["index_root"], cfg, args.query, limit=args.limit), indent=1))
             return 0
         if args.command == "card-search":
             if args.meaning:
