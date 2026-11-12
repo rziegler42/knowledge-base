@@ -9,7 +9,7 @@ from unittest import mock
 from engine.tests import ENGINE_DIR
 from engine.tests.test_convert import blocks_text, h, p
 from engine.tests.test_convert_run import approve
-from engine.tests.test_search import HARBOUR, OCELOT, TIDES, SearchCase, page, paper
+from engine.tests.test_search import HARBOUR, HOSTILE_HEADING, OCELOT, TIDES, SearchCase, holds_marker, page, paper, strings_in
 
 from kb import KbError, approvals, convert, locator, process, read, search, stages
 
@@ -400,6 +400,68 @@ class ReadTest(ReadCase):
         self.assertTrue(c.isprintable())
         self.assertNotIn("not a hash", c)
         self.assertIn("hash not recorded", c)
+
+
+class LocatorShownReadTest(ReadCase):
+    """The headings in the locators a read gives are text of a book: they are shown as a title is shown."""
+
+    LONG_PARAGRAPH = " ".join(f"quokka{n}" for n in range(120))
+
+    def hostile_book(self, *blocks):
+        self.approve_all()
+        items = blocks or (p("The quokka sleeps by the quiet river all day long and dreams of warm rain."), p(self.LONG_PARAGRAPH))
+        book, version = self.add_book("Quokkas", "web page", "page.html", page(h(HOSTILE_HEADING), *items))
+        process.process(self.store)
+        ref, conversion, _record = convert.load_in_use(self.store, book, version)
+        return book, version, ref, conversion
+
+    def test_the_locator_of_a_read_that_found_the_passage_by_its_words_has_the_heading_withheld(self):
+        book, version, ref, conversion = self.hostile_book()
+        hit = self.hit("sleeps")
+        self.assertEqual(hit["locator"]["at"]["path"], [locator.WITHHELD])
+        r = read.read(self.store, book, hit["locator"], version_id=version)
+        self.assertEqual(r["status"], "found_by_text")         # the heading shown is not the one the book has, so the place does not hold
+        self.assertIn("sleeps by the quiet river", r["text"])
+        self.assertEqual((r["text"].split("\n")[0], r["text"].split("\n")[-1]), (read.MARKER, read.END_MARKER))
+        self.assertEqual(r["locator"]["at"]["path"], [locator.WITHHELD])
+        self.assertEqual({k: v for k, v in r["locator"].items() if k != "at"}, {k: v for k, v in locator.make(ref, conversion, 1).items() if k != "at"})
+
+    def test_a_locator_found_as_given_is_echoed_with_the_heading_withheld(self):
+        book, version, ref, conversion = self.hostile_book()
+        raw = locator.make(ref, conversion, 1)                    # as the index holds it: the heading as the book has it
+        self.assertEqual(raw["at"]["path"], [HOSTILE_HEADING])
+        r = read.read(self.store, book, raw, version_id=version)
+        self.assertEqual(r["status"], "found")
+        self.assertEqual(r["locator"]["at"], {"path": [locator.WITHHELD], "paragraph": 1})
+        self.assertIn("sleeps by the quiet river", r["text"])
+
+    def test_the_next_piece_is_an_offset_locator_and_is_as_it_was(self):
+        book, version, ref, conversion = self.hostile_book()
+        r = read.read(self.store, book, locator.make(ref, conversion, 2), version_id=version, chars=200)
+        self.assertEqual(r["locator"]["at"]["path"], [locator.WITHHELD])
+        self.assertEqual(r["next"]["kind"], "offset")
+        self.assertEqual(r["next"], locator.at_offset(ref, conversion, r["next"]["at"]["offset"]))
+
+    def test_a_passage_with_no_words_under_such_a_heading_is_not_found_from_the_locator_shown(self):
+        book, version, ref, conversion = self.hostile_book(p("*** --- ***"), p("Words follow after the rule."))
+        raw = locator.make(ref, conversion, 1)
+        self.assertEqual(raw["excerpt"]["words"], 0)
+        self.assertEqual(read.read(self.store, book, raw, version_id=version)["status"], "found")     # as the book has it, by its place
+        shown = locator.shown(raw)
+        self.assertEqual(shown["at"]["path"], [locator.WITHHELD])
+        self.assertEqual(read.read(self.store, book, shown, version_id=version)["status"], "not_found")
+
+    def test_no_string_inside_a_locator_of_a_read_holds_the_words_of_a_marker(self):
+        book, version, ref, conversion = self.hostile_book()
+        seen = 0
+        for index in (1, 2):
+            r = read.read(self.store, book, locator.make(ref, conversion, index), version_id=version, chars=200)
+            for key in ("locator", "next"):
+                for s in strings_in(r[key]):
+                    seen += 1
+                    if s != locator.WITHHELD:
+                        self.assertFalse(holds_marker(s), s)
+        self.assertGreater(seen, 20)
 
 
 class SecurityReviewTest(ReadCase):

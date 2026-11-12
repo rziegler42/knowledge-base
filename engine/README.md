@@ -1286,7 +1286,7 @@ character offset (`offset`, for a page with no headings). It also carries a hash
 case, no punctuation, compatibility forms folded), looked for in the next 16,384 characters at most: a place with fewer words in
 that stretch (a ruler of dots, a very long word) has the words that are there, or none, and is then named by its first 64 characters. The place holds only against the same conversion; against another, the words
 find the passage again inside any block, and a different split into blocks does not matter. A passage in more than one block is
-reported with how many, and the first is named. A passage that is gone is "not found"; nothing is guessed.
+reported with how many, and the first is named. A passage that is gone is "not found"; nothing is guessed. A heading in the path of a `section` locator is text of a book, and a search and a read give a locator as data, outside the markers: so `locator.shown` shows each heading as a title is shown (cleaned, and replaced by the withheld text if its letters hold the words of a marker), in the `locator` of each hit of a search (when the result is built, so a row already in the index is covered), in the `locator` of a read, and in a locator that a read echoes; the index, `locator.check` and the themes' anchors are not changed. A locator whose heading was changed no longer holds by its place, so a read of it finds the passage by its words; a passage with no words in its excerpt is then `not_found`. On the real library's index (27,238 section locators, 68,384 headings) no heading is changed.
 
 **Not covered.**
 - The article extractor is set to leave comments out (the setting of the ten-page test); a discussion thread's comments therefore

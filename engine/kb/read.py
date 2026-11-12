@@ -173,7 +173,7 @@ def _read(store, book_id, loc, version_id, chars):
     body = conversion.text[start:end].rstrip()
     return {
         **base, "status": found["status"], "matches": found["matches"],
-        "locator": loc if found["status"] == "found" else locator.make(ref, conversion, block.index),
+        "locator": locator.shown(loc if found["status"] == "found" else locator.make(ref, conversion, block.index)),
         "text": f"{MARKER}\n{body}\n{END_MARKER}", "offset": start, "end": start + len(body), "total": len(conversion.text),
         "next": None if following is None else locator.at_offset(ref, conversion, following),
     }

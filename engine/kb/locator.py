@@ -11,6 +11,7 @@ and a hash of the excerpt: the first twelve words at that place, lower-cased, wi
 against the same conversion. Against another it is the excerpt that finds the passage again, by looking for those words
 inside any block, so a different split into blocks does not matter. Nothing is guessed: no match is "not found". A passage
 found in more than one block says how many, and names the first."""
+import copy
 import hashlib
 import re
 import unicodedata
@@ -172,6 +173,21 @@ def check(loc):
     if not ok:
         raise KbError("not a locator")
     return loc
+
+
+WITHHELD = "[withheld: this text holds the words of an untrusted-text marker]"   # the one text the library shows for a text it withholds (`card.WITHHELD`)
+
+
+def shown(loc):
+    """A locator as a result shows it: a copy in which each heading of the path of a locator of a section is shown as a title is
+    (`textutil.title`: cleaned, and withheld, here as `WITHHELD`, if its letters hold the words of an untrusted-text marker). A heading is
+    text of a book, and a result carries a locator as data, outside the markers. Everything else is as it was, and the locator given is
+    not changed. A place that holds a heading that is changed no longer equals the one the book has, so `resolve` finds the passage by
+    the words of its excerpt; one that has no words is then not found."""
+    out = copy.deepcopy(loc)
+    if isinstance(out, dict) and out.get("kind") == "section" and isinstance(out.get("at"), dict) and isinstance(out["at"].get("path"), list):
+        out["at"]["path"] = [(textutil.title(part, len(part)) or WITHHELD) if isinstance(part, str) else WITHHELD for part in out["at"]["path"]]
+    return out
 
 
 def _place(loc, conversion):
