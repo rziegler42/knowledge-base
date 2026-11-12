@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Increment B, Steps 1–4 and Completion criterion 5",
+      "problem": "The trial makes fresh extraction calls even though the earlier trial retained the raw answers. Because extraction output is nondeterministic, its reported cut/kept/drop differences versus the earlier trial cannot show the effect of this code change; the plan itself acknowledges that the cut count is only an estimate.",
+      "severity": "major",
+      "suggestion": "Add a deterministic replay of the earlier trial’s retained answers through the changed drafting and checking path, and report that comparison separately. A fresh live run may remain as a separate estimate of current behavior."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Assumptions and constraints 1; Increment A, Step 1",
+      "problem": "The cutting rule only considers character length. A conversion block may contain no words, while `theme.anchor_of` rejects an excerpt with no words. Thus an over-limit span beginning with a short numeric/punctuation-only block can have a longer valid prefix that fits, but a naïve cut to the first fitting endpoint will fail or be dropped. The plan neither specifies the intended outcome nor tests it.",
+      "severity": "major",
+      "suggestion": "Define cutting in terms of the longest prefix that both fits and produces a valid anchor, or explicitly preserve a stated drop behavior for no-word prefixes; add boundary tests for a no-word first block followed by words and for a prefix with no words that remains unanchorable."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan needs a deterministic baseline for its claimed trial comparison and an explicit valid-anchor rule for no-word prefixes.",
+  "verdict": "changes_needed"
+}
