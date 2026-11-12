@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Completion criteria 2; Increment A, step 1(d)",
+      "problem": "The required whole-result marker scan cannot be satisfied within the stated scope. It examines `citation`, caveats, completeness reasons, and other fields outside `excerpt`/`text`, but the plan changes only locator headings. For example, a permitted source URL containing the marker words is returned in `citation` after cleaning but is not withheld. This also conflicts with the non-goal that other result data remains unchanged.",
+      "severity": "major",
+      "suggestion": "Either limit this assertion to locator paths (and the specific hostile-heading regression), or expand the plan to define and implement marker-safe rendering for every inspected output field, including citation/address behavior."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment A — Verification",
+      "problem": "The locator test target is not named: “the module that tests the locator, found by search” is not an executable or reproducible verification command. The current locator tests are in `engine.tests.test_convert`.",
+      "severity": "minor",
+      "suggestion": "Name the exact test module in the verification command, e.g. include `engine.tests.test_convert`."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has one scope-versus-completion-criterion conflict that must be resolved before it can be relied on.",
+  "verdict": "changes_needed"
+}
