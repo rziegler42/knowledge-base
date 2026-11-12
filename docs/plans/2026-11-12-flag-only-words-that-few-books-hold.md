@@ -1,0 +1,131 @@
+# Flag only the words that few books hold
+
+Status: Proposed
+Created: 2026-11-12
+Candidate: none (a correction that follows from a finding of the library run: the flag fires on 77 percent of the themes; the roadmap `theme-weave` is not changed)
+Specs: theme
+
+## Goal
+
+Make the flag on a theme's description (`field_words`) mean something. It is raised when a description holds a word of the book's field, so that the owner can see where a description is not in words of no field. On the library as it stands it is raised for 77 percent of the themes,
+and it does not tell the descriptions that leak the field from those that do not. When this plan is done, a word counts as the field's only if few books of the library hold it; the flag is raised on far fewer themes, with nearly all of them holding a word that is specific to a few books; the themes already made have the
+flags the new rule gives (without a call to a model); and the owner has read a sample of what the old and the new rule flag.
+
+The measure behind the plan, a read-only count on 2026-11-12 over the 1,913 themes of the 175 books (the themes made with the extraction prompt `v4` and the check `v1`, at commit `83a4bb9`): 1,479 themes (77.3 percent) carry the flag. A flagged word comes from the card's topics (1,567 times), from the book's own frequent words (2,284) or from its title (318),
+and 1,380 of the flagged-word occurrences are words that at least 15 percent of the books hold, because only the words of the book's text pass the filter on how many books hold them, while the words of the title and of the card's topics do not. If a vocabulary word counted only when fewer than N percent of the books hold it (and this applied to title and topic words as well), the share of
+the themes flagged would be 4.0 percent (N = 1), 11.6 (2), 18.0 (3), 27.4 (5), 40.3 (8), 63.1 (15) and 69.5 (30). A sample of 20 descriptions read by the owner's session on 2026-11-12 found the words flagged in the sample mostly ordinary ones (`outcomes`, `classical`, `honest`, `party`, `segment`, `target`, `walk`), with a few real leaks
+(a description of algebraic graph theory that says "algebraic invariants"). There is no ground truth of leak or no leak, so 5 percent is a call and not a measurement; this plan adds a sample for the owner to read against it.
+
+## Scope
+
+- A rule for the flag: the vocabulary of the flag is the vocabulary of the book's field (the words of its title, its card's topics and its own frequent rare words, as now) **less any word that at least 5 percent of the books of the library hold**. Words that nobody else holds, and words that few books hold, are kept.
+- The check of the themes of a book uses that vocabulary for the flag. The words the extraction is told to avoid are unchanged.
+- A command that gives the themes already made the flags of the new rule without a call to a model: `themes-reflag plan` (read-only: counts) and `themes-reflag run` (a new generation for each book whose flags change).
+- The statement of the flag in the theme spec and in the engine README, with the figure.
+- A sample of themes flagged by the old rule and by the new, for the owner to read, kept outside the repository with its hash.
+- The run of `themes-reflag run` over the library, on the owner's word after the plan is shown.
+
+## Non-goals
+
+- Changing what the extraction is told to avoid (`avoid_words`), the prompts, the check of support, the form of a theme or of a flag (the kind stays `field_words`), or the config. A change that makes the model avoid more words costs nothing, and flagging them was the noise.
+- Limiting the flag to some parts of a description, a count of the words found, or a weight for each word. Deferred (below).
+- Judging whether a description is good, or a measure of leak with a ground truth. The sample is read by the owner; the plan records the reading.
+- A run of the models. Nothing in this plan is sent to a model.
+- Changing the skip rule or the records of `themes-run`: a generation made by `themes-reflag` keeps the `made` of its themes, so `themes-run` still skips the book.
+
+## Assumptions and constraints
+
+- **My calls, not yet the owner's.** (The owner said yes to the threshold of 5 percent as a recommendation, and to the re-flag in this plan; the others are mine.)
+  1. **The threshold is a constant, `FLAG_SHARE = 5`.** A word counts for the flag only if the number of books that hold it (`df`, which counts the book itself) times 100 is less than 5 times the number of books. On the library of 175 books that is a word held by at most 8 books. The share is of the active books with a conversion in use that `library_frequencies` counts.
+  2. **It applies to every word of the vocabulary**, including the words of the title and of the card's topics. A word in the title that 40 books hold is not flagged.
+  3. **One function makes the vocabulary of the flag** (`flag_vocabulary(text, df, size, title, topics)`), and `field_vocabulary` stays as it is, so the avoid list is made as before.
+  4. **A flag is recomputed from the descriptions, not stored with its rule.** The flags of a theme other than `field_words` (`no_description`, `confidence_unreadable`) are kept as they are; the `field_words` flag is replaced by the new one or left out. The order of the flags is the order in which the check puts them (the others, then `field_words`).
+  5. **`themes-reflag run` files a new generation of a book only if a flag changes.** A book whose themes already have the flags of the rule files nothing, so the command can be run again. The older generations stay. The themes keep everything else they have (`made` included).
+  6. **It takes no model, server or address**, as `themes-run` does, and it holds the shared lock (the lock of the card queue and of the theme run, taken through the folder of the journals), so it never runs with them against one index root.
+  7. **A book is left out of the re-flag, with the reason**, when it is not active, has no theme, has no card that can be read or has no conversion in use (the vocabulary cannot be made).
+  8. **The sample** is of up to 40 themes, chosen so that it can be made again: the population is every theme of the newest valid generation of every book that has themes, in the order of the book id and then the theme id. Stratum one is the themes that the old rule flags and the new does not; stratum two is the themes that the new rule flags. From each stratum, in that order,
+     `random.Random(12).sample` takes 20 (a fresh generator with the seed 12 for each stratum); a stratum with fewer than 20 gives all it has, and the report says so. Each theme is shown with its book title, its title, its five parts and the words flagged by each rule. The report names the seed, the size of each stratum and the ids chosen. It is written outside the repository, mode 600, and cited by its hash.
+- A defect found in the run stops it; the plan is not widened to get past it.
+
+## Completion criteria
+
+1. The vocabulary of the flag leaves out the words that at least 5 percent of the books hold, including the words of the title and of the topics, and the words to avoid are as they were. Tests show each.
+2. A theme made and checked now carries the flag by the new rule; the existing tests of the check still stand or are changed with a stated reason.
+3. `themes-reflag plan` counts, with no write, the books whose flags would change, the books left out with the reason, and the themes flagged before and after; `themes-reflag run` files a new generation for exactly those books, changes only the `field_words` flags, keeps the older generations, can be run again without filing anything, and holds the lock. Tests show each.
+4. The re-flag has been run over the library on the owner's word, and the Result holds the counts before and after, a read-only check of the library afterwards, and the hash of the report outside the repository.
+5. The sample has been written outside the repository with its hash (its seed, strata and ids in it), the owner has read it, and the Result holds the owner's reading (or says it is not given).
+6. The owner has the Result and has decided what comes next.
+
+## Increments
+
+### Increment A — The rule
+
+**Outcome:** the check of a book flags only the words of its field that fewer than 5 percent of the books hold.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/themecheck.py` (`FLAG_SHARE`, `flag_vocabulary`, `make_and_check_for_version`); `engine/tests/test_themecheck.py`; `docs/specs/theme.md` (a statement of what is true now); the engine README (the paragraph on the words of the field, with the figure).
+**Steps:**
+1. Write the tests first and see them fail: a word of the title that 40 of 100 books hold is in the vocabulary and not in the flag vocabulary; a word held by 4 of 100 books is in both; a word held by exactly 5 of 100 is not in the flag vocabulary; a word held by no other book is in it; a word of a topic held by 10 of 100 books is not; the common half of the books is left out as before;
+   `avoid_words` returns what it returned (the same list for the same input); `make_and_check_for_version` flags a description by the flag vocabulary and returns the number of words of it; a description holding only a word held by many books is not flagged; the flags other than `field_words` are as they were.
+2. Write `flag_vocabulary` and use it in `make_and_check_for_version`; run the tests; break the code on purpose, one break at a time (the threshold left out, `<=` for `<`, the title words exempt, the topic words exempt, the avoid list made from the flag vocabulary), and restore each.
+3. Write the statement in the spec and the paragraph in the README (the rule, the figure of 27 percent against 77 percent from the count above, and that 5 percent is a call).
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themecheck engine.tests.test_themeextract engine.tests.test_theme engine.tests.test_themerun` and `wb run code-work check`. No live call.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-12-flag-only-words-that-few-books-hold#A`.
+
+### Increment B — The re-flag of the themes already made
+
+**Outcome:** `themes-reflag plan` and `themes-reflag run` give the themes already made the flags of the new rule, with no call to a model.
+**Dependencies:** A.
+**Affected areas:** a new `engine/kb/themereflag.py`; `engine/kb/__main__.py` (the parser and its handler); `engine/tests/test_themereflag.py`; `docs/specs/theme.md`; the engine README.
+**Steps:**
+1. Write the tests first and see them fail, on a store with books of each kind (a book with themes whose flags change; one whose flags do not; one with no theme; one not active; one with no card that can be read; one with no conversion; a book whose newest generation is damaged and whose older one is valid): `plan` writes nothing and counts the books to change, the books left out with the reason and the themes flagged before and after;
+   `run` files one new generation for each book to change, with only the `field_words` flags changed and every other key of every theme equal, leaves the older generations as they were, files nothing for a book whose flags already match, files nothing on a second run, holds the lock (a second holder is refused), and stops on an unexpected error of a book by reporting it and going on to the next; the parser takes no model, server or address.
+2. Write `themereflag.plan` and `themereflag.run` and wire the command; run the tests; break the code on purpose, one break at a time, and restore each.
+3. Run `python3 -m kb themes-reflag --help` and `python3 -m kb --help` to show the command line.
+4. Read the plan of the real library, read-only: the books to change and the themes flagged before and after; record them in the Result.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_themereflag engine.tests.test_themecheck engine.tests.test_theme engine.tests.test_themerun engine.tests.test_cardqueue` and `wb run code-work check`. No live call, and nothing filed in the library.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-12-flag-only-words-that-few-books-hold#B`.
+
+### Increment C — The run over the library and the sample
+
+**Outcome:** the themes of the library have the flags of the new rule, and the owner has a sample to read.
+**Dependencies:** B. The owner's word, given after the plan is shown.
+**Affected areas:** the library's generations of themes (a new one for each book whose flags change); nothing tracked except this plan's Result.
+**Steps:**
+1. Run `themes-reflag plan` and show the owner what it prints: the books and the themes it would change, and that nothing is sent to a model and a new generation is filed for each book that changes (the older ones stay). Wait for the owner's "run it".
+2. Run `themes-reflag run`; keep its report outside the repository, mode 600, with its sha256.
+3. Check the library read-only: for each book that changed, the newest valid generation is the new one, none is damaged, the themes equal the old ones but for the `field_words` flags, and a second `themes-reflag plan` finds nothing to change.
+4. Write the sample of assumption 8 outside the repository, mode 600, with its sha256, and give it to the owner with my reading marked as mine.
+5. Write the Result with the counts, the check, the hashes and the owner's reading when given.
+**Verification:** the report of the run, the read-only check of step 3 and the second `plan`.
+**Evidence:** the Result of this plan, committed with the trailer `Plan: 2026-11-12-flag-only-words-that-few-books-hold#C`.
+
+## Verification for the plan as a whole
+
+Each increment's recorded verification still stands unless a later increment changed its inputs. Increment B uses the check of A, so the tests of A are run again in B with the others. The run of C changes the library and not the code. The card tests are run once in B (`engine.tests.test_cardqueue`) because the lock is shared and is not changed.
+
+## Risks and sensitive actions
+
+- **Filing a new generation for many books** (Increment C): about as many as the flags change for (up to 175). A generation is never changed or deleted by this, the older ones stay, and a reader gets the newest valid one. It changes what a reader sees of the flags, so the owner's word is asked after the plan is shown.
+- **Nothing is sent to a model**, so nothing leaves the machine.
+- **The threshold is a judgement.** 5 percent flags 27 percent of the themes; 3 percent flags 18 percent and 8 percent flags 40 percent. The constant can be changed and the re-flag run again, which is why the command is idempotent.
+- **A change of the rule makes older and newer themes differ in how they were flagged** unless the re-flag is run. The themes made after Increment A and before the run of C carry the new rule already; nothing records the rule in a generation, so a later change of the rule needs another re-flag run.
+- **Security review checkpoint:** the command reads and files through the existing functions of `theme` and `cardstate` and takes no input from a book beyond what the check already reads, so I do not propose a security review; the owner is asked once, before Increment A, and a review runs only if the owner asks.
+
+## Review record
+
+- **Reviewer:** the review engine (`plan-45f0fbe9163d794b`), model `gpt-5.6-terra`. Rounds used: 2 of a bound of 3; the second converged with no meaningful finding.
+- **Applied (2):** the candidate line made `none` with the reason that the plan corrects a finding of the library run, because the roadmap `theme-weave` still says in its current state that themes are not built, and a change to a roadmap is the owner's checkpoint, so the roadmap is not edited here (R1-F1);
+  the sample made reproducible: the population and its order, the seed 12 for each stratum, the rule when a stratum has fewer than 20, and what the report records (R1-F2).
+- **Rejected:** none.
+- **Left for the owner:** the stale "Current state" paragraph of `docs/roadmaps/theme-weave.md` (it says themes are not built; 1,913 themes of 175 books exist); whether to ask for a security review of the re-flag command (not asked; I do not propose one); whether to approve the plan.
+
+## Deferred work
+
+- Limiting the flag to some parts of a description, a count of the words found, or a weight for each word.
+- A ground truth of leak or no leak, and a threshold chosen against it.
+- Recording the rule in a generation, so that a flag says which rule raised it.
+- The PDF size bound, the check's leniency and the other open items of `2026-11-11-run-the-theme-extraction-over-the-library`.
+
+## Result
+
+Empty until work starts.
