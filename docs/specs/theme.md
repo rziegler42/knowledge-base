@@ -87,7 +87,7 @@ or conversion; they have their own specs.
 - **[proposed]** A description that holds a word of its book's field is flagged (`field_words`, with the words found) and kept: the flag is a reason for the owner to look, not a verdict.
   A word counts for the flag only if fewer than 5 percent of the books of the library hold it, whatever its source (the title, the card's topics or the book's own frequent words); a
   word that many books hold is still a word the extraction is told to avoid, but a description that uses it is not flagged for it. The 5 percent is a judgement, not a measurement: a count
-  over the 1,913 themes of the library shows that it would flag about 27 percent of them, where the earlier rule flagged 77 percent, with no ground truth of leak or no leak yet. The themes
+  over the 1,913 themes in the owner's local library on 2026-11-12 (the library is not in the repository) shows that it would flag about 27 percent of them, where the earlier rule flagged 77 percent, with no ground truth of leak or no leak yet. The themes
   already made keep the earlier flags until they are flagged again by the rule, which `themes-reflag` does without a call to a model: for each active book with a card, a conversion in use and themes,
   the flags other than `field_words` are kept and the flag of the rule is put after them, and a book whose flags change gets its themes filed as the next generation, with all else as it was
   (`made` included, so a run over the library still skips it). It can be run again and then files nothing.

@@ -1148,14 +1148,14 @@ topics of its card, and the words that occur at least 5 times in its text while 
 less the words that half of the books or more hold (a word is a run of four or more letters, folded to plain lower case, not stemmed). A
 description that holds a word of the *flag* vocabulary as a whole word is flagged (`field_words`, with the words found) and kept; the flag vocabulary is the vocabulary less any word that
 5 percent of the books or more hold (`themecheck.FLAG_SHARE`, `flag_vocabulary`; a word that no book holds is kept), whatever the word's source, and the words the extraction is told to
-avoid are still those of the whole vocabulary. The 5 percent is a judgement and not a measurement: a read-only count over the 1,913 themes of the 175 books on 2026-11-12 showed that
+avoid are still those of the whole vocabulary. The 5 percent is a judgement and not a measurement: a read-only count on the owner's local library (not in the repository), over its 1,913 themes in 175 books on 2026-11-12, showed that
 the vocabulary without this limit flagged 1,479 of them (77.3 percent), and with the limit of 1, 3, 5, 8 and 15 percent it would flag 4.0, 18.0, 27.4, 40.3 and 63.1 percent; there is no
 ground truth of leak or no leak. The themes made before this limit carry the earlier flags until they are flagged again with `themes-reflag` (below). *Support:* a
 second model is shown the excerpt and the parts of the description that have text, and says for each whether the excerpt supports it
 (`supports`, `partly`, `no`); a part it says is supported is marked `stated`, every other stays `inferred`. One call for each theme. A
 check whose answer is refused, asked once more with the reason and refused again, drops its theme as `unchecked` and the refusals are
 kept aside; the others go on. A theme with no part of a description is not asked about and is flagged `no_description`. The anchor of every
-theme is checked against the text before anything is sent. Read-only, on the 175 cards of the library, the vocabulary of a book has a
+theme is checked against the text before anything is sent. Read-only, on the 175 cards of the owner's local library (not in the repository), the vocabulary of a book has a
 median of 47 words, and applied to the neutral fields of the existing cards it flags 174 of 175 (the title alone 119, the title and topics
 173, so the words of the text hardly change the number). Of the 1,445 words flagged in them, 822 come from the card's topics, 425 only from
 the text and 198 from the title; the most often flagged are mostly terms of a field (training, distributed, neural, transformer,
@@ -1171,8 +1171,8 @@ in use and themes, it takes the newest valid generation and works out the flags 
 description, if any). It prints the books whose flags would change (with the themes of each and how many are flagged before and after), how many books would not change, the books left out with the reason
 (`inactive`, `no_themes`, `damaged` when every generation fails its check, `no_card`, `no_conversion`, `unreadable` when the book could not be read, which does not stop the others) and the themes flagged before and after. *`run`* files, for each book to change, its themes as the next generation, with everything but the flags as it
 was (`made` included, so `themes-run` still skips the book); the older generations are never changed. A book that fails does not end the run; it is reported with a fixed reason and no message. It holds the
-lock that the card queue and the theme run hold. A second run files nothing, because the flags then match. The command exits with 1 when a book failed. Read-only, on 2026-11-12, over the library as it
-stands: 166 books would change, 9 would not and 1 has no themes; 1,479 of the 1,913 themes are flagged and 525 (27.4 percent) would be.
+lock that the card queue and the theme run hold. A second run files nothing, because the flags then match. The command exits with 1 when a book failed. Read-only, on 2026-11-12, over the owner's local library (not in the repository) as it
+stood: 166 books would change, 9 would not and 1 has no themes; 1,479 of the 1,913 themes are flagged and 525 (27.4 percent) would be.
 
 **A run over the library** (`kb/themerun.py`; `python3 -m kb themes-run plan`, `run <run>` and `status <run>`; no option names a model, a server or an
 address). It makes the themes of many books, one book at a time, with the two models the tasks setting of your config names for `theme` and `theme-check`.
@@ -1185,8 +1185,8 @@ extraction only, because a generation does not hold the model and prompt version
 also lists the skipped books whose newest record names another check, or has none (`check_unknown`; the records are derived and may be lost, and then every skipped
 book is listed). It also lists books with a damaged generation (a reader passes over one, so an older generation that matches still counts), the pieces, the calls that can
 be counted (one for each piece), the models and prompt versions, and an estimate of the time from the trials (two trials on six books and on three PDFs, with the
-models of 2026-11-11, so a rough guide and no more): 9 to 14 seconds a piece, with two to two and a half calls to the check for each piece (the library of 175 books has
-622 pieces: about 1.6 to 2.4 hours). `--book` limits the plan to the books named. The plan writes a record,
+models of 2026-11-11, so a rough guide and no more): 9 to 14 seconds a piece, with two to two and a half calls to the check for each piece (the owner's local library of 175 books, which is not in the repository, had
+622 pieces on 2026-11-11: about 1.6 to 2.4 hours). `--book` limits the plan to the books named. The plan writes a record,
 `theme-run.json`, in the folder of the run under `card-runs` of the index root: derived and disposable, with ids, counts, fixed reasons and the model and prompt version of
 each book's calls, and no text of a book or of a reply.
 *`run`* is what sends: for each piece of each book, its title, the words to avoid and up to 20 KB of its text to the model set for `theme`, and for each theme found its

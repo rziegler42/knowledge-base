@@ -9,9 +9,14 @@ they would not otherwise reach.
 > description of its problem and approach in words of no field, and each point of a card is marked as found in the book or as the
 > model's own inference. The cards can be searched by keyword and by meaning. A workbench package, `kb`, lets an agent in another
 > project search by keyword, read a passage, and put a problem to the library by meaning, with a skill that says how (see
-> [Where the work stands](#where-the-work-stands)). The library holds about eighty books, 79 of them with a card. Not built yet:
-> a trial on problems you choose that shows how often it finds a source from another field, themes, and the program that adds
-> sources by itself.
+> [Where the work stands](#where-the-work-stands)). Themes (the ideas of a book, each described in words of no field) are made for
+> each book with `themes-run`, but cannot be searched yet. Not built yet: a trial on problems you choose that shows how often it
+> finds a source from another field, the search and links between themes, and the program that adds sources by itself.
+
+**The library is not in this repository.** The books, cards, themes and indexes it holds are the owner's local data, kept outside this
+clone (`docs/specs/knowledge-base.md`, "Where things live"). A clone of this repository has none of them. Where a document here gives a
+figure about the library's contents, or names a book or a result from it, that is the owner's figure, measured on the owner's library on
+the date the document gives, and nothing in the repository holds the data behind it.
 
 ## What it does now
 
@@ -59,7 +64,7 @@ they would not otherwise reach.
   else. It was run once through the package, from a scratch project.
 
 Planned, not built: a trial on problems you choose that compares keyword search, search by meaning and the problem search, judging
-pairs of ideas that a search returned, themes made with a local or cloud model, and a scheduled program that adds sources while
+pairs of ideas that a search returned, search and links between themes, and a scheduled program that adds sources while
 the owner is away. The roadmaps are in [docs/roadmaps/](docs/roadmaps/).
 
 The design and its reasons are in [docs/specs/knowledge-base.md](docs/specs/knowledge-base.md).

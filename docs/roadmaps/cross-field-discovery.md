@@ -18,7 +18,7 @@ search by meaning and themes as out of scope.
 
 ## Current state
 
-The library holds about eighty books on game theory, game players, learning models, algorithms, high performance computing, CAD and
+The owner's local library, which is not in this repository, held about eighty books when this was written (2026-11-10), on game theory, game players, learning models, algorithms, high performance computing, CAD and
 3D printing. A keyword search finds them and a read returns a passage with its citation, from the command line and, through the `kb`
 workbench package, from a project. Of the 79 books that have a card, 78 have a domain-neutral description, and their problem,
 approach and what-it-provides fields are turned into 230 vectors by the embedding model `qwen3-embedding:4b` on the owner's
