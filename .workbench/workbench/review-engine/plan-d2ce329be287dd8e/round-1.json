@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Assumptions and constraints 1; Completion criterion 1; Increment A",
+      "problem": "The plan embeds the summary plus only three neutral parts, while the theme spec says the source-vocabulary and domain-neutral descriptions are each embedded separately, and the agreed statement requires both descriptions to be embedded. It neither creates a vector for the complete neutral description nor justifies/specifies a permitted change.",
+      "severity": "major",
+      "suggestion": "Embed the summary and the complete five-part neutral description as the two specified texts, or explicitly change the spec through the required direction process before implementing a different field-level design."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Assumptions and constraints 7; Increment A affected areas; Completion criterion 2",
+      "problem": "The plan adopts the card-catalog citation form, but that form does not show the source language. This drifts from the agreed theme-spec requirement that a theme citation shows the language, and no result field or test restores it.",
+      "severity": "major",
+      "suggestion": "Define and test a theme citation that includes the source language, rather than reusing the card citation unchanged."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Scope; Assumptions and constraints 4 and 7; Increment A",
+      "problem": "The roadmap candidate requires vectors to be rebuildable from cards and themes alone. The plan instead derives active state, titles, and source facts for citations from the book store/book folders, and does not state how cards participate or how a missing card is handled.",
+      "severity": "major",
+      "suggestion": "Revise the build input to use the current card and theme generations alone, including citation data, and specify the counted/omitted behavior when either is unavailable; otherwise obtain an approved roadmap change."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Assumptions and constraints 3; Completion criterion 1; Increment A step 1",
+      "problem": "The handling of an existing file made with another model, dimension, or prefix is contradictory: the plan says it is refused, but also requires a changed model/dimension/prefix to make vectors again and permits a foreign-format file to be “replaced or refused.” This leaves the build behavior and its tests indeterminate.",
+      "severity": "major",
+      "suggestion": "Specify separately that a build replaces an unusable or configuration-mismatched prior file after successfully rebuilding it, while search refuses such a file; state the exact behavior for malformed/foreign files."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has material drift from the theme spec and roadmap, plus an unresolved build-versus-refusal contract.",
+  "verdict": "changes_needed"
+}

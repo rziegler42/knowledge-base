@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Assumptions and constraints 4; Completion criterion 2; Increment A step 1",
+      "problem": "The planned vector file retains only an anchor path and does not name the theme id in its result data. Consequently the search cannot provide the full theme identity and precise citation required by the theme spec: its id, the full typed anchor (including start and end), and the excerpt hash. Appending just the anchor path to the card citation is insufficient.",
+      "severity": "major",
+      "suggestion": "Store and validate each theme's id and complete anchor (`start`, `end`, `path`, and `excerpt_sha256`) in the vector file, and require search results/citations to return them. Add corresponding fixture and malformed-row tests."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan aligns with the roadmap and its named specs except that its planned result/citation data loses required theme identity and anchor detail.",
+  "verdict": "changes_needed"
+}
