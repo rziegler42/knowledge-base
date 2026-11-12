@@ -6,8 +6,10 @@ A theme carries a description in words of no field, in five parts. Two checks ar
 The words of the field. A book's vocabulary is the words of its title, of the topics and adjacent topics of its card, and the words
 that occur at least FREQUENT_MIN times in its text while at most RARE_PERCENT percent of the books of the library hold them, less the
 words that at least half of the books hold. A word is a run of letters of four or more in its plain lower-case form (no stemming). A
-description that holds a word of the vocabulary as a whole word is flagged with the words found, and kept: the flag is for the owner to
-read, and a false flag is a word that is not the field's.
+description that holds a word of the *flag* vocabulary as a whole word is flagged with the words found, and kept: the flag is for the owner to
+read, and a false flag is a word that is not the field's. The flag vocabulary is the vocabulary less any word that FLAG_SHARE percent of the
+books or more hold (`flag_vocabulary`): a word that many books use is the field's to avoid but is not a leak of one field. The words the
+extraction is told to avoid are those of the whole vocabulary.
 
 Support. A second model (the kind of work `theme-check`) is shown the excerpt and the parts of the description that have text, and says
 for each whether the excerpt supports it. A part it says is supported is marked `stated`; every other stays `inferred`. A theme whose
@@ -24,6 +26,7 @@ from . import KbError, cardmake, convert, models, textutil, theme, themeextract
 FREQUENT_MIN = 5       # occurrences in the book's own text for a word to count as one of its words
 RARE_PERCENT = 15      # the most percent of the books of the library that may hold such a word
 COMMON_SHARE = 2       # a word held by at least one book in this many (half) is common, and is never in a vocabulary
+FLAG_SHARE = 5         # a word counts for the flag only if fewer than this percent of the books of the library hold it (5 percent exactly does not)
 AVOID_LIMIT = 80       # the most words of a book's vocabulary that the extraction is told to avoid
 AVOID_WORD_MAX = 40    # the longest word it is told to avoid: a run of letters of any length in a book cannot make the prompt too large
 VERDICTS = cardmake.VERDICTS
@@ -80,6 +83,13 @@ def field_vocabulary(text, df, size, title, topics):
     common words, which at least half of the books hold."""
     named = set(words(title)) | {w for topic in topics for w in words(topic)}
     return (named | {w for w, _ in _own_words(text, df, size)}) - _common(df, size)
+
+
+def flag_vocabulary(text, df, size, title, topics):
+    """The words of the field's vocabulary (`field_vocabulary`) that count for the flag: those that fewer than FLAG_SHARE percent of the `size`
+    books hold, `df` counting the book itself. A word of the title or of the topics that many books hold is the field's word to avoid, but a
+    description that uses it is not flagged for it. A word that no book holds is kept."""
+    return {w for w in field_vocabulary(text, df, size, title, topics) if df.get(w, 0) * 100 < FLAG_SHARE * size}
 
 
 def avoid_words(text, df, size, title, topics, limit=AVOID_LIMIT):
@@ -192,7 +202,7 @@ def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=No
     df, size = frequencies if frequencies is not None else library_frequencies(store)
     model = current.get("model") or {}
     topics = list(model.get("topics", [])) + list(model.get("adjacent_topics", []))
-    vocabulary = field_vocabulary(conversion.text, df, size, current["title"], topics)
+    vocabulary = flag_vocabulary(conversion.text, df, size, current["title"], topics)
     avoid = avoid_words(conversion.text, df, size, current["title"], topics)
     keep = lambda refusal: themeextract._keep(store, refusal, book_id, version_id)
     try:
@@ -204,4 +214,5 @@ def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=No
         raise themeextract.ThemeRefused(str(refusal), kept, note) from None
     return {"book_id": book_id, "version_id": version_id, "generation": theme.make(book_id, version_id, checked["themes"]),
             "dropped": made["dropped"] + checked["dropped"], "records": made["records"] + checked["records"], "pieces": made["pieces"],
-            "calls": made["calls"] + checked["calls"], "vocabulary_words": len(vocabulary)}
+            "calls": made["calls"] + checked["calls"],
+            "vocabulary_words": len(vocabulary)}   # the words of the flag vocabulary, which is the field's vocabulary less the words many books hold

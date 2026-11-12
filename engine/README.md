@@ -1146,7 +1146,11 @@ needs a second new kind of work in your config, `"theme-check": "<name>"` (optio
 are found before the first call). *The words of the field:* a book's vocabulary is the words of its title, of the topics and adjacent
 topics of its card, and the words that occur at least 5 times in its text while at most 15 percent of the books of the library hold them,
 less the words that half of the books or more hold (a word is a run of four or more letters, folded to plain lower case, not stemmed). A
-description that holds a word of the vocabulary as a whole word is flagged (`field_words`, with the words found) and kept. *Support:* a
+description that holds a word of the *flag* vocabulary as a whole word is flagged (`field_words`, with the words found) and kept; the flag vocabulary is the vocabulary less any word that
+5 percent of the books or more hold (`themecheck.FLAG_SHARE`, `flag_vocabulary`; a word that no book holds is kept), whatever the word's source, and the words the extraction is told to
+avoid are still those of the whole vocabulary. The 5 percent is a judgement and not a measurement: a read-only count over the 1,913 themes of the 175 books on 2026-11-12 showed that
+the vocabulary without this limit flagged 1,479 of them (77.3 percent), and with the limit of 1, 3, 5, 8 and 15 percent it would flag 4.0, 18.0, 27.4, 40.3 and 63.1 percent; there is no
+ground truth of leak or no leak. The themes made before this limit carry the earlier flags until they are flagged again (a command for that, `themes-reflag`, is the next increment of the plan and is not built yet). *Support:* a
 second model is shown the excerpt and the parts of the description that have text, and says for each whether the excerpt supports it
 (`supports`, `partly`, `no`); a part it says is supported is marked `stated`, every other stays `inferred`. One call for each theme. A
 check whose answer is refused, asked once more with the reason and refused again, drops its theme as `unchecked` and the refusals are
@@ -1157,7 +1161,8 @@ median of 47 words, and applied to the neutral fields of the existing cards it f
 the text and 198 from the title; the most often flagged are mostly terms of a field (training, distributed, neural, transformer,
 stochastic, reinforcement, quantum, hash) with some generic ones (search, language, memory, critical). So the rule finds the field's words
 that the card prompt lets through, with some false flags. The prompt for themes gives the same instruction (no name of a field, game,
-product or person), so whether the descriptions of themes do better is not known; Increment E measures it. The flag is a reason to look
+product or person), so whether the descriptions of themes do better is not known; Increment E measures it (the figures in this paragraph from "Read-only, on the 175 cards" are those of the
+flag before the limit of 5 percent). The flag is a reason to look
 and not a verdict. A book whose conversion cannot be read is left out of the count of the library.
 
 **A run over the library** (`kb/themerun.py`; `python3 -m kb themes-run plan`, `run <run>` and `status <run>`; no option names a model, a server or an

@@ -119,6 +119,59 @@ class VocabularyTest(unittest.TestCase):
         self.assertEqual(themecheck.field_vocabulary(self.texts[0], df, size, "annealing", ["energy"]), set())
 
 
+class FlagVocabularyTest(unittest.TestCase):
+    """The words that count for the flag: those of the field's vocabulary that fewer than FLAG_SHARE percent of the books hold."""
+
+    TEXT = " ".join(["rarer"] * 5 + ["edge"] * 5 + ["solo"] * 5 + ["wide"] * 5 + ["common"] * 5)
+    DF = {"rarer": 4, "edge": 5, "wide": 40, "topicword": 10, "solo": 1, "common": 60}   # of 100 books (the target is one of them)
+
+    def vocab(self, df=None, size=100, title="Wide gone", topics=("topicword",), flag=True):
+        fn = themecheck.flag_vocabulary if flag else themecheck.field_vocabulary
+        return fn(self.TEXT, df if df is not None else self.DF, size, title, list(topics))
+
+    def test_the_share_is_five_percent(self):
+        self.assertEqual(themecheck.FLAG_SHARE, 5)
+
+    def test_only_the_words_that_fewer_than_five_percent_of_the_books_hold_are_kept(self):
+        # field vocabulary: wide and gone (title), topicword (topic), rarer, edge and solo (own words in at most 15 percent); common is common
+        self.assertEqual(self.vocab(flag=False), {"wide", "gone", "topicword", "rarer", "edge", "solo"})
+        self.assertEqual(self.vocab(), {"gone", "rarer", "solo"})
+
+    def test_a_word_in_the_title_that_many_books_hold_is_not_kept_and_nor_is_a_word_of_a_topic(self):
+        self.assertNotIn("wide", self.vocab())        # 40 of 100, in the title
+        self.assertNotIn("topicword", self.vocab())   # 10 of 100, in the topics
+
+    def test_a_word_held_by_exactly_five_percent_is_not_kept_and_by_fewer_is(self):
+        self.assertNotIn("edge", self.vocab())        # 5 of 100
+        self.assertIn("rarer", self.vocab())          # 4 of 100
+        self.assertIn("edge", self.vocab({**self.DF, "edge": 4}))
+
+    def test_a_word_that_no_book_holds_is_kept(self):
+        self.assertIn("gone", self.vocab())           # in the title and in no book at all
+
+    def test_the_share_is_of_the_size_of_the_library(self):
+        self.assertIn("wide", self.vocab(size=1000))  # 40 of 1000 is 4 percent
+        self.assertNotIn("rarer", self.vocab(size=40))  # 4 of 40 is 10 percent
+
+    def test_it_is_always_part_of_the_vocabulary_and_never_more(self):
+        for size in (10, 100, 1000):
+            self.assertLessEqual(self.vocab(size=size), self.vocab(size=size, flag=False))
+
+    def test_the_vocabulary_and_the_words_to_avoid_are_as_they_were(self):
+        self.assertEqual(self.vocab(flag=False), {"wide", "gone", "topicword", "rarer", "edge", "solo"})
+        avoided = themecheck.avoid_words(self.TEXT, self.DF, 100, "Wide gone", ["topicword"])
+        self.assertEqual(avoided[:3], ["wide", "gone", "topicword"])
+        self.assertEqual(set(avoided), {"wide", "gone", "topicword", "rarer", "edge", "solo"})   # the model is still told to avoid the common words of the field
+
+    def test_a_library_of_one_keeps_only_the_words_of_the_title_and_topics_that_no_book_holds(self):
+        df, size = themecheck.frequencies([self.TEXT])   # every word of the text is held by the one book, which is all the books
+        got = themecheck.flag_vocabulary(self.TEXT, df, size, "rarer missing", ["edge", "absent"])
+        self.assertEqual(got, {"missing", "absent"})   # "rarer" and "edge" are in the text, so held by 100 percent of the books
+
+    def test_a_library_of_none_keeps_nothing(self):
+        self.assertEqual(themecheck.flag_vocabulary(self.TEXT, {}, 0, "rarer missing", ["absent"]), set())
+
+
 class AvoidWordsTest(unittest.TestCase):
     def setUp(self):
         self.texts = library()
@@ -439,6 +492,16 @@ class VersionTest(VersionCase):
         self.assertEqual(got["generation"]["themes"][0]["flags"], [])
         self.assertGreater(got["vocabulary_words"], 0)   # "stopping" is a topic of the card and not a word of the text
         self.assertEqual(themecheck.library_frequencies(self.store)[1], 1)
+
+    def test_a_word_that_many_books_hold_is_not_flagged_but_is_still_avoided(self):
+        book, version = self.converted_book()
+        got = self.make(book, version, [values(row(problem="finding the stopping rule")), verdicts("supports", "supports", "supports", "supports")],
+                        frequencies=({"stopping": 10, "annealing": 10, "search": 1}, 30))   # stopping is held by a third of the books
+        self.assertEqual(got["generation"]["themes"][0]["flags"], [])
+        prompt = self.fake.calls[0]["prompt"]
+        token = re.search(r"<<<BOOK TITLE ([0-9a-f]+) BEGIN>>>", prompt).group(1)
+        section = re.search(r"<<<WORDS TO AVOID " + token + r" BEGIN>>>\n(.*?)\n<<<WORDS TO AVOID " + token + " END>>>", prompt, re.S).group(1)
+        self.assertIn("stopping", section.split())   # the extraction is told to avoid it all the same
 
     def test_the_words_to_avoid_that_the_extraction_is_given_are_those_of_the_vocabulary_in_their_order(self):
         book, version = self.converted_book()

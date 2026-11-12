@@ -84,6 +84,11 @@ or conversion; they have their own specs.
 - **[proposed]** The domain-neutral description has five parts, as used in the experiments: the problem it solves, the method in
   general terms, what it needs, what it provides, and where it would not work. It avoids the names of any field, game, product or
   person, and it avoids the field's jargon.
+- **[proposed]** A description that holds a word of its book's field is flagged (`field_words`, with the words found) and kept: the flag is a reason for the owner to look, not a verdict.
+  A word counts for the flag only if fewer than 5 percent of the books of the library hold it, whatever its source (the title, the card's topics or the book's own frequent words); a
+  word that many books hold is still a word the extraction is told to avoid, but a description that uses it is not flagged for it. The 5 percent is a judgement, not a measurement: a count
+  over the 1,913 themes of the library shows that it would flag about 27 percent of them, where the earlier rule flagged 77 percent, with no ground truth of leak or no leak yet. The themes
+  already made keep the earlier flags until they are flagged again by the rule (a later increment of the plan `2026-11-12-flag-only-words-that-few-books-hold`).
 - **[proposed]** The two descriptions serve different searches. The summary in the source's vocabulary serves search within a field and
   citing. The domain-neutral description serves matching across fields. Each is embedded separately, and a search can use either or
   both. In the experiments, neutral descriptions helped for a problem written in one shelf's own vocabulary and did not help within a

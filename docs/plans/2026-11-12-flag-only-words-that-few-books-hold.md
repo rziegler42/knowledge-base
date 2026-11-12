@@ -128,4 +128,15 @@ Each increment's recorded verification still stands unless a later increment cha
 
 ## Result
 
-Empty until work starts.
+### Increment A (the rule; committed)
+
+- **Done.** In `engine/kb/themecheck.py`: `FLAG_SHARE = 5` and `flag_vocabulary(text, df, size, title, topics)`, the field's vocabulary less any word that 5 percent or more of the books hold (`df.get(w, 0) * 100 < FLAG_SHARE * size`, so exactly 5 percent is not kept and a word no book holds is); `make_and_check_for_version` builds the vocabulary of the flag with it
+  and the words to avoid with `avoid_words`, which is unchanged, as is `field_vocabulary`. The module docstring says so. `vocabulary_words` in the result of `make_and_check_for_version` is now the size of the flag vocabulary (nothing else reads it). `docs/specs/theme.md`: one [proposed] statement under "What a theme holds" (the rule, "would flag about 27 percent", that the themes already made keep the earlier flags until flagged again).
+  `engine/README.md`: the paragraph on the words of the field, with the counts of the plan, and a note that the older figures there are those of the flag before the limit.
+- **Verification as run.** Tests first: the new tests failed because `flag_vocabulary` did not exist. `python3 -W error::ResourceWarning -m unittest engine.tests.test_themecheck engine.tests.test_themeextract engine.tests.test_theme engine.tests.test_themerun` printed `Ran 305 tests ... OK`; `wb run code-work check` clean. No existing test of the check had to be changed: one was added for the new behaviour
+  (a word held by a third of the books is not flagged and is still avoided).
+  Deliberate breaks: 11 one-line breaks of `themecheck.py` (the share left out, `<=` for `<`, the share of 100 and not of the library, shares of 10 and 3 percent, title words exempt, topic words exempt, a word no book holds dropped, the check flagging by the whole vocabulary, the avoid list made from the flag vocabulary, the vocabulary itself narrowed): all caught; file restored identical (sha256 prefix `936821ec0739`).
+- **Review.** The independent `reviewer` agent (read-only), one round, no blocking finding. Applied: the spec says "would flag" and that the stored themes keep the earlier flags (it said "flags"); the README no longer points to `themes-reflag` as if it existed; the test of a library of one now names what it shows (only title and topic words that no book holds are kept) and a library of none is tested;
+  the comment on `FLAG_SHARE` says "fewer than"; `vocabulary_words` has a comment saying it is the flag vocabulary. Noted, not changed: `avoid_words` drops words longer than 40 letters while the docstring says "the whole vocabulary" (an imprecision that was there before).
+- **Not run.** The whole suite; any live call; nothing was filed in the library. No security review (not asked; the reviewer named no concrete exposure: a filter over words counted from the library).
+- **Not done.** Increments B and C.
