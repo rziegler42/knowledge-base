@@ -216,29 +216,48 @@ def read_themes(conn):
     return out
 
 
-def read_vectors(conn, dimension, lenient=False):
-    """The vectors of the file, each checked: `[{book_id, version_id, theme_id, field, text_sha256, vector}]`, vector as a list of floats. A row
-    that is not what this engine writes is a refusal. So is a vector that is not of `dimension` finite numbers that are not all zero, unless
-    `lenient`: then its `vector` is `None`, and the caller leaves the row out and counts it."""
-    out = []
+def _check_vector_key(book_id, version_id, theme_id, field, sha):
+    """Refuse a row of vectors whose key or hash is not what this engine writes."""
+    if (not isinstance(book_id, str) or not ids._ID.fullmatch(book_id) or not isinstance(version_id, str) or not _VERSION.fullmatch(version_id)
+            or not isinstance(theme_id, str) or not _THEME_ID.fullmatch(theme_id) or field not in FIELDS
+            or not isinstance(sha, str) or len(sha) != 64 or set(sha) - _HEX):
+        raise KbError(f"the file of theme vectors holds a row that is not what this engine writes: {_AGAIN}")
+
+
+def check_vector_rows(conn):
+    """Refuse the file if a row of its vectors is not what this engine writes, reading no vector (only the key and the hash of each row)."""
     try:
-        rows = conn.execute("SELECT book_id, version_id, theme_id, field, text_sha256, vector FROM vectors "
-                            "ORDER BY book_id, version_id, theme_id, field").fetchall()
+        for book_id, version_id, theme_id, field, sha in conn.execute("SELECT book_id, version_id, theme_id, field, text_sha256 FROM vectors"):
+            _check_vector_key(book_id, version_id, theme_id, field, sha)
     except sqlite3.Error as e:
         raise KbError(f"the file of theme vectors cannot be read ({e}): {_AGAIN}") from None
-    for book_id, version_id, theme_id, field, sha, blob in rows:
-        if (not isinstance(book_id, str) or not ids._ID.fullmatch(book_id) or not isinstance(version_id, str) or not _VERSION.fullmatch(version_id)
-                or not isinstance(theme_id, str) or not _THEME_ID.fullmatch(theme_id) or field not in FIELDS
-                or not isinstance(sha, str) or len(sha) != 64 or set(sha) - _HEX):
-            raise KbError(f"the file of theme vectors holds a row that is not what this engine writes: {_AGAIN}")
-        try:
-            vector = unpack(blob, dimension)
-        except KbError:
-            if not lenient:
-                raise
-            vector = None
-        out.append({"book_id": book_id, "version_id": version_id, "theme_id": theme_id, "field": field, "text_sha256": sha, "vector": vector})
-    return out
+
+
+def iter_vectors(conn, dimension, lenient=False, ordered=True):
+    """The vectors of the file one at a time, each checked: `{book_id, version_id, theme_id, field, text_sha256, vector}`, vector as a list of
+    floats that lives only until the next row is asked for. A row that is not what this engine writes is a refusal. So is a vector that is not
+    of `dimension` finite numbers that are not all zero, unless `lenient`: then its `vector` is `None`, and the caller leaves the row out and
+    counts it. The rows come by key, unless `ordered` is false (then in the order the file holds them). The connection stays in use until the
+    last row is taken."""
+    order = " ORDER BY book_id, version_id, theme_id, field" if ordered else ""
+    try:
+        for book_id, version_id, theme_id, field, sha, blob in conn.execute(
+                f"SELECT book_id, version_id, theme_id, field, text_sha256, vector FROM vectors{order}"):
+            _check_vector_key(book_id, version_id, theme_id, field, sha)
+            try:
+                vector = unpack(blob, dimension)
+            except KbError:
+                if not lenient:
+                    raise
+                vector = None
+            yield {"book_id": book_id, "version_id": version_id, "theme_id": theme_id, "field": field, "text_sha256": sha, "vector": vector}
+    except sqlite3.Error as e:
+        raise KbError(f"the file of theme vectors cannot be read ({e}): {_AGAIN}") from None
+
+
+def read_vectors(conn, dimension, lenient=False):
+    """Every vector of the file as a list (`iter_vectors` taken whole): it holds all of them in memory, which the search does not."""
+    return list(iter_vectors(conn, dimension, lenient=lenient))
 
 
 def citation_line(base, path):
@@ -313,7 +332,7 @@ def _library(store):
 
 
 def _old_vectors(path, entry):
-    """`(vectors, model, reason)`: the vectors of the existing file that may be kept, as `{sha256 of the text: vector}`, the model the file says
+    """`(vectors, model, reason)`: the vectors of the existing file that may be kept, as `{sha256 of the text: the bytes of the vector as stored}` (checked, and not held as numbers), the model the file says
     made them, and why there are none (`None` when there is no file, or the file is good). A file that is not this engine's, is damaged, or is
     for another model, dimension or prefix gives no vectors and a reason: the build replaces it."""
     if not os.path.lexists(path):
@@ -322,11 +341,12 @@ def _old_vectors(path, entry):
         with closing(connect(path, readonly=True)) as conn:
             meta = check_entry(conn, entry)
             kept = {}
-            for sha, blob in conn.execute("SELECT text_sha256, vector FROM vectors").fetchall():
+            for sha, blob in conn.execute("SELECT text_sha256, vector FROM vectors"):
                 try:
-                    kept[sha] = unpack(blob, entry["dimension"])
+                    unpack(blob, entry["dimension"])   # checked, and its numbers let go: what is kept is the bytes it is stored in
                 except KbError:
                     continue  # a damaged vector is not kept; it is made again
+                kept[sha] = blob
             return kept, meta["model"], None
     except (KbError, sqlite3.Error) as e:
         return {}, None, textutil.clean(str(e), 160) or "the file cannot be used"
@@ -393,7 +413,7 @@ def build(store, cfg, again=False, launcher=None, root=None):
         if made_model is not None and got["model"] != made_model:
             raise KbError("the model that the bridge reported changed between the chunks of one build")
         made_model = got["model"]
-        made_vectors.update({sha: vec for (sha, _), vec in zip(group, got["vectors"])})
+        made_vectors.update({sha: vectors.pack(vec) for (sha, _), vec in zip(group, got["vectors"])})   # at once: no list of the numbers is kept
     theme_rows, vector_rows, kept, made = [], [], 0, 0
     for book in books:
         for made_theme, texts in book["themes"]:
@@ -403,10 +423,10 @@ def build(store, cfg, again=False, launcher=None, root=None):
                                json.dumps(hashes, sort_keys=True)))
             for field, sha in hashes.items():
                 if sha in old:
-                    vector, kept = old[sha], kept + 1
+                    blob, kept = old[sha], kept + 1
                 else:
-                    vector, made = made_vectors[sha], made + 1
-                vector_rows.append((book["book_id"], book["version_id"], made_theme["id"], field, sha, vectors.pack(vector)))
+                    blob, made = made_vectors[sha], made + 1
+                vector_rows.append((book["book_id"], book["version_id"], made_theme["id"], field, sha, blob))
     counts["themes"], counts["built"] = len(theme_rows), len(books)
     model = made_model or (old_model if keeps else None) or entry["model"]
     meta = {"format": str(FORMAT), "model": model, "configured": entry["model"], "dimension": str(entry["dimension"]),
@@ -493,39 +513,34 @@ def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, 
     query = vectors._query(query)
     name, _ = models.choose(cfg, "card-embed")
     entry = models.registry(cfg)[name]
-    with closing(connect(path_of(index_root), readonly=True)) as conn:
+    with closing(connect(path_of(index_root), readonly=True)) as conn:   # one connection to the end, so that the themes and the vectors are of one file
         meta = check_entry(conn, entry)
         rows = read_themes(conn)
-        stored = read_vectors(conn, entry["dimension"], lenient=True)
-    got = models.embed(cfg, name, [query], launcher=launcher, root=root, kind="query")
-    if got["model"] != meta["model"]:
-        raise KbError(f"the model that answered for the query ({textutil.clean(got['model'], 60)}) is not the one that made the vectors; "
-                      f"run `{COMMAND}` to build them again")
-    q = vectors._unit(got["vectors"][0])
-    if q is None:
-        raise KbError("the vector for the query has no length")
-    by_theme = {(r["book_id"], r["version_id"], r["theme_id"]): r for r in rows}
-    usable, stale = {}, 0
-    for v in stored:
-        key = (v["book_id"], v["version_id"], v["theme_id"])
-        row = by_theme.get(key)
-        unit = None
-        if row is not None and v["vector"] is not None and row["hashes"].get(v["field"]) == v["text_sha256"]:
-            unit = vectors._unit(v["vector"])
-        if unit is None:
-            stale += 1
-        else:
-            usable.setdefault(key, {})[v["field"]] = unit
-    ranked = []
-    for key, fields in usable.items():
-        best, best_field = None, None
-        for field in FIELDS:  # in this order, so that a tie goes to the first
-            if field in fields:
-                cosine = max(-1.0, min(1.0, math.fsum(a * b for a, b in zip(q, fields[field]))))
-                if best is None or cosine > best:
-                    best, best_field = cosine, field
-        ranked.append((round(best, 12), key, best_field))
-    ranked.sort(key=lambda r: (-r[0], r[1]))
-    return {"meaning": True, "model": meta["model"], "query_prefix": "query_prefix" in entry, "built": meta["built"], "themes_searched": len(usable),
-            "stale": stale, "without_vector": sum(1 for key in by_theme if key not in usable),
+        check_vector_rows(conn)   # a row that is not the engine's is refused here, before the query is sent
+        got = models.embed(cfg, name, [query], launcher=launcher, root=root, kind="query")
+        if got["model"] != meta["model"]:
+            raise KbError(f"the model that answered for the query ({textutil.clean(got['model'], 60)}) is not the one that made the vectors; "
+                          f"run `{COMMAND}` to build them again")
+        q = vectors._unit(got["vectors"][0])
+        if q is None:
+            raise KbError("the vector for the query has no length")
+        by_theme = {(r["book_id"], r["version_id"], r["theme_id"]): r for r in rows}
+        best, stale = {}, 0   # for each theme: the closest of its vectors so far, and the text it is the vector of
+        for v in iter_vectors(conn, entry["dimension"], lenient=True, ordered=False):   # one vector at a time: none is kept
+            key = (v["book_id"], v["version_id"], v["theme_id"])
+            row = by_theme.get(key)
+            unit = None
+            if row is not None and v["vector"] is not None and row["hashes"].get(v["field"]) == v["text_sha256"]:
+                unit = vectors._unit(v["vector"])
+            if unit is None:
+                stale += 1
+                continue
+            cosine = max(-1.0, min(1.0, math.fsum(a * b for a, b in zip(q, unit))))
+            held = best.get(key)
+            # a tie goes to the first text in the order of FIELDS, whatever the order in which the rows come
+            if held is None or cosine > held[0] or (cosine == held[0] and FIELDS.index(v["field"]) < FIELDS.index(held[1])):
+                best[key] = (cosine, v["field"])
+    ranked = sorted(((round(cosine, 12), key, field) for key, (cosine, field) in best.items()), key=lambda r: (-r[0], r[1]))
+    return {"meaning": True, "model": meta["model"], "query_prefix": "query_prefix" in entry, "built": meta["built"], "themes_searched": len(best),
+            "stale": stale, "without_vector": sum(1 for key in by_theme if key not in best),
             "results": [result_of(by_theme[key], score, field) for score, key, field in ranked[:limit]]}

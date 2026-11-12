@@ -5,11 +5,14 @@ import copy
 import fcntl
 import io
 import json
+import math
 import os
+import random
 import sqlite3
 import stat
 import struct
 import sys
+import tracemalloc
 import unittest
 import unittest.mock
 from contextlib import closing
@@ -19,7 +22,7 @@ from engine.tests.test_models import FAKE_EMBED, config as models_config, embedd
 from engine.tests.test_themecheck import config as theme_config, verdicts
 from engine.tests.test_themeextract import Fake, VersionCase, row, values
 
-from kb import KbError, card, catalog, convert, models, read as reading, search as fulltext, textutil, theme, themecheck, themevectors
+from kb import KbError, card, catalog, convert, models, read as reading, search as fulltext, textutil, theme, themecheck, themevectors, vectors
 from kb import __main__ as kbmain
 from kb import config as kbconfig
 
@@ -917,6 +920,268 @@ class StaleTest(SearchCase):
         got = self.search()
         self.assertEqual([r["book_id"] for r in got["results"]], [self.b1])
         self.assertGreater(got["stale"], 0)
+
+
+def seeded_embed(dim, model="bge-m3:latest"):
+    """An embedding call that makes a vector of `dim` numbers from each text, the same for the same text."""
+    def embed(cfg, name, texts, launcher=None, root=None, kind="document"):
+        return {"model": model, "dimension": dim, "vectors": [[random.Random(t).uniform(-1, 1) for _ in range(dim)] for t in texts]}
+    return embed
+
+
+class ReadOneRowAtATimeTest(SearchCase):
+    """Increment B-A: the search holds no list of all the vectors and returns what the search that read them all returned; the build holds a
+    vector as the bytes it is stored in."""
+
+    def setUp(self):
+        super().setUp()
+        self.b3, self.v3 = self.themed(rows_of(3, limits="the limit"))
+
+    def fixed_query(self, vec, dim=4):
+        return unittest.mock.patch.object(models, "embed", return_value={"model": self.meta()["model"], "dimension": dim, "vectors": [vec]})
+
+    def reference(self, vec):
+        """The search as it was before B-A (it read every vector into a list first): (ranked, stale, themes searched, without vector)."""
+        entry = models.registry(self.mcfg)["emb"]
+        with closing(themevectors.connect(self.path(), readonly=True)) as conn:
+            rows = themevectors.read_themes(conn)
+            stored = []   # read here with a query and an unpacking of its own, not with the code under test
+            for b, v, t, f, h, blob in conn.execute("SELECT book_id, version_id, theme_id, field, text_sha256, vector FROM vectors ORDER BY book_id, version_id, theme_id, field"):
+                numbers = list(struct.unpack(f"<{entry['dimension']}f", blob)) if isinstance(blob, bytes) and len(blob) == 4 * entry["dimension"] else None
+                if numbers is not None and (not all(math.isfinite(x) for x in numbers) or not any(numbers)):
+                    numbers = None
+                stored.append({"book_id": b, "version_id": v, "theme_id": t, "field": f, "text_sha256": h, "vector": numbers})
+        q = vectors._unit(vec)
+        by_theme = {(r["book_id"], r["version_id"], r["theme_id"]): r for r in rows}
+        usable, stale = {}, 0
+        for v in stored:
+            key = (v["book_id"], v["version_id"], v["theme_id"])
+            row = by_theme.get(key)
+            unit = None
+            if row is not None and v["vector"] is not None and row["hashes"].get(v["field"]) == v["text_sha256"]:
+                unit = vectors._unit(v["vector"])
+            if unit is None:
+                stale += 1
+            else:
+                usable.setdefault(key, {})[v["field"]] = unit
+        ranked = []
+        for key, fields in usable.items():
+            best, best_field = None, None
+            for field in themevectors.FIELDS:
+                if field in fields:
+                    cosine = max(-1.0, min(1.0, math.fsum(a * b for a, b in zip(q, fields[field]))))
+                    if best is None or cosine > best:
+                        best, best_field = cosine, field
+            ranked.append((round(best, 12), key, best_field))
+        ranked.sort(key=lambda r: (-r[0], r[1]))
+        return ([(score, key, field) for score, key, field in ranked[:50]], stale, len(usable), sum(1 for key in by_theme if key not in usable))
+
+    def shape(self, got):
+        return ([(r["score"], (r["book_id"], r["version_id"], r["theme_id"]), r["excerpt_field"]) for r in got["results"]],
+                got["stale"], got["themes_searched"], got["without_vector"])
+
+    def in_order(self, order):
+        """`iter_vectors` giving the rows of the file in another order than the file's own."""
+        real = themevectors.iter_vectors
+
+        def reordered(*args, **kw):
+            rows = list(real(*args, **kw))
+            if order == "reversed":
+                rows.reverse()
+            elif order != "natural":
+                random.Random(order).shuffle(rows)
+            return iter(rows)
+        return unittest.mock.patch.object(themevectors, "iter_vectors", reordered)
+
+    def same_as_the_search_that_read_every_vector(self):
+        for vec in ([1, 0, 0, 0], [0.3, 0.9, 0.1, 0], [0, 0, 0, 1], [0.5, 0.5, 0.5, 0.5], [-1, 0.2, 0, 0.1]):
+            expected = self.reference(vec)
+            self.assertGreaterEqual(len(expected[0]), 3)
+            for order in ("natural", "reversed", 1, 2, 3):
+                with self.subTest(query=vec, order=order), self.fixed_query(vec), self.in_order(order):
+                    self.assertEqual(self.shape(self.search(limit=50)), expected)
+
+    def test_the_results_are_those_of_the_search_that_read_every_vector_whatever_the_order_of_the_rows(self):
+        same = [1, 0, 0, 0]
+        self.built(**{self.QUERY: same, SUMMARIES[0]: same, "problem 1": same, "provides 2": same, "p other": same})   # ties inside a theme and between themes
+        self.same_as_the_search_that_read_every_vector()
+
+    def test_the_results_are_those_of_the_search_that_read_every_vector_with_the_vectors_the_fake_bridge_makes(self):
+        self.build(again=True)
+        self.same_as_the_search_that_read_every_vector()
+
+    def test_equal_scores_go_to_the_first_text_in_the_order_of_the_texts_and_not_in_the_order_the_rows_are_read(self):
+        same = [1, 0, 0, 0]
+        self.built(**{SUMMARIES[0]: same, "problem 1": same, "provides 1": same, "problem: problem 1\nmethod: method 1\nneeds: needs 1\nprovides: provides 1\nlimits: a limit": same})
+        for order in ("natural", "reversed", 1, 2, 3, 4):
+            with self.subTest(order=order), self.fixed_query(same), self.in_order(order):
+                first = [r for r in self.search(limit=50)["results"] if r["book_id"] == self.b1][0]
+                self.assertEqual(first["excerpt_field"], "summary")
+
+    def test_stale_damaged_and_orphan_rows_are_counted_as_they_were_whatever_the_order_of_the_rows(self):
+        self.build(again=True)
+        with closing(sqlite3.connect(self.path())) as conn:
+            conn.execute("UPDATE vectors SET text_sha256 = ? WHERE field = 'summary' AND book_id = ?", ("0" * 64, self.b1))
+            conn.execute("UPDATE vectors SET vector = zeroblob(16) WHERE book_id = ? AND field = 'problem'", (self.b3,))
+            conn.execute("UPDATE vectors SET vector = zeroblob(16) WHERE book_id = ?", (self.b2,))   # a theme with no vector left
+            conn.execute("DELETE FROM themes WHERE book_id = ? AND theme_id = (SELECT MIN(theme_id) FROM themes WHERE book_id = ?)", (self.b3, self.b3))
+            conn.commit()
+        expected = self.reference([0.3, 0.9, 0.1, 0])
+        self.assertGreater(expected[1], 3)      # some rows are stale
+        self.assertGreater(expected[3], 0)      # and some theme has no vector that can be used
+        self.same_as_the_search_that_read_every_vector()
+
+    def test_a_vector_with_a_number_that_is_not_finite_or_that_is_stored_as_text_is_counted_as_stale_as_it_was(self):
+        self.build(again=True)
+        with closing(sqlite3.connect(self.path())) as conn:
+            conn.execute("UPDATE vectors SET vector = ? WHERE book_id = ? AND field = 'problem'", (struct.pack("<4f", 1, float("nan"), 0, 0), self.b1))
+            conn.execute("UPDATE vectors SET vector = ? WHERE book_id = ? AND field = 'method'", (struct.pack("<4f", 1, float("inf"), 0, 0), self.b3))
+            conn.execute("UPDATE vectors SET vector = 'not a vector' WHERE book_id = ? AND field = 'needs'", (self.b2,))
+            conn.commit()
+        expected = self.reference([0.3, 0.9, 0.1, 0])
+        self.assertGreaterEqual(expected[1], 3)   # at least the rows changed above are left out and counted
+        self.same_as_the_search_that_read_every_vector()
+
+    def test_the_search_does_not_make_a_list_of_all_the_vectors(self):
+        self.build(again=True)
+        with unittest.mock.patch.object(themevectors, "read_vectors", side_effect=AssertionError("every vector was read into a list")), \
+                self.fixed_query([1, 0, 0, 0]):
+            self.assertEqual(len(self.search(limit=50)["results"]), 5)
+
+    def test_a_row_that_is_not_what_the_engine_writes_is_still_refused_before_the_query_is_sent(self):
+        self.build(again=True)
+        sent = len(self.sent())
+        last = "WHERE rowid = (SELECT MAX(rowid) FROM vectors)"   # the last row only: the key of the table must stay one of a kind
+        for statement in ("UPDATE vectors SET field = 'bogus' WHERE field = 'summary'", f"UPDATE vectors SET text_sha256 = 'abc' {last}",
+                          f"UPDATE vectors SET book_id = 'not an id' {last}", f"UPDATE vectors SET version_id = 'x' {last}",
+                          f"UPDATE vectors SET theme_id = 'X y' {last}"):
+            with self.subTest(statement):
+                with closing(sqlite3.connect(self.path())) as conn:
+                    conn.execute(statement)
+                    conn.commit()
+                with self.assertRaises(KbError):
+                    self.search()
+                self.assertEqual(len(self.sent()), sent)
+                self.build(again=True)
+                sent = len(self.sent())
+
+    def grow(self, copies, dim):
+        """The file with `copies` more copies of every theme (new ids) and of its vectors, so that it holds many vectors of `dim` numbers."""
+        with closing(sqlite3.connect(self.path())) as conn:
+            themes = conn.execute("SELECT * FROM themes").fetchall()
+            vector_rows = conn.execute("SELECT * FROM vectors").fetchall()
+            for k in range(copies):
+                new = []
+                for t in themes:
+                    made = json.loads(t[7])
+                    made["id"] = f"c{k}-{t[2]}"
+                    new.append((t[0], t[1], made["id"], t[3], t[4], t[5], t[6], json.dumps(made, sort_keys=True), t[8]))
+                conn.executemany("INSERT INTO themes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", new)
+                conn.executemany("INSERT INTO vectors VALUES (?, ?, ?, ?, ?, ?)", [(b, v, f"c{k}-{t}", f, h, blob) for b, v, t, f, h, blob in vector_rows])
+            conn.commit()
+            return conn.execute("SELECT COUNT(*) FROM vectors").fetchone()[0]
+
+    def peaks(self, dim, copies):
+        """(vectors in the file, peak memory of reading the themes alone, peak memory of a search), in bytes."""
+        self.mcfg = with_embedding(dimension=dim)
+        with unittest.mock.patch.object(models, "embed", seeded_embed(dim)):
+            self.build(again=True)
+        count = self.grow(copies, dim)
+        query = [random.Random(7).uniform(-1, 1) for _ in range(dim)]
+        tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            with closing(themevectors.connect(self.path(), readonly=True)) as conn:
+                themes = themevectors.read_themes(conn)
+            themes_peak = tracemalloc.get_traced_memory()[1]
+            del themes
+            tracemalloc.reset_peak()
+            with self.fixed_query(query, dim):
+                got = self.search(limit=50)
+            search_peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(got["themes_searched"], 5 * (copies + 1))   # the five themes of the three books, and their copies
+        self.assertEqual(got["stale"], 0)
+        return count, themes_peak, search_peak
+
+    def test_the_memory_of_a_search_beyond_the_themes_does_not_grow_with_the_vectors(self):
+        dim = 512
+        count, themes_peak, search_peak = self.peaks(dim, 100)
+        as_lists = count * dim * 32            # what the vectors would take as lists of floats (a float object and its place in the list)
+        self.assertGreater(as_lists, 30_000_000)
+        extra = search_peak - themes_peak
+        self.assertLess(extra, 2_000_000)      # not a fifteenth of it
+        count2, themes_peak2, search_peak2 = self.peaks(dim, 200)   # twice the vectors
+        self.assertGreater(count2, 1.9 * count)
+        self.assertLess(search_peak2 - themes_peak2, extra + 500_000)
+
+    def test_the_old_vectors_of_a_build_are_kept_as_the_bytes_they_are_stored_in(self):
+        dim = 512
+        self.mcfg = with_embedding(dimension=dim)
+        with unittest.mock.patch.object(models, "embed", seeded_embed(dim)):
+            self.build(again=True)
+        rnd = random.Random(3)
+        with closing(sqlite3.connect(self.path())) as conn:
+            conn.executemany("INSERT INTO vectors VALUES (?, ?, ?, ?, ?, ?)",
+                             [("b", "v1", f"x{i}", "summary", f"{i:064x}", struct.pack(f"<{dim}f", *[rnd.uniform(-1, 1) for _ in range(dim)])) for i in range(2000)])
+            conn.commit()
+        entry = models.registry(self.mcfg)["emb"]
+        tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            kept, model, reason = themevectors._old_vectors(self.path(), entry)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertEqual((model, reason), ("bge-m3:latest", None))
+        self.assertGreaterEqual(len(kept), 2000)
+        self.assertTrue(all(isinstance(v, bytes) and len(v) == 4 * dim for v in kept.values()))
+        self.assertLess(peak, 12_000_000)      # 2,000 vectors as bytes are 4 MB; as lists of floats they would take 33 MB
+
+    def test_a_vector_that_is_damaged_in_the_old_file_is_not_kept(self):
+        self.build(again=True)
+        with closing(sqlite3.connect(self.path())) as conn:
+            conn.execute("UPDATE vectors SET vector = zeroblob(16) WHERE book_id = ?", (self.b2,))
+            conn.execute("UPDATE vectors SET vector = zeroblob(16) WHERE book_id = ? AND field = 'summary'", (self.b1,))
+            conn.commit()
+        got = self.build()
+        self.assertGreater(got["made"], 0)       # what was damaged is made again
+        self.assertGreater(got["kept"], 0)
+        self.assertEqual(self.search()["stale"], 0)
+
+    def test_a_build_packs_each_vector_as_it_is_made_and_keeps_no_list_of_them(self):
+        from engine.tests.test_models import fake_vector
+        packed, calls = [0], []
+        real_pack = vectors.pack
+
+        def counting_pack(vector):
+            packed[0] += 1
+            return real_pack(vector)
+
+        def embed(cfg, name, texts, launcher=None, root=None, kind="document"):
+            calls.append((len(texts), packed[0]))
+            return {"model": "bge-m3:latest", "dimension": 4, "vectors": [fake_vector(t) for t in texts]}
+        with unittest.mock.patch.object(models, "MAX_EMBED_NUMBERS", 8), unittest.mock.patch.object(models, "embed", embed), \
+                unittest.mock.patch.object(vectors, "pack", counting_pack):
+            got = self.build(again=True)
+        self.assertGreater(len(calls), 3)                              # several calls, two texts at a time
+        self.assertEqual([p for _, p in calls], [sum(n for n, _ in calls[:i]) for i in range(len(calls))])   # each call finds the vectors of the earlier ones packed
+        self.assertEqual(sum(n for n, _ in calls), got["texts_sent"])
+
+    def test_every_vector_of_a_build_with_kept_and_made_vectors_is_the_packed_vector_of_its_text(self):
+        from engine.tests.test_models import fake_vector
+        self.build(again=True)
+        self.themed(rows_of(2, limits="one more limit"))
+        got = self.build()
+        self.assertGreater(got["kept"], 0)
+        self.assertGreater(got["made"], 0)
+        texts = {themevectors.sha256(t): t for t in self.sent()}
+        with closing(sqlite3.connect(self.path())) as conn:
+            rows = conn.execute("SELECT text_sha256, vector FROM vectors").fetchall()
+        self.assertEqual(len(rows), got["vectors"])
+        for sha, blob in rows:
+            self.assertEqual(blob, struct.pack("<4f", *fake_vector(texts[sha])))
 
 
 class CommandTest(SearchCase):
