@@ -122,6 +122,11 @@ What is built now, from the plan `2026-11-11-run-the-theme-extraction-over-the-l
 - **[proposed]** A book that fails does not end the run, and is tried once more after the last book. Three books in a row failing for a reason that is not a refused answer
   stop the run (a server that is down would fail every book), and the books not reached stay waiting. A book that is no longer active, or whose conversion changed since
   the plan, is dropped and reported. A run stopped at any point and run again makes no book twice whose record was saved.
+- **[proposed]** The answer for each piece of a book that the extraction accepted is kept in a journal in the index root (`card-runs/theme-journal/<book>-<version>.json`) as soon as it is
+  accepted, so that a book that fails, or a run that is stopped, loses no piece that was answered: the next go asks the model only for the pieces with no answer. A saved answer is used only
+  for the same title, words to avoid, text, piece number and number of pieces, the same model entry and model, and the same prompt version of the extraction, and only if it passes the
+  checks a fresh answer passes; the first piece for which it does not hold, and every one after it, is asked for again. The journal is removed when the generation of the book is filed or the
+  book is dropped, and kept when the book fails. It is derived data, and the check of the themes is not kept in it.
 - **[proposed]** The theme run and the card queue share one lock, so they never run together against one index root. The lock does not guard a second index root
   or another machine that uses the same model server.
 

@@ -1131,8 +1131,8 @@ the one of higher confidence is kept. Every non-empty part of a description is m
 check has yet shown that the excerpt supports it. A reply refused for its shape is asked once more with the reason, as for cards, and the
 refusal is kept in the folder `refused` of the index root; a reply of more than 24 themes is a runaway, is not asked again, makes nothing and
 is kept aside (`ThemeRefused`). A book of more than 150 pieces is refused, not sampled. Read-only, on the 175 versions of the library that
-have a conversion and a card: a median of 3 pieces, at most 24, 559 in all, so one call for each piece would be 559 calls. There is no
-journal, so a run that stops makes the book again from its first piece, and the calls already paid for are lost.
+have a conversion and a card: a median of 3 pieces, at most 24, 559 in all, so one call for each piece would be 559 calls. Called with
+no journal, a run that stops makes the book again from its first piece and the calls already paid for are lost; a run over the library gives each book a journal (see "A run over the library").
 The answer check of the model layer refuses an empty item in a list, so the prompt asks for the word `none` for a part that the text
 says nothing about, and code reads `none` (and `n/a`, `not stated`, `not applicable`, `nothing`, with spaces and full stops around)
 as no text. Known limits: a section whose heading path is the same as another's (two sections called "Notes") cannot be named by a
@@ -1186,7 +1186,16 @@ and whose record was not yet saved when the program was killed is made again as 
 a retry: a book that failed once before the stop gets one more try when the run is run again, and if it fails again it is `failed` and needs a new `plan`. The models and
 prompt versions in the config must be those of the plan (otherwise it is refused: plan again). There is one lock for the card queue and for a theme run, so they cannot run
 at the same time. The command prints the report (the counts, the sums of the books done and the items) and exits with 1 when a book failed or the run stopped, and with 2 on a refusal.
-*`status`* shows where each book has got to, with no text. The library is counted for the words of the fields once for a whole run.
+The answer for each piece that the extraction accepted is kept as it is accepted in a journal of the book, `theme-journal/<book>-<version>.json` in the folder `card-runs` of the index root
+(a private file, written as the other files of the index root are; derived, so it can be deleted at any time). A book that fails, or a run that is stopped or killed, keeps it, and the next
+pass or run asks the model only for the pieces that have no answer. An answer is used again only for the same title, words to avoid, text, piece number and number of pieces, the same entry
+and model of your config and the same prompt version, and only if it passes the checks of a fresh answer; the first piece for which it does not hold, and the ones after it, are asked for
+again. The check of the themes is asked for again every time. The journal is removed when the book's generation is filed or the book is dropped. A journal that cannot be read is not used. If the program is killed after the generation is filed and before the
+journal is removed, the journal stays, and a later `plan --again` of that book reuses its saved answers (they match the model, the prompt version and the inputs) and asks only for the checks again; delete the file to make the extraction afresh.
+The numbers of a book made in more than one go (`calls`, `input_tokens` and `output_tokens` of its stats) count the answers of all its pieces, those from the journal too; its
+`seconds` are the time of the go that finished it. If the journal cannot be written, the book fails with `failed` (the answer would otherwise be lost without a word).
+*`status`* shows where each book has got to, with no text, and for a book that is waiting or failed `kept`, the number of its pieces that are in its journal (0 if there is none, or it cannot
+be read; `null` for a book that is done or dropped). The library is counted for the words of the fields once for a whole run.
 
 ## Converting what is captured
 

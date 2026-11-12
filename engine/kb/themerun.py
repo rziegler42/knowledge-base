@@ -20,7 +20,7 @@ import secrets
 import time
 from collections import Counter
 
-from . import KbError, card, cardstate, convert, ids, models, textutil, theme, themecheck, themeextract
+from . import KbError, card, cardstate, convert, ids, models, textutil, theme, themecheck, themeextract, themejournal
 
 FORMAT = 1
 RECORD = "theme-run.json"
@@ -155,7 +155,7 @@ def _run_names(index_root):
             os.close(fd)
     finally:
         os.close(root_fd)
-    return sorted((n for n in names if cardstate._RUN.fullmatch(n)), reverse=True)
+    return sorted((n for n in names if cardstate._RUN.fullmatch(n) and n != themejournal.RUN), reverse=True)   # the folder of the journals holds no run
 
 
 def _earlier_records(index_root):
@@ -349,6 +349,26 @@ def _items(rec):
     return [{k: i[k] for k in ("book_id", "version_id", "pieces", "status", "generation", "reason", "attempts", "made", "stats")} for i in rec["items"]]
 
 
+def _forget(index_root, book_id, version_id):
+    """Remove the journal of the pieces of a book, if it has one. A journal that cannot be removed is left: it is derived data, and a later go
+    finds it stale or uses it only for the same pieces."""
+    try:
+        themejournal.remove(index_root, book_id, version_id)
+    except (KbError, OSError):
+        pass
+
+
+def _kept(index_root, item):
+    """How many pieces of a book that is not done are in its journal (0 if there is none or it cannot be read), or None for a book that is
+    done or dropped."""
+    if item["status"] not in ("waiting", "failed"):
+        return None
+    try:
+        return len(themejournal.read(index_root, item["book_id"], item["version_id"]) or [])
+    except KbError:
+        return 0
+
+
 def _serve(store, cfg, rec, item, frequencies, launcher, root):
     """Make, check and file the themes of one book, and say what became of it in the item. Returns "done", "dropped", "refused", "failed" or
     "unexpected". A reason is a fixed kind (`REASON_KINDS`) or the name of the kind of an unexpected error, never a message."""
@@ -360,7 +380,9 @@ def _serve(store, cfg, rec, item, frequencies, launcher, root):
 
     def drop(reason):
         item["status"], item["reason"] = "dropped", reason
+        _forget(index_root, book_id, version_id)   # a book that is dropped is not made from its pieces later
         return "dropped"
+    index_root = store.cfg["index_root"]
     book_id, version_id = item["book_id"], item["version_id"]
     try:
         book = store.read_book(book_id)
@@ -370,12 +392,16 @@ def _serve(store, cfg, rec, item, frequencies, launcher, root):
         if not loaded or loaded[0] != item["conversion"]:
             return drop("conversion_changed")
         started = time.monotonic()
-        got = themecheck.make_and_check_for_version(store, cfg, book_id, version_id, launcher=launcher, root=root, frequencies=frequencies)
+        # the pieces already answered, from a go that failed or was stopped, are not asked for again; a book that fails keeps them
+        journal = themeextract.PieceJournal.for_book(index_root, book_id, version_id)
+        got = themecheck.make_and_check_for_version(store, cfg, book_id, version_id, launcher=launcher, root=root, frequencies=frequencies,
+                                                    journal=journal)
         made, stats = _how_made(got, rec), _stats_of(got, time.monotonic() - started)
         done = {"status": "done", "generation": 1, "reason": "", "made": made, "stats": stats}
         _check_item({**item, **done})   # what the record will say is checked before anything is filed, so that a book is not filed and then failed
         done["generation"] = theme.file(store, got["generation"])
         item.update(done)
+        _forget(index_root, book_id, version_id)   # the pieces are in the generation now
         return "done"
     except themeextract.ThemeRefused:
         return fail("refused", "refused")
@@ -446,6 +472,8 @@ def status(store, run_id):
     if rec is None:
         raise KbError("there is no run with that name")
     items = _items(rec)
+    for each in items:   # the pieces of a book that is not done which are kept, so that the piece a book fails at is known
+        each["kept"] = _kept(store.cfg["index_root"], each)
     return {"run": rec["run"], "created": rec["created"], "again": rec["again"], "extraction": rec["extraction"], "check": rec["check"],
             "counts": _counts(rec), "totals": _totals(rec), "items": items, "pieces": sum(i["pieces"] for i in items),
             "pieces_done": sum(i["pieces"] for i in items if i["status"] == "done")}

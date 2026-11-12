@@ -10,9 +10,9 @@ from collections import Counter
 
 from engine.tests import ENGINE_DIR
 from engine.tests.test_themecheck import config
-from engine.tests.test_themeextract import Fake, VersionCase, row, values
+from engine.tests.test_themeextract import Fake, JournalFake, VersionCase, reply, row, uneven, values
 
-from kb import KbError, card, cardstate, models, theme, themecheck, themeextract, themerun
+from kb import KbError, card, cardstate, models, theme, themecheck, themeextract, themejournal, themerun
 from kb import __main__ as kbmain
 from kb import config as kbconfig
 
@@ -360,7 +360,8 @@ class RecordTest(PlanCase):
         self.assertEqual(rec["items"], [{"book_id": book, "version_id": version, "pieces": got["pieces"], "status": "waiting", "attempts": 0,
                                          "generation": None, "reason": "", "made": None,
                                          "conversion": themeextract.prepare(self.store, book)[2], "stats": None}])
-        raw = open(os.path.join(self.index_root(), cardstate.FOLDER, got["run"], themerun.RECORD)).read()
+        with open(os.path.join(self.index_root(), cardstate.FOLDER, got["run"], themerun.RECORD)) as f:
+            raw = f.read()
         for text in ("cools a system", "A paper on annealing", "Annealing", "search"):
             self.assertNotIn(text, raw)
         self.assertEqual(os.stat(os.path.join(self.index_root(), cardstate.FOLDER, got["run"], themerun.RECORD)).st_mode & 0o777, 0o600)
@@ -440,9 +441,9 @@ BAD = {**values(row()), "types": []}                                            
 REFUSED = [BAD, BAD]                                                              # refused, asked again, refused again: the book fails
 
 
-def scripted(*script):
+def scripted(*script, fake_class=Fake):
     """Stands in for `models.run_job`: a script of replies, exceptions (including an interrupt, which `Fake` would return as a reply), and the calls made."""
-    fake = Fake(*script)
+    fake = fake_class(*script)
 
     def call(*a, **k):
         if fake.script and isinstance(fake.script[0], BaseException) and not isinstance(fake.script[0], Exception):
@@ -474,7 +475,8 @@ class RunCase(PlanCase):
         return {i["book_id"]: i for i in themerun.read_record(self.index_root(), run)["items"]}
 
     def raw(self, run):
-        return open(os.path.join(self.index_root(), cardstate.FOLDER, run, themerun.RECORD)).read()
+        with open(os.path.join(self.index_root(), cardstate.FOLDER, run, themerun.RECORD)) as f:
+            return f.read()
 
 
 class RunTest(RunCase):
@@ -763,6 +765,168 @@ class RunTest(RunCase):
         raw = self.raw(run)
         for text in ("annealing", "cools a system", "Stopping a search", "secret-xyz", "accept a worse state", "A paper"):
             self.assertNotIn(text, raw)
+
+
+SAYS = verdicts("supports", "supports", "supports", "supports")
+THREE = [reply(1), reply(2), reply(3), SAYS, SAYS, SAYS]   # a book of three pieces, one theme in each, and the three checks
+
+
+class JournalRunTest(RunCase):
+    """A book of three pieces (PIECE_BYTES is made small), made with a journal of its pieces."""
+
+    def setUp(self):
+        super().setUp()
+        patch = unittest.mock.patch.object(themeextract, "PIECE_BYTES", 260)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def run_j(self, run, script):
+        fake = scripted(*script, fake_class=JournalFake)
+        with unittest.mock.patch.object(models, "run_job", fake):
+            try:
+                return themerun.run(self.store, config(), run)
+            finally:
+                self.fake = fake
+
+    def journal(self, book):
+        return themejournal.read(self.index_root(), book, self.store.read_book(book)["current_version"])
+
+    def test_a_book_whose_third_piece_is_refused_keeps_two_pieces_and_the_second_pass_asks_for_the_third_only(self):
+        run, ids = self.planned(1)
+        self.assertEqual(self.items(run)[ids[0]]["pieces"], 3)
+        report = self.run_j(run, [reply(1), reply(2), uneven(), uneven(), reply(3), SAYS, SAYS, SAYS])
+        self.assertEqual((report["counts"]["done"], report["passes"], self.items(run)[ids[0]]["attempts"]), (1, 2, 1))
+        self.assertEqual(len(self.fake.calls), 8)
+        self.assertIn("piece 3 of 3", self.fake.calls[4]["prompt"])   # the second pass: the third piece, not the first
+        self.assertEqual([c["job"].name for c in self.fake.calls[4:]], ["theme", "theme-check", "theme-check", "theme-check"])
+        generation = theme.read(self.store, ids[0], self.store.read_book(ids[0])["current_version"])[1]
+        self.assertEqual([t["title"] for t in generation["themes"]], ["Theme 1", "Theme 2", "Theme 3"])
+        self.assertIsNone(self.journal(ids[0]))   # a book that is done has no journal
+
+    def test_a_book_made_in_two_goes_has_the_stats_of_a_book_made_in_one(self):
+        run, ids = self.planned(2)
+        # the first book is refused at its third piece, the second is made whole, then the first is made from its third piece
+        self.run_j(run, [reply(1), reply(2), uneven(), uneven(), *THREE, reply(3), SAYS, SAYS, SAYS])
+        broken, whole = self.items(run)[ids[0]], self.items(run)[ids[1]]
+        self.assertEqual((broken["status"], whole["status"]), ("done", "done"))
+        for key in ("themes", "pieces", "calls", "stated", "inferred", "input_tokens", "output_tokens", "dropped", "flags"):
+            self.assertEqual(broken["stats"][key], whole["stats"][key], key)
+        self.assertEqual(set(broken), set(item(ids[0], "v1")))   # the record has the keys it had
+
+    def test_a_book_that_fails_in_both_passes_keeps_its_pieces(self):
+        run, ids = self.planned(1)
+        report = self.run_j(run, [reply(1), reply(2), uneven(), uneven(), uneven(), uneven()])
+        self.assertEqual((report["counts"]["failed"], self.items(run)[ids[0]]["reason"]), (1, "refused"))
+        self.assertEqual([e["piece"] for e in self.journal(ids[0])], [1, 2])
+        self.assertEqual(themerun.status(self.store, run)["items"][0]["kept"], 2)
+
+    def test_a_run_that_is_killed_leaves_a_journal_and_the_next_run_asks_from_the_piece_it_had_not_got(self):
+        run, ids = self.planned(1)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_j(run, [reply(1), reply(2), KeyboardInterrupt()])
+        self.assertEqual([e["piece"] for e in self.journal(ids[0])], [1, 2])
+        self.assertEqual(themerun.status(self.store, run)["items"][0]["kept"], 2)
+        report = self.run_j(run, [reply(3), SAYS, SAYS, SAYS])
+        self.assertEqual(report["counts"]["done"], 1)
+        self.assertEqual(len(self.fake.calls), 4)
+        self.assertIsNone(self.journal(ids[0]))
+
+    def interrupted(self):
+        """A run of one book killed after its second piece: the run and the book."""
+        run, ids = self.planned(1)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_j(run, [reply(1), reply(2), KeyboardInterrupt()])
+        return run, ids[0]
+
+    def test_a_journal_is_used_by_a_run_planned_again_for_the_book(self):
+        run, book = self.interrupted()
+        again = themerun.plan(self.store, config(), book_ids=[book])["run"]
+        self.run_j(again, [reply(3), SAYS, SAYS, SAYS])
+        self.assertEqual(len(self.fake.calls), 4)
+        self.assertIsNone(self.journal(book))
+
+    def test_a_book_that_is_no_longer_active_is_dropped_and_has_no_journal_left(self):
+        run, book = self.interrupted()
+        self.assertEqual(len(self.journal(book)), 2)
+        self.store.set_state(book, "weeded")
+        report = self.run_j(run, [])
+        self.assertEqual(report["counts"]["dropped"], 1)
+        self.assertIsNone(self.journal(book))
+        self.assertEqual(self.fake.calls, [])
+
+    def test_a_book_whose_conversion_changed_is_dropped_and_has_no_journal_left(self):
+        run, book = self.interrupted()
+        rec = themerun.read_record(self.index_root(), run)
+        rec["items"][0]["conversion"] = {"tool": "other", "version": "1", "generation": 9}
+        themerun.write_record(self.index_root(), rec)
+        report = self.run_j(run, [])
+        self.assertEqual(report["counts"]["dropped"], 1)
+        self.assertIsNone(self.journal(book))
+        self.assertEqual(self.fake.calls, [])
+
+    def test_a_journal_that_cannot_be_read_is_not_used_and_does_not_stop_the_run(self):
+        run, ids = self.planned(1)
+        book = ids[0]
+        version = self.store.read_book(book)["current_version"]
+        entry = {"piece": 1, "key": "a" * 64, "values": {"titles": ["x"]}, "record": {"model": "m1:latest", "registry": "themer", "prompt_version": "v1",
+                                                                                   "date": "2026-11-12T10:00:00+00:00", "input_tokens": 1, "output_tokens": 1}}
+        themejournal.write(self.index_root(), book, version, [entry])
+        os.chmod(os.path.join(self.index_root(), cardstate.FOLDER, themejournal.RUN, f"{book}-{version}.json"), 0o644)   # others can read it: refused
+        self.assertEqual(themeextract.PieceJournal.for_book(self.index_root(), book, version).entries, [])   # the file is not used
+        report = self.run_j(run, THREE)
+        self.assertEqual(report["counts"]["done"], 1)
+        self.assertEqual(len(self.fake.calls), 6)
+        self.assertIsNone(self.journal(book))
+
+    def test_a_journal_that_cannot_be_removed_does_not_fail_a_book_that_is_done(self):
+        run, ids = self.planned(1)
+        with unittest.mock.patch.object(themejournal, "remove", side_effect=KbError("no")):
+            report = self.run_j(run, THREE)
+        self.assertEqual((report["counts"]["done"], report["counts"]["failed"]), (1, 0))
+
+    def test_a_journal_left_after_a_book_was_filed_is_used_by_a_run_with_again_and_only_the_checks_are_asked_for(self):
+        # the window the README names: killed after the generation was filed and before the journal was removed
+        run, ids = self.planned(1)
+        self.run_j(run, THREE)
+        book = ids[0]
+        version = self.store.read_book(book)["current_version"]
+        with unittest.mock.patch.object(themejournal, "remove"):   # as if the program had been killed before it
+            again = themerun.plan(self.store, config(), book_ids=[book], again=True)["run"]
+            self.run_j(again, THREE)
+        self.assertEqual(len(themejournal.read(self.index_root(), book, version)), 3)
+        third = themerun.plan(self.store, config(), book_ids=[book], again=True)["run"]
+        self.run_j(third, [SAYS, SAYS, SAYS])
+        self.assertEqual([c["job"].name for c in self.fake.calls], ["theme-check"] * 3)
+        self.assertIsNone(self.journal(book))
+        self.assertEqual(theme.generations(self.store, book, version), [1, 2, 3])
+
+    def test_the_folder_of_the_journals_is_not_taken_for_a_run(self):
+        run, ids = self.planned(1)
+        self.run_j(run, [reply(1), reply(2), uneven(), uneven(), uneven(), uneven()])
+        self.assertTrue(os.path.isdir(os.path.join(self.index_root(), cardstate.FOLDER, themejournal.RUN)))
+        self.assertNotIn(themejournal.RUN, themerun._run_names(self.index_root()))
+        self.assertEqual(themerun._run_names(self.index_root()), [run])
+
+    def test_status_says_how_many_pieces_are_kept_of_a_book_that_is_not_done_and_nothing_for_one_that_is(self):
+        run, ids = self.planned(2)
+        with unittest.mock.patch.object(themerun, "RETRIES", 0):
+            self.run_j(run, [reply(1), reply(2), uneven(), uneven(), *THREE])
+        got = themerun.status(self.store, run)
+        self.assertEqual([(i["status"], i["kept"]) for i in got["items"]], [("failed", 2), ("done", None)])
+        self.assertNotIn("annealing", json.dumps(got))
+        self.assertNotIn("Theme 1", json.dumps(got))
+
+    def test_status_of_a_waiting_book_with_no_journal_keeps_none(self):
+        run, ids = self.planned(1)
+        self.assertEqual(themerun.status(self.store, run)["items"][0]["kept"], 0)
+
+    def test_status_does_not_stop_at_a_journal_that_cannot_be_read(self):
+        run, ids = self.planned(1)
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_j(run, [reply(1), KeyboardInterrupt()])
+        version = self.store.read_book(ids[0])["current_version"]
+        os.chmod(os.path.join(self.index_root(), cardstate.FOLDER, themejournal.RUN, f"{ids[0]}-{version}.json"), 0o644)
+        self.assertEqual(themerun.status(self.store, run)["items"][0]["kept"], 0)
 
 
 class StatusTest(RunCase):
