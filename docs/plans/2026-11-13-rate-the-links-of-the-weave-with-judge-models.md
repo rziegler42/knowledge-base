@@ -179,4 +179,32 @@ of the agreement are recomputed from the saved replies by a script other than th
 
 ## Result
 
-Empty until work starts.
+### Increment A (the sample, the prompt and a dry run; committed)
+
+- **Done.** A script outside the repository (`rate_links.py`, with its tests `test_rate_links.py`, the breaks `breaks_rate_links.py` and the dry run `dryrun_rate_links.py`, all in the session's scratchpad) that
+  reads the plan's prompt block, builds the prompt for a pair, parses a judge's reply, asks a judge (a stand-in for `kb.models.call` in the tests) with one more ask, and draws the sample.
+  **Script sha256** `2af3e29fcd09878aa7cfe5fd13fd49e4fa1c17c6edf31257c3cdb92d49cb6e98`; **prompt sha256** (the plan's block) `1af1eda17e445acbc406b39c47120040a7a727bd7d37cf44858806efbfe5f551`;
+  `test_rate_links.py` sha256 `18cb72f04c6ba6ac4315024b46203b7a687cf98eefe4fa442a6eeb2067c2fb78`.
+- **The dry run on the real weave (2026-11-13; generation 1; read only; no model called):** 30 themes drawn with `random.Random(20261113)`, **269 pairs** (the plan said about 270), each pair once;
+  pairs by band from the farthest 51, 74, 76 and 68; each sampled theme has 2 to 12 of the links; no pair has both of its themes in the sample; the owner's 20 pairs are 5, 5, 5 and 5 over the bands, and
+  are shown in a seeded shuffled order that follows neither the ids nor the bands; no text was missing from the vectors file and none was withheld or empty. The sample (keys, numbers, the weave's
+  generation and build times, the Python version and the counts; no text) is outside the repository, mode 600: `rate-links-sample-a01c8fd13b00.json`, sha256
+  `a01c8fd13b003930de8f2ea473115d7aefee938627ee7afed3f2ea57db045e15`. The prompts of three pairs (1, 135 and 269) were shown to the owner.
+- **The rules as built.** A rating is exactly one JSON object with the keys `label` (one of the three) and `reason` (not empty, at most 25 words, with no character of a category that starts with C), each
+  key once, and nothing before or after it, in a reply of at most 4,000 characters; anything else is asked once more and is then a failure with no label. A call that raises (a time limit, a server down)
+  counts as an ask and is recorded apart (`failure_kind`: `unparseable`, `call_error` or `mixed`) so that Increment B reports the two kinds separately. The texts of a pair are put on one line before they
+  go into the prompt, and the prompt is refused unless the plan's block ends with exactly the four lines the script fills in, so that the hash of the block is the hash of what is sent.
+- **Verification as run.** `engine/.venv/bin/python -W error::ResourceWarning -I test_rate_links.py`: **39 tests OK** (written after the first version, which had 27; the second look added 12). **24 deliberate
+  breaks, each caught** (the script restored byte for byte, sha256 prefix `2af3e29fcd09`): text around the JSON accepted; extra keys; a label not checked; the reason length, an empty reason, the reply length
+  not limited; no second ask, or a third; a failure given a label; a key twice accepted; a reason with a control character or a surrogate accepted; texts not on one line; a placeholder or the tail of
+  the template not checked; a call that raises stopping the run; the failure kind always the same; the seed not used for the order of A and B; a pair counted twice; a pair stored twice with other
+  numbers not counted; the owner pairs not spread over the bands; the owner order not shuffled; a fence with a language not seen; the weave identity not kept. Several tests first passed for the wrong
+  reason (a JSON text with a raw control character is invalid anyway; the owner order differed from the sorted ids anyway; the placeholder count was covered by the tail check) and were rewritten until the
+  breaks were caught. `wb run code-work check`: no problems.
+- **Second look.** The `reviewer` agent (read only, given the script pasted, since it is outside the project): no blocking finding; ten not blocking, of which eight were applied (the prompt hash did not
+  cover the lines the script fills in; a text could start a line of its own and imitate a label; a key twice was accepted with the last value; a reason with a lone surrogate or an escape code would
+  stop a write; a call that raises would stop the run; a pair stored twice with other numbers was resolved silently; the sample did not record the weave's identity or the Python version; the owner would
+  have seen the pairs in id order; the fences of the plan were paired by one regular expression). Two were not changes: the 10th (the check result was not in the message; it is above), and the
+  note that the owner's 20 pairs are drawn uniformly within a band, so a theme with 12 links is likely to appear more than once (a limit of the sample, named here).
+- **Not run.** Any call to a model (Increment B); the call `kb.models.call` itself (its return and the errors it raises are as the engine documents; the stand-in in the tests returns the shape
+  `{"reply": ...}`); a test of the dry run's own script beyond its run. The library and the config were only read. No push.
