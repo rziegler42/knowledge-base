@@ -329,3 +329,43 @@ conversion are not touched, and the tests of the extractor run in A because the 
   `engine/.venv` folder, where numpy now is; the extractor does not import it, and no exposure was named.
 - **Not run.** The tests of the other engine modules (nothing but the lock and two README sentences changed, and no code imports numpy); a
   security review (not asked). No push.
+
+### Increment B (the selection of links, as pure functions; committed)
+
+- **Done.** `engine/kb/weave.py` (new, the selection only, no file and no store) and `engine/tests/test_weave.py` (new). `select(keys, books,
+  summaries, methods, slots=3, top=300, block=256, use_floor=True)` returns the links, the three band edges, the median, the number of pairs and the
+  themes left out; `exact_ranks` and `exact_quantiles` find the median and the edges exactly (the closeness is an integer in billionths, a radix
+  selection in two passes with memory fixed by the bins: 16 top bits and 15 low bits, because the shifted range is below 2^31, where the plan said
+  "the next 16 bits"; interpolation as `numpy.quantile` does it). numpy is imported inside the functions, so `import kb.weave` works without it.
+- **Tests, first.** Written before the module and seen to fail (no module `kb.weave`). 32 tests: the exact selection against sorted lists (spread
+  values, extremes, all alike, within 1e-6, repeated ranks, out of range, and the memory with 100 times the values, all alike), against
+  `numpy.quantile` and `numpy.median` (odd and even counts, repeated values); hand-worked cases (one book, the floor and a pair exactly at the median,
+  values 0.0004 either side of the median and of an edge, a pair exactly on an edge, three slots, one theme of a book in a band, strongest first, ties by
+  keys, slots and `top` changed, themes left out, bad input, huge and tiny vectors, no numpy); and a plain-Python reference written from the rule, on
+  random themes with and without the floor, with two sizes of `top`, with blocks of 1 to 1000, and with the themes in any order.
+  `engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_weave`: **32 tests OK**; with plain `python3` the 32 are skipped with
+  a reason.
+- **Deliberate breaks.** 27, each caught, the file restored byte for byte (sha256 prefix `fd00df042a4c`): no floor; the floor at the wrong side; a pair
+  exactly at the median linked; one slot too many and too few; a pair on an edge put in the band below; wrong edges; two links to one book in a band;
+  not strongest first; pairs of one book; the edges and median over pairs of one book; ties by input order; the median and the edges from a coarse
+  estimate; no interpolation; the selection's values collected whole (the memory test); its second pass left out; ties in what a theme puts forward to
+  the last key; the closeness floored and not rounded; vectors not made unit and not scaled by their largest entry; the cut `top` not applied;
+  unhashable books not refused; the pair count including pairs of one book; a left-out theme not named; a rank or a value out of range not refused.
+- **A timing run on random vectors** (not the library; 1,800 themes of 2,560 numbers, 10 per book): 10.0 seconds and a peak of 381 MB traced, 10,778
+  links. The spec's 1 second was measured with another procedure (float32 products, no exact selection, 100 candidates for each theme and band, vectors already in memory); this one makes three passes of double-precision products and prepares its inputs, and the comparison on the real library is for Increment F.
+- **Review.** The `reviewer` agent (read only): no blocking finding. Applied: the unused `itertools` import removed; vectors with entries near 1e200
+  or 1e-200 are scaled by their largest entry before the length is taken, so they are not wrongly left out; unhashable books are refused with a
+  message; a test of pairs 0.0004 either side of an edge, which the plan asked for and I had only for the median. Recorded, not changed:
+  (1) **`top` is a bound that neither the plan nor the spec states.** Each theme puts forward only its 300 closest partners in each band, so memory
+  grows with the number of themes and not with its square; a theme whose candidates in a band are all taken gets no further link there even if
+  other partners are free (the spec says the themes "take their next candidate"). The module says so in its docstring. The plain-Python reference
+  uses the same cut, so the tests cannot show how often it bites; on the real library it can be seen by building with `top` at the number of themes
+  and comparing, which Increment F can do. **The owner's decision (2026-11-13), on the agent's recommendation: accept `top` as a recorded
+  bound**, to be measured in Increment F by building once with `top` 300 and once with `top` at the number of themes and comparing the links and the themes with
+  none in a band, and to be written into the spec at Increment C; the rule without the cut (rounds of further candidates for themes with free slots) is a change
+  of the plan, to be brought to the owner only if that comparison shows the cut changes real results. (2) A pair exactly on an edge is put in the band above it; the
+  tests pin it and the spec should say so, in Increment C. (3) The closeness of a pair is worked out from the row of one end for the links and from
+  the upper triangle for the median and the edges; a BLAS that sums in another order could differ by 1e-16, and a pair within that distance of a
+  half billionth could then carry another value; with the same block size the result is the same every time, and the docstring says so.
+- **Not run.** Any run on the real library (Increment F); the tests of the other engine modules (nothing else imports `weave`); a security review
+  (not asked: the module is pure functions of numbers, with no file, subprocess or network). No push.
