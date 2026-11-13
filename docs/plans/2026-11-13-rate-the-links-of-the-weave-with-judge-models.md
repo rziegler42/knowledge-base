@@ -244,3 +244,48 @@ of the agreement are recomputed from the saved replies by a script other than th
   failure kinds are both 0, the call before the owner's word is recorded, the scripts are tied to Increment A's, the estimate's error is stated, and the limits for Increment D (points 1 to 4 above); point 5
   was counted from the files after its remark.
 - **Not run.** Any other order of A and B, a second run for repeatability, any other prompt (all named as untested); the owner's rating and Codex (Increment C). No push.
+
+### Increment C (the owner's blind rating and the Codex spot check; committed)
+
+- **Step 1, the owner's rating (2026-11-13).** The 20 pairs of the sample's `owner_order` were shown in four batches of five with the plan's three definitions, as titles and method sentences only (no score,
+  band, judge label or book name), and the owner answered each batch; the answers were recorded as given, with the owner's words, in a mode 600 file outside the repository (sha256
+  `f31c26db7bd72bb2d2300a4a96942a05d2e7d8c2f7699e74c2a37544fd552672`): **11 unrelated, 8 related, 1 same_mechanism.** The owner's one `same_mechanism` pair (genetic algorithms with computational
+  selection principles) was labelled the same by both local judges and by Codex.
+- **Step 2, what was sent to Codex, with the owner's word ("run it", after being told what is sent).** 31 prompts, one call each, the prompt on standard input: an **invented pair** first (merge sort and
+  the closest pair of points; 869 bytes; no text of the library; sent as a test of the form of the call, and announced to the owner in the request), then the **30 pairs** (the owner's 20 and 10 drawn with seed
+  20261113 from the **64 pairs outside the owner's 20 on which both local judges were valid and differed**; 766 to 1,029 bytes each, 26,914 bytes in all). The prompt hash of each of the 30 equals the hash of
+  the judges' prompt for the same pair. Each prompt is the plan's prompt block with two titles and two method sentences (text written by a model from the owner's books); no ids, scores, bands, judge labels,
+  the owner's ratings or book titles. To `gpt-5.6-terra` at medium effort through the project's `ask-codex` bridge, as `.workbench/review.json` names them, started by a script (`wb run ask-codex ask` once per
+  prompt, with the prompt on standard input; not a Bash call of the form the plan names, which cannot carry a prompt on standard input). The Codex service may keep what it received; the owner was told.
+- **What went wrong first, and the correction the owner was given.** The first run was refused locally by the bridge before any contact with Codex (the bridge takes a `--root` only inside the project, and mine was
+  in the scratchpad), so nothing was sent; the plan's rule about a refusal by the gate did not apply (it was the bridge's rule) and the form was changed on the owner's word, not retried unchanged. The owner was then
+  told that an earlier statement of mine ("Codex runs in an empty folder so it can read nothing of the project") had been **too strong**: the bridge starts Codex read-only, and the root only sets where it starts;
+  it does not wall off other files that the process can read. The owner chose to run with an empty folder created inside the project (and removed afterwards; the working tree stayed clean). Whether Codex could
+  have read other files was **not tested** here (the sandbox is as the bridge states it), and nothing in the replies shows that it did (each reply is one JSON object with a label and a reason); the file of replies
+  does not record the model name the bridge reported or the token counts, so what answered is "what the bridge was asked for".
+- **Outcome.** The invented pair was rated `same_mechanism`; then all 30 pairs were rated, 0 failures (0 `unparseable`, 0 `call_error`), none asked twice, 4.3 s a pair on average and at most 6.15 s. Codex's labels on
+  the 30: `same_mechanism` 5, `related` 11, `unrelated` 14. Files (outside the repository, mode 600): Codex replies `rate-links-replies-codex-a01c8fd13b00.jsonl` sha256
+  `11b8be5adec64eb54c3f1329f05d52668e01132cc439c07b50ee968534687434`.
+- **Agreement with the owner, on the owner's 20 (equal pairs, Cohen's kappa):** Codex 17 (0.85), 0.733; `gptoss` 16 (0.80), 0.633; `checker` 14 (0.70), 0.388. Codex against the owner, owner in the rows: `related`
+  2 same, 5 related, 1 unrelated; `unrelated` 11 unrelated; `same_mechanism` 1 same. **Between the models, on the owner's 20:** Codex and `gptoss` 15 equal (kappa 0.545); Codex and `checker` 14 (0.344);
+  `gptoss` and `checker` 15 (0.451). All three models are equal on 12 of the 20, and all 12 are equal to the owner (10 of them `unrelated`, one `related`, one the `same_mechanism` pair). **On the 10 extra pairs, where the local
+  judges differ by construction,** Codex equals `gptoss` on 5 (kappa 0.038) and `checker` on 4 (0.167); 9 of the 10 differ between related and unrelated; Codex said `related` on 6, `unrelated` on 2, `same_mechanism`
+  on 2. **On all 30,** Codex against `gptoss` 20 equal (0.451) and against `checker` 18 (0.281); these are not like for like (on the 10 extra Codex can equal at most one of the two), and are not the headline.
+- **Verification as run.** The Codex runner's 8 tests (a stand-in for the subprocess: the prompt on standard input and not in the arguments, the root, the model and the effort equal to `.workbench/review.json`, a refusal
+  or no JSON raised and recorded as a call error, the bridge's refusal text kept in the error, the choice of the pairs) pass. The agreement figures were recomputed by `verify_c.py`, which uses `verify_b.py` and not
+  `analyze_b.py`: every figure above that is a count or a kappa was reproduced (the owner's 20: 16, 14, 17 equal; kappas 0.633, 0.388, 0.733). `wb run code-work check`: no problems. Scripts (sha256): `run_codex.py`
+  `24aca72d126820d83787c401de6fb8c5e02ba83ab801a6a1d1bb51c26359923c`; `test_run_codex.py` `bc8baa824dda1ea85293a5cb9eefd34c11a26687e139e61838fc58fe1e31f46e`; `show_owner_pairs.py`
+  `bac5e0f993f316cb331e763b2fc55adb9e9f76fb6e4e6de0e6d880257f96720c`; `record_owner.py` `0801991c4eb1031fb006354e44d434b77eedf0791a2b57f76111e125ece745e6`; `verify_c.py`
+  `6a841ed4118876b1752b0408bd5dfd327660fcc8834f2343145fb7b634df8f77`; `rate_links.py` and `run_judges.py` are unchanged from Increments A and B.
+- **What the figures support, and what Increment D must not claim.** (1) On 20 pairs, Codex 17, `gptoss` 16 and `checker` 14 differ by one to three pairs and the kappas have wide uncertainty that was not computed:
+  the figures show at most that `checker` agrees least with the owner; they do not rank Codex above `gptoss`, and they do not say who is right where a model and the owner differ (the owner is one rater, and the ratings
+  are a reading, not the truth). (2) Nothing here is an accuracy for `same_mechanism`: the owner gave one such label, and Codex said `same_mechanism` on 3 of the owner's 20 (two where the owner said `related`), which
+  is over-calling shown by two pairs and not a rate. (3) The owner's 20 were spread over the four bands and drawn uniformly within a band, from 30 themes with up to 12 links each: they are not independent and say
+  nothing about the weave as a whole, and the labels of the 30 (5, 11, 14) are not a share of the weave (20 spread over the bands, and 10 chosen for disagreement). (4) The judges and Codex may share biases; Codex
+  agreeing with the owner does not validate the local judges. (5) One prompt, one order, one run for each model; repeatability and the other order were not tested. (6) The unanimous 12 are dominated by `unrelated`
+  (10 of 12). (7) The timing says nothing about quality. Increment D must therefore rest on `same_mechanism` or `related` with every group size named, and must not say that closeness ranks real matches first (or the
+  reverse) from the owner's rating.
+- **Second look.** The `reviewer` agent (read only, given the facts since the files are outside the project): the arithmetic was checked by hand and agrees (the matrix, kappa 0.733 from the margins, the counts);
+  blocking for the wording of this Result only: the invented call, the exposure and the corrected statement (all above); not blocking and applied: the recomputation by a second script and the check, the changed form
+  taken on the owner's word, the 20 and the 10 extra reported apart, the claims D must not make, and the model name not recorded.
+- **Not run.** A repeat or the other order for any model; any rating by a second person; a test of what the Codex sandbox can read. No push.
