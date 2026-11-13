@@ -1,6 +1,6 @@
 # Link themes that work the same way, across fields
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-13
 Candidate: theme-weave#theme-links
 Specs: docs/specs/weave.md
@@ -640,3 +640,29 @@ conversion are not touched, and the tests of the extractor run in A because the 
 - **Verification as run.** `wb run code-work check` (checked 40 plans, no problems); each figure read against the output of the two scripts and against the reviewer's check. No test run: no code changed.
   The real library was not touched by this increment.
 - **Not run.** Anything on the real library; a test of where repeated repairs start to matter (not measured: only the end state of five was compared with a rebuild). No push.
+
+### The plan as a whole (completed 2026-11-13)
+
+Each completion criterion, with where its evidence is recorded. Increments A, B, C, D, E, E-A, F and G are each one local commit with the trailer `Plan: 2026-11-13-link-themes-that-work-the-same-way#<label>`.
+
+1. **A build makes a file whose links obey the slot rule and the floor, the same every time.** Increments B and C: the tests of selection against a reference, the tests of the file, and 30 deliberate breaks
+   of C (E-A adds 15). On the real library (F): 7,966 links, none with more than 12 on a theme, none under the floor (the lowest closeness is the median, 0.490, and a link must be above it); the
+   build over the real file and a build over a copy of the same file gave the same links.
+2. **The file says what it was made from.** Increment C (meta, every processed theme with its generation and hashes, the check on reading) and Increment E (a weave made from a vectors file that has
+   changed is said to be out of date); `theme-links status` on the real library on 2026-11-13: generation 1, built from the vectors of 2026-11-12, nothing waiting, nothing due.
+3. **`theme-links show`.** Increment D (cleaning and withholding as the search does, the bands, the closeness and the wording distance); the links of ten real themes were shown on 2026-11-13 with the
+   method text of both sides.
+4. **`status` and `repair`.** Increment E (the triggers, the refusals, one generation kept, a changed or removed book treated as removed and added again, a full build above 5 percent changed) and E-A (the
+   corrections of the security review); on the real library's file, on copies: a repair for new themes, five repairs in a row, books made again, and the refusal above 5 percent (F and G).
+5. **numpy only where the weave is built or repaired.** Increment A (the lock with the hash, and the install with the owner's word) and C (every module of `kb` imported with numpy made unavailable);
+   `engine/.venv/bin/python -c 'import numpy; print(numpy.__version__)'` printed `2.5.4` on 2026-11-13 after all the increments, which is the install check that the plan's verification asked to be rerun
+   after C.
+6. **The real library.** Increment F: one build with the owner's word, two new files in the index root (`weave-same-mechanism.sqlite`, `weave.lock`), the vectors file unchanged by its sha256, nothing sent
+   to any model, the figures recorded, and the owner's reading ("Keep the farthest band sparse. Keep weak links available for exploration. Treat the median as a provisional filter.").
+
+- **What was measured against what the plan assumed.** The spec's measurement gave 9,264 links before the floor and 4 or fewer themes with no link; the real build gave 9,263 links before the floor and
+  52 themes with no link after it (the floor leaves themes with none, which the plan said it would report). The farthest band is sparse (38 percent of themes have no link in it); the owner chose to keep
+  it so. A repair for new themes is close to a rebuild; a repair of changed themes is weak, so the 5 percent limit stays (Increment G).
+- **Left open, and recorded elsewhere.** Whether closeness ranks real same-mechanism matches first (ten themes were read; a larger rated test would say, and would send text to a second model, which the
+  owner would be told of first); the narrow-to-wide setting of the walk; whether to drop any of the seven theme texts; the other kinds of weave and the walk (the roadmap's candidates); no push yet.
+- **Not run.** Nothing wider than the increments' own verification, as the plan said. A security review of the corrections of E-A and of the documents of G was not asked for.
