@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "docs/plans/2026-11-13-link-themes-that-work-the-same-way.md: Increment B, step 2",
+      "problem": "The proposed exact quantile algorithm does not guarantee bounded memory. It collects the exact values in the histogram bin containing the desired rank, assuming they are few. Eligible pair scores can all fall in that bin, including for identical or tightly clustered vectors, so this collection can grow quadratically with the number of themes. This contradicts the stated memory constraint.",
+      "severity": "major",
+      "suggestion": "Specify an exact selection algorithm with a bounded-memory fallback for oversized bins, such as repeated refinement with explicit handling of equal values or external selection. Include a concentrated-score case that verifies the memory bound as well as the exact quantiles."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "One remaining defect: the exact quantile strategy can still require quadratic memory.",
+  "verdict": "changes_needed"
+}

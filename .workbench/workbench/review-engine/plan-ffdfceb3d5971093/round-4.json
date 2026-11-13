@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R4-F1",
+      "location": "docs/plans/2026-11-13-link-themes-that-work-the-same-way.md: Increment C step 2 and Increment E step 1",
+      "problem": "The weave stores only linked themes, while status treats every vector theme absent from the weave as awaiting repair. Themes processed successfully but left with no links by the median floor therefore remain pending forever. An old book containing such a theme can continually trigger repair, even immediately after a full build or successful repair.",
+      "severity": "major",
+      "suggestion": "Record all processed eligible themes, including those with zero links, with their generation and text hashes. Determine pending additions from that membership record, and count zero-link themes separately from themes awaiting processing."
+    }
+  ],
+  "format": 1,
+  "round": 4,
+  "summary": "The plan needs to distinguish processed themes with no links from new themes awaiting repair.",
+  "verdict": "changes_needed"
+}

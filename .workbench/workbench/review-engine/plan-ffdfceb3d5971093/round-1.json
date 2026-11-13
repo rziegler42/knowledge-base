@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "docs/plans/2026-11-13-link-themes-that-work-the-same-way.md:183-192 (Increment E)",
+      "problem": "The repair is specified to drop links for changed themes and then repair the weave. This conflicts with the weave spec's agreed batching rule: a change of theme generation requires a full rebuild, while repair is only for a batch of newly added books. Repairing after a changed generation while retaining the old band edges and median can produce a graph that is neither the required rebuild nor a valid incremental-addition repair.",
+      "severity": "major",
+      "suggestion": "Make `status`/`repair` refuse repair when any existing theme generation (or the vectors model, dimension, or prefix) has changed, report that a full `theme-links build` is required, and add tests for that refusal. Limit repair to newly added, otherwise unchanged themes."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan otherwise aligns with the named roadmap candidate and weave spec, but its changed-theme repair behavior conflicts with the spec's required full rebuild.",
+  "verdict": "changes_needed"
+}

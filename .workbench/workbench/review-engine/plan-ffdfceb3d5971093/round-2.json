@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-13-link-themes-that-work-the-same-way.md:113-118",
+      "problem": "Increment B permits a histogram estimate of the band quartiles and median with up to 0.001 error. That can classify a pair on the wrong side of the agreed median floor, contradicting both the weave spec’s requirement that links be above the median of all eligible pairs and this plan’s completion criterion that every link be closer than that median.",
+      "severity": "major",
+      "suggestion": "Require exact order statistics for the eligible pair values, or refine the bounded-memory selection until the exact rank boundaries are determined before accepting links. Test boundary values that would be misclassified by a 0.001 approximation."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan otherwise follows the named roadmap candidate and weave spec, but its approximate threshold calculation can violate the agreed link-selection rule.",
+  "verdict": "changes_needed"
+}

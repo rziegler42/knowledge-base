@@ -116,7 +116,8 @@ tested. It does not cover how themes are made or how the agent searches, which h
   search. A link depends on the two themes and not on any question. What depends on the agent's question, such as whether an
   ordinary search of it would have returned a theme, which links to follow, and the closeness of a theme to the question, is worked
   out at query time on top of the stored links. Stored links need no model call per pair, and a weave records the generation of
-  each theme it links, so that it is rebuilt when the themes change.
+  each theme it processed, those left with no link included, so that it is rebuilt when the themes change and a theme the floor left
+  with no link is not taken for one that is waiting.
 - **[proposed]** *Stage 0, no weave.* The agent restates the problem abstractly, splits it into sub-problems, and searches the
   neutral descriptions of themes across all shelves for each (`reading.md`). The cross-field experiment measures how far this goes,
   including the composite problem where a theme from each of three shelves is needed.
@@ -207,8 +208,11 @@ tested. It does not cover how themes are made or how the agent searches, which h
   happens: the new themes reach about 5 percent of the themes already linked, or 30 days have passed since the oldest unlinked book
   arrived, or the owner asks. A repair offers the candidate links of the new themes strongest first; a link takes a free slot, or
   replaces the weakest link of a full slot if it is stronger, and a theme that lost a link is refilled from its candidates. Each batch
-  makes one generation, and one previous generation is kept. A full rebuild is for a change of embedding model or theme generation,
-  or on the owner's word. The walk says how many themes are not yet linked. The numbers are guesses to tune in the plan.
+  makes one generation, and one previous generation is kept. A book whose themes changed, or that was taken out, is treated as
+  removed and added again (the owner, 2026-11-13): the links of its old themes are dropped, the themes that lost a link are refilled,
+  and its new themes are added as new. A full rebuild is for a change of embedding model, dimension or prefix, for a change of more
+  than about 5 percent of the themes in the weave at once (which is what a new theme generation of the whole library is), or on the
+  owner's word. The walk says how many themes are not yet linked. The numbers are guesses to tune in the plan.
 
 ### Using the weave at query time
 
