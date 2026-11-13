@@ -78,8 +78,10 @@ tested. It does not cover how themes are made or how the agent searches, which h
 - **[agreed]** A link made without a model judging the pair holds (the owner, 2026-11-13): its kind, the two themes, the structural
   closeness and the wording distance as numbers, which texts of the two themes matched and in which direction, and what lets the
   agent check it (the stated or inferred mark, the book's own words and the citation of each theme). It holds no model, prompt or date
-  of judging, because none judged it. The library never drops a link for looking weak or noisy, because what looks like noise to one
-  search may be a find for another; the agent decides what is worth pursuing.
+  of judging, because none judged it. The library never drops a link because it looks weak or noisy to a reader, because what looks
+  like noise to one search may be a find for another; the agent decides what is worth pursuing. The one rule that leaves a link out
+  for its closeness is the floor of strength under "Keeping the graph sparse", which is the weave's own measure and no judgment of
+  use.
 - **[agreed]** The weaves are separate (the owner, 2026-11-13): each is a set of links of one kind, with a score that means one
   thing, rebuilt on its own. The kinds are *alike*, *same mechanism*, *same problem*, *fit together* and *builds on* (positive), and
   *incompatible* and *disagrees* (negative). *Same problem* is the owner's addition to the first six: the problem is close across
@@ -168,11 +170,23 @@ tested. It does not cover how themes are made or how the agent searches, which h
 - **[agreed]** The reachability rule (the owner, 2026-11-13). In this rule a *link* is the line between two themes (this spec's
   *thread*) and a *weave* is a set of links of one kind. **Cap, for every weave:** no theme keeps more than a set number of links
   in all; when a theme is full, the themes that wanted it choose their next candidate, so that the cap holds back the generic
-  themes that a choice made for variety of distance piles links onto. A link is turned away because its theme is full and never
-  because it is weak. **Floor, for a directional weave only** (*fit together*, and *builds on* when it exists): a theme with fewer
+  themes that a choice made for variety of distance piles links onto. A link is turned away because its theme is full and not
+  because it is weak (the floor of strength below is a separate rule). **Floor on incoming links, for a directional weave only** (*fit together*, and *builds on* when it exists): a theme with fewer
   than a few incoming links is given some, chosen from the themes whose *provides* is closest to its *needs*. A symmetric weave
-  needs no floor, because its links can be followed both ways and a theme is reached by its own links. The numbers are set in the
-  plan; the measurement under "Evidence" suggests a cap near 60.
+  needs no such floor, because its links can be followed both ways and a theme is reached by its own links. For a symmetric weave
+  the cap is the slot rule below, which holds a theme to 12 links; the cap near 60 that the first measurement under "Evidence"
+  suggested, for a choice made without slots, is not needed. The numbers for a directional weave are set in the plan.
+- **[agreed]** The slot rule, which links a theme keeps (the owner, 2026-11-13). The links of a symmetric weave are two-way. Every
+  pair of themes of different books falls in one of four bands of wording distance, the quarters of the summary closeness over all
+  such pairs, and the edges of the bands are stored with the weave. Each theme has 3 slots in each band, so at most 12 links. A link
+  takes one slot at each end, a theme links to at most one theme of one book in a band, and links are accepted from the strongest
+  closeness of the weave's kind down (method closeness for *same mechanism*). When a theme's slots are full, the themes that wanted
+  it take their next candidate. Slots for a directional weave are not decided.
+- **[agreed]** The floor of strength (the owner, 2026-11-13). A link is kept only if its closeness for the weave's kind is above the
+  median closeness of all pairs of themes of different books, worked out for each weave. A pair no closer than a typical pair is not
+  a link of that kind, so it is not stored, and a theme may keep fewer than 12 links, most of all in the wording-farthest band. It
+  is the weave's own measure and not a judgment of whether a link is useful. The farthest band is to be checked for sparseness when
+  a weave is built.
 - **[idea]** The ledger records pairs judged unrelated as well as threads, so a pair is not paid for twice and can be judged again
   when the model or prompt improves.
 - **[proposed]** There is a bound on the threads per theme, large and never expected to be reached, to catch a runaway. Reaching it
@@ -188,6 +202,13 @@ tested. It does not cover how themes are made or how the agent searches, which h
   copy of the index matters most for them (`library.md`, "Backup").
 - **[proposed]** Threads are kept per generation of the weave, so a better prompt or model adds a generation and the old one can be
   compared and restored.
+- **[agreed]** Adding books (the owner, 2026-11-13). A full rebuild and every old generation kept at each new book would cost too
+  much over years of slow growth. New books wait in a list, and the weaves are repaired for the whole batch when the first of these
+  happens: the new themes reach about 5 percent of the themes already linked, or 30 days have passed since the oldest unlinked book
+  arrived, or the owner asks. A repair offers the candidate links of the new themes strongest first; a link takes a free slot, or
+  replaces the weakest link of a full slot if it is stronger, and a theme that lost a link is refilled from its candidates. Each batch
+  makes one generation, and one previous generation is kept. A full rebuild is for a change of embedding model or theme generation,
+  or on the owner's word. The walk says how many themes are not yet linked. The numbers are guesses to tune in the plan.
 
 ### Using the weave at query time
 
@@ -295,6 +316,19 @@ tested. It does not cover how themes are made or how the agent searches, which h
   *Genetic algorithm* and *Natural selection*, came out as close as the near pairs because the book on the first is written in the
   second field's words. Conclusion: the summary closeness is a usable stand-in for how far apart two themes are in wording, not a measure of field,
   and it needs the number and the texts beside it.
+- **[proposed]** The slot rule, the floor and adding books, measured on 2026-11-13 (read only, no call to any model; Python 3.15.0,
+  numpy 2.5.4; repository at `b6ffb09`) on the owner's local library, which is not in this repository, for a same-mechanism weave
+  over 1,805 themes with a summary and a method vector, in 173 books. The edges of the four bands were 0.316, 0.378 and 0.447.
+  With 3 slots in each band and every candidate considered, there were 9,264 links, no theme was left with none and 4 with one to
+  three, no theme had more than 12, and 391 themes (22 percent) had no link in the wording-farthest band. The median method
+  closeness of all pairs of themes of different books was 0.490, and 1,298 of the 9,264 links (14 percent) were no closer than that,
+  461 of 1,881 (25 percent) in the wording-farthest band. A full rebuild took about 1.0 second and a repair about 0.7 second. Taking
+  17 of the 173 books out and putting them back, 70 percent of the old links were in the full rebuild and 77 percent in the repair,
+  72 percent of the repair's links were in the rebuild, and the mean method closeness of a link was 0.618 for the repair against 0.624
+  for the rebuild. Adding books together replaced these shares of the old links: 1 book 2.6 percent (227 links), 3 books 6.6
+  percent, 9 books 13.7 percent, 17 books 22.8 percent, 35 books 37.6 percent (the average of 3 random samples), so a book costs
+  227 replaced links alone and 74 in a batch of 35. Not tested: the drift over many repairs in a row, a directional weave, and
+  whether links just above the median are useful.
 
 ## Acceptance criteria
 
