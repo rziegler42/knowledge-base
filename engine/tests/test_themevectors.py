@@ -761,6 +761,152 @@ class SearchTest(SearchCase):
         self.assertEqual(got["built"], self.meta()["built"])
 
 
+class PerBookCase(VectorsCase):
+    """Books with several themes each, built so that every theme has the score the test names (the query is [1, 0, 0, 0], the summary of a theme
+    is at that cosine to it, and every other text is orthogonal to it)."""
+
+    QUERY = "how to stop a search once it has settled"
+    BLOCKS = ["1", "2", "4", "5"]
+
+    def themes_of(self, name, n):
+        return [row(title=f"Theme {name}{i}", blocks=self.BLOCKS[i], summary=f"Summary of theme {name}{i}.", problem=f"problem {name}{i}",
+                    method=f"method {name}{i}", needs=f"needs {name}{i}", provides=f"provides {name}{i}") for i in range(n)]
+
+    def scored(self, scores):
+        self.build()
+        table, away = {self.QUERY: [1, 0, 0, 0]}, [0, 0, 1, 0]
+        for r in self.themes_read():
+            texts = themevectors.texts_of(r["theme"])
+            for text in texts.values():
+                table[text] = away
+            s = scores[r["theme"]["title"].split()[-1]]
+            table[texts["summary"]] = [s, math.sqrt(1 - s * s), 0, 0]
+        self.plan(table=table)
+        self.build(again=True)
+
+    def search(self, *args, **kw):
+        return themevectors.search(self.store.cfg["index_root"], self.mcfg, args[0] if args else self.QUERY, launcher=self.launcher, **kw)
+
+    @staticmethod
+    def names(got):
+        return [r["theme_title"].split()[-1] for r in got["results"]]
+
+
+class PerBookTest(PerBookCase):
+    """Three books: A with four themes, B with two, C with one; the ranking is A0 A1 A2 B0 A3 B1 C0."""
+
+    SCORES = {"A0": 0.95, "A1": 0.90, "A2": 0.85, "B0": 0.80, "A3": 0.75, "B1": 0.70, "C0": 0.65}
+    RANKING = ["A0", "A1", "A2", "B0", "A3", "B1", "C0"]
+
+    def setUp(self):
+        super().setUp()
+        self.books = {}
+        for name, n in (("A", 4), ("B", 2), ("C", 1)):
+            self.books[name] = self.themed(self.themes_of(name, n))[0]
+        self.scored(self.SCORES)
+
+    def test_with_the_limit_off_the_results_are_the_ranking_and_nothing_is_held_back(self):
+        got = self.search(per_book=0)
+        self.assertEqual(self.names(got), self.RANKING)
+        for result, name in zip(got["results"], self.RANKING):
+            self.assertAlmostEqual(result["score"], self.SCORES[name], places=6)
+        self.assertEqual((got["per_book"], got["held_back"]), (0, 0))
+
+    def test_a_limit_of_two_keeps_two_themes_of_a_book_in_the_order_of_the_ranking_and_says_what_was_held_back(self):
+        got = self.search(per_book=2)
+        self.assertEqual(self.names(got), ["A0", "A1", "B0", "B1", "C0"])
+        self.assertEqual((got["per_book"], got["held_back"]), (2, 2))          # A2 and A3
+
+    def test_a_limit_of_one_keeps_the_best_theme_of_each_book(self):
+        got = self.search(per_book=1)
+        self.assertEqual(self.names(got), ["A0", "B0", "C0"])
+        self.assertEqual((got["per_book"], got["held_back"]), (1, 4))          # A1, A2, A3 and B1
+        self.assertEqual([r["book_id"] for r in got["results"]], [self.books["A"], self.books["B"], self.books["C"]])
+
+    def test_no_book_has_more_results_than_the_limit_and_the_results_keep_the_order_of_the_ranking(self):
+        for n in (1, 2, 3, 4, 5):
+            with self.subTest(per_book=n):
+                got = self.search(per_book=n)
+                counts = {}
+                for r in got["results"]:
+                    counts[r["book_id"]] = counts.get(r["book_id"], 0) + 1
+                self.assertLessEqual(max(counts.values()), n)
+                names = self.names(got)
+                self.assertEqual(names, [x for x in self.RANKING if x in names])
+                scores = [r["score"] for r in got["results"]]
+                self.assertEqual(scores, sorted(scores, reverse=True))
+                self.assertEqual(got["held_back"], len(self.RANKING) - sum(min(n, k) for k in (4, 2, 1)))   # the books have 4, 2 and 1 themes
+
+    def test_the_page_is_filled_from_further_down_the_ranking_and_limit_is_still_the_most(self):
+        self.assertEqual(self.names(self.search(per_book=2, limit=4)), ["A0", "A1", "B0", "B1"])   # A2 is held back and B0 comes up in its place
+        self.assertEqual(self.names(self.search(per_book=2, limit=3)), ["A0", "A1", "B0"])
+        self.assertEqual(self.names(self.search(per_book=1, limit=2)), ["A0", "B0"])
+        self.assertEqual(self.names(self.search(per_book=1, limit=10)), ["A0", "B0", "C0"])         # the page is shorter than the limit
+
+    def test_the_themes_held_back_are_counted_over_the_whole_ranking_whatever_the_limit(self):
+        for limit in (1, 3, 10):
+            with self.subTest(limit=limit):
+                self.assertEqual(self.search(per_book=2, limit=limit)["held_back"], 2)   # A3 is after the last result shown when limit is 3
+        self.assertEqual(self.search(per_book=4)["held_back"], 0)
+        self.assertEqual(self.search(per_book=50)["held_back"], 0)
+
+    def test_the_default_is_two_a_theme_of_a_book_beyond_it_is_held_back(self):
+        self.assertEqual(themevectors.DEFAULT_PER_BOOK, 2)
+        got = self.search()
+        self.assertEqual(self.names(got), ["A0", "A1", "B0", "B1", "C0"])
+        self.assertEqual((got["per_book"], got["held_back"]), (2, 2))
+
+    def test_the_other_counts_and_what_a_result_holds_do_not_change_with_the_limit(self):
+        off, on = self.search(per_book=0), self.search(per_book=2)
+        for key in ("meaning", "model", "query_prefix", "built", "themes_searched", "stale", "without_vector"):
+            self.assertEqual(off[key], on[key], key)
+        self.assertEqual((on["themes_searched"], on["stale"], on["without_vector"]), (7, 0, 0))
+        by_theme = {(r["book_id"], r["theme_id"]): r for r in off["results"]}
+        for r in on["results"]:
+            self.assertEqual(r, by_theme[(r["book_id"], r["theme_id"])])
+        self.assertEqual(set(off), {"meaning", "model", "query_prefix", "built", "themes_searched", "stale", "without_vector", "per_book", "held_back", "results"})
+
+    def test_a_book_is_counted_once_whatever_the_versions_of_it_in_the_file(self):
+        # the build writes the current version of a book only, so a second version of book A is put in by hand: the same themes under "v2"
+        with closing(sqlite3.connect(self.path())) as conn:
+            for t in conn.execute("SELECT * FROM themes WHERE book_id = ?", (self.books["A"],)).fetchall():
+                made = json.loads(t[7])
+                made["version_id"] = "v2"
+                conn.execute("INSERT INTO themes VALUES (?, 'v2', ?, ?, ?, ?, ?, ?, ?)", (t[0], t[2], t[3], t[4], t[5], t[6], json.dumps(made), t[8]))
+            for v in conn.execute("SELECT * FROM vectors WHERE book_id = ?", (self.books["A"],)).fetchall():
+                conn.execute("INSERT INTO vectors VALUES (?, 'v2', ?, ?, ?, ?)", (v[0], v[2], v[3], v[4], v[5]))
+            conn.commit()
+        got = self.search(per_book=2)
+        self.assertEqual(got["themes_searched"], 11)
+        self.assertEqual(self.names(got), ["A0", "A0", "B0", "B1", "C0"])
+        self.assertEqual(sorted({r["version_id"] for r in got["results"] if r["book_id"] == self.books["A"]}), ["v1", "v2"])
+        self.assertEqual(got["held_back"], 6)
+
+    def test_a_limit_that_is_not_a_whole_number_from_zero_to_fifty_is_refused_before_the_query_is_sent(self):
+        before = self.calls()
+        for bad in (-1, 51, "2", None, True, False, 2.0, [2]):
+            with self.subTest(per_book=bad):
+                with self.assertRaises(KbError) as cm:
+                    self.search(per_book=bad)
+                self.assertIn("per-book", str(cm.exception))
+        self.assertEqual(self.calls(), before)
+        for good in (0, 1, 50):
+            self.assertIn("results", self.search(per_book=good))
+
+
+class OneBookTest(PerBookCase):
+    def setUp(self):
+        super().setUp()
+        self.themed(self.themes_of("A", 3))
+        self.scored({"A0": 0.9, "A1": 0.8, "A2": 0.7})
+
+    def test_a_ranking_that_ends_before_the_page_is_full_still_says_what_was_held_back(self):
+        got = self.search(per_book=2, limit=10)
+        self.assertEqual((self.names(got), got["held_back"]), (["A0", "A1"], 1))
+        got = self.search(per_book=3, limit=10)
+        self.assertEqual((self.names(got), got["held_back"]), (["A0", "A1", "A2"], 0))
+
+
 class WhatIsShownTest(VectorsCase):
     def test_a_source_address_that_holds_the_words_of_a_marker_does_not_make_the_file_unsearchable(self):
         # the file the build makes must be one the search accepts, whatever the address of the source is
@@ -1048,6 +1194,10 @@ class ReadOneRowAtATimeTest(SearchCase):
     def setUp(self):
         super().setUp()
         self.b3, self.v3 = self.themed(rows_of(3, limits="the limit"))
+
+    def search(self, *args, **kw):
+        kw.setdefault("per_book", 0)   # these tests hold the search to the one that read every vector, which had no limit for each book
+        return super().search(*args, **kw)
 
     def fixed_query(self, vec, dim=4):
         return unittest.mock.patch.object(models, "embed", return_value={"model": self.meta()["model"], "dimension": dim, "vectors": [vec]})
@@ -1355,6 +1505,30 @@ class CommandTest(SearchCase):
         self.assertEqual(self.embedded, [("query", ["stopping a search when it has cooled"])])
         code, out, _ = self.kb("theme-search", "stopping a search", "--limit", "1")
         self.assertEqual((code, len(json.loads(out)["results"])), (0, 1))
+
+    def test_theme_search_passes_the_limit_for_each_book_two_by_default_and_zero_switches_it_off(self):
+        seen = []
+
+        def search(index_root, cfg, query, **kw):
+            seen.append(kw)
+            return {"results": []}
+
+        with unittest.mock.patch.object(themevectors, "search", search):
+            for args in ((), ("--per-book", "0"), ("--per-book", "3"), ("--limit", "5", "--per-book", "1")):
+                self.assertEqual(self.kb("theme-search", "a query", *args)[0], 0)
+        self.assertEqual(seen, [{"limit": 10, "per_book": 2}, {"limit": 10, "per_book": 0}, {"limit": 10, "per_book": 3}, {"limit": 5, "per_book": 1}])
+        for bad in ("two", "1.5", ""):
+            with unittest.mock.patch.object(themevectors, "search", search):
+                self.assertEqual(self.kb("theme-search", "a query", "--per-book", bad)[0], 2)
+
+    def test_theme_search_refuses_a_limit_for_each_book_out_of_range_before_the_query_is_sent(self):
+        self.kb("theme-vectors")
+        for bad in ("-1", "51"):
+            code, out, err = self.kb("theme-search", "anything", "--per-book", bad)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(self.embedded, [])
+        code, out, _ = self.kb("theme-search", "stopping a search", "--per-book", "0")
+        self.assertEqual((code, json.loads(out)["per_book"]), (0, 0))
 
     def test_theme_search_refuses_a_limit_out_of_range_and_a_missing_file_with_the_command_to_run(self):
         code, out, err = self.kb("theme-search", "anything")

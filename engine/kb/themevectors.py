@@ -54,6 +54,7 @@ BUILD_PREFIX = ".theme-vectors-build-"   # the folders in which a build is made;
 FORMAT = 1
 COMMAND = "python3 -m kb theme-vectors"
 FIELDS = ("summary", "description", "problem", "method", "needs", "provides", "limits")
+DEFAULT_PER_BOOK = 2   # the most themes of one book that a page of a search holds, unless the caller says another number (0: no limit)
 LANGUAGE = "Language: not recorded"
 MAX_SECTIONS, MAX_SECTION_CHARS, MAX_CITATION = 8, 100, 4000
 _META_KEYS = ("format", "model", "configured", "dimension", "built", "document_prefix_sha256")
@@ -512,11 +513,14 @@ def result_of(row, score, field):
             "text": f"{fulltext.MARKER}\n{render(row)}\n{reading.END_MARKER}"}
 
 
-def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, root=None):
+def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, root=None, per_book=DEFAULT_PER_BOOK):
     """Search by meaning. The query is turned into a vector by the embedding model that the config sets for `card-embed` (with the entry's
     query prefix, if it has one), and each theme is ranked by the cosine between it and the closest of the theme's vectors, larger being
-    closer. Returns `{"meaning", "model", "query_prefix", "built", "themes_searched", "stale", "without_vector", "results"}`: one result for
-    each theme, at most `limit`. A vector is used only if it is a vector of the entry's dimension that is finite and not all zeros, its theme
+    closer. Returns `{"meaning", "model", "query_prefix", "built", "themes_searched", "stale", "without_vector", "per_book", "held_back",
+    "results"}`: one result for each theme, at most `limit`, and at most `per_book` of one book (0: no limit): the ranked themes are walked in
+    order and a theme is left out if `per_book` themes of its book come before it, so a page is filled from further down the ranking.
+    `held_back` is the number of themes left out so, over the whole ranking and whatever `limit` is (0 when `per_book` is 0), so that a page
+    shorter than `limit` is explained. A vector is used only if it is a vector of the entry's dimension that is finite and not all zeros, its theme
     is in the file, and its text still hashes to the hash the theme row holds for that text: any other is left out and counted in `stale`,
     and a theme with no vector that can be used is counted in `without_vector`. Refused before the query is sent: a query that is not text,
     a limit out of range, no file or a file that is not the engine's, a file for another model, dimension or document prefix, a row that is
@@ -525,6 +529,8 @@ def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, 
     as of its build."""
     if type(limit) is not int or not 1 <= limit <= fulltext.MAX_LIMIT:
         raise KbError(f"the limit must be a whole number from 1 to {fulltext.MAX_LIMIT}")
+    if type(per_book) is not int or not 0 <= per_book <= fulltext.MAX_LIMIT:
+        raise KbError(f"the limit for each book (per-book) must be a whole number from 0 (no limit) to {fulltext.MAX_LIMIT}")
     query = vectors._query(query)
     name, _ = models.choose(cfg, "card-embed")
     entry = models.registry(cfg)[name]
@@ -556,6 +562,14 @@ def search(index_root, cfg, query, limit=fulltext.DEFAULT_LIMIT, launcher=None, 
             if held is None or cosine > held[0] or (cosine == held[0] and FIELDS.index(v["field"]) < FIELDS.index(held[1])):
                 best[key] = (cosine, v["field"])
     ranked = sorted(((round(cosine, 12), key, field) for key, (cosine, field) in best.items()), key=lambda r: (-r[0], r[1]))
+    shown, held_back, kept = [], 0, {}   # the results, the themes over the limit of their book, and how many of each book are kept
+    for score, key, field in ranked:   # the whole ranking is walked, so that held_back does not depend on where the page ends
+        if per_book and kept.get(key[0], 0) >= per_book:
+            held_back += 1
+            continue
+        kept[key[0]] = kept.get(key[0], 0) + 1
+        if len(shown) < limit:
+            shown.append(result_of(by_theme[key], score, field))
     return {"meaning": True, "model": meta["model"], "query_prefix": "query_prefix" in entry, "built": meta["built"], "themes_searched": len(best),
-            "stale": stale, "without_vector": sum(1 for key in by_theme if key not in best),
-            "results": [result_of(by_theme[key], score, field) for score, key, field in ranked[:limit]]}
+            "stale": stale, "without_vector": sum(1 for key in by_theme if key not in best), "per_book": per_book, "held_back": held_back,
+            "results": shown}

@@ -129,6 +129,8 @@ def main(argv=None):
                                              "and the themes are ranked by the closeness of their closest text; needs `theme-vectors` run first")
     ts.add_argument("query")
     ts.add_argument("--limit", type=int, default=catalog.DEFAULT_LIMIT, help=f"at most this many themes (1 to {catalog.MAX_LIMIT})")
+    ts.add_argument("--per-book", type=int, default=themevectors.DEFAULT_PER_BOOK, dest="per_book",
+                    help=f"at most this many themes of one book in the results (0 to {catalog.MAX_LIMIT}; 0 is no limit; default {themevectors.DEFAULT_PER_BOOK})")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -274,7 +276,7 @@ def main(argv=None):
             return 0
         if args.command == "theme-search":
             cfg = config.load()
-            print(json.dumps(themevectors.search(cfg["index_root"], cfg, args.query, limit=args.limit), indent=1))
+            print(json.dumps(themevectors.search(cfg["index_root"], cfg, args.query, limit=args.limit, per_book=args.per_book), indent=1))
             return 0
         if args.command == "card-search":
             if args.meaning:
