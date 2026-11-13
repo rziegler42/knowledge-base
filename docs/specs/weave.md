@@ -75,14 +75,25 @@ tested. It does not cover how themes are made or how the agent searches, which h
 
 - **[idea]** A thread connects two themes. It holds: the two theme ids and the generation of each, a kind, a weight, a one-line
   reason that cites both themes' excerpts, a confidence, and a record of the model, prompt version and date that judged it.
-- **[idea]** There may be several weaves, each a separate set of threads where the weight means one thing. A first set to react to:
-  *alike*, *same mechanism*, *fit together* and *builds on* (positive), and *incompatible* and *disagrees* (negative). Whether
-  weights or several weaves are needed at all is open.
+- **[agreed]** A link made without a model judging the pair holds (the owner, 2026-11-13): its kind, the two themes, the structural
+  closeness and the wording distance as numbers, which texts of the two themes matched and in which direction, and what lets the
+  agent check it (the stated or inferred mark, the book's own words and the citation of each theme). It holds no model, prompt or date
+  of judging, because none judged it. The library never drops a link for looking weak or noisy, because what looks like noise to one
+  search may be a find for another; the agent decides what is worth pursuing.
+- **[agreed]** The weaves are separate (the owner, 2026-11-13): each is a set of links of one kind, with a score that means one
+  thing, rebuilt on its own. The kinds are *alike*, *same mechanism*, *same problem*, *fit together* and *builds on* (positive), and
+  *incompatible* and *disagrees* (negative). *Same problem* is the owner's addition to the first six: the problem is close across
+  fields and the method differs, so it shows how other fields solved the same problem, the mirror of *same mechanism*. The order of
+  building, agreed with the owner's reading of the agent's table: *same mechanism*, *fit together*, *same problem*, then *alike*,
+  which is kept as a reference for when the agent is in its home field and is not walked by default; *builds on* waits for reference
+  data, and *incompatible* and *disagrees* wait for a model to judge each pair. Which of these the first plan builds is not decided.
+  Whether weights are needed at all is open.
 - **[idea]** What each kind is for. *Alike* (similar subject) maps the neighbourhood. *Same mechanism* (works the same way
   underneath, from a different field) is probably the main source of surprise. *Fit together* (one theme supplies what the other
   needs) is for combinations. *Builds on* (cites, extends or replaces) is the cheapest, because the citations come from the
   sources. *Incompatible* (assumptions clash) stops combinations that cannot work. *Disagrees* (contradicts) surfaces a tension as a
-  lead and filters nothing out.
+  lead and filters nothing out. *Same problem* (the problem is the same, the method differs) shows how else the problem has been
+  solved.
 - **[idea]** Combinations are never precomputed, because there are too many. Only themes and threads are prepared ahead, and a
   combination is composed at query time and cites every theme behind it.
 - **[proposed]** *Fit together* and *builds on* are directional: the first theme provides what the second needs, or the second extends
@@ -90,8 +101,9 @@ tested. It does not cover how themes are made or how the agent searches, which h
 - **[idea]** Novelty tends to sit on weaker, cross-shelf threads, so a search needs a setting for how far from the obvious to go.
 - **[idea]** How the weaves might combine: look for themes far in topic but close in mechanism or fit, then drop the incompatible
   ones. Roughly the same-mechanism and fit-together scores, minus the alike score, minus incompatible. The hard weaves are same
-  mechanism, fit together and incompatible, because they need the domain-neutral descriptions and recorded assumptions. A start:
-  alike, same mechanism, fit together and builds on, adding incompatible once those produce something worth filtering.
+  mechanism, fit together and incompatible, because they need the domain-neutral descriptions and recorded assumptions. A start, as
+  the owner agreed on 2026-11-13: same mechanism, fit together and same problem, with alike as a reference, adding the rest once
+  those produce something worth filtering.
 
 ### Staged build
 
@@ -122,8 +134,11 @@ tested. It does not cover how themes are made or how the agent searches, which h
   neutral descriptions, taken across shelves and fields, and not only within the theme's own.
 - **[idea]** *Provides and needs.* For *fit together*, the *provides* part of one theme is matched against the *needs* part of
   another, which needs those parts embedded separately. This is cheap and fits the five-part structure.
-- **[proposed]** *Distance in field.* A pair is worth more when it is far in field, and the distance comes from the shelves' buckets
-  in the library's default scheme (`shelf.md`). Pairs in unknown buckets are treated as unknown, not as near.
+- **[agreed]** *Distance in field* is a wording distance and nothing stronger (the owner, 2026-11-13): the closeness of the summary
+  vectors of the two themes, which are their own words, taken at the level of the theme and not of the book, so that a book on
+  several topics does not blur them. It is carried on each link as a number and never as a pass or fail. It stands in for field and
+  does not measure it, and it fails when a transfer borrowed the vocabulary of its home field. Where Wikipedia or arXiv categories
+  exist they are shown beside it as evidence. The shelves' buckets are not used: every book is on the default shelf today.
 - **[proposed]** Near-duplicates and themes of books marked as the same work are marked, so they do not create strong, useless *alike*
   threads (`theme.md`).
 
@@ -143,10 +158,19 @@ tested. It does not cover how themes are made or how the agent searches, which h
 - **[idea]** Two protections for novelty. Sparsifying the graph must not keep only each theme's most similar neighbours, which are
   the obvious ones: each theme keeps a quota of neighbours from other shelves and fields as well, and low-weight threads are kept
   and not pruned.
+- **[agreed]** The reachability rule (the owner, 2026-11-13). In this rule a *link* is the line between two themes (this spec's
+  *thread*) and a *weave* is a set of links of one kind. **Cap, for every weave:** no theme keeps more than a set number of links
+  in all; when a theme is full, the themes that wanted it choose their next candidate, so that the cap holds back the generic
+  themes that a choice made for variety of distance piles links onto. A link is turned away because its theme is full and never
+  because it is weak. **Floor, for a directional weave only** (*fit together*, and *builds on* when it exists): a theme with fewer
+  than a few incoming links is given some, chosen from the themes whose *provides* is closest to its *needs*. A symmetric weave
+  needs no floor, because its links can be followed both ways and a theme is reached by its own links. The numbers are set in the
+  plan; the measurement under "Evidence" suggests a cap near 60.
 - **[idea]** The ledger records pairs judged unrelated as well as threads, so a pair is not paid for twice and can be judged again
   when the model or prompt improves.
 - **[proposed]** There is a bound on the threads per theme, large and never expected to be reached, to catch a runaway. Reaching it
-  marks the stage failed, as for themes.
+  marks the stage failed, as for themes. It is a different bound from the cap of the reachability rule above, which hub themes are
+  expected to reach and which fails nothing.
 - **[proposed]** A thread records the generation of each theme it judged. When a theme is regenerated, the thread is re-anchored by
   the excerpt hash and kept if the excerpt is found, and flagged if not (`theme.md`).
 
@@ -169,6 +193,9 @@ tested. It does not cover how themes are made or how the agent searches, which h
   described in domain-neutral terms.
 - **[proposed]** A search has a setting for how far from the obvious to go, which raises the weight given to distant, weaker
   threads. The default is left to the builder and tuned on real use.
+- **[agreed]** Whether a theme offered is one that an ordinary search of the agent's own question would also have returned is worked
+  out when the agent asks, from its question, and is shown with each theme. It belongs to the walk and is not stored in a link, which
+  is made before any question is known.
 - **[proposed]** Every combination states which themes it uses, why they fit, what it assumes, and that it is a hypothesis for the
   owner to test. The agent never presents a combination as a finding.
 
@@ -241,6 +268,26 @@ tested. It does not cover how themes are made or how the agent searches, which h
   rank 1 shows retrieval, and only the owner can say that a connection is new or useful.
 - **[idea]** Earlier throwaway experiments showed that neutral descriptions raised two foraging papers from 25th–34th by card to the
   top six on a whole problem, with no benefit within a single field.
+- **[proposed]** How links fall on the themes, measured on 2026-11-13 (read only, no call to any model; Python 3.15.0, numpy 2.5.4;
+  repository at `ff99750`) on the owner's local library, which is not in this repository: 1,805 themes with a summary and a method
+  vector, in 173 books, for links of method closeness between themes of different books. Keeping each theme's 6 nearest left 228
+  themes with no incoming link and 405 with one or two, and the top 5 percent of themes held 21 percent of the links (the
+  most-linked theme had 67). Keeping 3 for each quarter of wording distance, at most one theme of a book in a quarter, left 186
+  with none and 329 with one or two, and the top 5 percent held 35 percent (the most-linked theme had 328, and 50 themes had more
+  than 60). Conclusion: a choice made for variety of distance piles links onto generic themes, so a cap is needed, and a floor
+  matters where links are directional. One library and one weave: it is a measurement, not a limit.
+- **[proposed]** Wording distance as a stand-in for field, tested on 2026-11-13 (read only, no call to any model; Python 3.15.0;
+  repository at `ff99750`) on the owner's local library, which is not in this repository. The library held 176 books: 40 arXiv
+  preprints (34 of them computer science) and 136 web pages, 128 of them English Wikipedia pages; every book was on the default
+  shelf, and no book recorded a language. 127 of 128 stored Wikipedia pages still held their own list of categories (a median of
+  12, some of them maintenance labels). On 12 pairs of books that the assistant judged to be in the same field and 12 in different
+  fields (its own judgment, not the owner's), the closeness of the average summary vectors of the two books separated them perfectly
+  (AUC 1.000, against 0.979 for the field-free description, 0.938 for the method and 0.931 for the provides). At the level of the
+  theme, over every pair of themes of the two books, the summary separated them at 0.824 (the method at 0.675), and by the median of
+  a pair of books at 0.986; the cosines are on a lower scale than between books, so no threshold carries over. One far pair,
+  *Genetic algorithm* and *Natural selection*, came out as close as the near pairs because the book on the first is written in the
+  second field's words. Conclusion: the summary closeness is a usable stand-in for how far apart two themes are in wording, not a measure of field,
+  and it needs the number and the texts beside it.
 
 ## Acceptance criteria
 
