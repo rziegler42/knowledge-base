@@ -108,15 +108,22 @@ tested. It does not cover how themes are made or how the agent searches, which h
 ### Staged build
 
 - **[proposed]** The weave is built in stages, and each stage is built only if the evidence says the one before it is not enough.
+  This holds for the stages in which a model judges pairs. It does not hold for stored links that no model judges, which are built
+  as the next bullet says.
+- **[agreed]** Links that no model judges are precomputed and stored (the owner, 2026-11-13), and are not made at the time of a
+  search. A link depends on the two themes and not on any question. What depends on the agent's question, such as whether an
+  ordinary search of it would have returned a theme, which links to follow, and the closeness of a theme to the question, is worked
+  out at query time on top of the stored links. Stored links need no model call per pair, and a weave records the generation of
+  each theme it links, so that it is rebuilt when the themes change.
 - **[proposed]** *Stage 0, no weave.* The agent restates the problem abstractly, splits it into sub-problems, and searches the
   neutral descriptions of themes across all shelves for each (`reading.md`). The cross-field experiment measures how far this goes,
   including the composite problem where a theme from each of three shelves is needed.
 - **[proposed]** *Stage 1, threads made at query time.* The agent or a model judges candidate pairs among the themes a search just
   retrieved, and uses the answers for the brainstorm report. Nothing is stored except an optional cache in the ledger. This tests whether
   judging pairs adds anything, without paying for a graph.
-- **[proposed]** *Stage 2, stored threads.* Threads are precomputed for the pairs most likely to matter and kept, with the ledger,
-  so a search can follow them without judging again. It is built only if Stage 1 shows value and is too slow or too costly to run at
-  query time.
+- **[proposed]** *Stage 2, stored threads that a model judged.* Threads are precomputed for the pairs most likely to matter and
+  kept, with the ledger, so a search can follow them without judging again. It is built only if Stage 1 shows value and is too slow
+  or too costly to run at query time. It is not the stored links of the agreed bullet above, which no model judges.
 - **[proposed]** The decision between the stages is made on measures (see "Testing"), not on enthusiasm. This spec stays at the
   level of hypothesis until then.
 - **[proposed]** The measures so far do not fit the purpose above. The cross-field experiments and the trial of cross-field search
