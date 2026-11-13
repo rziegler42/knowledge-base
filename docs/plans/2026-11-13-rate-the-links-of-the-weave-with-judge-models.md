@@ -208,3 +208,39 @@ of the agreement are recomputed from the saved replies by a script other than th
   note that the owner's 20 pairs are drawn uniformly within a band, so a theme with 12 links is likely to appear more than once (a limit of the sample, named here).
 - **Not run.** Any call to a model (Increment B); the call `kb.models.call` itself (its return and the errors it raises are as the engine documents; the stand-in in the tests returns the shape
   `{"reply": ...}`); a test of the dry run's own script beyond its run. The library and the config were only read. No push.
+
+### Increment B (the two local judges rate every pair; committed)
+
+- **What was sent, with the owner's word ("Run it", 2026-11-13, after being told).** The 269 prompts of the sample (sample sha256 `a01c8fd13b003930de8f2ea473115d7aefee938627ee7afed3f2ea57db045e15`; prompt
+  sha256 of the block `1af1eda17e445acbc406b39c47120040a7a727bd7d37cf44858806efbfe5f551`; 766 to 1,029 bytes each, 239,154 bytes in all), once each, one at a time, to `gptoss` (gpt-oss:20b) and then to
+  `checker` (qwen3:14b), both local, through `kb.models.call`; the first judge finished all pairs before the second began. Each outcome was appended to a file (mode 600) as it came, with the sha256 of the
+  prompt, the replies, the asks and the seconds. Nothing left the machine; the library and the config were only read. **A call outside the 269:** before the owner's word, one invented pair (merge sort and
+  the closest pair of points; no text of the library) was sent once to each model to time them (7.9 s and 5.7 s; both replies parsed), and the owner was told of it in the same message as the request.
+- **Outcome.** Every pair has a valid rating from each judge: 269 rated and 0 failures for each, of which 0 `unparseable` and 0 `call_error`, and none needed a second ask. The run took about 10 minutes (gptoss
+  348 s, 1.29 s a pair on average, at most 4.24 s; checker 265 s, 0.98 s, at most 3.67 s). The estimate given to the owner was about an hour, from the two timing calls, which included loading the models, so it
+  was about six times too high.
+- **Labels (of the valid ratings of each judge):** gptoss `same_mechanism` 18 (0.0669), `related` 70 (0.2602), `unrelated` 181 (0.6729); checker 4 (0.0149), 48 (0.1784), 217 (0.8067). **Agreement over the 269
+  pairs on which both are valid:** equal labels 200 (0.7435), Cohen's kappa 0.374 (observed 0.7435, by chance 0.5902). Matrix, gptoss in the rows and checker in the columns: `related` 27 related, 0 same, 43
+  unrelated; `same_mechanism` 9 related, 4 same, 5 unrelated; `unrelated` 12 related, 0 same, 169 unrelated. The two judges agree on 4 of the 22 pairs on which either says `same_mechanism`; checker is the
+  stricter judge, and its four `same_mechanism` labels are all pairs on which gptoss also says so.
+- **Files** (outside the repository, mode 600): `rate-links-replies-gptoss-a01c8fd13b00.jsonl` sha256 `4119ad1cc7b7c379726f5f06778f7cbbcf08bc58316dc24427ca4a7345cc8b19`;
+  `rate-links-replies-checker-a01c8fd13b00.jsonl` sha256 `d90b126500d27fda3dc7ba66915e8fafe589ace71f81d4a858825c27392b5428`. **Scripts:** `rate_links.py` is unchanged from Increment A
+  (`2af3e29f…6e98`) and the runner uses it; `run_judges.py` sha256 `a2b461d9808f896d796df1b19fd2bf731fd56773d5d949c335b65047acb5663c`; `analyze_b.py`
+  `3c7952e3acef79d4fa7da6abd415632fc1e8f5a3ee7c70b64e5fc86cc9a55f88`; `verify_b.py` `09f89c87289d5baa5f258dd0cfcc7bdaafedf1e0b28e9a25207c0bb01ffc6cae`. Every reply line holds the prompt hash of its prompt.
+- **Verification as run.** The runner's 8 tests (stand-in model: a line per pair, mode 600, a run that stopped goes on, a line cut short is asked again, a failure and a call that raises are lines of their own,
+  what is recorded, the two judges, the wrong sample file refused, a prompt holds only the two titles and two methods) and the analysis's 6 tests (kappa by hand and at its edges, failures left out of the
+  agreement and counted apart, a pair with no line, no valid pair, and the two computations agreeing on random data) all pass. The agreement was recomputed by `verify_b.py`, a second and different
+  computation from the saved lines: equal 200, kappa 0.37404. `wb run code-work check`: no problems. The real `kb.models.call` return was not tested before this run; 538 calls returned replies in the shape the
+  script reads.
+- **What the figures support, and what they do not (for Increment D).** (1) The judges agree on 74 percent of the pairs and only fairly beyond chance (kappa 0.374), mostly because both say `unrelated` for most
+  pairs; the figures do not say which judge is right, which only the owner's rating can. (2) The labels are few where they matter: 18 `same_mechanism` (gptoss) and 4 (checker) over 269 pairs, so by tercile
+  or band that is about 6 and about 1 in a group; a share of `same_mechanism` by group for checker is a count of 0 to 3 and is not a trend. Increment D's claims must rest mainly on `same_mechanism` or
+  `related` (88 for gptoss, 52 for checker, 100 pairs on which either judge says so), and name every group size. (3) The two judges saw each pair in the same order (the sample fixes it), so an effect of
+  the order is not separable from agreement; one prompt, one order and one run; whether a reply repeats was not tested. (4) The 269 pairs come from 30 themes with up to 12 links each, so they are not
+  independent. (5) Of the owner's 20 pairs (spread over the bands, not over the labels), both judges say `unrelated` on 12, one or both say `related` (and none says more) on 6, and `same_mechanism` appears on 2 (both judges on
+  one, gptoss alone on the other): the owner's rating can say much about `unrelated` against `related`, and almost nothing about `same_mechanism`. The 64 pairs on which the judges differ outside the owner's 20
+  are the pool from which Codex's 10 are drawn (Increment C).
+- **Second look.** The `reviewer` agent (read only, given the facts since the files are outside the project): no blocking finding; its figures were checked by arithmetic and agree; applied here: the
+  failure kinds are both 0, the call before the owner's word is recorded, the scripts are tied to Increment A's, the estimate's error is stated, and the limits for Increment D (points 1 to 4 above); point 5
+  was counted from the files after its remark.
+- **Not run.** Any other order of A and B, a second run for repeatability, any other prompt (all named as untested); the owner's rating and Codex (Increment C). No push.
