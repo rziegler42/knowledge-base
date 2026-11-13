@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Completion criteria 2; Increment B steps 2–3; Increment D step 1",
+      "problem": "The plan permits a judge to fail parsing twice and records that as a failure, but completion criterion 2 still requires both judges to have rated every pair. It also never defines how failed pairs are excluded or represented in agreement, label-share, tercile, band, gap, or rank calculations. Consequently the required figures can be ambiguous or impossible to produce when any permitted failure occurs.",
+      "severity": "major",
+      "suggestion": "Define a valid-rating denominator for every statistic; state that failures are reported separately and excluded from label-based measures (or assign a specified missing category); revise completion criterion 2 to require an outcome—valid rating or recorded failure—for every pair."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment C, steps 1–3; Completion criterion 4",
+      "problem": "The 20 owner-rated pairs are selected before the 30 Codex pairs, and the Codex sample is subsequently selected only by local-judge label strata. Nothing requires overlap with the owner sample. The promised Codex-versus-owner agreement can therefore have zero observations, despite being a stated completion result and part of the goal of knowing the judges’ trust.",
+      "severity": "major",
+      "suggestion": "Reserve or deliberately include owner-rated pairs in the Codex selection, while preserving the stated strata, and specify the minimum overlap and how any short stratum is handled."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan is well scoped, but two permitted sampling/error paths leave required trust and analysis results undefined.",
+  "verdict": "changes_needed"
+}
