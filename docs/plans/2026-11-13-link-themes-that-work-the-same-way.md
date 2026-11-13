@@ -618,4 +618,25 @@ conversion are not touched, and the tests of the extractor run in A because the 
   mode 600, sha256 `034369d167c42a030da59a2dc792d92e167f969cb98680d4dee14df7833354d9`): "Keep the farthest band sparse. Keep weak links available for exploration. Treat the median as a
   provisional filter." So nothing changes in the slot rule or the floor; the spec's floor rule records the reading. The agent's own reading, given to the owner and not the owner's: closeness is
   a weak proxy for the same mechanism (ten themes read; the strong links are mostly in the middle and nearest bands; many method sentences are short and generic).
-- **Not yet done.** The Result of the whole plan; the two decisions about a limit for a full build and about building again (Increment G, drafted, waits for approval). No push.
+- **Not yet done.** The Result of the whole plan (Increment G records what came of the two questions about a limit for a full build and about building again). No push.
+
+### Increment G (what the measurements say about repair, and when to build again; documentation only; committed)
+
+- **Step 1, the measurement (2026-11-13).** On private copies of the file of theme vectors, with the limit set to 10 percent for the run only and the repair forced: themes of books at about 5, 7 and 9
+  percent of the themes made again (a new generation and a vector moved towards another theme's; a text hash cannot change without the text, which the file checks, so the plan's "another text hash"
+  was not possible). Links in common with a full build over the same changed file: repair 69, 63 and 59 percent; the old links with no repair 62, 53 and 49 percent; mean closeness of the repair
+  0.6513, 0.6518 and 0.6536 against 0.6574, 0.6591 and 0.6616 for the rebuild; repair times 4.2 to 4.5 seconds. The plan's test (as close to the rebuild as a repair for 10 percent new themes, 81 percent)
+  was not met, so the run stopped, reported, and the owner chose to keep 5 percent and make the increment documentation only. The report is outside the repository, mode 600, sha256
+  `b6d2496ed8b62b930bf52b507e1fd0c0af2d4b60dbe828932b8d94907f4f1eb7`; the file of vectors was unchanged by it; nothing was sent to any model.
+- **Step 2, the text.** `docs/specs/weave.md`: a "[measured]" evidence item (what was run, Python 3.15.0, numpy 2.5.4, repository at `2a94018`, the two reports by sha256, the figures of the build and of
+  the repairs, and the conclusion), the last sentences of the "Adding books" item, and the owner's reading of the floor; `engine/README.md`: the figures and the advice to build again, in the weave
+  paragraph. No code, test or constant changed.
+- **Step 3, the second look.** The `reviewer` agent found seven non-blocking points; six were applied: the base of "70 percent of the books" (it is 125 books and 1,355 of the 1,913 themes of the file,
+  71 percent) and of "about 10 percent" (189 new themes are 11.7 percent of the 1,616 before and 10.5 percent of the 1,805 after) are named; "gets a little farther with each repair" was a trend the
+  figures do not show (only the end state of five repairs was compared with a rebuild), so the text says what was measured; "puts the weave right" became "gives again what a build gives" and the advice
+  says that five is the number the experiment ran and nothing measured shows where the difference starts to matter; the 5 percent limit "stays, because" became "the measurements do not argue for
+  raising it" (all three runs were forced with the limit at 10 percent, none was below 5); the time of a repair is "3 to 5.4 seconds". The seventh (that "mean method closeness" could not be confirmed
+  from the numbers given to it) was not changed: the closeness of a link of this weave is the method closeness, as the spec says.
+- **Verification as run.** `wb run code-work check` (checked 40 plans, no problems); each figure read against the output of the two scripts and against the reviewer's check. No test run: no code changed.
+  The real library was not touched by this increment.
+- **Not run.** Anything on the real library; a test of where repeated repairs start to matter (not measured: only the end state of five was compared with a rebuild). No push.

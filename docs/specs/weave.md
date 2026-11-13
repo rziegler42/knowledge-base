@@ -201,7 +201,8 @@ tested. It does not cover how themes are made or how the agent searches, which h
   median closeness of all pairs of themes of different books, worked out for each weave. A pair no closer than a typical pair is not
   a link of that kind, so it is not stored, and a theme may keep fewer than 12 links, most of all in the wording-farthest band. It
   is the weave's own measure and not a judgment of whether a link is useful. The farthest band is to be checked for sparseness when
-  a weave is built.
+  a weave is built. **The owner's reading of the first weave over the real library (2026-11-13):** keep the farthest band sparse;
+  keep weak links available for exploration; treat the median as a provisional filter, not a settled limit.
 - **[idea]** The ledger records pairs judged unrelated as well as threads, so a pair is not paid for twice and can be judged again
   when the model or prompt improves.
 - **[proposed]** There is a bound on the threads per theme, large and never expected to be reached, to catch a runaway. Reaching it
@@ -226,7 +227,10 @@ tested. It does not cover how themes are made or how the agent searches, which h
   removed and added again (the owner, 2026-11-13): the links of its old themes are dropped, the themes that lost a link are refilled,
   and its new themes are added as new. A full rebuild is for a change of embedding model, dimension or prefix, for a change of more
   than about 5 percent of the themes in the weave at once (which is what a new theme generation of the whole library is), or on the
-  owner's word. The walk says how many themes are not yet linked. The numbers are guesses to tune in the plan.
+  owner's word. The walk says how many themes are not yet linked. The numbers are guesses to tune in the plan. Measured on the real
+  library (the evidence below, 2026-11-13): the limit of 5 percent for a full build stays, because the measurements do not argue for raising it
+  (a repair of themes made again had 59 to 69 percent of the links in common with a rebuild at 5 to 9 percent changed), and the owner may
+  build again, for instance after about five repairs in a row, which ended farther from a rebuild than the single repairs did.
 
 ### Using the weave at query time
 
@@ -345,8 +349,26 @@ tested. It does not cover how themes are made or how the agent searches, which h
   72 percent of the repair's links were in the rebuild, and the mean method closeness of a link was 0.618 for the repair against 0.624
   for the rebuild. Adding books together replaced these shares of the old links: 1 book 2.6 percent (227 links), 3 books 6.6
   percent, 9 books 13.7 percent, 17 books 22.8 percent, 35 books 37.6 percent (the average of 3 random samples), so a book costs
-  227 replaced links alone and 74 in a batch of 35. Not tested: the drift over many repairs in a row, a directional weave, and
-  whether links just above the median are useful.
+  227 replaced links alone and 74 in a batch of 35. Not tested then: the drift over many repairs in a row (measured in the next
+  item), a directional weave, and whether links just above the median are useful.
+- **[measured]** The first weave over the real library and repair against a rebuild, on 2026-11-13 (Python 3.15.0, numpy 2.5.4,
+  repository at `2a94018`; the library is the owner's and is not in this repository; the repair experiments ran on private copies of
+  its file of theme vectors, which was only read; no call to any model; two reports outside the repository hold numbers only:
+  `weave-real-run-d86ef289da13.json`, sha256 `d86ef289da134ebf1f80d565d1cd013788985e8a2a3110cadfb89633a91fdb0e`, and
+  `weave-g-measure-b6d2496ed8b6.json`, sha256 `b6d2496ed8b62b930bf52b507e1fd0c0af2d4b60dbe828932b8d94907f4f1eb7`). The build took 5.3
+  seconds and gave 7,966 links over 1,805 themes, 52 themes with no link, and 680 (38 percent) with none in the wording-farthest band;
+  with 300 candidates for a theme and with no cut the links were the same. A repair for 189 new themes (11.7 percent of the 1,616 themes
+  in the weave before, 10.5 percent of the 1,805 after) took 4.3 seconds, and 81 percent of its links were in a full rebuild, with a mean
+  method closeness of 0.6452 against 0.6484. Five repairs in a row, from 125 books and 1,355 themes (71 percent of the 1,913 themes of the
+  file), ended at 69 percent in common with a rebuild and a mean of 0.6399; one repair of 525 themes at once (41 percent of the 1,280 in the
+  weave before) at 72 percent and 0.6425. The figures of the steps of the five repairs are not compared with a rebuild of their own. A repair of themes made again (a new generation and a vector
+  moved towards another theme's) at about 5, 7 and 9 percent of the themes had 69, 63 and 59 percent of its links in common with a
+  rebuild, where the old links without a repair had 62, 53 and 49 percent: a repair of changed themes recovers only 7 to 10 points.
+  Conclusion: a repair of new themes is close to a rebuild (81 percent for one, 69 percent after five in a row, 72 percent for one
+  of 525 themes); a repair of changed themes is weak, so the full build stays the answer above 5 percent changed, and a full build (5
+  seconds here) gives again what a build gives, which is why the owner may build again, for instance after about five repairs in a row
+  ("five" is the number the experiment ran; nothing measured shows where the difference from a rebuild starts to matter). The owner's reading of the links of ten themes
+  (2026-11-13) is under "The floor of strength" above.
 
 ## Acceptance criteria
 
