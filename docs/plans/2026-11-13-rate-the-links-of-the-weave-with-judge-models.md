@@ -1,6 +1,6 @@
 # Rate the links of the weave with two local models, and spot check with Codex
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-13
 Candidate: none (a measurement that follows from the owner's reading of the first weave, which found closeness a weak proxy for the same mechanism; no new direction)
 Specs: docs/specs/weave.md
@@ -317,3 +317,30 @@ of the agreement are recomputed from the saved replies by a script other than th
   missing from the provenance; and one clause says that 16, 14 and 17 of 20 are no ranking of the judges.
 - **Not run.** A test of significance (none is claimed), a cross-tabulation of closeness, wording closeness and band, a larger sample, the other order of the two texts, the summary text as input, a judge that is
   not a language model, a repeat. No push.
+
+### The plan as a whole (completed 2026-11-13)
+
+Each completion criterion, with where its evidence is recorded. Increments A, B, C and D are each one local commit with the trailer `Plan: 2026-11-13-rate-the-links-of-the-weave-with-judge-models#<label>`.
+
+1. **The sample.** Increment A: 30 themes with at least one link drawn with seed 20261113, **269 pairs**, each pair once, the order of the two texts chosen at random for each pair; the sample sha256
+   `a01c8fd13b003930de8f2ea473115d7aefee938627ee7afed3f2ea57db045e15`, the prompt sha256 `1af1eda17e445acbc406b39c47120040a7a727bd7d37cf44858806efbfe5f551`, the script sha256
+   `2af3e29fcd09878aa7cfe5fd13fd49e4fa1c17c6edf31257c3cdb92d49cb6e98`.
+2. **Both local judges.** Increment B: every pair has a valid rating from each of `gptoss` and `checker` (0 failures, of which 0 `unparseable` and 0 `call_error`); the judges are equal on 200 of the 269 pairs
+   (0.7435), kappa 0.374, recomputed by a second script.
+3. **The owner's blind rating.** Increment C: 20 pairs rated and recorded as given (11 unrelated, 8 related, 1 same_mechanism); `gptoss` equal on 16 (kappa 0.633), `checker` on 14 (0.388).
+4. **Codex.** Increment C: 30 pairs rated (the owner's 20 and 10 on which the local judges differ, drawn from 64), 0 failures; equal to the owner on 17 of 20 (kappa 0.733); the agreement with each local judge on the
+   20 and on the 10 apart; the 10 pairs are not a sample of the weave.
+5. **The spec's evidence.** Increment D: one "[measured]" item in `docs/specs/weave.md` with, for each local judge and for the owner's ratings, the share of related-or-better pairs by closeness, band, wording
+   closeness and gap, and within a theme, every group size, the limits and what was not tested; no rule changed. In this sample, for each local judge, the share rose with closeness and was highest in the
+   nearest band; the figures do not say that closeness ranks real same-mechanism matches first.
+6. **Nothing sent that the owner had not been told of; the library and the config only read.** Each run was announced with what was sent and where, and waited for "run it": the 538 calls to the two local
+   models (Increment B), and 31 calls to Codex (Increment C). **Recorded as they happened:** an invented pair was sent as a test of the form of each run, announced in the request and holding no library text; my
+   first statement that Codex would run in an empty folder and could read nothing of the project was too strong and was corrected to the owner before the run; a first run of the Codex step was refused by the
+   bridge before any contact and the form was changed on the owner's word. The library, the config and the weave were only read; no file of the repository changed but the plan and the spec.
+
+- **What was measured against what the plan assumed.** The plan did not anticipate how few `same_mechanism` labels there would be (18 and 4 of 269, and one among the owner's 20), which Increment B's Result noticed
+  and which made the figures rest on "related or same mechanism"; the plan's step on group sizes is what kept the small groups from being read as findings. The estimate of an hour for the local run was wrong by a
+  factor of six (10 minutes).
+- **Left open, and recorded elsewhere.** What to do with the figures (the median floor as a provisional filter, the walk's narrow-to-wide setting, the seven theme texts) stays the owner's decision, as the plan says;
+  a larger sample, the other order of the two texts, the summary text as input, a judge that is not a language model, a second human rater and a repeat were not done (Deferred work).
+- **Not run.** Nothing wider than the increments' own verification, as the plan said. No push.
