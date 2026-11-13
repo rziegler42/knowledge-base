@@ -273,6 +273,33 @@ any model. No wider run.
 **Evidence:** the one local commit (the Result of this plan, and the spec's "Evidence" with the figures), with the trailer
 `Plan: 2026-11-13-link-themes-that-work-the-same-way#F`.
 
+### Increment G — a limit of its own for a full build, and when to build again
+
+**Outcome:** a repair is due, as now, when the themes waiting reach 5 percent of the themes of the weave, but a full build is needed only when more than 10 percent of the themes of the weave
+changed or are gone, so that a few books made again are repaired and not refused; and the README and the spec say to build again after about five repairs, with the measured drift. The owner
+asked for both on 2026-11-13 ("go with your recommendation", after the results of Increment F), the first changing a number that the spec marks as a guess to tune in the plan.
+**Dependencies:** F (its measurements are the reason) and E (the code it changes).
+**Affected areas:** `engine/kb/weave.py` (`REPAIR_SHARE` and its uses in `_inspect` and the text of `status` and `repair`), `engine/tests/test_weave.py`, `engine/README.md`, `docs/specs/weave.md`
+(the batching rule and its evidence).
+**Steps:**
+1. Measure before changing, on throwaway copies of the file of vectors (nothing written to the real library, nothing sent to any model): with the new limit set for the run only, make the themes of
+   books that amount to about 7 percent and about 9 percent of the themes change by giving them another text hash and another vector (the shifts of the tests, so that the links really change),
+   repair, and compare with a full build over the same file the way Increment F did (links in common, mean closeness). Record the figures. If a repair at 9 percent is as close to the rebuild as a
+   repair of 10 percent of new themes was (81 percent in common), the limit of 10 percent stands; if it is far below, stop and report to the owner, who chooses the limit.
+2. Write the tests first and see them fail: themes changed or gone at 6 and at 9 percent of the weave make a repair due and allowed, and `status` says so and does not say that a full build is
+   needed; at more than 10 percent `status` says a full build is needed and `repair` refuses even with `--now` (as the tests of 5 percent do now, moved to 10); exactly 10 percent is allowed;
+   a repair is still due at exactly 5 percent of themes waiting, and not below it; the count of themes gone, of themes that lost vectors and of left-out themes is as before.
+3. Make the change: a second constant, `FULL_BUILD_SHARE = Fraction(1, 10)`, used only where "changed or gone" is compared; `REPAIR_SHARE` is left for what is due. The messages say which limit.
+4. Write in the README paragraph of the weave and in the spec's batching rule: the full-build limit is 10 percent, with the figures of step 1; and that a repair is a quick way and a full build
+   takes about 5 seconds at 1,800 themes, so after about five repairs in a row (which Increment F measured at 69 percent of the links in common with a rebuild and a mean closeness of 0.640
+   against 0.648) the owner may build again. The spec's batching rule keeps "the numbers are guesses to tune in the plan" and names this tuning.
+5. Deliberate breaks, each restored byte for byte and each caught: the full-build limit left at 5 percent; the full-build limit used where the repair is due; the comparison made with
+   `>=` instead of `>` at the full-build limit; the full-build limit applied to the themes waiting and not to those changed or gone.
+6. The `reviewer` agent, for a second look.
+**Verification:** `engine/.venv/bin/python -m unittest engine.tests.test_weave`, and the breaks of step 5. No wider run: only `weave.py` changes in the code, and nothing else imports it but the
+command line, which the tests of the weave exercise. The real library is not touched.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-13-link-themes-that-work-the-same-way#G`.
+
 ## Verification for the plan as a whole
 
 Each increment's recorded verification stands unless a later increment changed its inputs. Increment C changes the README lines that
@@ -564,3 +591,35 @@ conversion are not touched, and the tests of the extractor run in A because the 
   (the two phases, "touched", the tie and same-book choices), so it would not catch a wrong reading of the rule.
 - **Not run.** Any run on the real library (Increment F); the other engine modules' tests (nothing else changed besides the command line); a security review (not asked: the owner decided to
   ask once more over the whole weave module before Increment F). No push.
+
+### Increment F (the weave over the owner's real library, and the owner's reading; run and read, recorded here; the figures in the spec's evidence follow with Increment G)
+
+- **What was written to the real library (with the owner's word, "run it", 2026-11-13).** One build with `engine/.venv/bin/python -m kb theme-links build` from the config of the owner: the index root gained
+  `weave-same-mechanism.sqlite` (1,794,048 bytes, mode 600, sha256 `ebbba8f45128d0e7f75e3d63bfc0c981d0d640e763b8668f30ccab0058e68fe3`) and an empty `weave.lock` (mode 600), and nothing else; the file of
+  theme vectors was read only and its sha256 is the same before and after (`59fe64746b3c854aaad1b3324120a0827fa5baf691c8b247108970580d1f9229`); nothing was sent to any model; the build took 5.3 seconds.
+- **The figures of the build** (the measurement of the spec in brackets): 1,913 themes in the vectors file, 1,805 processed and 108 left out (all 108 have no method or summary text), **7,966 links**, 9,263
+  links by the slot rule without the floor [9,264], of which 1,297 [1,298] are at or under the median (14 percent), the edges 0.316, 0.378 and 0.447, the median 0.490, at most 12 links on a theme (599
+  themes have 12), **52 themes with no link** [4 or fewer without the floor], 680 themes (38 percent) with no link in the wording-farthest band [391 without the floor], links per band 1,420, 1,964, 2,311 and
+  2,271 from the farthest, the closeness of the links from 0.490 to 0.911 with a median of 0.649. The file is the one a build over a copy with 300 candidates gives (the links are equal).
+- **Experiments on throwaway copies** of the file of vectors (private folder of the scratchpad, removed after; the report holds numbers only, mode 600, outside the repository:
+  `weave-real-run-d86ef289da13.json`, sha256 `d86ef289da134ebf1f80d565d1cd013788985e8a2a3110cadfb89633a91fdb0e`; peak memory of the whole run 966 MB):
+  - **The cut on the candidates (300 against 5,000, no cut at this size):** the same 7,966 links, 100 percent in common. The cut changes nothing on this library.
+  - **Repair against a rebuild, with 18 books (200 themes, 189 of them usable) left out:** the build on the rest 7,074 links in 1,616 themes; status said a repair is due (189 themes waiting, 5 percent or more);
+    the repair took 4.3 seconds, dropped 1,003 links and added 1,953, and gave 8,024 links, **81 percent of which are in the full rebuild** (82 percent of the rebuild is in the repair); mean closeness 0.6452 against
+    0.6484, 52 themes with no link as in the rebuild, at most 12 links on a theme.
+  - **Drift, repair in batches one after another** (from 125 books and 1,355 themes, five repairs of 6 to 15 books, 3.0 to 4.0 seconds each, one of them not due and made with `--now`): 8,179 links at the end,
+    mean closeness 0.6399, 44 themes with no link, **69 percent of the links in the rebuild** (71 percent of the rebuild in them). One big repair of all the rest at once (525 themes waiting): 8,090 links, mean
+    closeness 0.6425, 72 percent in common. So quality drifts a little with repairs (0.6484 for the rebuild, 0.6452 for one repair of 10 percent, 0.6425 for one of 30 percent, 0.6399 after five in a row), and a full
+    build puts it back; both were made with the rules checked on reading.
+  - **Books made again** (the generation of 71 themes in 5 books raised by one, 62 of them in the weave: 3.4 percent): the status says they wait, a repair is not due, and with `--now` it took 3.6 seconds and
+    gave exactly the 7,966 links of before (the vectors had not changed, so the same links come back). With 164 themes (8 percent) made again, **a full build is needed and the repair is refused even with
+    `--now`**, as the plan says.
+- **What the experiments show about the design, for the owner.** (1) For themes that changed, the 5 percent that makes a repair due and the 5 percent above which a full build is needed are the same number:
+  a repair is due by the share only at exactly 5 percent, so books made again are repaired only through the 30 days from the date the book was added, or by `--now`, and above 5 percent the answer is a full
+  build, which is cheap (5 seconds at this size) and makes the weave as a rebuild does. (2) The farthest band is sparse after the floor: 38 percent of the themes have no link in it. (3) A weave repaired many
+  times drifts a little from a rebuild, in the direction of weaker links, which a full build corrects.
+- **The owner's reading (step 4), 2026-11-13,** after the links of three themes and of seven random ones were shown with the method text of both sides (the printout is outside the repository,
+  mode 600, sha256 `034369d167c42a030da59a2dc792d92e167f969cb98680d4dee14df7833354d9`): "Keep the farthest band sparse. Keep weak links available for exploration. Treat the median as a
+  provisional filter." So nothing changes in the slot rule or the floor; the spec's floor rule records the reading. The agent's own reading, given to the owner and not the owner's: closeness is
+  a weak proxy for the same mechanism (ten themes read; the strong links are mostly in the middle and nearest bands; many method sentences are short and generic).
+- **Not yet done.** The Result of the whole plan; the two decisions about a limit for a full build and about building again (Increment G, drafted, waits for approval). No push.
