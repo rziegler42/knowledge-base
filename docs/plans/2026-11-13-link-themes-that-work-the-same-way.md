@@ -307,4 +307,25 @@ conversion are not touched, and the tests of the extractor run in A because the 
 
 ## Result
 
-Empty until work starts.
+### Increment A (numpy in the pinned environment; committed)
+
+- **Done.** `engine/requirements.lock` pins `numpy==2.5.4` with the sha256 `0b4724a19de67bea8cfc4970798efa78bcbbe2ac2613cfac16721a42d44de2a5`
+  of the wheel `numpy-2.5.4-cp315-cp315-macosx_14_0_arm64.whl` (5,454,250 bytes), between `lxml_html_clean` and `python-dateutil`; its header
+  and a provenance line say what numpy is for and how the hash was taken. `README.md` (the install bullet of the quick start) and
+  `engine/README.md` (the requirements sentence) say the same lock pins numpy, that only the build and the repair of the weaves will need
+  it, and that no code imports it yet; Increment C changes that last clause.
+- **The hash.** `pip download --no-deps --only-binary=:all: numpy==2.5.4` (with the owner's word) served the wheel from pip's cache of an
+  earlier install from PyPI, not from a new download, so its hash was compared with the sha256 that `https://pypi.org/pypi/numpy/2.5.4/json`
+  publishes for that file: equal, and the sizes equal. The lock says so (the reviewer noted that "the same way" overstated this and the
+  line was corrected).
+- **The install** (with the owner's word): `engine/.venv/bin/python -m pip install --require-hashes --no-deps -r engine/requirements.lock`
+  installed numpy 2.5.4; the other 21 packages were already satisfied and unchanged (`pip list --format=freeze` before and after: the same
+  21, plus numpy). `engine/.venv/bin/python -c 'import numpy; print(numpy.__version__)'` printed `2.5.4`.
+- **Verification as run.** `engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_convert`: 169 tests OK (the one
+  `ResourceWarning` about `kb/extract_traf.py` that it prints is the same as before this change); `wb run code-work check`: no problems.
+- **Review.** The `reviewer` agent (read only): no blocking finding. Not blocking: the provenance wording (applied, above); the long line 9 of
+  the engine README (left); the READMEs name the build and repair as future uses, as the plan says. It could not check the runs, the hash,
+  the network comparison or the unchanged packages, which are the ones above. It noted that the sandboxed extractor is given the
+  `engine/.venv` folder, where numpy now is; the extractor does not import it, and no exposure was named.
+- **Not run.** The tests of the other engine modules (nothing but the lock and two README sentences changed, and no code imports numpy); a
+  security review (not asked). No push.
