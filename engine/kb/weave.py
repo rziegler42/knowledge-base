@@ -403,6 +403,7 @@ _SCHEMA = (
     "b_theme TEXT NOT NULL, closeness INTEGER NOT NULL, wording INTEGER NOT NULL, band INTEGER NOT NULL, "
     "PRIMARY KEY (a_book, a_version, a_theme, b_book, b_version, b_theme))",
 )
+_GENERATION_LAST = 10 ** 12 - 1   # the highest generation a weave file can hold (twelve digits)
 _COUNT = re.compile(r"[0-9]{1,15}")   # the number of pairs of themes of different books: about the square of the number of themes
 _NUMPY_VERSION = re.compile(r"[0-9][0-9A-Za-z.+_-]{0,31}")
 
@@ -501,19 +502,23 @@ def _no_constant(name):
     raise ValueError(name)
 
 
+def _is_number(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and -SCALE <= x <= SCALE and math.isfinite(x)   # the range first: `isfinite` of an integer of 400 digits raises
+
+
 def _json_numbers(text, how_many):
-    """`how_many` finite numbers in billionths in order, or `None` if the text is `null`; any other form is a refusal."""
+    """One finite number in billionths (`how_many` 1: the median) or three in order (`how_many` 3: the edges), or `None` if the text is `null`; any other form (a list for the
+    median, one number for the edges, a boolean, text, NaN) is a refusal."""
     if text == "null":
         return None
     try:
         value = json.loads(text, parse_constant=_no_constant)
     except (ValueError, RecursionError):
         raise _bad("holds a number that is not a number") from None
-    values = value if isinstance(value, list) else [value]
-    if (not isinstance(value, (list, int, float)) or isinstance(value, bool) or len(values) != how_many
-            or not all(isinstance(x, (int, float)) and not isinstance(x, bool) and -SCALE <= x <= SCALE for x in values) or values != sorted(values)):
+    values = value if how_many > 1 else [value]
+    if (how_many > 1) != isinstance(value, list) or len(values) != how_many or not all(_is_number(x) for x in values) or values != sorted(values):
         raise _bad("holds edges or a median that are not what the build writes")
-    return values if isinstance(value, list) else values[0]
+    return value
 
 
 def _read_meta(conn):
@@ -524,7 +529,7 @@ def _read_meta(conn):
     if set(rows) != set(_META_KEYS) or not all(isinstance(v, str) for v in rows.values()):
         raise _bad("does not say what it was made from")
     hexset = themevectors._HEX
-    if (rows["format"] != str(FORMAT) or rows["kind"] != KIND or not re.fullmatch(r"[1-9][0-9]{0,8}", rows["generation"])
+    if (rows["format"] != str(FORMAT) or rows["kind"] != KIND or not re.fullmatch(r"[1-9][0-9]{0,11}", rows["generation"])
             or not models._valid_model(rows["vectors_model"]) or not models._valid_model(rows["vectors_configured"])
             or not themevectors._DIMENSION.fullmatch(rows["vectors_dimension"]) or not 1 <= int(rows["vectors_dimension"]) <= models.MAX_DIMENSION
             or not themevectors._BUILT.fullmatch(rows["vectors_built"]) or not themevectors._BUILT.fullmatch(rows["built"])
@@ -559,6 +564,10 @@ def check_rows(meta, themes, links):
     two themes of the file, of different books, in the order of their keys, once; its closeness is above the median and its band is the one its wording and the edges
     give; no theme has more links in a band than the slots, or two to one book in a band; and the number of links of a theme is the number it has. (`meta` needs
     `slots`, `median`, `edges` and `bands`.) The slots are those the file records: a build is given the number of slots, 3 by default, and a file says which it used."""
+    median, edges = meta["median"], meta["edges"]
+    if (median is None) != (edges is None) or (median is not None and (not _is_number(median) or not isinstance(edges, list) or len(edges) != 3
+                                                                       or not all(_is_number(e) for e in edges) or edges != sorted(edges))):
+        raise _bad("holds edges or a median that are not what the build writes")
     have = {}
     for t in themes:
         if t["key"] in have:
@@ -636,6 +645,12 @@ def _existing(final, previous):
     return before, os.path.lexists(final), False
 
 
+def _refuse_the_last_generation(generation, final):
+    if generation >= _GENERATION_LAST:
+        raise KbError(f"the generation of the weave ({generation}) is the highest that the file can hold: remove {os.path.basename(final)} and {PREVIOUS_FILE} "
+                      f"(the generation before holds the number too) from the index folder, and build again")
+
+
 def _keep_previous(final, held, previous):
     """Keep the weave in place as the generation before, as it is: a second name for the same file (or, where a link cannot be made, a copy), put in place before the new
     file is. The file must be a regular file of this user's own, which is not followed if it has become a link."""
@@ -645,8 +660,33 @@ def _keep_previous(final, held, previous):
     try:
         os.link(final, held, follow_symlinks=False)
     except (OSError, NotImplementedError):
-        shutil.copyfile(final, held)
-        os.chmod(held, 0o600)
+        # no link can be made: the weave is copied from a file opened without following a link and checked, as the descriptor and not the name says it is
+        # (O_NONBLOCK so that a pipe swapped in cannot hold the lock while it waits for a writer; it is then refused as not a regular file)
+        try:
+            source = os.open(final, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError as e:
+            raise KbError(f"the weave in place cannot be kept as the generation before ({e.strerror}); nothing was changed") from None
+        try:
+            info = os.fstat(source)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+                raise KbError("the weave in place is not a file of this user's own; nothing was changed")
+            src = os.fdopen(source, "rb")
+        except BaseException:
+            os.close(source)
+            raise
+        with src:
+            target = os.open(held, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                dst = os.fdopen(target, "wb")
+            except BaseException:
+                os.close(target)
+                raise
+            with dst:
+                shutil.copyfileobj(src, dst)
+    else:
+        if not stat.S_ISREG(os.lstat(held).st_mode):      # the link of a link that was swapped in is not a file, and is not kept
+            os.remove(held)
+            raise KbError("the weave in place is not a regular file; nothing was changed")
     os.replace(held, previous)
 
 
@@ -686,6 +726,7 @@ def _publish(index_root, meta, theme_rows, link_rows, expect_generation=None):
         try:
             _clean_leftovers(index_root)
             old_generation, replaced, in_place = _existing(final, previous)
+            _refuse_the_last_generation(old_generation, final)
             if expect_generation is not None and (not in_place or old_generation != expect_generation):
                 raise KbError("the weave in place changed while the repair was worked out, so nothing was written; run it again")
             meta = {**meta, "generation": str(old_generation + 1)}
@@ -728,6 +769,7 @@ def build(index_root, cfg, slots=SLOTS, top=TOP, block=BLOCK):
     (what the slot rule makes without the floor, from a second selection) of which `links_at_or_under_the_floor` are no closer than the median, the processed themes with no link in the farthest band (`no_link_in_farthest_band`), the `edges`, the `median` and the number of
     `pairs`, the `generation` and whether a file that was not a weave was `replaced`."""
     np = _np()
+    _refuse_the_last_generation(_existing(path_of(index_root), os.path.join(index_root, PREVIOUS_FILE))[0], path_of(index_root))
     with _vectors_file(index_root, cfg) as (conn, entry, vmeta, by_theme):
         wanted = _usable_vectors(np, conn, entry, by_theme)
     keys = sorted(by_theme)
@@ -871,6 +913,7 @@ def repair(index_root, cfg, store, now=None, force=False):
         raise KbError("no repair is due (" + state["next"] + "); `python3 -m kb theme-links repair --now` goes on")
     made, by_theme, wanted = info["made"], info["by_theme"], info["wanted"]
     meta = made["meta"]
+    _refuse_the_last_generation(meta["generation"], path_of(index_root))
     keys = [k for k in sorted(by_theme) if (k, "summary") in wanted and (k, "method") in wanted]
     unusable_changed = [k for k in info["changed"] if k not in set(keys)]
     old_keys = {t["key"] for t in made["themes"]}

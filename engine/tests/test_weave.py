@@ -607,6 +607,107 @@ class WeaveBuildTest(WeaveCase):
         self.assertEqual(counts["links_at_or_under_the_floor"], sum(1 for link in without["links"] if link[2] <= without["median"]))
         self.assertGreater(counts["links_at_or_under_the_floor"], 0)
 
+    def test_a_weave_with_a_generation_of_ten_digits_goes_on_and_one_at_the_limit_is_refused_before_any_file_is_made(self):
+        self.build_weave()
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = '5000000000' WHERE key = 'generation'")
+        self.assertEqual(self.build_weave()["generation"], 5000000001)
+        self.assertEqual(weave.read(self.weave_path())["meta"]["generation"], 5000000001)
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = '999999999998' WHERE key = 'generation'")
+        self.assertEqual(self.build_weave()["generation"], 999999999999)
+        before = file_sha256(self.weave_path())
+        with unittest.mock.patch.object(weave, "select", side_effect=AssertionError("the work was started")), self.assertRaises(KbError) as cm:
+            self.build_weave()                    # refused at the start, before the links are worked out
+        self.assertIn("remove", str(cm.exception))
+        self.assertIn(weave.INDEX_FILE, str(cm.exception))
+        self.assertIn(weave.PREVIOUS_FILE, str(cm.exception))        # the generation before holds the number too: removing the one alone would not help
+        self.assertEqual((file_sha256(self.weave_path()), self.leftovers()), (before, []))
+
+    def test_the_last_generation_in_the_generation_before_alone_is_refused_too_and_the_message_says_what_to_remove(self):
+        self.build_weave()
+        self.build_weave()
+        with closing_sqlite(os.path.join(self.index_root(), weave.PREVIOUS_FILE)) as conn:
+            conn.execute("UPDATE meta SET value = '999999999999' WHERE key = 'generation'")
+        os.remove(self.weave_path())
+        with unittest.mock.patch.object(weave, "select", side_effect=AssertionError("the work was started")), self.assertRaises(KbError) as cm:
+            self.build_weave()
+        self.assertIn(weave.PREVIOUS_FILE, str(cm.exception))
+
+    def test_a_weave_in_place_that_is_swapped_for_a_link_after_the_check_is_not_copied_when_a_link_to_it_cannot_be_made(self):
+        self.build_weave()
+        secret = os.path.join(self.base_dir(), "secret.txt")
+        with open(secret, "wb") as f:
+            f.write(b"not a weave, but the owner's")
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        held = os.path.join(self.base_dir(), "held")
+
+        def link_that_swaps(src, dst, **kw):          # the weave is swapped for a link to the secret between the check and the copy
+            os.remove(src)
+            os.symlink(secret, src)
+            raise OSError(1, "operation not permitted")
+
+        with unittest.mock.patch("kb.weave.os.link", link_that_swaps), self.assertRaises(KbError):
+            weave._keep_previous(self.weave_path(), held, previous)
+        self.assertFalse(os.path.exists(previous))
+        self.assertFalse(os.path.exists(held))
+        with open(secret, "rb") as f:
+            self.assertEqual(f.read(), b"not a weave, but the owner's")
+        # swapped for a folder instead: it is opened, and it is not a regular file, which the descriptor says
+        os.remove(self.weave_path())
+        self.build_weave()
+
+        def link_that_swaps_for_a_folder(src, dst, **kw):
+            os.remove(src)
+            os.mkdir(src)
+            raise OSError(1, "operation not permitted")
+
+        with unittest.mock.patch("kb.weave.os.link", link_that_swaps_for_a_folder), self.assertRaises(KbError):
+            weave._keep_previous(self.weave_path(), held, previous)
+        self.assertFalse(os.path.exists(previous))
+        self.assertFalse(os.path.exists(held))
+        # swapped for a link and the hard link is made of the link itself (as some systems do with follow_symlinks=False): what is at `held` is a link, which is not kept
+        os.rmdir(self.weave_path())
+        self.build_weave()
+
+        def link_of_a_link(src, dst, **kw):
+            os.symlink(secret, dst)
+
+        with unittest.mock.patch("kb.weave.os.link", link_of_a_link), self.assertRaises(KbError):
+            weave._keep_previous(self.weave_path(), held, previous)
+        self.assertFalse(os.path.lexists(previous))
+        self.assertFalse(os.path.lexists(held))
+        with open(secret, "rb") as f:
+            self.assertEqual(f.read(), b"not a weave, but the owner's")
+
+    def test_a_weave_in_place_that_is_swapped_for_a_pipe_is_refused_and_does_not_wait_for_a_writer(self):
+        import signal
+        self.build_weave()
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        held = os.path.join(self.base_dir(), "held")
+
+        def link_that_swaps_for_a_pipe(src, dst, **kw):
+            os.remove(src)
+            os.mkfifo(src)
+            raise OSError(1, "operation not permitted")
+
+        class WaitedForAWriter(Exception):        # not an OSError, which the copy turns into a refusal
+            pass
+
+        def too_long(*a):
+            raise WaitedForAWriter("the copy waited for a writer of the pipe")
+
+        old_handler = signal.signal(signal.SIGALRM, too_long)
+        signal.alarm(10)
+        try:
+            with unittest.mock.patch("kb.weave.os.link", link_that_swaps_for_a_pipe), self.assertRaises(KbError):
+                weave._keep_previous(self.weave_path(), held, previous)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+        self.assertFalse(os.path.lexists(previous))
+        self.assertFalse(os.path.lexists(held))
+
     def test_the_file_is_private_and_a_folder_of_a_build_that_was_killed_is_removed(self):
         os.mkdir(os.path.join(self.index_root(), weave.BUILD_PREFIX + "leftover"))
         self.build_weave()
@@ -749,6 +850,33 @@ class ReadingTheWeaveFileTest(WeaveCase):
         os.symlink(self.weave_path(), os.path.join(self.base_dir(), "link.sqlite"))
         with self.assertRaises(KbError):
             weave.read(os.path.join(self.base_dir(), "link.sqlite"))
+
+    def test_a_median_written_as_a_list_or_edges_as_one_number_or_a_boolean_are_refused_and_not_a_traceback(self):
+        for statement in ("UPDATE meta SET value = '[5]' WHERE key = 'median'", "UPDATE meta SET value = '[1, 2, 3]' WHERE key = 'median'",
+                          "UPDATE meta SET value = '5' WHERE key = 'edges'", "UPDATE meta SET value = 'true' WHERE key = 'median'",
+                          "UPDATE meta SET value = '[true, 2, 3]' WHERE key = 'edges'", "UPDATE meta SET value = '\"5\"' WHERE key = 'median'",
+                          f"UPDATE meta SET value = '{'1' + '0' * 400}' WHERE key = 'median'", f"UPDATE meta SET value = '[1, 2, {'1' + '0' * 400}]' WHERE key = 'edges'",
+                          f"UPDATE meta SET value = '-{'1' + '0' * 400}' WHERE key = 'median'"):
+            with self.subTest(statement=statement), self.assertRaises(KbError):
+                weave.read(self.damaged(statement))
+
+    def test_check_rows_refuses_a_median_or_an_edge_that_is_not_a_number_even_when_there_are_no_links(self):
+        themes = [{"key": ("b1", "v1", "t1"), "links": 0}]
+        good = {"slots": 3, "median": 1e8, "edges": [1e8, 2e8, 3e8], "bands": 4}
+        weave.check_rows(good, themes, [])
+        weave.check_rows({**good, "median": 100000000, "edges": [1, 2, 3]}, themes, [])
+        for bad in ({"median": 10 ** 400}, {"median": -10 ** 400}, {"edges": [1, 2, 10 ** 400]}, {"median": [5]}, {"median": True}, {"median": "5"}, {"median": None, "edges": [1, 2, 3]}, {"edges": [1, 2]}, {"edges": [True, 2, 3]}, {"edges": 5},
+                    {"edges": ["1", 2, 3]}, {"median": float("nan")}, {"edges": [1, float("inf"), 3]}):
+            with self.subTest(bad=bad), self.assertRaises(KbError):
+                weave.check_rows({**good, **bad}, themes, [])
+
+    def test_a_generation_of_ten_to_twelve_digits_is_read_and_one_of_thirteen_is_refused(self):
+        for value in ("1000000000", "999999999999"):
+            with closing_sqlite(self.weave_path()) as conn:
+                conn.execute("UPDATE meta SET value = ? WHERE key = 'generation'", (value,))
+            self.assertEqual(weave.read(self.weave_path())["meta"]["generation"], int(value))
+        with self.assertRaises(KbError):
+            weave.read(self.damaged("UPDATE meta SET value = '1000000000000' WHERE key = 'generation'"))
 
     def test_a_number_of_pairs_of_more_than_nine_digits_is_read(self):
         with closing_sqlite(self.weave_path()) as conn:
@@ -1695,6 +1823,35 @@ class RepairBigTest(RepairCase):
         self.assertEqual(self.status()["full_build_needed"], True)
         self.vectors_sql("UPDATE themes SET theme_generation = 1")
         self.assertEqual(self.status()["full_build_needed"], False)
+
+
+@needs_numpy
+class ForgedWeaveTest(RepairCase):
+    def test_a_median_written_as_a_list_is_refused_by_status_show_and_repair_and_nothing_is_written(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = '[5]' WHERE key = 'median'")
+        before = file_sha256(self.weave_path())
+        book, version, theme_id = self.keyed()["A0"]
+        for call in (lambda: self.status(), lambda: weave.show(self.index_root(), self.mcfg, book, theme_id), lambda: self.repair(force=True)):
+            with self.assertRaises(KbError) as cm:
+                call()
+            self.assertIn("theme-links build", str(cm.exception))
+        self.assertEqual((file_sha256(self.weave_path()), self.leftovers()), (before, []))
+        self.assertFalse(os.path.exists(os.path.join(self.index_root(), weave.PREVIOUS_FILE)))
+
+    def test_a_generation_at_the_limit_is_refused_by_a_repair_before_any_file_is_made(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = '999999999999' WHERE key = 'generation'")
+        before = file_sha256(self.weave_path())
+        with unittest.mock.patch.object(weave, "repair_links", side_effect=AssertionError("the work was started")), self.assertRaises(KbError) as cm:
+            self.repair()
+        self.assertIn("remove", str(cm.exception))
+        self.assertEqual((file_sha256(self.weave_path()), self.leftovers()), (before, []))
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = '999999999998' WHERE key = 'generation'")
+        self.assertEqual(self.repair()["generation"], 999999999999)
 
 
 @needs_numpy

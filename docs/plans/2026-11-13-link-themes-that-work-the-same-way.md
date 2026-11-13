@@ -497,6 +497,31 @@ conversion are not touched, and the tests of the extractor run in A because the 
   it needs the owner's word and a new increment (E-A) with a new approval of the plan. **The owner's decision (2026-11-13): go with the agent's recommendation** (correct L1, L3 and L5 in
   Increment E-A; write L2, L4, L6 and L7 down as accepted limits); the plan was approved again with E-A in it (region `fcc14d7a…2a1b`).
 
+### Increment E-A (corrections from the security review of the weave module; committed)
+
+- **Done.** In `engine/kb/weave.py`: **L1** a median is one finite number and the edges are three in order (or `null` for both), in `_json_numbers` and now also in `check_rows`, which refuses a
+  list, a boolean, text, NaN, infinity and an integer of any size (the range is tested before `isfinite`, which raises for an integer of 400 digits); `status`, `show` and `repair` over such a
+  file refuse with the command to run and write nothing. **L3** the generation may have twelve digits (`_GENERATION_LAST`); a build or a repair over a weave at the limit refuses at its
+  start, before any link is worked out and before any file is made, naming the two files to remove (the weave and the generation before, which holds the number too), and `_publish` checks
+  again under the lock. **L5** where a hard link cannot be made, the copy that keeps the generation before is made from a descriptor opened with `O_NOFOLLOW` and `O_NONBLOCK`, checked with
+  `fstat` to be a regular file of this user's, into a file created with `O_EXCL` and mode 0600; a link, a folder or a pipe swapped in is refused with a `KbError` and nothing is created, and
+  where the hard link was made of a link, what is at `held` is checked and removed. The four accepted limits (L2, L4, L6, L7), the limit of twelve digits and the form of the median are in the
+  README and the spec.
+- **Tests, first.** Written before the corrections and seen to fail (a list median gave a `TypeError` or was accepted, a generation of ten digits was refused, the copy followed a swapped link).
+  `test_weave` has 128 tests (126 before this increment's second look; 119 before E-A's first tests). `engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_weave`:
+  **128 tests OK**; with plain `python3` they are skipped with a reason.
+- **Second look.** The `reviewer` agent (read only) found **one blocking finding in the correction itself**, which was applied: `math.isfinite` raises `OverflowError` for an integer of about 400
+  digits, which `json.loads` reads, so a forged median could still end in a traceback (confirmed by running it; the range is now tested first, with tests for 400-digit values in the median,
+  the edges and `check_rows`). Applied also: the message at the limit named only the weave in place, but when the generation before holds the number removing that alone does not help (it names
+  both, with a test of the generation before alone); the hard link made of a link is checked after it is made; `O_NONBLOCK` so that a pipe swapped in does not hold the lock while it waits for a
+  writer (the test first passed by accident, because the alarm's `TimeoutError` is an `OSError` that the code turns into a refusal after ten seconds; it now fails when the copy waits); a
+  descriptor that `fdopen` could not take is closed. The README and the spec say the limit of twelve digits and the form of the median.
+- **Deliberate breaks.** 15, each caught (file restored byte for byte): a list accepted as a median; a boolean accepted; the median or the edges not checked in `check_rows`; the generation limited
+  to nine digits; the last generation not refused at the start of a build or of a repair, or one too late; a link followed when the weave is copied; the descriptor not checked; the copy made with
+  the name and not the descriptor; the range tested after `isfinite`; the message not naming the generation before; a link made of a link kept; a pipe waited for.
+- **Not run.** Any run on the real library (Increment F); a security review of the corrections (the second look above was read only, and the first review's findings were these three, tested).
+  Recorded, not changed: the hard link path is not tested against a symbolic link swapped in a real race on macOS (the code checks what it can: `lstat` before, `lstat` of `held` after). No push.
+
 ### Increment E (`theme-links status` and `repair`; committed)
 
 - **Done.** `engine/kb/weave.py` has `status(index_root, cfg, store, now=None)`, `repair(index_root, cfg, store, now=None, force=False)` and, below them, the repair as a pure
