@@ -72,13 +72,13 @@ The design and its reasons are in [docs/specs/knowledge-base.md](docs/specs/know
 ## Quick start
 
 Requirements: macOS (the sandbox is `sandbox-exec`) and Python 3.15, the version the engine was written and tested with. The
-engine's own code uses only the standard library today. The decision
-[the engine may use numpy](docs/decisions/2026-11-13-the-engine-may-use-numpy.md) allows numpy where it helps, first to build the
-weaves, and no code imports it yet. Two of the converters need more:
+engine's own code uses only the standard library, except that building a weave uses numpy, as the decision
+[the engine may use numpy](docs/decisions/2026-11-13-the-engine-may-use-numpy.md) allows; every other command runs without it.
+Two of the converters need more:
 
 - the article extractor needs a virtual environment built from hashes: `python3 -m venv engine/.venv`, then
   `engine/.venv/bin/python -m pip install --require-hashes --no-deps -r engine/requirements.lock`. The same lock pins numpy, which
-  the build and the repair of the weaves will need (run with `engine/.venv/bin/python`); no other command needs it;
+  `python3 -m kb theme-links build` needs (run it with `engine/.venv/bin/python`; the repair of the weaves will too); no other command needs it;
 - PDFs need poppler: `brew install poppler`.
 
 Then, from `engine/`:

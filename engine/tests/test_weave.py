@@ -3,9 +3,19 @@
 The selection is checked three ways: by cases small enough to work out by hand, against a plain-Python reference written here from the rule of the spec (random themes, several
 block sizes), and, for the exact median and edges, against `numpy.median` and `numpy.quantile`. The tests need numpy, so run them with the pinned environment:
 `engine/.venv/bin/python -m unittest engine.tests.test_weave`."""
+import contextlib
+import fcntl
+import hashlib
+import io
 import itertools
+import json
 import math
+import os
 import random
+import shutil
+import sqlite3
+import stat
+import subprocess
 import sys
 import tracemalloc
 import unittest
@@ -16,7 +26,10 @@ try:
 except ImportError:   # run with the standard library alone, these tests are skipped and say why
     np = None
 
-from kb import KbError, weave
+from engine.tests.test_themevectors import PerBookCase, with_embedding
+from kb import KbError, catalog, models, themevectors, weave
+from kb import __main__ as kbmain
+from kb import config as kbconfig
 
 SCALE = 10 ** 9
 needs_numpy = unittest.skipUnless(np is not None, "numpy is not installed: run with engine/.venv/bin/python")
@@ -404,6 +417,441 @@ class SelectAgainstTheReferenceTest(unittest.TestCase):
         self.assertEqual((with_floor["median"], with_floor["edges"]), (without["median"], without["edges"]))
         self.assertGreater(len(without["links"]), len(with_floor["links"]))
         self.assertTrue(all(link[2] > with_floor["median"] for link in with_floor["links"]))
+
+
+def deg4(d):
+    """A vector of the dimension 4 (the dimension of the tests of the vectors) at the angle d degrees."""
+    return [math.cos(math.radians(d)), math.sin(math.radians(d)), 0.0, 0.0]
+
+
+def as_stored(v):
+    """A vector as the file of the vectors keeps it: little-endian 32-bit floats, read back as doubles."""
+    return np.array(v, dtype=np.float32).astype(np.float64).tolist()
+
+
+def file_sha256(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+@needs_numpy
+class WeaveCase(PerBookCase):
+    """Books with themes whose summary vector and method vector are at the angles the test names, built into a file of theme vectors of the dimension 4."""
+
+    SPEC = {"A": [(0, 0), (40, 10)], "B": [(10, 30), (80, 70)], "C": [(20, 5), (60, 50)]}   # book: [(summary degrees, method degrees) of each theme]
+
+    def setUp(self):
+        super().setUp()
+        self.books = {name: self.themed(self.themes_of(name, len(themes)))[0] for name, themes in self.SPEC.items()}
+        self.build()
+        away, table = [0.0, 0.0, 1.0, 0.0], {}
+        for r in self.themes_read():
+            texts = themevectors.texts_of(r["theme"])
+            for text in texts.values():
+                table[text] = away
+            name = r["theme"]["title"].split()[-1]
+            summary, method = self.SPEC[name[0]][int(name[1:])]
+            table[texts["summary"]], table[texts["method"]] = deg4(summary), deg4(method)
+        self.plan(table=table)
+        self.build(again=True)
+
+    def index_root(self):
+        return self.store.cfg["index_root"]
+
+    def weave_path(self):
+        return weave.path_of(self.index_root())
+
+    def build_weave(self, cfg=None, **kw):
+        return weave.build(self.index_root(), cfg or self.mcfg, **kw)
+
+    def keyed(self):
+        return {r["theme"]["title"].split()[-1]: (r["book_id"], r["version_id"], r["theme_id"]) for r in self.themes_read()}
+
+    def expected(self, **kw):
+        keyed = self.keyed()
+        names = sorted(keyed, key=keyed.get)
+        spec = {f"{b}{i}": pair for b, themes in self.SPEC.items() for i, pair in enumerate(themes)}
+        return weave.select([keyed[n] for n in names], [keyed[n][0] for n in names], [as_stored(deg4(spec[n][0])) for n in names],
+                            [as_stored(deg4(spec[n][1])) for n in names], **kw)
+
+    def leftovers(self):
+        return [n for n in os.listdir(self.index_root()) if n.startswith(weave.BUILD_PREFIX)]
+
+
+@needs_numpy
+class WeaveBuildTest(WeaveCase):
+    def test_a_build_makes_the_links_of_the_selection_and_says_what_it_was_made_from(self):
+        counts = self.build_weave()
+        want = self.expected()
+        self.assertGreater(len(want["links"]), 0)
+        got = weave.read(self.weave_path())
+        self.assertEqual(got["links"], want["links"])
+        meta, vmeta = got["meta"], self.meta()
+        self.assertEqual((meta["kind"], meta["generation"], meta["slots"], meta["top"], meta["bands"]), ("same-mechanism", 1, 3, 300, 4))
+        self.assertEqual((meta["vectors_model"], meta["vectors_configured"], meta["vectors_dimension"], meta["vectors_built"], meta["vectors_document_prefix_sha256"]),
+                         (vmeta["model"], vmeta["configured"], int(vmeta["dimension"]), vmeta["built"], vmeta["document_prefix_sha256"]))
+        self.assertEqual((meta["edges"], meta["median"], meta["pairs"]), (want["edges"], want["median"], want["pairs"]))
+        self.assertRegex(meta["built"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00$")
+        self.assertEqual(meta["numpy"], np.__version__)
+        self.assertEqual([t["theme_generation"] for t in got["themes"]], [1] * 6)
+        self.assertEqual((counts["links"], counts["generation"], counts["replaced"], counts["themes_in_vectors_file"], counts["themes_processed"]), (len(want["links"]), 1, False, 6, 6))
+
+    def test_the_counts_say_what_was_done(self):
+        counts = self.build_weave()
+        want, without = self.expected(), self.expected(use_floor=False)
+        degree = {}
+        for a, b, *_ in want["links"]:
+            degree[a] = degree.get(a, 0) + 1
+            degree[b] = degree.get(b, 0) + 1
+        self.assertEqual(counts["links_without_floor"], len(without["links"]))
+        self.assertEqual((counts["themes_with_links"], counts["themes_with_no_link"]), (len(degree), 6 - len(degree)))
+        self.assertEqual((counts["left_out"], counts["left_out_reasons"]), (0, {"no_text": 0, "no_usable_vector": 0}))
+        far = {x for a, b, c, w, band in want["links"] if band == 0 for x in (a, b)}
+        self.assertEqual(counts["no_link_in_farthest_band"], 6 - len(far))
+        self.assertEqual((counts["edges"], counts["median"], counts["pairs"]), (want["edges"], want["median"], want["pairs"]))
+
+    def test_a_second_build_is_a_new_generation_and_the_one_before_is_kept_as_it_was(self):
+        self.build_weave()
+        first = file_sha256(self.weave_path())
+        again = self.build_weave()
+        self.assertEqual(again["generation"], 2)
+        self.assertEqual(weave.read(self.weave_path())["links"], self.expected()["links"])
+        self.assertEqual(file_sha256(os.path.join(self.index_root(), weave.PREVIOUS_FILE)), first)
+        self.assertEqual(weave.read(os.path.join(self.index_root(), weave.PREVIOUS_FILE))["meta"]["generation"], 1)
+        second = file_sha256(self.weave_path())
+        self.assertEqual(self.build_weave()["generation"], 3)
+        self.assertEqual(file_sha256(os.path.join(self.index_root(), weave.PREVIOUS_FILE)), second)    # only one before is kept
+
+    def test_the_generation_before_is_kept_by_a_copy_if_a_link_to_the_file_cannot_be_made(self):
+        self.build_weave()
+        first = file_sha256(self.weave_path())
+        with unittest.mock.patch("kb.weave.os.link", side_effect=OSError(1, "operation not permitted")):
+            self.assertEqual(self.build_weave()["generation"], 2)
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        self.assertEqual(file_sha256(previous), first)
+        self.assertEqual(stat.S_IMODE(os.stat(previous).st_mode), 0o600)
+        self.assertNotEqual(os.stat(previous).st_ino, os.stat(self.weave_path()).st_ino)
+
+    def test_a_name_for_the_generation_before_that_is_a_link_is_replaced_and_its_target_left_alone(self):
+        self.build_weave()
+        target = os.path.join(self.base_dir(), "other.sqlite")
+        with open(target, "wb") as f:
+            f.write(b"somebody's file")
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        os.symlink(target, previous)
+        self.build_weave()
+        self.assertFalse(os.path.islink(previous))
+        with open(target, "rb") as f:
+            self.assertEqual(f.read(), b"somebody's file")
+        self.assertEqual(weave.read(previous)["meta"]["generation"], 1)
+
+    def test_a_weave_in_place_that_has_become_a_link_is_not_followed_to_keep_it_as_the_generation_before(self):
+        self.build_weave()
+        elsewhere = os.path.join(self.base_dir(), "secret.txt")
+        with open(elsewhere, "wb") as f:
+            f.write(b"not a weave")
+        os.remove(self.weave_path())
+        os.symlink(elsewhere, self.weave_path())
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        with self.assertRaises(KbError):
+            weave._keep_previous(self.weave_path(), os.path.join(self.base_dir(), "held"), previous)
+        self.assertFalse(os.path.exists(previous))
+        self.assertFalse(os.path.exists(os.path.join(self.base_dir(), "held")))
+
+    def test_a_failure_at_the_second_rename_leaves_the_weave_in_place_and_the_next_build_goes_on(self):
+        self.build_weave()
+        self.build_weave()
+        before = file_sha256(self.weave_path())
+        real, calls = os.replace, []
+
+        def second_fails(src, dst, *a, **k):
+            calls.append(dst)
+            if len(calls) == 2:
+                raise OSError(5, "input/output error")
+            return real(src, dst, *a, **k)
+
+        with unittest.mock.patch("kb.weave.os.replace", second_fails), self.assertRaises(KbError):
+            self.build_weave()
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        self.assertEqual((file_sha256(self.weave_path()), file_sha256(previous)), (before, before))    # both names hold the generation in place; nothing is damaged
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(self.build_weave()["generation"], 3)
+        self.assertEqual(file_sha256(previous), before)
+
+    def test_a_weave_file_that_is_damaged_goes_on_from_the_generation_before_and_leaves_it_as_it_was(self):
+        self.build_weave()
+        self.build_weave()
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        kept = file_sha256(previous)
+        with open(self.weave_path(), "wb") as f:
+            f.write(b"not a database")
+        again = self.build_weave()
+        self.assertEqual((again["replaced"], again["generation"]), (True, 2))
+        self.assertEqual(file_sha256(previous), kept)
+
+    def test_the_count_of_the_links_at_or_under_the_floor_is_of_those_the_slot_rule_makes_without_it(self):
+        counts = self.build_weave()
+        without = self.expected(use_floor=False)
+        self.assertEqual(counts["links_at_or_under_the_floor"], sum(1 for link in without["links"] if link[2] <= without["median"]))
+        self.assertGreater(counts["links_at_or_under_the_floor"], 0)
+
+    def test_the_file_is_private_and_a_folder_of_a_build_that_was_killed_is_removed(self):
+        os.mkdir(os.path.join(self.index_root(), weave.BUILD_PREFIX + "leftover"))
+        self.build_weave()
+        self.build_weave()
+        self.assertEqual(self.leftovers(), [])
+        for name in (weave.INDEX_FILE, weave.PREVIOUS_FILE, weave.LOCK_FILE):
+            self.assertEqual(stat.S_IMODE(os.stat(os.path.join(self.index_root(), name)).st_mode), 0o600, name)
+
+    def test_the_vectors_file_is_not_changed_and_no_model_is_called(self):
+        before, asked = file_sha256(themevectors.path_of(self.index_root())), self.calls()
+        with unittest.mock.patch.object(models, "embed", side_effect=AssertionError("a model was called")), \
+                unittest.mock.patch.object(models, "run_job", side_effect=AssertionError("a model was called")):
+            self.build_weave()
+        self.assertEqual(file_sha256(themevectors.path_of(self.index_root())), before)
+        self.assertEqual(self.calls(), asked)    # the bridge of the tests was not asked again
+
+    def test_a_rename_that_fails_leaves_the_old_file_as_it_was_and_no_folder(self):
+        self.build_weave()
+        before = file_sha256(self.weave_path())
+        with unittest.mock.patch("kb.weave.os.replace", side_effect=OSError(5, "input/output error")):
+            with self.assertRaises(KbError):
+                self.build_weave()
+        self.assertEqual(file_sha256(self.weave_path()), before)
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(self.build_weave()["generation"], 2)
+
+    def test_another_writer_holds_the_lock(self):
+        fd = os.open(os.path.join(self.index_root(), weave.LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            with unittest.mock.patch.object(catalog, "LOCK_WAIT", 0.2), self.assertRaises(KbError) as cm:
+                self.build_weave()
+            self.assertIn("another process", str(cm.exception))
+        finally:
+            os.close(fd)
+        self.assertFalse(os.path.exists(self.weave_path()))
+
+    def test_a_lock_file_that_is_a_link_is_not_followed(self):
+        target = os.path.join(self.base_dir(), "elsewhere")
+        open(target, "w").close()
+        os.symlink(target, os.path.join(self.index_root(), weave.LOCK_FILE))
+        with self.assertRaises(KbError):
+            self.build_weave()
+        self.assertFalse(os.path.exists(self.weave_path()))
+
+    def test_a_weave_file_that_is_a_link_is_replaced_and_its_target_is_left_alone(self):
+        self.build_weave()
+        target = os.path.join(self.base_dir(), "moved.sqlite")
+        os.replace(self.weave_path(), target)
+        os.symlink(target, self.weave_path())
+        kept = file_sha256(target)
+        again = self.build_weave()
+        self.assertTrue(again["replaced"])
+        self.assertEqual((again["generation"], file_sha256(target)), (1, kept))
+        self.assertFalse(os.path.islink(self.weave_path()))
+        self.assertEqual(weave.read(self.weave_path())["links"], self.expected()["links"])
+
+    def test_a_weave_file_that_is_damaged_is_replaced_and_not_kept_as_the_one_before(self):
+        self.build_weave()
+        with open(self.weave_path(), "wb") as f:
+            f.write(b"not a database")
+        again = self.build_weave()
+        self.assertEqual((again["replaced"], again["generation"]), (True, 1))
+        self.assertFalse(os.path.exists(os.path.join(self.index_root(), weave.PREVIOUS_FILE)))
+
+    def test_no_file_of_vectors_or_one_for_another_model_dimension_or_prefix_or_not_the_engines_is_refused_and_nothing_is_written(self):
+        for cfg in (with_embedding(model="other:1"), with_embedding(dimension=5), with_embedding(document_prefix="x")):
+            with self.subTest(cfg=cfg["models"]["emb"]), self.assertRaises(KbError):
+                self.build_weave(cfg)
+        path = themevectors.path_of(self.index_root())
+        with open(path, "rb") as f:
+            good = f.read()
+        with open(path, "wb") as f:
+            f.write(b"damaged")
+        with self.assertRaises(KbError):
+            self.build_weave()
+        os.remove(path)
+        with self.assertRaises(KbError) as cm:
+            self.build_weave()
+        self.assertIn("theme-vectors", str(cm.exception))
+        with closing_sqlite(path) as conn:
+            conn.execute("CREATE TABLE other (x)")
+        with self.assertRaises(KbError):
+            self.build_weave()
+        self.assertFalse(os.path.exists(self.weave_path()))
+        self.assertEqual(self.leftovers(), [])
+        with open(path, "wb") as f:
+            f.write(good)
+
+    def test_without_numpy_the_build_says_what_to_install_and_writes_nothing(self):
+        with unittest.mock.patch.dict(sys.modules, {"numpy": None}), self.assertRaises(KbError) as cm:
+            self.build_weave()
+        self.assertIn("requirements.lock", str(cm.exception))
+        self.assertFalse(os.path.exists(self.weave_path()))
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_value_of_a_theme_that_is_stale_is_left_out_and_counted(self):
+        path = themevectors.path_of(self.index_root())
+        with closing_sqlite(path) as conn:
+            conn.execute("UPDATE vectors SET text_sha256 = ? WHERE rowid = (SELECT rowid FROM vectors WHERE field = 'method' LIMIT 1)", ("0" * 64,))
+        counts = self.build_weave()
+        self.assertEqual((counts["themes_processed"], counts["left_out"]), (5, 1))
+        self.assertEqual(counts["left_out_reasons"], {"no_text": 0, "no_usable_vector": 1})
+
+
+def closing_sqlite(path):
+    return contextlib.closing(sqlite3.connect(path, isolation_level=None))
+
+
+@needs_numpy
+class WeaveFloorTest(WeaveCase):
+    SPEC = {"A": [(0, 0)], "B": [(0, 10)], "C": [(0, 30)], "D": [(0, 70)]}   # one theme in each of four books; the floor leaves the theme at 70 degrees with no link
+
+    def test_a_theme_left_with_no_link_by_the_floor_is_in_the_weave_with_none(self):
+        counts = self.build_weave()
+        got = weave.read(self.weave_path())
+        by_name = {name: key for name, key in self.keyed().items()}
+        self.assertEqual({t["key"]: t["links"] for t in got["themes"]}, {by_name["A0"]: 2, by_name["B0"]: 2, by_name["C0"]: 2, by_name["D0"]: 0})
+        self.assertEqual((counts["themes_processed"], counts["themes_with_no_link"], counts["links"]), (4, 1, 3))
+
+
+@needs_numpy
+class ReadingTheWeaveFileTest(WeaveCase):
+    def setUp(self):
+        super().setUp()
+        self.build_weave()
+        self.copy = os.path.join(self.base_dir(), "copy.sqlite")
+
+    def damaged(self, statement):
+        shutil.copyfile(self.weave_path(), self.copy)
+        with closing_sqlite(self.copy) as conn:
+            conn.execute(statement)
+        return self.copy
+
+    def test_a_good_file_is_read_and_a_missing_one_or_a_link_is_refused(self):
+        self.assertEqual(len(weave.read(self.weave_path())["themes"]), 6)
+        with self.assertRaises(KbError) as cm:
+            weave.read(os.path.join(self.base_dir(), "none.sqlite"))
+        self.assertIn("theme-links build", str(cm.exception))
+        os.symlink(self.weave_path(), os.path.join(self.base_dir(), "link.sqlite"))
+        with self.assertRaises(KbError):
+            weave.read(os.path.join(self.base_dir(), "link.sqlite"))
+
+    def test_a_number_of_pairs_of_more_than_nine_digits_is_read(self):
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = '12345678901' WHERE key = 'pairs'")
+        self.assertEqual(weave.read(self.weave_path())["meta"]["pairs"], 12345678901)
+
+    def test_a_row_or_a_value_that_is_not_what_the_engine_writes_is_refused(self):
+        a_link = "(SELECT rowid FROM links LIMIT 1)"
+        statements = [
+            "INSERT INTO meta (key, value) VALUES ('extra', 'x')",
+            "DELETE FROM meta WHERE key = 'kind'",
+            "UPDATE meta SET value = '2' WHERE key = 'format'",
+            "UPDATE meta SET value = 'other' WHERE key = 'kind'",
+            "UPDATE meta SET value = '0' WHERE key = 'generation'",
+            "UPDATE meta SET value = '[1, 2]' WHERE key = 'edges'",
+            "UPDATE meta SET value = '[3.0, 2.0, 1.0]' WHERE key = 'edges'",
+            "UPDATE meta SET value = '[NaN, 1.0, 2.0]' WHERE key = 'edges'",
+            "UPDATE meta SET value = 'null' WHERE key = 'median'",
+            "UPDATE meta SET value = '5' WHERE key = 'bands'",
+            "UPDATE meta SET value = 'a long time ago' WHERE key = 'built'",
+            "UPDATE meta SET value = 'x' WHERE key = 'vectors_dimension'",
+            "UPDATE meta SET value = 'x' WHERE key = 'vectors_document_prefix_sha256'",
+            "CREATE TABLE extra (x)",
+            "CREATE TRIGGER t AFTER INSERT ON meta BEGIN SELECT 1; END",
+            "CREATE VIEW v AS SELECT 1",
+            "UPDATE themes SET book_id = 'a bad id' WHERE rowid = 1",
+            "UPDATE themes SET method_sha256 = 'zz' WHERE rowid = 1",
+            "UPDATE themes SET theme_generation = 0 WHERE rowid = 1",
+            "UPDATE themes SET links = links + 1 WHERE rowid = 1",
+            "DELETE FROM themes WHERE rowid = 1",
+            f"UPDATE links SET b_book = a_book WHERE rowid = {a_link}",
+            f"UPDATE links SET closeness = -5 WHERE rowid = {a_link}",
+            f"UPDATE links SET closeness = 2000000000 WHERE rowid = {a_link}",
+            f"UPDATE links SET band = (band + 1) % 4 WHERE rowid = {a_link}",
+            f"UPDATE links SET wording = 'x' WHERE rowid = {a_link}",
+            f"UPDATE links SET a_theme = 'zz' WHERE rowid = {a_link}",
+            "UPDATE links SET a_book = b_book, a_version = b_version, a_theme = b_theme, b_book = a_book, b_version = a_version, b_theme = a_theme WHERE rowid = (SELECT rowid FROM links LIMIT 1)",
+        ]
+        for statement in statements:
+            with self.subTest(statement=statement):
+                with self.assertRaises(KbError):
+                    weave.read(self.damaged(statement))
+
+    def test_more_links_than_the_slot_rule_allows_are_refused_and_a_file_that_keeps_it_is_not(self):
+        # rows made by hand: themes t0 to t4 in books b0 to b4, and a link of t0 to each of the others in one band (wording 0.9, band 3), each above the median 0.1
+        def rows(links, slots=3):
+            meta = {"slots": slots, "median": 1e8, "edges": [1e8, 2e8, 3e8], "bands": 4}
+            keys = [(f"b{i}", "v1", "t1") for i in range(5)]
+            themes = [{"key": k, "links": sum(1 for a, b in links if i in (a, b))} for i, k in enumerate(keys)]
+            return meta, themes, [(keys[a], keys[b], 5 * 10 ** 8, 9 * 10 ** 8, 3) for a, b in links]
+        weave.check_rows(*rows([(0, 1), (0, 2), (0, 3)]))                  # three in a band is the rule
+        with self.assertRaises(KbError):
+            weave.check_rows(*rows([(0, 1), (0, 2), (0, 3), (0, 4)]))      # four are not
+        weave.check_rows(*rows([(0, 1), (0, 2), (0, 3), (0, 4)], slots=4))
+        meta, themes, links = rows([(0, 1)])
+        links.append((links[0][0], links[0][1], 6 * 10 ** 8, 9 * 10 ** 8, 3))
+        with self.assertRaises(KbError):
+            weave.check_rows(meta, themes, links)                          # the same pair twice
+        # two links of one theme to one book in a band: t0 to a theme of book b9 and another theme of book b9
+        keys = [("b0", "v1", "t1"), ("b9", "v1", "t1"), ("b9", "v1", "t2")]
+        meta = {"slots": 3, "median": 1e8, "edges": [1e8, 2e8, 3e8], "bands": 4}
+        themes = [{"key": keys[0], "links": 2}, {"key": keys[1], "links": 1}, {"key": keys[2], "links": 1}]
+        links = [(keys[0], keys[1], 5 * 10 ** 8, 9 * 10 ** 8, 3), (keys[0], keys[2], 4 * 10 ** 8, 9 * 10 ** 8, 3)]
+        with self.assertRaises(KbError):
+            weave.check_rows(meta, themes, links)
+
+
+@needs_numpy
+class ThemeLinksCommandTest(WeaveCase):
+    def setUp(self):
+        super().setUp()
+        saved = kbconfig.load()
+        saved.update(with_embedding())
+        kbconfig.save(saved)
+
+    def kb(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.object(models, "embed", side_effect=AssertionError("a model was called")), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = kbmain.main(list(args))
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_theme_links_build_prints_the_counts_and_a_second_build_is_the_next_generation(self):
+        code, out, err = self.kb("theme-links", "build")
+        counts = json.loads(out)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual((counts["generation"], counts["themes_processed"], counts["links"] > 0), (1, 6, True))
+        code, out, _ = self.kb("theme-links", "build")
+        self.assertEqual((code, json.loads(out)["generation"]), (0, 2))
+
+    def test_without_the_file_of_vectors_it_refuses_and_names_the_command_to_run(self):
+        os.remove(themevectors.path_of(self.index_root()))
+        code, out, err = self.kb("theme-links", "build")
+        self.assertEqual(code, 2)
+        self.assertIn("theme-vectors", err)
+        self.assertEqual(out, "")
+
+    def test_it_takes_no_model_server_address_or_launcher_and_needs_a_sub_command(self):
+        for option in ("--model", "--server", "--address", "--host", "--url", "--launcher", "--bridge"):
+            with self.subTest(option=option):
+                self.assertEqual(self.kb("theme-links", "build", option, "x")[0], 2)
+        self.assertEqual(self.kb("theme-links")[0], 2)
+
+    def test_without_numpy_the_command_refuses_and_every_other_module_still_imports(self):
+        with unittest.mock.patch.dict(sys.modules, {"numpy": None}):
+            code, out, err = self.kb("theme-links", "build")
+        self.assertEqual(code, 2)
+        self.assertIn("numpy", err)
+        engine = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        program = ("import sys; sys.modules['numpy'] = None; sys.path.insert(0, %r); import pkgutil, importlib, kb; "
+                   "[importlib.import_module('kb.' + m.name) for m in pkgutil.iter_modules(kb.__path__)]; print('imported')" % engine)
+        done = subprocess.run([sys.executable, "-I", "-c", program], capture_output=True, text=True, timeout=120)
+        self.assertEqual((done.returncode, done.stdout.strip()), (0, "imported"), done.stderr)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import themerun, themereflag, themevectors
+from . import themerun, themereflag, themevectors, weave
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -124,6 +124,11 @@ def main(argv=None):
                                               "every theme, up to seven texts) with the embedding model that the config sets for card-embed; a vector "
                                               "whose text has not changed is kept; those texts go to that model")
     tv.add_argument("--again", action="store_true", help="make every vector again")
+    tl = sub.add_parser("theme-links", help="the links between the themes: a weave is a set of links of one kind (the weave of same mechanism is the first); "
+                                            "needs numpy, so run it with engine/.venv/bin/python")
+    tls = tl.add_subparsers(dest="links_command", required=True)
+    tls.add_parser("build", help="build the weave of same mechanism from the file of theme vectors (read only; nothing is sent to any model) and put it in the "
+                                 "index root in place of the old one, keeping the generation before; needs `theme-vectors` run first")
     ts = sub.add_parser("theme-search", help="search the themes by meaning: the query is any text (a sentence or two about a problem), turned into "
                                              "a vector by the embedding model that the config sets for card-embed (the query goes to that model), "
                                              "and the themes are ranked by the closeness of their closest text; needs `theme-vectors` run first")
@@ -273,6 +278,10 @@ def main(argv=None):
             if counts["unreadable"]:
                 print(f"{counts['unreadable']} book could not be read and has no vectors", file=sys.stderr)
                 return 1
+            return 0
+        if args.command == "theme-links":
+            cfg = config.load()
+            print(json.dumps(weave.build(cfg["index_root"], cfg)))
             return 0
         if args.command == "theme-search":
             cfg = config.load()

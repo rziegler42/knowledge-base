@@ -183,6 +183,16 @@ tested. It does not cover how themes are made or how the agent searches, which h
   takes one slot at each end, a theme links to at most one theme of one book in a band, and links are accepted from the strongest
   closeness of the weave's kind down (method closeness for *same mechanism*). When a theme's slots are full, the themes that wanted
   it take their next candidate. Slots for a directional weave are not decided.
+- **[agreed]** A bound on the candidates (the owner, 2026-11-13, on the agent's recommendation): each theme puts forward only its closest 300 partners in each band,
+  so that memory grows with the number of themes and not with its square. A theme whose candidates in a band are all taken, or all of books it already links to in
+  that band, gets no further link there even if other partners are free. How often this changes a result is measured on the owner's library by building with and
+  without the cut, and the rule without it (rounds of further candidates for themes with free slots) is brought to the owner only if the measurement shows real
+  differences.
+- **[proposed]** A pair whose wording closeness is exactly on an edge is in the band above it.
+- **[proposed]** Built: `engine/.venv/bin/python -m kb theme-links build` makes the weave of *same mechanism* from the file of the theme vectors (read only; nothing is
+  sent to any model) and puts `weave-same-mechanism.sqlite` in the index root, in a folder of its own under a lock, keeping the generation before; the file records every
+  theme it processed with its number of links, those left with none included, and what it was made from. The closeness is an integer in billionths and the median and
+  the edges are exact (`engine/kb/weave.py`; `engine/README.md`). Looking at the links of a theme, the repair of a weave and the batching are not built yet.
 - **[agreed]** The floor of strength (the owner, 2026-11-13). A link is kept only if its closeness for the weave's kind is above the
   median closeness of all pairs of themes of different books, worked out for each weave. A pair no closer than a typical pair is not
   a link of that kind, so it is not stored, and a theme may keep fewer than 12 links, most of all in the wording-farthest band. It

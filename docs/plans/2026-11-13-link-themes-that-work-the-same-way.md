@@ -369,3 +369,41 @@ conversion are not touched, and the tests of the extractor run in A because the 
   half billionth could then carry another value; with the same block size the result is the same every time, and the docstring says so.
 - **Not run.** Any run on the real library (Increment F); the tests of the other engine modules (nothing else imports `weave`); a security review
   (not asked: the module is pure functions of numbers, with no file, subprocess or network). No push.
+
+### Increment C (the file of the weave and `theme-links build`; committed)
+
+- **Done.** `engine/kb/weave.py` now holds the file of the weave and its build below the selection of Increment B: `build(index_root, cfg)` reads the file of the
+  theme vectors read-only (`themevectors.connect`, `check_entry`, `read_themes`, `check_vector_rows`, `iter_vectors`, as the search does), counts a vector only if its
+  text is the text the theme still has, calls `select`, and writes `weave-same-mechanism.sqlite` in the index root: in a folder of its own under a lock, mode 600, read
+  back before it is put in place, renamed into place; the generation before is kept as it was in `weave-same-mechanism.previous.sqlite` (a second name for the same
+  file, or a copy where a link cannot be made). The file holds `meta`, `themes` (every theme processed, those left with no link included, with its number of links)
+  and `links`. `read(path)` and `check_rows` check every row. `engine/kb/__main__.py` has `theme-links build`, which takes no option that names a model, a server or an
+  address. The READMEs say that only `theme-links build` needs numpy (the repair will too), the engine README has a paragraph for the weave, and `docs/specs/weave.md`
+  records the bound on the candidates (agreed), the edge side (proposed) and what is built (proposed).
+- **Tests, first.** Written before the code and seen to fail (no `weave.build`, no `theme-links` command). `test_weave` has 60 tests: the build against `select` on a
+  small file made as the tests of `themevectors` make theirs (six themes of three books with vectors at chosen angles), the meta, the counts, a second and a third
+  generation with the one before kept byte for byte, mode 600, a leftover folder of a killed build, the vectors file unchanged and no model called, a failed rename and
+  a failed second rename, another writer holding the lock, a lock file and a weave file and a name for the generation before that are links, a weave that is damaged
+  (replaced, and the generation going on from the one before), a vectors file that is missing, damaged, not the engine's or for another model, dimension or prefix (nothing
+  written), a stale vector, no numpy, a theme left with no link by the floor (in the weave with none), 28 ways in which a row of the weave file could be wrong (all refused),
+  slots and two links to one book in a band, more than nine digits of pairs, the command line (counts, a second generation, no vectors file, no options, no numpy and
+  every module of `kb` imported with numpy made unavailable). `engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_weave
+  engine.tests.test_themevectors`: **171 tests OK**; with plain `python3` the 60 of `test_weave` are skipped with a reason.
+- **Deliberate breaks.** 30, each caught, `weave.py` restored byte for byte (sha256 prefix `21182de24dce`): the lock not held; the file written in place and not in a folder
+  of its own; the generation before not kept; a link followed (the lock file, the weave file, the weave in place when it is kept); the vectors file written to; the
+  meta not written; rows not checked on reading; numpy imported at the top; a theme with no link left out; a leftover not removed; the file not private (and the copy);
+  the generation not counted up or not gone on from the one before; a file in the way not said to be replaced; a stale vector accepted; the model of the vectors file
+  not checked; the counts wrong; a link not above the floor, in the wrong band, with a wrong number on a theme, over the slots, or two to one book in a band not
+  refused; a trigger not refused; the file in place not checked to be a regular file of this user's; pairs limited to nine digits.
+- **Review.** The `reviewer` agent (read only): no blocking finding. Applied: the file in place is checked with `lstat` to be a regular file of this user's before it is kept
+  as the generation before, and linked with `follow_symlinks=False`; the generation goes on from the generation before when the file in place is not a weave (it started
+  again at 1 under a `previous` that could hold a higher number); the number of pairs may have up to 15 digits (a library of about 45,000 themes would have refused its own
+  file); `build` also prints `links_at_or_under_the_floor`, the number of links the slot rule makes without the floor that are no closer than the median, which is
+  what the plan's "links dropped by the floor" means (`links_without_floor` stays, and the second selection that gives them roughly doubles the time of a build); the README
+  says that the model work of the config must be on, only to find the embedding entry; and tests for the copy fallback, a name for the generation before that is a link,
+  a failure at the second rename, and the `lstat` check. Recorded, not changed: `read` checks the slot rule against the slots the file records, not the constant 3 (a
+  build is given the number of slots, and the docstring says so); the one `previous` name shares the inode of the file in place until the new file is renamed over it, which
+  is safe because a build never writes the old file, **and Increment E must write a new file and rename it, never change the file in place, or it would change the generation
+  before** (the engine README says so too); a crash between the two renames leaves both names with the generation in place and loses only the generation before that.
+- **Not run.** Any run on the real library (Increment F); the other engine modules' tests (nothing else changed besides the command line, which `test_themevectors`
+  exercises); a security review (not asked: the new code reads two files of the index root, every row of which is checked, and writes one in a private folder). No push.
