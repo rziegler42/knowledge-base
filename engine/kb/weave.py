@@ -33,6 +33,7 @@ import tempfile
 import time
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path
 
 from . import KbError, catalog, ids, models, themevectors, vectors
@@ -198,6 +199,46 @@ def _prepare(np, keys, books, summaries, methods):
     return kept, order, left_out, rows_s, rows_m
 
 
+
+def _closeness_of_rows(np, A, rows):
+    """The closeness, in billionths, of each theme of `rows` (indexes) to every theme."""
+    return np.clip(np.rint((A[rows] @ A.T) * SCALE), -SCALE, SCALE).astype(np.int64)
+
+
+def _candidates(np, S, M, book, sources, edges, floor, top, block):
+    """The pairs that the themes `sources` (indexes, in order) put forward: each puts forward its `top` closest partners in each band, of other books and, if `floor` is
+    not `None`, above it, the closest first and a tie to the lower index. Returns `(a, b, closeness, wording, band)` as arrays, a pair once, a before b."""
+    found = ([], [], [], [], [])
+    n = len(book)
+    sources = np.asarray(sources, dtype=np.int64)
+    for start in range(0, len(sources), block):
+        rows = sources[start:start + block]
+        cm, cs = _closeness_of_rows(np, M, rows), _closeness_of_rows(np, S, rows)
+        band = np.digitize(cs, edges)
+        for r, i in enumerate(rows.tolist()):
+            row_cm = cm[r]
+            allowed = book != book[i]
+            if floor is not None:
+                allowed = allowed & (row_cm > floor)
+            for b in range(BANDS):
+                idx = np.nonzero(allowed & (band[r] == b))[0]
+                if not len(idx):
+                    continue
+                idx = idx[np.lexsort((idx, -row_cm[idx]))[:top]]
+                found[0].append(np.minimum(idx, i))
+                found[1].append(np.maximum(idx, i))
+                found[2].append(row_cm[idx])
+                found[3].append(cs[r][idx])
+                found[4].append(np.full(len(idx), b, dtype=np.int64))
+    if not found[0]:
+        empty = np.zeros(0, dtype=np.int64)
+        return empty, empty, empty, empty, empty
+    a, b = np.concatenate(found[0]), np.concatenate(found[1])
+    m, s, bd = np.concatenate(found[2]), np.concatenate(found[3]), np.concatenate(found[4])
+    _, first = np.unique(a * n + b, return_index=True)      # a pair put forward from both ends is one
+    return a[first], b[first], m[first], s[first], bd[first]
+
+
 def select(keys, books, summaries, methods, slots=SLOTS, top=TOP, block=BLOCK, use_floor=True):
     """The links of the weave of "same mechanism" for the themes `keys` (each theme has a key that can be put in an order, a book, a summary vector and a method vector; a
     theme with a missing, zero or not finite vector is left out and named). Returns `{"links", "edges", "median", "pairs", "left_out", "slots", "top"}`: `links` is a list of
@@ -238,32 +279,10 @@ def select(keys, books, summaries, methods, slots=SLOTS, top=TOP, block=BLOCK, u
     edges = exact_quantiles(pair_values(S), (0.25, 0.5, 0.75))
     median = exact_quantiles(pair_values(M), (0.5,))[0]
     result["edges"], result["median"] = edges, median
-    found_a, found_b, found_m, found_s, found_band = [], [], [], [], []
-    for start in range(0, n, block):
-        stop = min(start + block, n)
-        cm, cs = closeness(M, start, stop), closeness(S, start, stop)
-        band = np.digitize(cs, edges)
-        for i in range(start, stop):
-            row_cm = cm[i - start]
-            allowed = book != book[i]
-            if use_floor:
-                allowed = allowed & (row_cm > median)
-            for b in range(BANDS):
-                idx = np.nonzero(allowed & (band[i - start] == b))[0]
-                if not len(idx):
-                    continue
-                idx = idx[np.lexsort((idx, -row_cm[idx]))[:top]]
-                found_a.append(np.minimum(idx, i))
-                found_b.append(np.maximum(idx, i))
-                found_m.append(row_cm[idx])
-                found_s.append(cs[i - start][idx])
-                found_band.append(np.full(len(idx), b, dtype=np.int64))
-    if not found_a:
+    floor = median if use_floor else None
+    a, b, m, s, bd = _candidates(np, S, M, book, np.arange(n), edges, floor, top, block)
+    if not len(a):
         return result
-    a, b = np.concatenate(found_a), np.concatenate(found_b)
-    m, s, bd = np.concatenate(found_m), np.concatenate(found_s), np.concatenate(found_band)
-    _, first = np.unique(a * n + b, return_index=True)      # a pair put forward from both ends is one
-    a, b, m, s, bd = a[first], b[first], m[first], s[first], bd[first]
     strongest = np.lexsort((b, a, -m))
     count = [[0] * BANDS for _ in range(n)]
     taken = set()
@@ -280,6 +299,94 @@ def select(keys, books, summaries, methods, slots=SLOTS, top=TOP, block=BLOCK, u
     result["links"] = links
     return result
 
+
+
+def repair_links(keys, books, summaries, methods, old_links, edges, median, removed, added, slots=SLOTS, top=TOP, block=BLOCK):
+    """The links of a weave repaired for themes that were added, changed or taken out, from the links it had and with its band edges and its median kept. `keys` (with their
+    books and vectors, as for `select`) are the themes now; `removed` are keys whose links are dropped (themes that changed, which are also in `added`, and themes that are gone,
+    which are not in `keys`), and `added` are keys that are linked anew (new themes, and changed themes). The rule: the links of themes in `removed`, or no longer in `keys`, are
+    dropped. The themes in `added` put forward their closest partners in each band (above the median), and these candidates are taken strongest first: a link takes a free slot
+    at each end, or replaces the weakest link of a slot that is full if that is weaker than the candidate (of the weakest, the one to the greater key); where an end already has a
+    link to a theme of the candidate's book in the band, that link is replaced if it is weaker and the candidate is refused if it is not; a candidate that either end cannot admit
+    changes nothing. Then each theme that lost a link puts forward its candidates again, and these are taken strongest first into free slots only. Returns `{"links", "dropped",
+    "added", "touched"}`: the links in the form `select` gives them, the number of old links that are not there any more, the number of links there that were not, and the number
+    of themes that lost a link and were offered new ones."""
+    slots, top, block = _whole(slots, "the number of slots"), _whole(top, "the number of candidates"), _whole(block, "the size of a block")
+    np = _np()
+    if edges is None or median is None:
+        raise KbError("the weave has no edges or median to repair with: it needs a full build")
+    kept, order, left_out, rows_s, rows_m = _prepare(np, keys, books, summaries, methods)
+    removed, added = set(removed), set(added)
+    K = [keys[i] for i in kept]
+    index = {k: i for i, k in enumerate(K)}
+    try:
+        ids = {}
+        book = np.array([ids.setdefault(books[i], len(ids)) for i in kept], dtype=np.int64)
+    except TypeError:
+        raise KbError("the books of the themes must be values that can be compared for equality, such as text") from None
+    old_pairs = {(a, b) for a, b, *_ in old_links}
+    links, slot, touched = {}, {}, set()
+
+    def put(a, b, m, w, band):
+        links[(a, b)] = (m, w, band)
+        slot.setdefault((a, band), {})[b] = m
+        slot.setdefault((b, band), {})[a] = m
+
+    def drop(x, o, band):
+        del links[(min(x, o), max(x, o))]
+        del slot[(x, band)][o]
+        del slot[(o, band)][x]
+        touched.update(y for y in (x, o))
+
+    for a, b, m, w, band in old_links:
+        if a in removed or b in removed or a not in index or b not in index:
+            touched.update(index[x] for x in (a, b) if x in index and x not in removed)
+        else:
+            put(index[a], index[b], m, w, band)
+    n = len(K)
+    if n >= 2:
+        S, M = np.stack(rows_s), np.stack(rows_m)
+        news = sorted(index[k] for k in added if k in index)
+        if news:
+            a, b, m, s_, bd = _candidates(np, S, M, book, news, edges, median, top, block)
+            for x, y, closer, wording, where in zip(*(v[np.lexsort((b, a, -m))].tolist() for v in (a, b, m, s_, bd))):
+                if (x, y) in links:
+                    continue
+                drops, refused = [], False
+                for end, other in ((x, y), (y, x)):
+                    there = slot.get((end, where), {})
+                    same = [(o, mm) for o, mm in there.items() if book[o] == book[other]]
+                    if same:
+                        o, mm = same[0]
+                        if mm >= closer:
+                            refused = True
+                        else:
+                            drops.append((end, o))
+                    elif len(there) >= slots:
+                        lowest = min(there.values())
+                        o = max(o2 for o2, mm in there.items() if mm == lowest)
+                        if lowest >= closer:
+                            refused = True
+                        else:
+                            drops.append((end, o))
+                if refused:
+                    continue
+                for end, o in drops:
+                    drop(end, o, where)
+                put(x, y, closer, wording, where)
+        again = sorted(touched)
+        if again:
+            a, b, m, s_, bd = _candidates(np, S, M, book, again, edges, median, top, block)
+            for x, y, closer, wording, where in zip(*(v[np.lexsort((b, a, -m))].tolist() for v in (a, b, m, s_, bd))):
+                if (x, y) in links:
+                    continue
+                if (len(slot.get((x, where), {})) >= slots or len(slot.get((y, where), {})) >= slots
+                        or any(book[o] == book[y] for o in slot.get((x, where), {})) or any(book[o] == book[x] for o in slot.get((y, where), {}))):
+                    continue
+                put(x, y, closer, wording, where)
+    out = sorted(((K[a], K[b], m, w, band) for (a, b), (m, w, band) in links.items()), key=lambda link: (-link[2], link[0], link[1]))
+    now = {(a, b) for a, b, *_ in out}
+    return {"links": out, "dropped": len(old_pairs - now), "added": len(now - old_pairs), "touched": len(touched)}
 
 # --- the file of the weave
 
@@ -543,62 +650,45 @@ def _keep_previous(final, held, previous):
     os.replace(held, previous)
 
 
-def build(index_root, cfg, slots=SLOTS, top=TOP, block=BLOCK):
-    """Build the weave of "same mechanism" from the file of the theme vectors and put it in place of the old one, keeping the generation before. Reads the file of the
-    vectors read-only and nothing else, sends nothing to any model, and refuses (before it writes anything) a file for another model, dimension or document prefix than
-    the config sets, or one that is missing or not the engine's (it needs the model work of the config to be on, to find the embedding entry, though nothing is sent). Returns the counts: the themes of the vectors file (`themes_in_vectors_file`), those the build processed
-    (`themes_processed`, of which `themes_with_links` and `themes_with_no_link`), those left out (`left_out` and its `left_out_reasons`), the `links`, the `links_without_floor`
-    (what the slot rule makes without the floor, from a second selection) of which `links_at_or_under_the_floor` are no closer than the median, the processed themes with no link in the farthest band (`no_link_in_farthest_band`), the `edges`, the `median` and the number of
-    `pairs`, the `generation` and whether a file that was not a weave was `replaced`."""
-    np = _np()
+@contextmanager
+def _vectors_file(index_root, cfg):
+    """The file of the theme vectors open read-only and checked as the search checks it: yields `(conn, entry, vmeta, by_theme)`, with `by_theme` as `{key: row}` for the
+    themes of the file. A file for another model, dimension or document prefix than the config sets, a missing one and one that is not the engine's is a refusal."""
     name, _ = models.choose(cfg, "card-embed")
     entry = models.registry(cfg)[name]
     with closing(themevectors.connect(themevectors.path_of(index_root), readonly=True)) as conn:
         vmeta = themevectors.check_entry(conn, entry)
         rows = themevectors.read_themes(conn)
         themevectors.check_vector_rows(conn)
-        by_theme = {(r["book_id"], r["version_id"], r["theme_id"]): r for r in rows}
-        wanted = {}
-        for v in themevectors.iter_vectors(conn, entry["dimension"], lenient=True, ordered=False):
-            if v["field"] not in ("summary", "method") or v["vector"] is None:
-                continue
-            key = (v["book_id"], v["version_id"], v["theme_id"])
-            row = by_theme.get(key)
-            if row is not None and row["hashes"].get(v["field"]) == v["text_sha256"]:   # a vector counts only if its text is the text the theme still has
-                wanted[(key, v["field"])] = np.array(v["vector"], dtype=np.float32)
-    keys = sorted(by_theme)
-    reasons = {"no_text": 0, "no_usable_vector": 0}
-    for key in keys:
-        if "summary" not in by_theme[key]["hashes"] or "method" not in by_theme[key]["hashes"]:
-            reasons["no_text"] += 1
-        elif (key, "summary") not in wanted or (key, "method") not in wanted:
-            reasons["no_usable_vector"] += 1
-    summaries = [wanted.get((k, "summary")) for k in keys]
-    methods = [wanted.get((k, "method")) for k in keys]
-    chosen = select(keys, [k[0] for k in keys], summaries, methods, slots=slots, top=top, block=block)
-    without = select(keys, [k[0] for k in keys], summaries, methods, slots=slots, top=top, block=block, use_floor=False)
-    left_out = set(chosen["left_out"])
-    processed = [k for k in keys if k not in left_out]
-    degree, farthest = {}, set()
-    for a, b, closeness, wording, band in chosen["links"]:
-        for x in (a, b):
-            degree[x] = degree.get(x, 0) + 1
-            if band == 0:
-                farthest.add(x)
-    meta = {"format": str(FORMAT), "kind": KIND, "vectors_model": vmeta["model"], "vectors_configured": vmeta["configured"],
-            "vectors_dimension": vmeta["dimension"], "vectors_built": vmeta["built"], "vectors_document_prefix_sha256": vmeta["document_prefix_sha256"],
-            "edges": json.dumps(chosen["edges"]), "median": json.dumps(chosen["median"]), "pairs": str(chosen["pairs"]), "slots": str(slots), "top": str(top),
-            "bands": str(BANDS), "built": datetime.now(timezone.utc).isoformat(timespec="seconds"), "numpy": np.__version__}
-    theme_rows = [(k[0], k[1], k[2], by_theme[k]["theme_generation"], by_theme[k]["hashes"]["method"], by_theme[k]["hashes"]["summary"], degree.get(k, 0))
-                  for k in processed]
-    link_rows = [(*a, *b, closeness, wording, band) for a, b, closeness, wording, band in chosen["links"]]
+        yield conn, entry, vmeta, {(r["book_id"], r["version_id"], r["theme_id"]): r for r in rows}
+
+
+def _usable_vectors(np, conn, entry, by_theme):
+    """`{(key, field): vector}` for the summary and the method vector of each theme whose text is the text the theme still has and whose vector is of the right length."""
+    wanted = {}
+    for v in themevectors.iter_vectors(conn, entry["dimension"], lenient=True, ordered=False):
+        if v["field"] not in ("summary", "method") or v["vector"] is None:
+            continue
+        key = (v["book_id"], v["version_id"], v["theme_id"])
+        row = by_theme.get(key)
+        if row is not None and row["hashes"].get(v["field"]) == v["text_sha256"]:   # a vector counts only if its text is the text the theme still has
+            wanted[(key, v["field"])] = np.array(v["vector"], dtype=np.float32)
+    return wanted
+
+
+def _publish(index_root, meta, theme_rows, link_rows, expect_generation=None):
+    """Write the weave from its rows and put it in place under the lock, keeping the generation before as it was. The file is made in a folder of its own and renamed; it is never
+    written in place, which would change the generation before (a second name for the same file). With `expect_generation`, a weave in place of another generation than that is a
+    refusal that writes nothing. Returns `(generation, replaced)`."""
     final, previous = path_of(index_root), os.path.join(index_root, PREVIOUS_FILE)
     with lock(index_root):
         folder = None
         try:
             _clean_leftovers(index_root)
             old_generation, replaced, in_place = _existing(final, previous)
-            meta["generation"] = str(old_generation + 1)
+            if expect_generation is not None and (not in_place or old_generation != expect_generation):
+                raise KbError("the weave in place changed while the repair was worked out, so nothing was written; run it again")
+            meta = {**meta, "generation": str(old_generation + 1)}
             # the file is built in a folder of its own, private to the owner and with a name no one can know before it is made, and renamed into place
             folder = tempfile.mkdtemp(prefix=BUILD_PREFIX, dir=index_root)
             identity = vectors._identity(folder)
@@ -627,10 +717,187 @@ def build(index_root, cfg, slots=SLOTS, top=TOP, block=BLOCK):
         finally:
             if folder is not None:  # whatever went wrong, the old file is as it was and no folder of the build is left
                 shutil.rmtree(folder, ignore_errors=True)
+    return old_generation + 1, replaced
+
+
+def build(index_root, cfg, slots=SLOTS, top=TOP, block=BLOCK):
+    """Build the weave of "same mechanism" from the file of the theme vectors and put it in place of the old one, keeping the generation before. Reads the file of the
+    vectors read-only and nothing else, sends nothing to any model, and refuses (before it writes anything) a file for another model, dimension or document prefix than
+    the config sets, or one that is missing or not the engine's (it needs the model work of the config to be on, to find the embedding entry, though nothing is sent). Returns the counts: the themes of the vectors file (`themes_in_vectors_file`), those the build processed
+    (`themes_processed`, of which `themes_with_links` and `themes_with_no_link`), those left out (`left_out` and its `left_out_reasons`), the `links`, the `links_without_floor`
+    (what the slot rule makes without the floor, from a second selection) of which `links_at_or_under_the_floor` are no closer than the median, the processed themes with no link in the farthest band (`no_link_in_farthest_band`), the `edges`, the `median` and the number of
+    `pairs`, the `generation` and whether a file that was not a weave was `replaced`."""
+    np = _np()
+    with _vectors_file(index_root, cfg) as (conn, entry, vmeta, by_theme):
+        wanted = _usable_vectors(np, conn, entry, by_theme)
+    keys = sorted(by_theme)
+    reasons = {"no_text": 0, "no_usable_vector": 0}
+    for key in keys:
+        if "summary" not in by_theme[key]["hashes"] or "method" not in by_theme[key]["hashes"]:
+            reasons["no_text"] += 1
+        elif (key, "summary") not in wanted or (key, "method") not in wanted:
+            reasons["no_usable_vector"] += 1
+    summaries = [wanted.get((k, "summary")) for k in keys]
+    methods = [wanted.get((k, "method")) for k in keys]
+    chosen = select(keys, [k[0] for k in keys], summaries, methods, slots=slots, top=top, block=block)
+    without = select(keys, [k[0] for k in keys], summaries, methods, slots=slots, top=top, block=block, use_floor=False)
+    left_out = set(chosen["left_out"])
+    processed = [k for k in keys if k not in left_out]
+    degree, farthest = {}, set()
+    for a, b, closeness, wording, band in chosen["links"]:
+        for x in (a, b):
+            degree[x] = degree.get(x, 0) + 1
+            if band == 0:
+                farthest.add(x)
+    meta = {"format": str(FORMAT), "kind": KIND, "vectors_model": vmeta["model"], "vectors_configured": vmeta["configured"],
+            "vectors_dimension": vmeta["dimension"], "vectors_built": vmeta["built"], "vectors_document_prefix_sha256": vmeta["document_prefix_sha256"],
+            "edges": json.dumps(chosen["edges"]), "median": json.dumps(chosen["median"]), "pairs": str(chosen["pairs"]), "slots": str(slots), "top": str(top),
+            "bands": str(BANDS), "built": datetime.now(timezone.utc).isoformat(timespec="seconds"), "numpy": np.__version__}
+    theme_rows = [(k[0], k[1], k[2], by_theme[k]["theme_generation"], by_theme[k]["hashes"]["method"], by_theme[k]["hashes"]["summary"], degree.get(k, 0))
+                  for k in processed]
+    link_rows = [(*a, *b, closeness, wording, band) for a, b, closeness, wording, band in chosen["links"]]
+    generation, replaced = _publish(index_root, meta, theme_rows, link_rows)
     return {"themes_in_vectors_file": len(keys), "themes_processed": len(processed), "themes_with_links": len(degree),
             "themes_with_no_link": len(processed) - len(degree), "left_out": len(left_out), "left_out_reasons": reasons, "links": len(chosen["links"]),
-            "links_without_floor": len(without["links"]), "links_at_or_under_the_floor": sum(1 for link in without["links"] if link[2] <= without["median"]), "no_link_in_farthest_band": len(processed) - len(farthest), "edges": chosen["edges"],
-            "median": chosen["median"], "pairs": chosen["pairs"], "generation": old_generation + 1, "replaced": replaced}
+            "links_without_floor": len(without["links"]), "links_at_or_under_the_floor": sum(1 for link in without["links"] if link[2] <= without["median"]),
+            "no_link_in_farthest_band": len(processed) - len(farthest), "edges": chosen["edges"], "median": chosen["median"], "pairs": chosen["pairs"],
+            "generation": generation, "replaced": replaced}
+
+
+# --- what is waiting, and the repair
+
+REPAIR_SHARE = Fraction(1, 20)   # a repair is due when the themes waiting reach this share of the themes in the weave, and a full build is needed when more than this share changed
+REPAIR_DAYS = 30                 # or when the oldest waiting book was added this many days ago
+
+
+def _same_theme(row, recorded):
+    """Whether the theme of the vectors file is the one the weave recorded: its generation and the hashes of the two texts."""
+    return ((row["theme_generation"], row["hashes"].get("method"), row["hashes"].get("summary"))
+            == (recorded["theme_generation"], recorded["method_sha256"], recorded["summary_sha256"]))
+
+
+def _age_in_days(store, books, now):
+    """The age in days of the oldest of the books (when it was added, from the store, read only), or `None` if no age can be had."""
+    oldest = None
+    for book in sorted(books):
+        try:
+            added = store.read_book(book).get("added")
+        except KbError:
+            continue
+        if not isinstance(added, str) or not themevectors._BUILT.fullmatch(added):
+            continue
+        try:
+            age = (now - datetime.fromisoformat(added)).total_seconds() / 86400
+        except (ValueError, OverflowError):      # it has the form of a date and is not one (month 13, year 0)
+            continue
+        oldest = age if oldest is None else max(oldest, age)
+    return oldest
+
+
+def _inspect(index_root, cfg, store, now, np=None):
+    """What the weave in place and the file of vectors say about each other: `{"made", "vmeta", "entry", "by_theme", "wanted", "new", "changed", "gone", "left_out", "status"}`.
+    `new` are the themes of the vectors file that the weave did not process and that have a summary vector and a method vector that count, `left_out` those it did not process and
+    that have not, `changed` those it processed whose generation or text is not what it recorded, `gone` those it processed that are no longer in the file. `wanted` is the
+    vectors, only if `np` is given (for a repair). The numbers of the status are worked out from these."""
+    now = now if now is not None else datetime.now(timezone.utc)
+    with _vectors_file(index_root, cfg) as (conn, entry, vmeta, by_theme):
+        made = read(path_of(index_root))
+        in_weave = {t["key"]: t for t in made["themes"]}
+        wanted = _usable_vectors(np, conn, entry, by_theme) if np is not None else None
+        new, left_out = [], []
+        for key in sorted(by_theme):
+            if key in in_weave:
+                continue
+            usable = ((key, "summary") in wanted and (key, "method") in wanted) if wanted is not None else _has_usable_vectors(conn, by_theme[key], entry["dimension"])
+            (new if usable else left_out).append(key)
+    changed = [k for k, t in sorted(in_weave.items()) if k in by_theme and not _same_theme(by_theme[k], t)]
+    gone = [k for k in sorted(in_weave) if k not in by_theme]
+    wmeta = made["meta"]
+    processed = len(in_weave)
+    full, why_full = False, []
+    if (wmeta["vectors_model"], wmeta["vectors_configured"], wmeta["vectors_dimension"], wmeta["vectors_document_prefix_sha256"]) != (
+            vmeta["model"], vmeta["configured"], int(vmeta["dimension"]), vmeta["document_prefix_sha256"]):
+        full, why_full = True, why_full + ["the weave was made from vectors of another model, dimension or document prefix than the file of vectors now holds"]
+    if wmeta["edges"] is None or wmeta["median"] is None:
+        full, why_full = True, why_full + ["the weave has no edges or median to repair with"]
+    moved = len(changed) + len(gone)
+    if processed and Fraction(moved, processed) > REPAIR_SHARE:
+        full, why_full = True, why_full + [f"{moved} of the {processed} themes of the weave changed or are gone, more than {float(REPAIR_SHARE) * 100:g} percent"]
+    waiting = len(new) + len(changed)
+    age = _age_in_days(store, {k[0] for k in new + changed}, now) if waiting else None
+    due, why_due = False, []
+    if not full and waiting:
+        if not processed or Fraction(waiting, processed) >= REPAIR_SHARE:
+            due, why_due = True, why_due + [f"{waiting} themes are waiting, {float(REPAIR_SHARE) * 100:g} percent or more of the {processed} of the weave"]
+        if age is not None and age >= REPAIR_DAYS:
+            due, why_due = True, why_due + [f"the oldest waiting book was added {age:.1f} days ago, {REPAIR_DAYS} days or more"]
+    degree_zero = sum(1 for t in made["themes"] if t["links"] == 0)
+    status = {"weave": {"generation": wmeta["generation"], "built": wmeta["built"], "vectors_built": wmeta["vectors_built"]},
+              "themes_in_vectors_file": len(by_theme), "themes_in_weave": processed, "themes_with_no_link": degree_zero,
+              "waiting": {"new": len(new), "changed": len(changed), "total": waiting}, "left_out": len(left_out), "gone": len(gone),
+              "changed_or_gone_share": (moved / processed) if processed else 0.0, "full_build_needed": full, "full_build_because": why_full,
+              "repair_due": due, "repair_due_because": why_due, "oldest_waiting_days": age,
+              "limits": {"share": float(REPAIR_SHARE), "days": REPAIR_DAYS},
+              "next": (f"a full build is needed: run `{COMMAND}`" if full else
+                       "a repair is due: run `python3 -m kb theme-links repair`" if due else
+                       "nothing is due" if not waiting else "themes are waiting, but a repair is not due yet (`repair --now` goes on)")}
+    return {"made": made, "vmeta": vmeta, "entry": entry, "by_theme": by_theme, "wanted": wanted, "new": new, "changed": changed, "gone": gone,
+            "left_out": left_out, "status": status}
+
+
+def status(index_root, cfg, store, now=None):
+    """What is waiting to be linked, and whether a repair is due or a full build is needed. Reads the file of the vectors, the weave and (for the age of a book, which it
+    asks of `store`: `read_book` only) the library, all read-only; sends nothing to any model and needs no numpy. A theme the weave processed that ended with no link is counted
+    apart (`themes_with_no_link`) and never waits; a theme it could not link because it has no usable summary or method vector is counted apart too (`left_out`) and never waits.
+    The themes that wait are the new ones and those whose generation or text changed (a changed book is removed and added again); the themes that are gone are counted and
+    alone make nothing due. A repair is due when the waiting themes are 5 percent or more of the themes of the weave, or the oldest waiting book was added 30 days ago or more;
+    a full build is needed instead when more than 5 percent of the themes of the weave changed or are gone, or the vectors are of another model, dimension or prefix."""
+    return _inspect(index_root, cfg, store, now)["status"]
+
+
+def repair(index_root, cfg, store, now=None, force=False):
+    """Add the themes that wait to the weave in place (`repair_links`: new themes and changed ones are linked, the links of changed and gone themes are dropped, the band edges
+    and the median and the slots are the weave's own) and put the result in place as the next generation, keeping the generation before as it was. The new file is written and
+    renamed and the old one is never written in place. Refused, with nothing written: when a full build is needed (even if `force`), when nothing is waiting and nothing is
+    gone, when no repair is due unless `force`, and when the weave in place changed while the repair was worked out. Needs numpy. Returns the counts."""
+    np = _np()
+    info = _inspect(index_root, cfg, store, now, np=np)
+    state = info["status"]
+    if state["full_build_needed"]:
+        raise KbError("a full build is needed, not a repair (" + "; ".join(state["full_build_because"]) + f"): run `{COMMAND}`")
+    if not state["waiting"]["total"] and not state["gone"]:
+        raise KbError("nothing is waiting to be linked and no theme is gone, so there is nothing to repair")
+    if not state["repair_due"] and not force:
+        raise KbError("no repair is due (" + state["next"] + "); `python3 -m kb theme-links repair --now` goes on")
+    made, by_theme, wanted = info["made"], info["by_theme"], info["wanted"]
+    meta = made["meta"]
+    keys = [k for k in sorted(by_theme) if (k, "summary") in wanted and (k, "method") in wanted]
+    unusable_changed = [k for k in info["changed"] if k not in set(keys)]
+    old_keys = {t["key"] for t in made["themes"]}
+    lost_vectors = [k for k in sorted(old_keys) if k in by_theme and k not in set(keys) and k not in set(info["changed"])]   # unchanged, but no summary or method vector counts now
+    removed = set(info["changed"]) | set(info["gone"])      # a theme that lost its vectors is not in `keys`, so its links are dropped with the others
+    added = set(info["new"]) | {k for k in info["changed"] if k in set(keys)}
+    result = repair_links(keys, [k[0] for k in keys], [wanted[(k, "summary")] for k in keys], [wanted[(k, "method")] for k in keys], made["links"],
+                          meta["edges"], meta["median"], removed, added, slots=meta["slots"], top=meta["top"])
+    degree = {}
+    for a, b, *_ in result["links"]:
+        for x in (a, b):
+            degree[x] = degree.get(x, 0) + 1
+    per_book = {}
+    for k in keys:
+        per_book[k[0]] = per_book.get(k[0], 0) + 1
+    vmeta = info["vmeta"]
+    new_meta = {"format": str(FORMAT), "kind": KIND, "vectors_model": vmeta["model"], "vectors_configured": vmeta["configured"], "vectors_dimension": vmeta["dimension"],
+                "vectors_built": vmeta["built"], "vectors_document_prefix_sha256": vmeta["document_prefix_sha256"], "edges": json.dumps(meta["edges"]),
+                "median": json.dumps(meta["median"]), "pairs": str((len(keys) ** 2 - sum(c * c for c in per_book.values())) // 2), "slots": str(meta["slots"]),
+                "top": str(meta["top"]), "bands": str(BANDS), "built": datetime.now(timezone.utc).isoformat(timespec="seconds"), "numpy": np.__version__}
+    theme_rows = [(k[0], k[1], k[2], by_theme[k]["theme_generation"], by_theme[k]["hashes"]["method"], by_theme[k]["hashes"]["summary"], degree.get(k, 0)) for k in keys]
+    link_rows = [(*a, *b, closeness, wording, band) for a, b, closeness, wording, band in result["links"]]
+    generation, _ = _publish(index_root, new_meta, theme_rows, link_rows, expect_generation=meta["generation"])
+    return {"generation": generation, "themes_in_weave": len(keys), "themes_added": len(info["new"]), "themes_changed": len(info["changed"]),
+            "themes_gone": len(info["gone"]), "themes_left_out_now": len(info["left_out"]) + len(unusable_changed), "themes_lost_vectors": len(lost_vectors), "links_before": len(made["links"]),
+            "links": len(result["links"]), "links_dropped": result["dropped"], "links_added": result["added"], "themes_that_lost_a_link": result["touched"],
+            "repair_due_because": state["repair_due_because"] or ["told to go on"]}
 
 
 # --- looking at the links of a theme

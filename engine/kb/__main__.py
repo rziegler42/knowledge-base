@@ -125,13 +125,18 @@ def main(argv=None):
                                               "whose text has not changed is kept; those texts go to that model")
     tv.add_argument("--again", action="store_true", help="make every vector again")
     tl = sub.add_parser("theme-links", help="the links between the themes: a weave is a set of links of one kind (the weave of same mechanism is the first); "
-                                            "`build` needs numpy, so run it with engine/.venv/bin/python")
+                                            "`build` and `repair` need numpy, so run them with engine/.venv/bin/python")
     tls = tl.add_subparsers(dest="links_command", required=True)
     tsh = tls.add_parser("show", help="show the links of one theme in the weave, by band of wording distance, each with the other theme as a search shows a theme "
                                       "(read only; nothing is sent to any model; needs `theme-links build` run first)")
     tsh.add_argument("book_id", help="the id of the theme's book, as theme-search prints it")
     tsh.add_argument("theme_id", help="the id of the theme")
     tsh.add_argument("--version", dest="version_id", default=None, help="the version of the book, if the file holds more than one (it holds the current one)")
+    tls.add_parser("status", help="what is waiting to be linked, and whether a repair is due (new themes reach 5 percent of the weave, or the oldest waiting book was added 30 "
+                                  "days ago) or a full build is needed (more than 5 percent of the themes changed or are gone); read only, no model, no numpy")
+    trp = tls.add_parser("repair", help="add the themes that wait to the weave and put the result in place as the next generation, keeping the generation before; refused "
+                                        "when a full build is needed, when nothing waits, and when none of the triggers holds unless --now; needs numpy")
+    trp.add_argument("--now", action="store_true", dest="go_on", help="repair although neither trigger holds (never when a full build is needed)")
     tls.add_parser("build", help="build the weave of same mechanism from the file of theme vectors (read only; nothing is sent to any model) and put it in the "
                                  "index root in place of the old one, keeping the generation before; needs `theme-vectors` run first")
     ts = sub.add_parser("theme-search", help="search the themes by meaning: the query is any text (a sentence or two about a problem), turned into "
@@ -286,7 +291,13 @@ def main(argv=None):
             return 0
         if args.command == "theme-links":
             cfg = config.load()
-            if args.links_command == "show":
+            if args.links_command in ("status", "repair"):
+                store = Store.open(write=False)   # the age of a book is read, nothing is written
+                if args.links_command == "status":
+                    print(json.dumps(weave.status(cfg["index_root"], cfg, store), indent=1))
+                else:
+                    print(json.dumps(weave.repair(cfg["index_root"], cfg, store, force=args.go_on)))
+            elif args.links_command == "show":
                 print(json.dumps(weave.show(cfg["index_root"], cfg, args.book_id, args.theme_id, version_id=args.version_id), indent=1))
             else:
                 print(json.dumps(weave.build(cfg["index_root"], cfg)))

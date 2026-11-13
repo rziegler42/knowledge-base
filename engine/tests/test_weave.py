@@ -4,6 +4,7 @@ The selection is checked three ways: by cases small enough to work out by hand, 
 block sizes), and, for the exact median and edges, against `numpy.median` and `numpy.quantile`. The tests need numpy, so run them with the pinned environment:
 `engine/.venv/bin/python -m unittest engine.tests.test_weave`."""
 import contextlib
+import datetime
 import fcntl
 import hashlib
 import io
@@ -443,6 +444,10 @@ class WeaveCase(PerBookCase):
     def setUp(self):
         super().setUp()
         self.books = {name: self.themed(self.themes_of(name, len(themes)))[0] for name, themes in self.SPEC.items()}
+        self.vectorize()
+
+    def vectorize(self):
+        """Make the file of vectors so that each theme has the summary vector and the method vector that `self.SPEC` names."""
         self.build()
         away, table = [0.0, 0.0, 1.0, 0.0], {}
         for r in self.themes_read():
@@ -454,6 +459,13 @@ class WeaveCase(PerBookCase):
             table[texts["summary"]], table[texts["method"]] = deg4(summary), deg4(method)
         self.plan(table=table)
         self.build(again=True)
+
+    def add_books(self, extra):
+        """Books that come after a weave was built: their themes, and the file of vectors made again with the vectors that `extra` names."""
+        self.SPEC = {**self.SPEC, **extra}
+        for name, themes in extra.items():
+            self.books[name] = self.themed(self.themes_of(name, len(themes)))[0]
+        self.vectorize()
 
     def index_root(self):
         return self.store.cfg["index_root"]
@@ -1132,6 +1144,653 @@ class ThemeLinksShowCommandTest(WeaveCase):
         code, out, err = self.kb("theme-links", "show", book, theme_id)
         self.assertEqual(code, 2)
         self.assertIn("theme-links build", err)
+
+
+def grid(books, per_book, seed=7):
+    """A spec of `books` books of `per_book` themes each at angles from a fixed random sequence."""
+    rng = random.Random(seed)
+    return {chr(65 + b): [(rng.uniform(0, 180), rng.uniform(0, 180)) for _ in range(per_book)] for b in range(books)}
+
+
+def reference_repair(old_links, keys, books, summaries, methods, edges, median, slots, top, removed, added):
+    """The repair rule of the plan, in plain Python. The links of themes in `removed` are dropped. The themes in `added` put forward their `top` closest partners in each band
+    (those above the floor, with the edges and the median of the weave being repaired), and these candidates are taken strongest first: a link takes a free slot at each end, or,
+    where an end has all its slots in the band, replaces the weakest link there if that is weaker than the candidate; where an end already has a link to a theme of the
+    candidate's book in the band, that link is replaced if it is weaker and the candidate is refused if it is not. A candidate that either end cannot admit changes nothing.
+    A theme that lost a link then puts forward its candidates again, and they are taken strongest first into free slots only."""
+    order = sorted(range(len(keys)), key=lambda i: keys[i])
+    keys = [keys[i] for i in order]
+    book = {keys[n]: books[order[n]] for n in range(len(keys))}
+    S = {keys[n]: unit(summaries[order[n]]) for n in range(len(keys))}
+    M = {keys[n]: unit(methods[order[n]]) for n in range(len(keys))}
+
+    def cm(a, b):
+        return closeness(M[a], M[b])
+
+    def cs(a, b):
+        return closeness(S[a], S[b])
+
+    def band(w):
+        return sum(1 for e in edges if w >= e)
+
+    links = {(a, b): (m, w, bd) for a, b, m, w, bd in old_links if a not in removed and b not in removed}
+    touched = {x for a, b, *_ in old_links if a in removed or b in removed for x in (a, b) if x not in removed and x in book}
+
+    def mine(x, bd):
+        return [((b if a == x else a), v[0]) for (a, b), v in links.items() if x in (a, b) and v[2] == bd]
+
+    def put_forward(t):
+        out = set()
+        for bd in range(4):
+            mineb = sorted(((cm(t, o), o) for o in keys if o != t and book[o] != book[t] and cm(t, o) > median and band(cs(t, o)) == bd), key=lambda x: (-x[0], x[1]))
+            out.update((min(t, o), max(t, o)) for _, o in mineb[:top])
+        return out
+
+    candidates = set()
+    for t in sorted(added):
+        candidates |= put_forward(t)
+    for a, b in sorted(candidates, key=lambda p: (-cm(*p), p)):
+        if (a, b) in links:
+            continue
+        m, w = cm(a, b), cs(a, b)
+        bd = band(w)
+        drops, refused = [], False
+        for x, other in ((a, b), (b, a)):
+            there = mine(x, bd)
+            same_book = [(o, mm) for o, mm in there if book[o] == book[other]]
+            if same_book:
+                o, mm = same_book[0]
+                if mm >= m:
+                    refused = True
+                else:
+                    drops.append((x, o))
+            elif len(there) >= slots:
+                lowest = min(mm for _, mm in there)
+                o = max(o2 for o2, mm in there if mm == lowest)         # of the weakest, the one with the greater key
+                if lowest >= m:
+                    refused = True
+                else:
+                    drops.append((x, o))
+        if refused:
+            continue
+        for x, o in drops:
+            del links[(min(x, o), max(x, o))]
+            touched.update(y for y in (x, o) if y in book)
+        links[(a, b)] = (m, w, bd)
+    refill = set()
+    for t in sorted(touched):
+        refill |= {p for p in put_forward(t) if p not in links}
+    for a, b in sorted(refill, key=lambda p: (-cm(*p), p)):
+        m, w = cm(a, b), cs(a, b)
+        bd = band(w)
+        if len(mine(a, bd)) >= slots or len(mine(b, bd)) >= slots or any(book[o] == book[b] for o, _ in mine(a, bd)) or any(book[o] == book[a] for o, _ in mine(b, bd)):
+            continue
+        links[(a, b)] = (m, w, bd)
+    return sorted(((a, b, m, w, bd) for (a, b), (m, w, bd) in links.items()), key=lambda l: (-l[2], l[0], l[1]))
+
+
+@needs_numpy
+class RepairLinksTest(unittest.TestCase):
+    """`weave.repair_links`, the repair as a function of vectors, against the plain-Python rule above, on random themes: some themes are taken out of the weave (gone), some
+    are taken out and put back (changed) and some are new."""
+
+    def scenario(self, seed, slots, top=300, n=36, n_new=6, books=6, gone=3, changed=2):
+        keys, book, S, M = random_themes(seed, n=n, books=books)
+        old_n = n - n_new
+        old = weave.select(keys[:old_n], book[:old_n], S[:old_n], M[:old_n], slots=slots, top=top)
+        rng = random.Random(seed + 100)
+        picked = rng.sample(sorted(keys[:old_n]), gone + changed)
+        gone_keys, changed_keys = set(picked[:gone]), set(picked[gone:])
+        current = [i for i, k in enumerate(keys) if k not in gone_keys]
+        added = set(keys[old_n:]) | changed_keys
+        removed = gone_keys | changed_keys
+        args = ([keys[i] for i in current], [book[i] for i in current], [S[i] for i in current], [M[i] for i in current])
+        return old, args, removed, added
+
+    def test_the_links_are_those_of_the_plain_rule_for_random_themes_and_slots(self):
+        for seed in range(8):
+            for slots in (1, 2, 3):
+                with self.subTest(seed=seed, slots=slots):
+                    old, (keys, book, S, M), removed, added = self.scenario(seed, slots)
+                    want = reference_repair(old["links"], keys, book, S, M, old["edges"], old["median"], slots, 300, removed, added)
+                    got = weave.repair_links(keys, book, S, M, old["links"], old["edges"], old["median"], removed, added, slots=slots)
+                    self.assertEqual(got["links"], want)
+
+    def test_the_same_links_with_a_smaller_cut_whatever_the_block_and_the_order_of_the_themes(self):
+        old, (keys, book, S, M), removed, added = self.scenario(3, 2, top=4)
+        base = weave.repair_links(keys, book, S, M, old["links"], old["edges"], old["median"], removed, added, slots=2, top=4)
+        self.assertEqual(base["links"], reference_repair(old["links"], keys, book, S, M, old["edges"], old["median"], 2, 4, removed, added))
+        for block in (1, 5, 1000):
+            self.assertEqual(weave.repair_links(keys, book, S, M, old["links"], old["edges"], old["median"], removed, added, slots=2, top=4, block=block), base)
+        order = list(range(len(keys)))
+        random.Random(9).shuffle(order)
+        shuffled = weave.repair_links([keys[i] for i in order], [book[i] for i in order], [S[i] for i in order], [M[i] for i in order],
+                                      old["links"], old["edges"], old["median"], removed, added, slots=2, top=4)
+        self.assertEqual(shuffled, base)
+
+    def test_no_rule_is_broken_a_link_that_goes_is_replaced_by_a_stronger_one_and_nothing_is_lost_that_nobody_displaced(self):
+        for seed in range(6):
+            old, (keys, book, S, M), removed, added = self.scenario(seed, 2)
+            got = weave.repair_links(keys, book, S, M, old["links"], old["edges"], old["median"], removed, added, slots=2)
+            of_book = dict(zip(keys, book))
+            count, one_book = {}, set()
+            for a, b, m, w, band in got["links"]:
+                self.assertTrue(a < b and of_book[a] != of_book[b] and m > old["median"] and a not in removed - added and b not in removed - added)
+                for x, y in ((a, b), (b, a)):
+                    count[(x, band)] = count.get((x, band), 0) + 1
+                    self.assertLessEqual(count[(x, band)], 2)
+                    self.assertNotIn((x, band, of_book[y]), one_book)
+                    one_book.add((x, band, of_book[y]))
+            after = {(a, b): m for a, b, m, *_ in got["links"]}
+            for a, b, m, w, band in old["links"]:
+                if a in removed or b in removed or (a, b) in after:
+                    continue
+                # a link of two themes that stay was dropped: an end of it has, in that band, a link that is stronger
+                stronger = [l for l in got["links"] if l[4] == band and (a in l[:2] or b in l[:2]) and l[2] > m]
+                self.assertTrue(stronger, (a, b))
+
+    def test_a_theme_that_changed_loses_its_old_links_even_when_it_has_no_partner_now(self):
+        # a, b, c and d in four books at the method angles 0, 20, 60 and 100 degrees, one slot: the links are a-b (cos 20) and c-d (cos 40); b then changes to 150 degrees,
+        # where it is close to nothing (b and d are 50 degrees apart, but d is taken by a stronger link): its old link to a must go, and nothing takes its place
+        keys, books, S = ["a", "b", "c", "d"], ["1", "2", "3", "4"], [angle(0)] * 4
+        M = [angle(0), angle(20), angle(60), angle(100)]
+        old = weave.select(keys, books, S, M, slots=1)
+        self.assertEqual([(a, b) for a, b, *_ in old["links"]], [("a", "b"), ("c", "d")])
+        M2 = [angle(0), angle(150), angle(60), angle(100)]
+        got = weave.repair_links(keys, books, S, M2, old["links"], old["edges"], old["median"], {"b"}, {"b"}, slots=1)
+        self.assertEqual([(a, b) for a, b, *_ in got["links"]], [("c", "d")])
+        self.assertEqual(got["links"], reference_repair(old["links"], keys, books, S, M2, old["edges"], old["median"], 1, 300, {"b"}, {"b"}))
+        # a theme that is gone has its links dropped too, and the theme that lost one takes the next free partner if there is one
+        gone = weave.repair_links(["a", "c", "d"], ["1", "3", "4"], [angle(0)] * 3, [angle(0), angle(60), angle(100)], old["links"], old["edges"], old["median"],
+                                  {"b"}, set(), slots=1)
+        self.assertEqual([(a, b) for a, b, *_ in gone["links"]], [("c", "d")])
+
+    def test_a_new_theme_that_is_closer_than_a_link_takes_its_slot_and_the_theme_that_lost_it_takes_the_next_free_partner(self):
+        # slots 1: of the themes A, B, C, D, F at the method angles 0, 20, 60, 100 and 40, the strongest pair is B and F (cos 20), then A and ... as the greedy gives; then E at 21 degrees
+        keys = ["a", "b", "c", "d", "f"]
+        books = ["1", "2", "3", "4", "5"]
+        S = [angle(0)] * 5
+        M = [angle(0), angle(20), angle(60), angle(100), angle(40)]
+        old = weave.select(keys, books, S, M, slots=1)
+        self.assertGreater(len(old["links"]), 0)
+        keys2, books2, S2, M2 = keys + ["e"], books + ["6"], S + [angle(0)], M + [angle(21)]
+        want = reference_repair(old["links"], keys2, books2, S2, M2, old["edges"], old["median"], 1, 300, set(), {"e"})
+        got = weave.repair_links(keys2, books2, S2, M2, old["links"], old["edges"], old["median"], set(), {"e"}, slots=1)
+        self.assertEqual(got["links"], want)
+        self.assertIn("e", {x for l in got["links"] for x in l[:2]})
+        self.assertNotEqual(got["links"], old["links"])
+        self.assertEqual(got["dropped"], len([l for l in old["links"] if l not in got["links"]]))
+
+
+class OnlyReads:
+    """A store that can be asked for a book and nothing else: a call to anything that writes is an error."""
+
+    def __init__(self, store, fail=False, added="keep"):
+        self._store, self._fail, self._added = store, fail, added
+
+    def read_book(self, book_id):
+        if self._fail:
+            raise KbError("the book cannot be read")
+        book = self._store.read_book(book_id)
+        return book if self._added == "keep" else {**book, "added": self._added}
+
+
+@needs_numpy
+class StatusCase(WeaveCase):
+    SPEC = grid(5, 4)           # twenty themes in five books: one theme is exactly 5 percent of them
+
+    def setUp(self):
+        super().setUp()
+        self.build_weave()
+        self.first_keys = self.keyed()
+
+    def status(self, store=None, **kw):
+        return weave.status(self.index_root(), self.mcfg, store or OnlyReads(self.store), **kw)
+
+    def repair(self, store=None, **kw):
+        return weave.repair(self.index_root(), self.mcfg, store or OnlyReads(self.store), **kw)
+
+    def vectors_sql(self, *statements):
+        with closing_sqlite(themevectors.path_of(self.index_root())) as conn:
+            for statement in statements:
+                conn.execute(statement)
+
+    def title_key(self, name):
+        return self.keyed()[name]
+
+
+@needs_numpy
+class StatusTest(StatusCase):
+    def test_right_after_a_build_nothing_is_waiting_and_nothing_is_due(self):
+        got = self.status()
+        self.assertEqual((got["themes_in_vectors_file"], got["themes_in_weave"], got["waiting"], got["gone"], got["left_out"]),
+                         (20, 20, {"new": 0, "changed": 0, "total": 0}, 0, 0))
+        self.assertEqual((got["full_build_needed"], got["repair_due"], got["oldest_waiting_days"]), (False, False, None))
+        self.assertEqual(got["limits"], {"share": 0.05, "days": 30})
+        self.assertIn("nothing", got["next"])
+
+    def test_one_new_theme_of_twenty_is_five_percent_and_makes_a_repair_due_and_says_why(self):
+        self.add_books({"F": [(10, 20)]})
+        got = self.status()
+        self.assertEqual((got["waiting"], got["themes_in_weave"], got["themes_in_vectors_file"]), ({"new": 1, "changed": 0, "total": 1}, 20, 21))
+        self.assertEqual((got["repair_due"], got["full_build_needed"]), (True, False))
+        self.assertTrue(any("5 percent" in why for why in got["repair_due_because"]), got["repair_due_because"])
+        self.assertIn("theme-links repair", got["next"])
+
+    def test_a_changed_theme_is_waiting_and_is_not_a_full_build_until_more_than_five_percent_have_changed_or_gone(self):
+        first = self.keyed()["A0"]
+        self.vectors_sql(f"UPDATE themes SET theme_generation = 2 WHERE book_id = '{first[0]}' AND theme_id = '{first[2]}'")
+        got = self.status()
+        self.assertEqual((got["waiting"], got["full_build_needed"], got["repair_due"]), ({"new": 0, "changed": 1, "total": 1}, False, True))
+        self.assertEqual(got["changed_or_gone_share"], 0.05)
+        second = self.keyed()["B0"]
+        self.vectors_sql(f"UPDATE themes SET theme_generation = 2 WHERE book_id = '{second[0]}' AND theme_id = '{second[2]}'")
+        got = self.status()
+        self.assertEqual((got["full_build_needed"], got["repair_due"]), (True, False))
+        self.assertTrue(any("5 percent" in why for why in got["full_build_because"]))
+        self.assertIn("theme-links build", got["next"])
+
+    def test_a_theme_whose_text_changed_is_changed_too(self):
+        first = self.keyed()["A0"]
+        with closing_sqlite(themevectors.path_of(self.index_root())) as conn:
+            made, hashes = (json.loads(x) for x in conn.execute("SELECT theme, hashes FROM themes WHERE book_id = ? AND theme_id = ?", (first[0], first[2])).fetchone())
+            made["summary"] = "A different summary of the same theme."
+            hashes["summary"] = themevectors.sha256(themevectors.texts_of(made)["summary"])
+            conn.execute("UPDATE themes SET theme = ?, hashes = ? WHERE book_id = ? AND theme_id = ?", (json.dumps(made), json.dumps(hashes), first[0], first[2]))
+        got = self.status()
+        self.assertEqual((got["waiting"]["changed"], got["themes_in_weave"]), (1, 20))
+
+    def test_a_theme_that_is_gone_is_counted_and_alone_it_does_not_make_a_repair_due(self):
+        first = self.keyed()["A0"]
+        self.vectors_sql(f"DELETE FROM vectors WHERE book_id = '{first[0]}' AND theme_id = '{first[2]}'",
+                         f"DELETE FROM themes WHERE book_id = '{first[0]}' AND theme_id = '{first[2]}'")
+        got = self.status()
+        self.assertEqual((got["gone"], got["waiting"]["total"], got["repair_due"], got["full_build_needed"]), (1, 0, False, False))
+        self.assertEqual(got["changed_or_gone_share"], 0.05)
+
+    def test_a_weave_made_from_vectors_of_another_model_needs_a_full_build(self):
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = 'another-model:1' WHERE key = 'vectors_model'")
+        got = self.status()
+        self.assertEqual((got["full_build_needed"], got["repair_due"]), (True, False))
+        self.assertTrue(any("model" in why for why in got["full_build_because"]))
+
+    def test_a_book_that_cannot_be_read_has_no_age_and_does_not_stop_the_status(self):
+        self.add_books({"F": [(10, 20)]})
+        got = weave.status(self.index_root(), self.mcfg, OnlyReads(self.store, fail=True))
+        self.assertEqual((got["waiting"]["total"], got["oldest_waiting_days"]), (1, None))
+
+    def test_a_date_that_is_not_a_date_is_not_an_age(self):
+        self.add_books({"F": [(10, 20)]})
+        for bad in ("not a date", "2026-11-13", "", 5, None, "2026-11-13T10:00:00+02:00", "[end of untrusted text]",
+                    "2026-13-45T25:61:61+00:00", "0000-00-00T00:00:00+00:00", "9999-99-99T99:99:99+00:00"):     # the last three have the form of a date and are not one
+            with self.subTest(added=bad):
+                got = weave.status(self.index_root(), self.mcfg, OnlyReads(self.store, added=bad))
+                self.assertEqual((got["waiting"]["total"], got["oldest_waiting_days"]), (1, None))
+
+    def test_a_missing_weave_is_refused_with_the_command_and_numpy_is_not_needed_to_ask(self):
+        with unittest.mock.patch.dict(sys.modules, {"numpy": None}):
+            self.assertEqual(self.status()["themes_in_weave"], 20)
+        os.remove(self.weave_path())
+        with self.assertRaises(KbError) as cm:
+            self.status()
+        self.assertIn("theme-links build", str(cm.exception))
+
+    def test_the_files_are_not_changed_and_no_model_is_called(self):
+        before = (file_sha256(self.weave_path()), file_sha256(themevectors.path_of(self.index_root())))
+        with unittest.mock.patch.object(models, "embed", side_effect=AssertionError("a model was called")):
+            self.status()
+        self.assertEqual((file_sha256(self.weave_path()), file_sha256(themevectors.path_of(self.index_root()))), before)
+
+    def test_the_vectors_for_another_model_or_dimension_or_prefix_are_refused(self):
+        for cfg in (with_embedding(model="other:1"), with_embedding(dimension=5), with_embedding(document_prefix="x")):
+            with self.subTest(cfg=cfg["models"]["emb"]), self.assertRaises(KbError):
+                weave.status(self.index_root(), cfg, OnlyReads(self.store))
+
+
+@needs_numpy
+class StatusBelowTheShareTest(StatusCase):
+    SPEC = {**grid(5, 4), "F": [(30, 40)]}     # twenty-one themes: one theme is less than 5 percent
+
+    def test_one_new_theme_of_twenty_one_is_not_enough_to_make_a_repair_due(self):
+        self.add_books({"G": [(10, 20)]})
+        got = self.status()
+        self.assertEqual((got["waiting"]["total"], got["themes_in_weave"], got["repair_due"]), (1, 21, False))
+        self.assertIn("not due yet", got["next"])
+
+    def test_the_thirty_days_since_the_oldest_waiting_book_was_added_make_a_repair_due(self):
+        self.add_books({"G": [(10, 20)]})
+        moment = datetime.datetime.fromisoformat(self.store.read_book(self.books["G"])["added"])
+        before = self.status(now=moment + datetime.timedelta(days=29, hours=23))
+        self.assertEqual((before["waiting"]["total"], before["repair_due"]), (1, False))
+        self.assertAlmostEqual(before["oldest_waiting_days"], 29 + 23 / 24, places=3)
+        at = self.status(now=moment + datetime.timedelta(days=30))
+        self.assertEqual(at["repair_due"], True)
+        self.assertTrue(any("30 days" in why for why in at["repair_due_because"]), at["repair_due_because"])
+        self.assertAlmostEqual(at["oldest_waiting_days"], 30.0, places=3)
+
+
+@needs_numpy
+class StatusFloorTest(StatusCase):
+    SPEC = {"A": [(0, 0)], "B": [(0, 10)], "C": [(0, 30)], "D": [(0, 70)]}   # the theme at 70 degrees is left with no link by the floor
+
+    def test_a_theme_the_floor_left_with_no_link_is_counted_apart_and_never_waits(self):
+        got = self.status()
+        self.assertEqual((got["themes_with_no_link"], got["waiting"]["total"], got["repair_due"], got["themes_in_weave"]), (1, 0, False, 4))
+
+
+@needs_numpy
+class StatusLeftOutTest(WeaveCase):
+    def setUp(self):
+        super().setUp()
+        with closing_sqlite(themevectors.path_of(self.index_root())) as conn:
+            conn.execute("UPDATE vectors SET text_sha256 = ? WHERE rowid = (SELECT rowid FROM vectors WHERE field = 'method' LIMIT 1)", ("0" * 64,))
+        self.build_weave()
+
+    def test_a_theme_with_no_usable_vector_is_counted_apart_and_never_waits(self):
+        got = weave.status(self.index_root(), self.mcfg, OnlyReads(self.store))
+        self.assertEqual((got["left_out"], got["waiting"]["total"], got["repair_due"]), (1, 0, False))
+
+
+@needs_numpy
+class RepairCase(StatusCase):
+    """The repair of the file, against the same rule given to `weave.repair_links` with the inputs the test knows."""
+
+    def all_keys(self):
+        """The key of each theme by name, as the file of vectors had it before the test took some away, and with those that came after."""
+        return {**self.first_keys, **self.keyed()}
+
+    def vectors_of(self, names):
+        spec = {f"{b}{i}": pair for b, themes in self.SPEC.items() for i, pair in enumerate(themes)}
+        keyed = self.all_keys()
+        keys = sorted(keyed[n] for n in names)
+        name_of = {keyed[n]: n for n in names}
+        return (keys, [k[0] for k in keys], [as_stored(deg4(spec[name_of[k]][0])) for k in keys], [as_stored(deg4(spec[name_of[k]][1])) for k in keys])
+
+    def expected_links(self, old, current, removed=(), added=()):
+        keyed = self.all_keys()
+        keys, books, S, M = self.vectors_of([n for n in current])
+        meta = old["meta"]
+        return weave.repair_links(keys, books, S, M, old["links"], meta["edges"], meta["median"], {keyed[n] for n in removed}, {keyed[n] for n in added},
+                                  slots=meta["slots"], top=meta["top"])["links"]
+
+    def names(self):
+        return set(self.keyed())
+
+
+@needs_numpy
+class RepairTest(RepairCase):
+    def test_a_book_that_came_after_the_weave_is_added_by_the_rule_and_the_edges_and_the_median_are_kept(self):
+        old, before = weave.read(self.weave_path()), file_sha256(self.weave_path())
+        old_names = self.names()
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        counts = self.repair()
+        got = weave.read(self.weave_path())
+        self.assertEqual(got["links"], self.expected_links(old, self.names(), added=self.names() - old_names))
+        for key in ("edges", "median", "slots", "top", "bands", "kind"):
+            self.assertEqual(got["meta"][key], old["meta"][key], key)
+        self.assertEqual(got["meta"]["generation"], 2)
+        self.assertEqual(got["meta"]["vectors_built"], self.meta()["built"])
+        books = {k[0] for k in self.keyed().values()}
+        per = {}
+        for b in (k[0] for k in self.keyed().values()):
+            per[b] = per.get(b, 0) + 1
+        self.assertEqual(got["meta"]["pairs"], (22 * 22 - sum(c * c for c in per.values())) // 2)
+        rows = {(r["book_id"], r["version_id"], r["theme_id"]): r for r in self.themes_read()}
+        self.assertEqual([t["key"] for t in got["themes"]], sorted(rows))
+        for t in got["themes"]:
+            row = rows[t["key"]]
+            self.assertEqual((t["theme_generation"], t["method_sha256"], t["summary_sha256"]), (row["theme_generation"], row["hashes"]["method"], row["hashes"]["summary"]))
+        self.assertEqual((counts["generation"], counts["themes_added"], counts["themes_in_weave"]), (2, 2, 22))
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        self.assertEqual((file_sha256(previous), weave.read(previous)["meta"]["generation"]), (before, 1))
+        after = self.status()
+        self.assertEqual((after["waiting"]["total"], after["repair_due"], after["themes_in_weave"]), (0, False, 22))
+
+    def test_the_new_file_is_written_and_renamed_and_the_old_one_is_never_written_in_place(self):
+        old_inode = os.stat(self.weave_path()).st_ino
+        before = file_sha256(self.weave_path())
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        self.repair()
+        previous = os.path.join(self.index_root(), weave.PREVIOUS_FILE)
+        self.assertEqual((os.stat(previous).st_ino, file_sha256(previous)), (old_inode, before))
+        self.assertNotEqual(os.stat(self.weave_path()).st_ino, old_inode)
+        self.assertEqual(stat.S_IMODE(os.stat(self.weave_path()).st_mode), 0o600)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_changed_theme_is_dropped_and_added_again_and_the_weave_says_which_generation_it_has(self):
+        old = weave.read(self.weave_path())
+        keyed = self.keyed()
+        name = max(keyed, key=lambda n: sum(1 for l in old["links"] if keyed[n] in l[:2]))     # a theme that has links, so that dropping them is seen
+        key = keyed[name]
+        had = [l for l in old["links"] if key in l[:2]]
+        self.assertGreater(len(had), 0)
+        book, index = name[0], int(name[1:])
+        themes = list(self.SPEC[book])
+        themes[index] = (150.0, 150.0)       # the theme has other vectors now, so that its old links are not right any more
+        self.SPEC = {**self.SPEC, book: themes}
+        self.vectorize()
+        self.vectors_sql(f"UPDATE themes SET theme_generation = 2 WHERE book_id = '{key[0]}' AND theme_id = '{key[2]}'")
+        counts = self.repair()
+        got = weave.read(self.weave_path())
+        self.assertNotEqual(had, [l for l in got["links"] if key in l[:2]])
+        self.assertEqual(got["links"], self.expected_links(old, self.names(), removed=[name], added=[name]))
+        self.assertEqual({t["key"]: t["theme_generation"] for t in got["themes"]}[key], 2)
+        self.assertEqual((counts["themes_added"], counts["themes_changed"], counts["themes_gone"]), (0, 1, 0))
+        self.assertEqual(self.status()["waiting"]["total"], 0)
+
+    def test_a_theme_that_is_gone_is_dropped_with_its_links(self):
+        old = weave.read(self.weave_path())
+        key = self.keyed()["A0"]
+        self.vectors_sql(f"DELETE FROM vectors WHERE book_id = '{key[0]}' AND theme_id = '{key[2]}'", f"DELETE FROM themes WHERE book_id = '{key[0]}' AND theme_id = '{key[2]}'")
+        self.assertEqual(self.status()["repair_due"], False)
+        with self.assertRaises(KbError):
+            self.repair()                      # nothing waits: only a theme is gone
+        counts = self.repair(force=True)
+        got = weave.read(self.weave_path())
+        self.assertEqual(got["links"], self.expected_links(old, self.names() - {"A0"}, removed=["A0"]))
+        self.assertNotIn(key, {t["key"] for t in got["themes"]})
+        self.assertEqual(counts["themes_gone"], 1)
+
+    def test_the_same_repair_from_the_same_state_gives_the_same_links(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        with open(self.weave_path(), "rb") as f:
+            weave_bytes = f.read()
+        self.repair()
+        first = weave.read(self.weave_path())["links"]
+        os.remove(os.path.join(self.index_root(), weave.PREVIOUS_FILE))
+        with open(self.weave_path(), "wb") as f:
+            f.write(weave_bytes)
+        self.repair()
+        self.assertEqual(weave.read(self.weave_path())["links"], first)
+
+    def test_a_theme_that_lost_its_vectors_is_dropped_with_its_links_and_the_repair_says_so(self):
+        old = weave.read(self.weave_path())
+        key = self.keyed()["A0"]
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        self.vectors_sql(f"DELETE FROM vectors WHERE book_id = '{key[0]}' AND theme_id = '{key[2]}' AND field = 'method'")
+        self.assertEqual((self.status()["waiting"]["changed"], self.status()["gone"]), (0, 0))      # its text and its generation are as they were
+        counts = self.repair()
+        got = weave.read(self.weave_path())
+        self.assertEqual(counts["themes_lost_vectors"], 1)
+        self.assertNotIn(key, {t["key"] for t in got["themes"]})
+        self.assertEqual([l for l in got["links"] if key in l[:2]], [])
+        self.assertEqual(got["links"], self.expected_links(old, self.names() - {"A0"}, removed=["A0"], added=self.names() - set(self.first_keys)))
+
+    def test_a_theme_left_with_no_link_by_a_repair_is_in_the_weave_with_none(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        self.repair()
+        got = weave.read(self.weave_path())
+        self.assertEqual(sum(t["links"] for t in got["themes"]), 2 * len(got["links"]))
+        self.assertEqual(len(got["themes"]), 22)
+
+    def test_without_numpy_a_repair_says_what_to_install_and_writes_nothing(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        before = file_sha256(self.weave_path())
+        with unittest.mock.patch.dict(sys.modules, {"numpy": None}), self.assertRaises(KbError) as cm:
+            self.repair()
+        self.assertIn("requirements.lock", str(cm.exception))
+        self.assertEqual(file_sha256(self.weave_path()), before)
+        self.assertFalse(os.path.exists(os.path.join(self.index_root(), weave.PREVIOUS_FILE)))
+
+    def test_the_vectors_file_is_not_changed_and_no_model_is_called(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        before = file_sha256(themevectors.path_of(self.index_root()))
+        with unittest.mock.patch.object(models, "embed", side_effect=AssertionError("a model was called")), \
+                unittest.mock.patch.object(models, "run_job", side_effect=AssertionError("a model was called")):
+            self.repair()
+        self.assertEqual(file_sha256(themevectors.path_of(self.index_root())), before)
+
+    def test_a_failed_rename_leaves_the_weave_as_it_was_and_no_folder(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        before = file_sha256(self.weave_path())
+        with unittest.mock.patch("kb.weave.os.replace", side_effect=OSError(5, "input/output error")), self.assertRaises(KbError):
+            self.repair()
+        self.assertEqual(file_sha256(self.weave_path()), before)
+        self.assertEqual(self.leftovers(), [])
+        self.assertEqual(self.repair()["generation"], 2)
+
+    def test_a_weave_that_was_replaced_while_the_repair_was_worked_out_is_not_written_over(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        before = file_sha256(self.weave_path())
+        with unittest.mock.patch("kb.weave._existing", return_value=(5, False, True)), self.assertRaises(KbError) as cm:
+            self.repair()
+        self.assertIn("changed while", str(cm.exception))
+        self.assertEqual(file_sha256(self.weave_path()), before)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_missing_weave_or_vectors_file_or_another_model_is_refused(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        for cfg in (with_embedding(model="other:1"), with_embedding(dimension=5), with_embedding(document_prefix="x")):
+            with self.subTest(cfg=cfg["models"]["emb"]), self.assertRaises(KbError):
+                weave.repair(self.index_root(), cfg, OnlyReads(self.store))
+        os.remove(self.weave_path())
+        with self.assertRaises(KbError) as cm:
+            self.repair()
+        self.assertIn("theme-links build", str(cm.exception))
+
+
+@needs_numpy
+class RepairBigTest(RepairCase):
+    SPEC = grid(10, 4)          # forty themes: two themes that changed or are gone are exactly 5 percent, which is not more than 5 percent
+
+    def test_new_changed_and_gone_themes_at_once(self):
+        old, old_names = weave.read(self.weave_path()), self.names()
+        gone, changed = self.keyed()["B1"], self.keyed()["C2"]
+        self.add_books({"K": [(20, 30), (100, 110)]})
+        self.vectors_sql(f"DELETE FROM vectors WHERE book_id = '{gone[0]}' AND theme_id = '{gone[2]}'", f"DELETE FROM themes WHERE book_id = '{gone[0]}' AND theme_id = '{gone[2]}'",
+                         f"UPDATE themes SET theme_generation = 2 WHERE book_id = '{changed[0]}' AND theme_id = '{changed[2]}'")
+        state = self.status()
+        self.assertEqual((state["waiting"], state["gone"], state["full_build_needed"], state["repair_due"]), ({"new": 2, "changed": 1, "total": 3}, 1, False, True))
+        counts = self.repair()
+        got = weave.read(self.weave_path())
+        current = self.names() - {"B1"}
+        self.assertEqual(got["links"], self.expected_links(old, current, removed=["B1", "C2"], added=(self.names() - old_names) | {"C2"}))
+        self.assertEqual((counts["themes_added"], counts["themes_changed"], counts["themes_gone"], counts["themes_in_weave"]), (2, 1, 1, 41))
+
+    def test_a_third_theme_changed_or_gone_is_more_than_five_percent_and_needs_a_full_build(self):
+        for name in ("A0", "B0", "C0"):
+            key = self.keyed()[name]
+            self.vectors_sql(f"UPDATE themes SET theme_generation = 2 WHERE book_id = '{key[0]}' AND theme_id = '{key[2]}'")
+        self.assertEqual(self.status()["full_build_needed"], True)
+        self.vectors_sql("UPDATE themes SET theme_generation = 1")
+        self.assertEqual(self.status()["full_build_needed"], False)
+
+
+@needs_numpy
+class RepairIsRefusedTest(RepairCase):
+    def test_nothing_waiting_is_refused_even_when_told_to_go_on(self):
+        for force in (False, True):
+            with self.subTest(force=force), self.assertRaises(KbError) as cm:
+                self.repair(force=force)
+            self.assertIn("nothing is waiting", str(cm.exception))
+        self.assertEqual(weave.read(self.weave_path())["meta"]["generation"], 1)
+
+    def test_a_full_build_needed_is_refused_even_when_told_to_go_on_and_nothing_is_written(self):
+        for name in ("A0", "B0"):
+            key = self.keyed()[name]
+            self.vectors_sql(f"UPDATE themes SET theme_generation = 2 WHERE book_id = '{key[0]}' AND theme_id = '{key[2]}'")
+        before = file_sha256(self.weave_path())
+        for force in (False, True):
+            with self.subTest(force=force), self.assertRaises(KbError) as cm:
+                self.repair(force=force)
+            self.assertIn("theme-links build", str(cm.exception))
+        self.assertEqual(file_sha256(self.weave_path()), before)
+        self.assertFalse(os.path.exists(os.path.join(self.index_root(), weave.PREVIOUS_FILE)))
+
+    def test_a_weave_of_another_model_is_a_full_build_even_when_told_to_go_on(self):
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = 'another-model:1' WHERE key = 'vectors_model'")
+        with self.assertRaises(KbError) as cm:
+            self.repair(force=True)
+        self.assertIn("theme-links build", str(cm.exception))
+
+
+@needs_numpy
+class RepairBelowTheShareTest(RepairCase):
+    SPEC = {**grid(5, 4), "F": [(30, 40)]}
+
+    def test_a_repair_that_is_not_due_is_refused_and_goes_on_when_told_to(self):
+        self.add_books({"G": [(10, 20)]})
+        before = file_sha256(self.weave_path())
+        with self.assertRaises(KbError) as cm:
+            self.repair()
+        self.assertIn("no repair is due", str(cm.exception))
+        self.assertEqual(file_sha256(self.weave_path()), before)
+        self.assertEqual(self.repair(force=True)["generation"], 2)
+
+    def test_the_thirty_days_make_it_due(self):
+        self.add_books({"G": [(10, 20)]})
+        moment = datetime.datetime.fromisoformat(self.store.read_book(self.books["G"])["added"])
+        with self.assertRaises(KbError):
+            self.repair(now=moment + datetime.timedelta(days=29))
+        self.assertEqual(self.repair(now=moment + datetime.timedelta(days=30))["generation"], 2)
+
+
+@needs_numpy
+class ThemeLinksRepairCommandTest(StatusCase):
+    def setUp(self):
+        super().setUp()
+        saved = kbconfig.load()
+        saved.update(with_embedding())
+        kbconfig.save(saved)
+
+    def kb(self, *args):
+        out, err, opened = io.StringIO(), io.StringIO(), []
+        real = kbmain.Store.open
+        with unittest.mock.patch.object(models, "embed", side_effect=AssertionError("a model was called")), \
+                unittest.mock.patch.object(kbmain.Store, "open", side_effect=lambda *a, **k: opened.append((a, k)) or real(*a, **k)), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = kbmain.main(list(args))
+            except SystemExit as e:
+                code = e.code
+        self.opened = opened
+        return code, out.getvalue(), err.getvalue()
+
+    def test_status_prints_what_is_waiting_and_opens_the_store_to_read_only(self):
+        code, out, err = self.kb("theme-links", "status")
+        got = json.loads(out)
+        self.assertEqual((code, err, got["waiting"]["total"], got["repair_due"]), (0, "", 0, False))
+        self.assertEqual([k.get("write") for a, k in self.opened], [False])
+
+    def test_repair_prints_the_counts_and_opens_the_store_to_read_only_and_now_goes_on_when_it_is_not_due(self):
+        code, out, err = self.kb("theme-links", "repair")
+        self.assertEqual(code, 2)
+        self.assertIn("nothing is waiting", err)
+        self.add_books({"F": [(20, 30), (100, 110)]})
+        code, out, err = self.kb("theme-links", "repair")
+        got = json.loads(out)
+        self.assertEqual((code, err, got["generation"], got["themes_added"]), (0, "", 2, 2))
+        self.assertEqual([k.get("write") for a, k in self.opened], [False])
+        self.assertEqual(self.kb("theme-links", "repair", "--now")[0], 2)      # nothing waits any more
+
+    def test_they_take_no_model_server_address_or_launcher(self):
+        for command in ("status", "repair"):
+            for option in ("--model", "--server", "--address", "--host", "--url", "--launcher", "--bridge"):
+                with self.subTest(command=command, option=option):
+                    self.assertEqual(self.kb("theme-links", command, option, "x")[0], 2)
 
 
 if __name__ == "__main__":

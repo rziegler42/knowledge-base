@@ -445,3 +445,46 @@ conversion are not touched, and the tests of the extractor run in A because the 
   owner asks. The reasons: the text of a book goes through `themevectors.result_of`, whose cleaning an earlier security review fixed; the other strings are validated ids, times,
   bounded numbers and fixed words; the surface is the same as the search's; and the earlier review's finding in the search (the anchor headings) is the precedent for asking
   once more over the whole module. No push.
+
+### Increment E (`theme-links status` and `repair`; committed)
+
+- **Done.** `engine/kb/weave.py` has `status(index_root, cfg, store, now=None)`, `repair(index_root, cfg, store, now=None, force=False)` and, below them, the repair as a pure
+  function `repair_links(...)`; `engine/kb/__main__.py` has `theme-links status` and `theme-links repair [--now]`, which open the store with `Store.open(write=False)` and take
+  no option that names a model, a server or an address. `status` (no numpy, no model) says what waits: the themes of the vectors file that the weave has not processed and that
+  have a summary vector and a method vector that count (`new`), those it processed whose generation or text hash is not what it recorded (`changed`: a book whose themes were
+  made again is removed and added again), those no longer in the file (`gone`), and, apart, those that ended with no link (`themes_with_no_link`) and those with no usable vector
+  (`left_out`), which never wait. A repair is due when the waiting themes are 5 percent or more of the themes in the weave, or the oldest waiting book was added 30 days ago or
+  more (`REPAIR_SHARE` and `REPAIR_DAYS`, named in one place); a full build is needed, and the status says why, when more than 5 percent of the themes changed or are gone, when
+  the vectors are of another model, dimension or prefix than the weave was made from, or when the weave has no edges. `repair` (needs numpy) drops the links of changed and gone
+  themes, offers the candidates of the new and changed themes strongest first (a link takes a free slot or replaces the weakest link of a full slot if it is stronger, with a rule
+  for a second link to one book in a band), then lets each theme that lost a link take its next candidates into free slots only; the band edges, the median, the slots and the cut are the
+  weave's own; the result is written as a new file under the lock and renamed (the shared `_publish`, which `build` now uses too), the generation before is kept as it was, the file in
+  place is never written over, and a weave that changed while the repair was worked out is refused. It is refused, with nothing written, when a full build is needed (also with
+  `--now`), when nothing waits and nothing is gone, and when no trigger holds (unless `--now`).
+- **Tests, first.** Written before the code and seen to fail (no `repair_links`, `status`, `repair`). `test_weave` now has 119 tests, 42 of them new in this increment (it had 77): `repair_links` against
+  `reference_repair`, a plain-Python statement of the rule written separately in the tests, on 24 random scenarios (8 seeds, 1, 2 and 3 slots, themes gone, changed and new), with a smaller cut,
+  blocks of 1 to 1000 and the themes in another order; two hand-worked cases (a new theme takes the slot of a weaker link; a changed theme with no partner now loses its old link); `status`
+  right after a build, with one new theme of twenty (exactly 5 percent, due) and of twenty-one (below, not due), with 1 and 2 changed themes of twenty (5 percent is not more than 5 percent,
+  10 percent is a full build), a theme whose text changed, a theme gone, a model that differs, the 30 days (29 days and 23 hours is not due, 30 days is), a book that cannot be read, dates that
+  are not dates (ten forms, three of them with the form of a date), a theme with no link and a theme with no usable vector (neither waits), no numpy, the files unchanged, no model called;
+  `repair` of a new book, of a changed theme, of a gone theme, of all three in a library of forty, the same result twice, the edges, the median, the slots and the pairs, the previous
+  generation byte for byte and its inode, never written in place, a failed rename and a writer that got in first, no numpy, a refusal for nothing waiting, for a full build (also with
+  `--now`), for a repair not due; and the two commands (the store opened read-only, the counts, `--now`, no option names a model). `engine/.venv/bin/python -W error::ResourceWarning -m
+  unittest engine.tests.test_weave engine.tests.test_themevectors`: **230 tests OK**; with plain `python3` the 119 of `test_weave` are skipped with a reason.
+- **Deliberate breaks.** 27, each caught in a final run after the last change of the code (three were missed at first and the tests were strengthened until they were caught: a changed theme's old links kept needed a case where the
+  changed theme has no partner now, the median not kept needed a larger shift and a break on the written value, and the age of a book needed dates that are not dates), the files restored
+  byte for byte: a theme with no link counted as waiting; the links of a changed or gone theme kept; a full build needed at more than 5 percent and a half, or at exactly 5 percent; the
+  vectors model not compared; a full build not refused with `--now`; the age trigger a day early or late; the share trigger above 5 percent or at half of it; a full slot, or the floor,
+  not respected by the repair; a theme that lost a link not refilled; the new file written over the file in place; a weave that changed during the repair not noticed; a changed theme not
+  added again; the median or the edges not kept (three ways); the pairs not worked out again; changed themes not counted as waiting; a theme with no usable vector counted as waiting; a
+  gone theme alone not repaired with `--now`; the age not read as a date, and an impossible date raising; a theme that lost its vectors not counted; the store opened to write.
+- **Review.** The `reviewer` agent (read only): no blocking finding. Applied: a date that has the form of a date and is not one (month 13, year 0) made `status` and `repair` end in a traceback,
+  and now gives no age (a test with three such dates); a theme that is unchanged but has lost its summary or method vector is dropped with its links and counted
+  (`themes_lost_vectors`; the code that dropped it twice is now once); the help text says that `repair` needs numpy too; the spec says that "already linked" means the themes in the weave,
+  no-link themes included, and records the repair's details (the replacement rules, the tie to the greater key, the second link to one book) as proposed, since they are the agent's choices.
+  Recorded for the owner, not changed: **the 30 days count from the date a book was added, as the plan says, so a book that is old and whose themes were made again is due at once**
+  (the date the themes changed is not recorded where the status can read it); the plan and the spec said "of the linked" and the code takes the share of all the themes in the weave, no-link
+  themes included, as the README and "Built" say; a theme that lost its vectors alone does not make a repair due; `reference_repair` checks the numeric side of the code and shares its design
+  (the two phases, "touched", the tie and same-book choices), so it would not catch a wrong reading of the rule.
+- **Not run.** Any run on the real library (Increment F); the other engine modules' tests (nothing else changed besides the command line); a security review (not asked: the owner decided to
+  ask once more over the whole weave module before Increment F). No push.

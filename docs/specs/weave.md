@@ -192,7 +192,11 @@ tested. It does not cover how themes are made or how the agent searches, which h
 - **[proposed]** Built: `engine/.venv/bin/python -m kb theme-links build` makes the weave of *same mechanism* from the file of the theme vectors (read only; nothing is
   sent to any model) and puts `weave-same-mechanism.sqlite` in the index root, in a folder of its own under a lock, keeping the generation before; the file records every
   theme it processed with its number of links, those left with none included, and what it was made from. The closeness is an integer in billionths and the median and
-  the edges are exact (`engine/kb/weave.py`; `engine/README.md`). `theme-links show BOOK_ID THEME_ID` prints the links of a theme by band, each with the other theme as a search shows a theme, the closeness, the wording closeness and the matched texts, read only and without numpy; a weave made from an older build of the vectors file is said to be out of date. The repair of a weave and the batching are not built yet.
+  the edges are exact (`engine/kb/weave.py`; `engine/README.md`). `theme-links show BOOK_ID THEME_ID` prints the links of a theme by band, each with the other theme as a search shows a theme, the closeness, the wording closeness and the matched texts, read only and without numpy; a weave made from an older build of the vectors file is said to be out of date. `theme-links status` says what waits to be linked and whether a repair is due (waiting themes at 5 percent of the weave, or the oldest waiting book 30 days old) or a full build is needed (more than 5 percent of the themes changed or gone, or the vectors of another model); `theme-links repair [--now]` adds them as the adding-books rule says and writes the next generation as a new file, never over the file in place. The batching numbers are constants of `engine/kb/weave.py` that the owner may tune.
+- **[proposed]** Details of the repair, which the agent chose and the owner has not decided: a candidate link takes a free slot, or replaces the weakest link of a full slot if that is
+  strictly weaker (of equal weakest links, the one to the greater key); where an end already links to a theme of the candidate's book in that band, that link is replaced if it is weaker
+  and the candidate is refused if it is not; a candidate that either end cannot admit changes nothing; and a theme that lost a link takes its next candidates into free slots only.
+  A theme that is unchanged but no longer has a summary or a method vector that counts is dropped with its links.
 - **[agreed]** The floor of strength (the owner, 2026-11-13). A link is kept only if its closeness for the weave's kind is above the
   median closeness of all pairs of themes of different books, worked out for each weave. A pair no closer than a typical pair is not
   a link of that kind, so it is not stored, and a theme may keep fewer than 12 links, most of all in the wording-farthest band. It
@@ -215,8 +219,8 @@ tested. It does not cover how themes are made or how the agent searches, which h
   compared and restored.
 - **[agreed]** Adding books (the owner, 2026-11-13). A full rebuild and every old generation kept at each new book would cost too
   much over years of slow growth. New books wait in a list, and the weaves are repaired for the whole batch when the first of these
-  happens: the new themes reach about 5 percent of the themes already linked, or 30 days have passed since the oldest unlinked book
-  arrived, or the owner asks. A repair offers the candidate links of the new themes strongest first; a link takes a free slot, or
+  happens: the new themes reach about 5 percent of the themes already in the weave (those left with no link included), or 30 days have passed since the oldest unlinked
+  book was added (by the date the book was added, so a book that is old and whose themes were made again is due at once), or the owner asks. A repair offers the candidate links of the new themes strongest first; a link takes a free slot, or
   replaces the weakest link of a full slot if it is stronger, and a theme that lost a link is refilled from its candidates. Each batch
   makes one generation, and one previous generation is kept. A book whose themes changed, or that was taken out, is treated as
   removed and added again (the owner, 2026-11-13): the links of its old themes are dropped, the themes that lost a link are refilled,
