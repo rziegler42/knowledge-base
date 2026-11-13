@@ -1,0 +1,76 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-13T12:35:36Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "held_back is now defined over the whole ranking, not up to the last result shown, so an underfilled page is explained; the scope, the tests, the breaks and criterion 3 say so."
+    }
+  ],
+  "format": 1,
+  "generation": 4,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-13-limit-the-themes-of-one-book-in-a-theme-search.md",
+  "rounds": [
+    {
+      "at": "2026-11-13T12:35:21Z",
+      "bridge": "ask-codex",
+      "document_sha256": "d08dda37ac1bdd9271927e1a013ed1550bd398fbfb9312d2495bf11dd81bbecf",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "0e87bf932b0ae6f315c1562d112e92a7e4f0e7037924794131a660c7ee276692",
+      "usage": {
+        "input_tokens": 279505,
+        "output_tokens": 2759,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-13T12:37:38Z",
+      "bridge": "ask-codex",
+      "document_sha256": "2afb1a713ae1cd63133e8e299e52dc049f19e9d99f5f68ab9c31982e9f10f977",
+      "file": "round-2.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "4ce3fda7ec935659f9561d5d76070e81aafb0d35db83fcb9e914a06c9066745d",
+      "usage": {
+        "input_tokens": 302202,
+        "output_tokens": 1568,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "9bdac1c49a4040012d079ad2fd6760ecce6d9402111d6921091c6c301ea1051c",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

@@ -1,7 +1,7 @@
 # Theme weave
 
 Status: Active
-Updated: 2026-11-12
+Updated: 2026-11-13
 
 ## Purpose
 
@@ -57,6 +57,16 @@ not measure extrapolation. The weave spec (`docs/specs/weave.md`) is a draft tha
 - Dependencies: theme-unit.
 - Boundary: in, the vectors, their store and a command to find themes. Out, links and the walk.
 - Trigger: theme-unit is done and the owner asks for a plan.
+
+### theme-per-book: Limit the themes of one book in a theme search
+
+- ID: theme-per-book
+- Outcome: a search of the themes by meaning can limit how many themes of one book a page holds, so that a page shows more books.
+  The limit has a default of 2 and an option to change it or switch it off. The counts and the marks stay as they are.
+- Dependencies: theme-vectors.
+- Boundary: in, the limit in the theme search and its option on the command line. Out, links, the walk, and a separate view of the
+  best theme of each book.
+- Trigger: the owner asks for a plan.
 
 ### theme-links: Link themes from different fields
 
