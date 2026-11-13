@@ -192,7 +192,7 @@ tested. It does not cover how themes are made or how the agent searches, which h
 - **[proposed]** Built: `engine/.venv/bin/python -m kb theme-links build` makes the weave of *same mechanism* from the file of the theme vectors (read only; nothing is
   sent to any model) and puts `weave-same-mechanism.sqlite` in the index root, in a folder of its own under a lock, keeping the generation before; the file records every
   theme it processed with its number of links, those left with none included, and what it was made from. The closeness is an integer in billionths and the median and
-  the edges are exact (`engine/kb/weave.py`; `engine/README.md`). Looking at the links of a theme, the repair of a weave and the batching are not built yet.
+  the edges are exact (`engine/kb/weave.py`; `engine/README.md`). `theme-links show BOOK_ID THEME_ID` prints the links of a theme by band, each with the other theme as a search shows a theme, the closeness, the wording closeness and the matched texts, read only and without numpy; a weave made from an older build of the vectors file is said to be out of date. The repair of a weave and the batching are not built yet.
 - **[agreed]** The floor of strength (the owner, 2026-11-13). A link is kept only if its closeness for the weave's kind is above the
   median closeness of all pairs of themes of different books, worked out for each weave. A pair no closer than a typical pair is not
   a link of that kind, so it is not stored, and a theme may keep fewer than 12 links, most of all in the wording-farthest band. It

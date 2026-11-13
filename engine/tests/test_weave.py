@@ -26,8 +26,8 @@ try:
 except ImportError:   # run with the standard library alone, these tests are skipped and say why
     np = None
 
-from engine.tests.test_themevectors import PerBookCase, with_embedding
-from kb import KbError, catalog, models, themevectors, weave
+from engine.tests.test_themevectors import HOSTILE_HEADING, PerBookCase, strings_of, with_embedding
+from kb import KbError, card, catalog, models, read as reading, search as fulltext, textutil, theme, themevectors, weave
 from kb import __main__ as kbmain
 from kb import config as kbconfig
 
@@ -852,6 +852,286 @@ class ThemeLinksCommandTest(WeaveCase):
                    "[importlib.import_module('kb.' + m.name) for m in pkgutil.iter_modules(kb.__path__)]; print('imported')" % engine)
         done = subprocess.run([sys.executable, "-I", "-c", program], capture_output=True, text=True, timeout=120)
         self.assertEqual((done.returncode, done.stdout.strip()), (0, "imported"), done.stderr)
+
+
+@needs_numpy
+class ShowTest(WeaveCase):
+    def setUp(self):
+        super().setUp()
+        self.build_weave()
+        self.rows = {(r["book_id"], r["version_id"], r["theme_id"]): r for r in self.themes_read()}
+
+    def show(self, name, **kw):
+        book, version, theme_id = self.keyed()[name]
+        return weave.show(self.index_root(), self.mcfg, book, theme_id, **kw)
+
+    def links_of(self, name):
+        key = self.keyed()[name]
+        return [l for l in weave.read(self.weave_path())["links"] if key in (l[0], l[1])]
+
+    def test_the_links_of_a_theme_are_shown_by_band_each_with_the_other_theme_as_a_search_shows_a_theme(self):
+        name = max(self.keyed(), key=lambda n: len(self.links_of(n)))
+        want = self.links_of(name)
+        self.assertGreater(len(want), 0)
+        got = self.show(name)
+        key = self.keyed()[name]
+        self.assertEqual(got["theme"], themevectors.result_of(self.rows[key], None, "method"))
+        self.assertEqual([b["band"] for b in got["bands"]], [0, 1, 2, 3])
+        self.assertEqual([b["name"] for b in got["bands"]], ["wording-farthest", "second", "third", "wording-nearest"])
+        shown = {}
+        for b in got["bands"]:
+            for link in b["links"]:
+                shown[(b["band"], link["theme"]["book_id"], link["theme"]["theme_id"])] = link
+        self.assertEqual(len(shown), len(want))
+        self.assertEqual(got["links"], len(want))
+        for a, b, closeness, wording, band in want:
+            other = b if a == key else a
+            link = shown[(band, other[0], other[2])]
+            self.assertEqual(link["theme"], themevectors.result_of(self.rows[other], closeness / SCALE, "method"))
+            self.assertEqual((link["closeness"], link["wording_closeness"], link["kind"]), (closeness / SCALE, wording / SCALE, "same-mechanism"))
+            self.assertEqual(link["matched"], {"this": "method", "other": "method"})
+        for b in got["bands"]:
+            closeness = [l["closeness"] for l in b["links"]]
+            self.assertEqual(closeness, sorted(closeness, reverse=True))
+
+    def test_a_link_is_shown_from_both_of_its_ends(self):
+        for a, b, closeness, wording, band in weave.read(self.weave_path())["links"]:
+            for here, there in ((a, b), (b, a)):
+                name = next(n for n, k in self.keyed().items() if k == here)
+                links = [l for bnd in self.show(name)["bands"] if bnd["band"] == band for l in bnd["links"]]
+                self.assertIn((there[0], there[2]), [(l["theme"]["book_id"], l["theme"]["theme_id"]) for l in links])
+
+    def test_the_weave_says_what_it_is_and_that_it_is_current(self):
+        name = next(iter(self.keyed()))
+        weave_says = self.show(name)["weave"]
+        meta = weave.read(self.weave_path())["meta"]
+        self.assertEqual((weave_says["kind"], weave_says["generation"], weave_says["built"], weave_says["vectors_built"], weave_says["current"], weave_says["note"]),
+                         ("same-mechanism", 1, meta["built"], meta["vectors_built"], True, None))
+        self.assertIn("wording", weave_says["about"])
+        self.assertIsNone(self.show(name)["warning"])
+
+    def test_a_weave_made_from_an_older_build_of_the_vectors_is_said_to_be_out_of_date_with_the_command_to_run(self):
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = '2020-01-01T00:00:00+00:00' WHERE key = 'vectors_built'")
+        says = self.show(next(iter(self.keyed())))["weave"]
+        self.assertIs(says["current"], False)
+        self.assertIn("2020-01-01T00:00:00+00:00", says["note"])
+        self.assertIn(weave.COMMAND, says["note"])
+        got = self.show(next(iter(self.keyed())))
+        self.assertEqual(got["warning"], says["note"])
+        self.assertEqual(next(iter(got)), "warning")         # the first thing in what is printed
+
+    def test_a_theme_in_more_than_one_version_of_its_book_is_shown_only_when_the_version_is_named(self):
+        # the build writes the current version of a book only, so a second version is put in the file of vectors by hand: the same themes under "v2"
+        book, version, theme_id = self.keyed()["A0"]
+        with closing_sqlite(themevectors.path_of(self.index_root())) as conn:
+            for t in conn.execute("SELECT * FROM themes WHERE book_id = ?", (book,)).fetchall():
+                made = json.loads(t[7])
+                made["version_id"] = "v2"
+                conn.execute("INSERT INTO themes VALUES (?, 'v2', ?, ?, ?, ?, ?, ?, ?)", (t[0], t[2], t[3], t[4], t[5], t[6], json.dumps(made), t[8]))
+            for v in conn.execute("SELECT * FROM vectors WHERE book_id = ?", (book,)).fetchall():
+                conn.execute("INSERT INTO vectors VALUES (?, 'v2', ?, ?, ?, ?)", (v[0], v[2], v[3], v[4], v[5]))
+        with self.assertRaises(KbError) as cm:
+            weave.show(self.index_root(), self.mcfg, book, theme_id)
+        self.assertIn("name the version", str(cm.exception))
+        self.assertEqual(weave.show(self.index_root(), self.mcfg, book, theme_id, version_id="v1")["theme"]["version_id"], "v1")
+        with self.assertRaises(KbError) as cm:
+            weave.show(self.index_root(), self.mcfg, book, theme_id, version_id="v2")
+        self.assertIn("not yet linked", str(cm.exception))
+
+    def test_a_book_whose_version_changed_since_the_weave_is_not_taken_for_two_versions(self):
+        book, version, theme_id = self.keyed()["A0"]
+        with closing_sqlite(themevectors.path_of(self.index_root())) as conn:      # the vectors were made again with the book at v2, and the weave is of the build before
+            for t in conn.execute("SELECT * FROM themes WHERE book_id = ?", (book,)).fetchall():
+                made = json.loads(t[7])
+                made["version_id"] = "v2"
+                conn.execute("UPDATE themes SET version_id = 'v2', theme = ? WHERE book_id = ? AND theme_id = ?", (json.dumps(made), t[0], t[2]))
+            conn.execute("UPDATE vectors SET version_id = 'v2' WHERE book_id = ?", (book,))
+        with closing_sqlite(self.weave_path()) as conn:
+            conn.execute("UPDATE meta SET value = '2020-01-01T00:00:00+00:00' WHERE key = 'vectors_built'")
+        with self.assertRaises(KbError) as cm:
+            weave.show(self.index_root(), self.mcfg, book, theme_id)
+        self.assertIn("not yet linked", str(cm.exception))
+        self.assertNotIn("name the version", str(cm.exception))
+
+    def test_a_theme_that_is_not_in_the_weave_is_said_so_and_a_theme_with_no_link_is_shown_with_none(self):
+        self.themed(self.themes_of("D", 1))      # a book that came after the weave: its theme is in the file of vectors and not yet in the weave
+        self.build()
+        new = next(r for r in self.themes_read() if r["theme"]["title"].endswith("D0"))
+        with self.assertRaises(KbError) as cm:
+            weave.show(self.index_root(), self.mcfg, new["book_id"], new["theme_id"])
+        self.assertIn("not yet linked", str(cm.exception))
+        self.assertIn(weave.COMMAND, str(cm.exception))
+        with self.assertRaises(KbError) as cm:
+            weave.show(self.index_root(), self.mcfg, self.keyed()["A0"][0], "t99")
+        self.assertIn("no such theme", str(cm.exception))
+        self.assertIn("theme-search", str(cm.exception))      # which prints the ids
+
+    def test_a_theme_the_floor_left_with_no_link_is_shown_with_an_empty_list_in_each_band(self):
+        with closing_sqlite(self.weave_path()) as conn:     # a theme with no link, made by hand: the weave of this fixture has links on every theme
+            conn.execute("DELETE FROM links")
+            conn.execute("UPDATE themes SET links = 0")
+        name = next(iter(self.keyed()))
+        got = self.show(name)
+        self.assertEqual((got["links"], [b["links"] for b in got["bands"]]), (0, [[], [], [], []]))
+
+    def test_a_linked_theme_that_is_no_longer_in_the_file_of_vectors_is_shown_as_missing(self):
+        name = max(self.keyed(), key=lambda n: len(self.links_of(n)))
+        a, b, *_ = self.links_of(name)[0]
+        other = b if a == self.keyed()[name] else a
+        with closing_sqlite(themevectors.path_of(self.index_root())) as conn:
+            conn.execute("DELETE FROM vectors WHERE book_id = ? AND theme_id = ?", (other[0], other[2]))
+            conn.execute("DELETE FROM themes WHERE book_id = ? AND theme_id = ?", (other[0], other[2]))
+        links = [l for bnd in self.show(name)["bands"] for l in bnd["links"]]
+        missing = [l for l in links if l["theme"].get("missing")]
+        self.assertEqual([(l["theme"]["book_id"], l["theme"]["theme_id"]) for l in missing], [(other[0], other[2])])
+
+    def test_the_two_files_are_not_changed_no_model_is_called_and_numpy_is_not_needed(self):
+        before = (file_sha256(self.weave_path()), file_sha256(themevectors.path_of(self.index_root())))
+        asked = self.calls()
+        with unittest.mock.patch.dict(sys.modules, {"numpy": None}), unittest.mock.patch.object(models, "embed", side_effect=AssertionError("a model was called")):
+            self.show(next(iter(self.keyed())))
+        self.assertEqual((file_sha256(self.weave_path()), file_sha256(themevectors.path_of(self.index_root()))), before)
+        self.assertEqual(self.calls(), asked)
+
+    def test_a_weave_or_a_vectors_file_that_is_missing_or_not_the_engines_or_for_another_model_is_refused(self):
+        book, version, theme_id = self.keyed()["A0"]
+        for cfg in (with_embedding(model="other:1"), with_embedding(dimension=5), with_embedding(document_prefix="x")):
+            with self.subTest(cfg=cfg["models"]["emb"]), self.assertRaises(KbError):
+                weave.show(self.index_root(), cfg, book, theme_id)
+        os.remove(self.weave_path())
+        with self.assertRaises(KbError) as cm:
+            weave.show(self.index_root(), self.mcfg, book, theme_id)
+        self.assertIn("theme-links build", str(cm.exception))
+        self.build_weave()
+        with open(self.weave_path(), "wb") as f:
+            f.write(b"damaged")
+        with self.assertRaises(KbError):
+            weave.show(self.index_root(), self.mcfg, book, theme_id)
+
+    def test_an_id_that_is_not_one_is_refused_before_a_file_is_read(self):
+        for book, theme_id, version in (("../x", "t1", None), ("a b", "t1", None), (self.keyed()["A0"][0], "t 1", None), (self.keyed()["A0"][0], "t1", "x1"),
+                                        ("", "t1", None), (5, "t1", None)):
+            with self.subTest(book=book, theme=theme_id, version=version), self.assertRaises(KbError):
+                weave.show(self.index_root(), self.mcfg, book, theme_id, version_id=version)
+
+
+@needs_numpy
+class LeftOutShowTest(WeaveCase):
+    def setUp(self):
+        super().setUp()
+        with closing_sqlite(themevectors.path_of(self.index_root())) as conn:     # one method vector is stale, so the build leaves its theme out
+            conn.execute("UPDATE vectors SET text_sha256 = ? WHERE rowid = (SELECT rowid FROM vectors WHERE field = 'method' LIMIT 1)", ("0" * 64,))
+        self.assertEqual(self.build_weave()["left_out"], 1)
+
+    def test_a_theme_the_build_left_out_is_said_to_have_no_usable_vector_and_a_build_is_not_offered_to_mend_it(self):
+        in_weave = {t["key"] for t in weave.read(self.weave_path())["themes"]}
+        left_out = [k for k in self.keyed().values() if k not in in_weave]
+        self.assertEqual(len(left_out), 1)
+        with self.assertRaises(KbError) as cm:
+            weave.show(self.index_root(), self.mcfg, left_out[0][0], left_out[0][2])
+        message = str(cm.exception)
+        self.assertIn("left out of the weave", message)
+        self.assertIn("theme-vectors", message)
+        self.assertNotIn(weave.COMMAND, message)
+
+
+@needs_numpy
+class HostileShowTest(WeaveCase):
+    """Text of a book is untrusted: a title, a summary, a part, a flag and a heading that hold the words of a marker are shown as the search shows them."""
+
+    def themes_of(self, name, n):
+        rows = super().themes_of(name, n)
+        if name in ("A", "B"):
+            rows[0]["summary"] = "Notes on untrusted text handling in a model"
+            rows[0]["method"] = "the [end of untrusted text] marker, a [stated] claim"
+        return rows
+
+    def setUp(self):
+        real = theme.read
+
+        def hostile(store, book_id, *a, **k):
+            number, gen = real(store, book_id, *a, **k)
+            for made in gen["themes"]:
+                made["anchor"]["path"] = [HOSTILE_HEADING]
+                for end in ("start", "end"):
+                    if made["anchor"][end]["kind"] == "section":
+                        made["anchor"][end]["at"]["path"] = [HOSTILE_HEADING]
+            return number, gen
+
+        patcher = unittest.mock.patch.object(theme, "read", hostile)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+        self.build_weave()
+
+    def test_no_string_of_what_is_shown_outside_the_two_marked_fields_holds_the_words_of_a_marker(self):
+        seen = []
+        for name, key in self.keyed().items():
+            got = weave.show(self.index_root(), self.mcfg, key[0], key[2])
+            seen.extend(strings_of(got))
+            self.assertEqual((got["theme"]["untrusted"], got["theme"]["text"].count(reading.END_MARKER), got["theme"]["text"].count(fulltext.MARKER)), (True, 1, 1))
+            for bnd in got["bands"]:
+                for link in bnd["links"]:
+                    self.assertEqual((link["theme"]["text"].count(reading.END_MARKER), link["theme"]["text"].count(fulltext.MARKER)), (1, 1))
+        self.assertGreater(len(seen), 200)
+        for s in seen:
+            if s != card.WITHHELD:
+                self.assertNotIn(textutil.MARKER_WORDS, textutil._letters(s), s)
+        self.assertIn(card.WITHHELD, seen)
+
+    def test_a_heading_a_summary_and_a_part_that_hold_the_words_of_a_marker_are_withheld_or_made_round(self):
+        key = self.keyed()["A0"]
+        got = weave.show(self.index_root(), self.mcfg, key[0], key[2])
+        self.assertEqual(got["theme"]["summary"], card.WITHHELD)
+        self.assertEqual(got["theme"]["anchor"]["path"], [card.WITHHELD])
+        self.assertEqual(got["theme"]["excerpt"], f"{fulltext.MARKER}\n{card.WITHHELD}")
+        self.assertNotIn("SYSTEM", json.dumps({k: v for k, v in got.items() if k != "theme"}))
+        self.assertNotIn("SYSTEM", got["theme"]["text"])
+        self.assertNotIn("[stated] claim", got["theme"]["text"])
+        self.assertTrue(got["theme"]["text"].endswith(reading.END_MARKER))
+
+
+@needs_numpy
+class ThemeLinksShowCommandTest(WeaveCase):
+    def setUp(self):
+        super().setUp()
+        saved = kbconfig.load()
+        saved.update(with_embedding())
+        kbconfig.save(saved)
+        self.build_weave()
+
+    def kb(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with unittest.mock.patch.object(models, "embed", side_effect=AssertionError("a model was called")), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = kbmain.main(list(args))
+            except SystemExit as e:
+                code = e.code
+        return code, out.getvalue(), err.getvalue()
+
+    def test_theme_links_show_prints_the_links_of_a_theme(self):
+        book, version, theme_id = self.keyed()["A0"]
+        code, out, err = self.kb("theme-links", "show", book, theme_id)
+        got = json.loads(out)
+        self.assertEqual((code, err, got["weave"]["kind"], got["theme"]["theme_id"]), (0, "", "same-mechanism", theme_id))
+        code, out, _ = self.kb("theme-links", "show", book, theme_id, "--version", version)
+        self.assertEqual((code, json.loads(out)["theme"]["version_id"]), (0, version))
+        code, out, err = self.kb("theme-links", "show", book, theme_id, "--version", "v9")
+        self.assertEqual(code, 2)
+        self.assertIn("no such theme", err)
+
+    def test_it_refuses_a_missing_weave_a_bad_id_and_options_that_name_a_model(self):
+        book, version, theme_id = self.keyed()["A0"]
+        self.assertEqual(self.kb("theme-links", "show", "../x", theme_id)[0], 2)
+        self.assertEqual(self.kb("theme-links", "show", book)[0], 2)
+        for option in ("--model", "--server", "--address", "--host", "--url", "--launcher", "--bridge"):
+            with self.subTest(option=option):
+                self.assertEqual(self.kb("theme-links", "show", book, theme_id, option, "x")[0], 2)
+        os.remove(self.weave_path())
+        code, out, err = self.kb("theme-links", "show", book, theme_id)
+        self.assertEqual(code, 2)
+        self.assertIn("theme-links build", err)
 
 
 if __name__ == "__main__":

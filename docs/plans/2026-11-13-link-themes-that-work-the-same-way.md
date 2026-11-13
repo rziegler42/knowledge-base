@@ -407,3 +407,41 @@ conversion are not touched, and the tests of the extractor run in A because the 
   before** (the engine README says so too); a crash between the two renames leaves both names with the generation in place and loses only the generation before that.
 - **Not run.** Any run on the real library (Increment F); the other engine modules' tests (nothing else changed besides the command line, which `test_themevectors`
   exercises); a security review (not asked: the new code reads two files of the index root, every row of which is checked, and writes one in a private folder). No push.
+
+### Increment D (`theme-links show`; committed)
+
+- **Done.** `engine/kb/weave.py` has `show(index_root, cfg, book_id, theme_id, version_id=None)` and `engine/kb/__main__.py` has `theme-links show BOOK_ID THEME_ID
+  [--version V]`. It reads the file of the theme vectors and the weave read-only (the vectors file checked as the search checks it; the weave by `read`), sends nothing to
+  any model and imports no numpy. It prints, first a `warning` (empty when the weave is current), then the weave (kind, generation, times, `current`, a note, and a text
+  that says what the numbers are), the theme as `themevectors.result_of` shows it, the number of links, and the four bands (wording-farthest, second, third, wording-nearest),
+  each with its links strongest first: the kind, the method `closeness`, the `wording_closeness` (how close the summaries are), the matched texts (the method text of each
+  theme) and the other theme as `result_of` shows it, so that every text of a book is cleaned and withheld whole if it holds the words of a marker, and the excerpt and
+  the text are between the markers; no other path carries text of a book to the output. Refusals: ids that are not ids; no such theme (naming `theme-search`); a theme in
+  more than one version of its book (name it); a theme no longer in the vectors file; a theme not yet linked (build again); a theme the build left out because it has no
+  usable summary or method vector (a build cannot help; the vectors are made by `theme-vectors`); a missing, damaged or foreign weave or vectors file. A weave made from an
+  older build of the vectors is shown with the warning, and a linked theme gone from the vectors file is shown as `missing`. The READMEs and the spec say so.
+- **Tests, first.** Written before the code and seen to fail (no `weave.show`). 77 tests in `test_weave` in all, of which 17 are new here: the links of a theme by band against
+  `result_of` of the other themes; a link from both of its ends; the weave said to be current and the warning empty; out of date with the command; not yet linked and no such
+  theme; a theme with no link; a theme missing from the vectors file; two versions of a book (named or not), and a book whose version changed since the weave; the left-out
+  theme; the two files unchanged, no model called, numpy not needed; refusals for a missing weave, a damaged one and a vectors file for another model, dimension or prefix; bad
+  ids; hostile text (a summary and a part that hold the words of a marker, a flag, a heading in the anchor, strings in every place of the reply, the markers counted); and the
+  command line (it prints, `--version`, bad ids, a missing weave, no option names a model). `engine/.venv/bin/python -W error::ResourceWarning -m unittest
+  engine.tests.test_weave engine.tests.test_themevectors`: **188 tests OK**; with plain `python3` the 77 of `test_weave` are skipped with a reason.
+- **Deliberate breaks.** 17, each caught, `weave.py` restored byte for byte (sha256 prefix `7675e5f3a29b`): a text of a book not cleaned; the words of a marker left in a summary;
+  the links of another theme returned; a link shown from one end only; an out-of-date weave shown as current, or its warning left out; a band mislabelled; closeness and
+  wording swapped; a theme not yet linked, or one the build left out, not refused as it should be; a stale vector counted as usable; the model of the vectors file not checked;
+  a theme missing from the vectors file not shown as missing; numpy needed to show; the number of links wrong; more than one version not refused; the words of the refusal for
+  no such theme.
+- **Review.** The `reviewer` agent (read only): no blocking finding. Applied: the left-out theme was told to build again, which cannot help (it is now told that the vectors are
+  made by `theme-vectors`, and whether a theme has usable vectors is checked in the file, not guessed from the build time); "no such theme" names `theme-search`; versions are
+  counted in the vectors file only, so a rebuild that moved a book from v1 to v2 is not called two versions; the field `wording` is named `wording_closeness` (a higher number
+  is nearer wording), and the weave's text says so; a `warning` is the first thing printed when the weave is out of date; the help text of `theme-links` says that `build`
+  needs numpy; the README says that the numbers of a weave are not worked out again from the vectors when it is shown, so a file written by someone else could hold others that
+  look right (no text injection results: every text still goes through `result_of`). Recorded, not changed: `current` compares the time of the build and the model of the vectors
+  only, so two builds of the vectors in one second look the same, and a build that changed nothing makes the weave look out of date, which errs on the safe side.
+- **Not run.** Any run on the real library (Increment F); the other engine modules' tests (nothing else changed besides the command line, which `test_themevectors` exercises).
+  A security review was not run. **The owner's decision (2026-11-13), on the agent's recommendation: no security review of this command now; the agent asks again before
+  Increment F** (the first write into the real index root), for one review of the whole weave module (the reading, the build, the repair and `show`), which runs only when the
+  owner asks. The reasons: the text of a book goes through `themevectors.result_of`, whose cleaning an earlier security review fixed; the other strings are validated ids, times,
+  bounded numbers and fixed words; the surface is the same as the search's; and the earlier review's finding in the search (the anchor headings) is the precedent for asking
+  once more over the whole module. No push.

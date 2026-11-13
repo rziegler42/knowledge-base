@@ -631,3 +631,95 @@ def build(index_root, cfg, slots=SLOTS, top=TOP, block=BLOCK):
             "themes_with_no_link": len(processed) - len(degree), "left_out": len(left_out), "left_out_reasons": reasons, "links": len(chosen["links"]),
             "links_without_floor": len(without["links"]), "links_at_or_under_the_floor": sum(1 for link in without["links"] if link[2] <= without["median"]), "no_link_in_farthest_band": len(processed) - len(farthest), "edges": chosen["edges"],
             "median": chosen["median"], "pairs": chosen["pairs"], "generation": old_generation + 1, "replaced": replaced}
+
+
+# --- looking at the links of a theme
+
+BAND_NAMES = ("wording-farthest", "second", "third", "wording-nearest")
+ABOUT = ("closeness is how close the method texts of the two themes are (1 is the same direction); wording_closeness is how close their summaries, the book's own words, "
+         "are (so a low number means far apart in wording), and a link with a high closeness and a low wording_closeness is a theme that works the same way and is said in other words. A link is a lead, not a finding; the numbers "
+         "say how the pair was found and are not a judgement of whether it is useful.")
+
+
+def _theme_result(row, score):
+    """A theme as the search shows it (`themevectors.result_of`: every text of the file cleaned, the marked fields between the untrusted-text markers), with the method text
+    as the matched text, or the summary if the theme has no method text any more."""
+    texts = themevectors.texts_of(row["theme"])
+    for field in ("method", "summary"):
+        if field in texts:
+            return themevectors.result_of(row, score, field)
+    return {"book_id": row["book_id"], "version_id": row["version_id"], "theme_id": row["theme_id"], "missing": True, "reason": "the theme has no method or summary text"}
+
+
+def _has_usable_vectors(conn, row, dimension):
+    """Whether the file of theme vectors holds, for this theme, a summary vector and a method vector that count: of the text the theme still has, and of the right length."""
+    have = set()
+    try:
+        for field, sha, blob in conn.execute("SELECT field, text_sha256, vector FROM vectors WHERE book_id = ? AND version_id = ? AND theme_id = ? "
+                                             "AND field IN ('summary', 'method')", (row["book_id"], row["version_id"], row["theme_id"])):
+            if row["hashes"].get(field) == sha:
+                try:
+                    themevectors.unpack(blob, dimension)
+                    have.add(field)
+                except KbError:
+                    pass
+    except sqlite3.Error as e:
+        raise KbError(f"the file of theme vectors cannot be read ({e})") from None
+    return have == {"summary", "method"}
+
+
+def show(index_root, cfg, book_id, theme_id, version_id=None):
+    """The links of one theme in the weave, by band, each with the other theme as the search shows a theme and what the link is (its kind, the method closeness, the wording
+    closeness and the texts that were matched). Reads the file of the theme vectors and the weave read-only, sends nothing to any model and needs no numpy. A theme that is not
+    in the weave, or not in the file of vectors, is a refusal that says which: no such theme (the ids are those `theme-search` prints), one that came after the weave (not yet
+    linked: build again), one the build left out because it has no usable summary or method vector (a build cannot help: the vectors must be made), or one that is no longer in
+    the file of vectors. A weave made from an older build of the vectors is shown, with a `warning` first in what is printed and `weave.current` false. The numbers of the weave
+    are not worked out again from the vectors here. The theme is named by its book and its id (and its version if the file holds more than one)."""
+    if (not isinstance(book_id, str) or not ids._ID.fullmatch(book_id) or not isinstance(theme_id, str) or not themevectors._THEME_ID.fullmatch(theme_id)
+            or (version_id is not None and (not isinstance(version_id, str) or not themevectors._VERSION.fullmatch(version_id)))):
+        raise KbError("a theme is named by the id of its book and its own id (and its version, if the book has more than one): these are not ids")
+    name, _ = models.choose(cfg, "card-embed")
+    entry = models.registry(cfg)[name]
+    with closing(themevectors.connect(themevectors.path_of(index_root), readonly=True)) as conn:
+        vmeta = themevectors.check_entry(conn, entry)
+        rows = themevectors.read_themes(conn)
+        themevectors.check_vector_rows(conn)
+        made = read(path_of(index_root))
+        by_key = {(r["book_id"], r["version_id"], r["theme_id"]): r for r in rows}
+        in_weave = {t["key"]: t for t in made["themes"]}
+
+        def named(keys):
+            return [k for k in keys if k[0] == book_id and k[2] == theme_id and (version_id is None or k[1] == version_id)]
+
+        in_file, in_links = named(by_key), named(in_weave)
+        if len(in_file) > 1 or (not in_file and len(in_links) > 1):
+            raise KbError("the theme is in more than one version of its book: name the version")
+        if not in_file and not in_links:
+            raise KbError("no such theme in the file of theme vectors or in the weave (the ids are those `python3 -m kb theme-search` prints)")
+        key = (in_file or in_links)[0]
+        if key not in by_key:
+            raise KbError(f"the theme is in the weave but no longer in the file of theme vectors: {_AGAIN}")
+        if key not in in_weave:
+            if not _has_usable_vectors(conn, by_key[key], entry["dimension"]):
+                raise KbError("the theme was left out of the weave: it has no usable summary vector or method vector (its text is missing, or its vector is stale or not "
+                              "usable), and building the weave again does not change that; the vectors are made by `python3 -m kb theme-vectors`")
+            raise KbError(f"the theme is not yet linked: the weave was made before it was in the file of theme vectors: {_AGAIN}")
+    wmeta = made["meta"]
+    current = (wmeta["vectors_built"], wmeta["vectors_model"]) == (vmeta["built"], vmeta["model"])
+    note = None if current else (f"out of date: the file of theme vectors was built on {vmeta['built']}, after this weave was made from the build of "
+                                 f"{wmeta['vectors_built']}; {_AGAIN}")
+    centre = _theme_result(by_key[key], None)
+    bands = [{"band": b, "name": BAND_NAMES[b], "links": []} for b in range(BANDS)]
+    total = 0
+    for a, b, closeness, wording, band in made["links"]:
+        if key not in (a, b):
+            continue
+        other = b if a == key else a
+        row = by_key.get(other)
+        shown = _theme_result(row, closeness / SCALE) if row is not None else {
+            "book_id": other[0], "version_id": other[1], "theme_id": other[2], "missing": True, "reason": "the theme is no longer in the file of theme vectors"}
+        bands[band]["links"].append({"closeness": closeness / SCALE, "wording_closeness": wording / SCALE, "kind": KIND,
+                                     "matched": {"this": centre.get("excerpt_field", "method"), "other": shown.get("excerpt_field", "method")}, "theme": shown})
+        total += 1
+    return {"warning": note, "weave": {"kind": KIND, "generation": wmeta["generation"], "built": wmeta["built"], "vectors_built": wmeta["vectors_built"],
+                                       "current": current, "note": note, "about": ABOUT}, "theme": centre, "links": total, "bands": bands}

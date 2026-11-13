@@ -125,8 +125,13 @@ def main(argv=None):
                                               "whose text has not changed is kept; those texts go to that model")
     tv.add_argument("--again", action="store_true", help="make every vector again")
     tl = sub.add_parser("theme-links", help="the links between the themes: a weave is a set of links of one kind (the weave of same mechanism is the first); "
-                                            "needs numpy, so run it with engine/.venv/bin/python")
+                                            "`build` needs numpy, so run it with engine/.venv/bin/python")
     tls = tl.add_subparsers(dest="links_command", required=True)
+    tsh = tls.add_parser("show", help="show the links of one theme in the weave, by band of wording distance, each with the other theme as a search shows a theme "
+                                      "(read only; nothing is sent to any model; needs `theme-links build` run first)")
+    tsh.add_argument("book_id", help="the id of the theme's book, as theme-search prints it")
+    tsh.add_argument("theme_id", help="the id of the theme")
+    tsh.add_argument("--version", dest="version_id", default=None, help="the version of the book, if the file holds more than one (it holds the current one)")
     tls.add_parser("build", help="build the weave of same mechanism from the file of theme vectors (read only; nothing is sent to any model) and put it in the "
                                  "index root in place of the old one, keeping the generation before; needs `theme-vectors` run first")
     ts = sub.add_parser("theme-search", help="search the themes by meaning: the query is any text (a sentence or two about a problem), turned into "
@@ -281,7 +286,10 @@ def main(argv=None):
             return 0
         if args.command == "theme-links":
             cfg = config.load()
-            print(json.dumps(weave.build(cfg["index_root"], cfg)))
+            if args.links_command == "show":
+                print(json.dumps(weave.show(cfg["index_root"], cfg, args.book_id, args.theme_id, version_id=args.version_id), indent=1))
+            else:
+                print(json.dumps(weave.build(cfg["index_root"], cfg)))
             return 0
         if args.command == "theme-search":
             cfg = config.load()
