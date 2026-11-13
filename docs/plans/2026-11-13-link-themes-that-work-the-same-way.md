@@ -222,11 +222,36 @@ the spec, treating a book whose themes changed as removed and added again, unles
 **Verification:** `engine/.venv/bin/python -m unittest engine.tests.test_weave`, and the breaks of step 3. No wider run.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-13-link-themes-that-work-the-same-way#E`.
 
+### Increment E-A — Corrections from the security review of the weave module
+
+**Outcome:** three corrections that the security review of the weave module asked for (L1, L3 and L5 in its Result) are made, each with a test that failed before the correction, a second
+look by the `reviewer` agent, and the four limits that are accepted (L2, L4, L6 and L7) are written down where the owner and an agent will read them.
+**Dependencies:** E. It follows the security review of 2026-11-13, whose findings and the owner's decision are in the Result.
+**Affected areas:** `engine/kb/weave.py` (`_json_numbers`, `_read_meta`, `check_rows`, `_keep_previous`, `_publish`), `engine/tests/test_weave.py`, `engine/README.md`, `docs/specs/weave.md`.
+**Steps:**
+1. Write the tests first and see them fail. **L1:** a weave whose median is written as a list (`[5]`) or whose edges are written as one number is refused by `read` with a refusal that
+   names the command, not a `TypeError`; `check_rows` refuses a median, an edge, a closeness or a wording that is not an int or a float, a boolean included; `status`, `show` and `repair` over
+   such a file refuse and write nothing. **L3:** a weave whose generation has more than nine digits (up to twelve) is read, and a build or a repair over it writes the next generation and reads it
+   back; a generation of twelve digits is refused at the start of a build or a repair with a message that says what to do, before any file is made. **L5:** where a hard link cannot be made
+   (`os.link` failing), a weave in place that has been swapped for a symbolic link after the check is not followed: the copy is made from a file opened with `O_NOFOLLOW` and checked with
+   `fstat` to be a regular file of this user's, so a link is refused with nothing written and the file it pointed to is left alone and not copied.
+2. Make the three corrections, the least that makes the tests pass.
+3. Write the four accepted limits in the README paragraph of the weave and in the spec's "Built" line: a weave file has no integrity tag, so a repair keeps the numbers the weave in place holds
+   and only a full build works them out again (L2); a leftover folder that cannot be removed makes a build refuse, naming it (L4); a hot journal next to the weave makes it unreadable and a build
+   then goes on from the generation before (L6); and the size: about 70 MB and 2 seconds at 1,000 themes, 260 MB and 8 seconds at 2,000 and 620 MB and 22 seconds at 4,000, so that a library of
+   tens of thousands of themes needs several gigabytes and an index for the candidates (L7).
+4. Deliberate breaks, each restored byte for byte and each caught: a list accepted as a median or as edges; a boolean accepted as a number; the generation limit left at nine digits, or not
+   checked at twelve; `O_NOFOLLOW` left off the copy; the `fstat` check left out.
+5. The `reviewer` agent, for a second look at the three corrections: a correction is new surface.
+**Verification:** `engine/.venv/bin/python -m unittest engine.tests.test_weave`, and the breaks of step 4. No wider run: only `weave.py` changes, and nothing else imports it but the command line,
+which the tests of the weave exercise.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-13-link-themes-that-work-the-same-way#E-A`.
+
 ### Increment F — the weave over the owner's real library, and the owner's reading
 
 **Outcome:** the weave has been built over the real library with no call to any model, the figures are recorded, repair is tested
 against a rebuild, and the owner has read the links of some real themes.
-**Dependencies:** D and E.
+**Dependencies:** D, E and E-A.
 **Affected areas:** the owner's local index root (a new file, `weave-same-mechanism.sqlite`), a report outside the repository, and this
 plan's Result.
 **Steps:**
@@ -445,6 +470,32 @@ conversion are not touched, and the tests of the extractor run in A because the 
   owner asks. The reasons: the text of a book goes through `themevectors.result_of`, whose cleaning an earlier security review fixed; the other strings are validated ids, times,
   bounded numbers and fixed words; the surface is the same as the search's; and the earlier review's finding in the search (the anchor headings) is the precedent for asking
   once more over the whole module. No push.
+
+### Security review of the weave module (asked for by the owner on 2026-11-13, before Increment F)
+
+- **Run.** The `security-reviewer` agent, over `engine/kb/weave.py`, the `theme-links` commands and their tests, on a copy of the code in its own scratch folder, with forged weave and vectors
+  files, links and races at the names of the index root, hostile vectors and a library fixture; it did not touch the owner's library or config. Findings are advice.
+- **Result.** No Critical, High or Medium finding, and no path by which text of a weave file or of a book reaches the output unvalidated (every id is checked by a pattern, every book text goes
+  through `themevectors.result_of`; the SQL is bound; a forged file is refused for a trigger, a view, an extra table, bad UTF-8, a float, a bool, NaN, inf, a huge number, a deep nest, a
+  reversed key, a hot journal; the lock, the folder, the modes 0600 and 0700, the order of the renames and `expect_generation` against a second writer all held).
+- **Seven Low findings** (each needs write access to the index folder or the weave file, or is a size limit):
+  - **L1:** a forged median written as a list (`[5]`) is accepted by `read` and later raises an uncaught `TypeError` in `check_rows` or in a repair (nothing is written). Correction: `_json_numbers`
+    returns a scalar for one number and `check_rows` refuses any type but int and float.
+  - **L2:** a forged but well-formed weave (a median of -1e9, 999 slots) is accepted by `repair`, which keeps the weave's own numbers and writes a new generation that passes every check. The
+    weave has no integrity tag, so no read can tell. An accepted trust boundary: the same position can already replace the vectors file; only `build` derives the numbers again.
+  - **L3:** a forged generation of 999999999 blocks `build` and `repair` (the file they would write is refused by their own check) until the file is removed. Correction: allow more digits.
+  - **L4:** a leftover folder that cannot be removed (read-only inside, or another owner's) makes every build refuse, with a clear message: denial of service only.
+  - **L5:** the copy fallback of `_keep_previous` (used only where a hard link cannot be made) follows a symbolic link swapped in after the `lstat` check: it would copy a file the owner can already
+    read into the previous name, mode 0600, where the next read refuses it. Correction: open the weave with `O_NOFOLLOW`, check `fstat`, and copy from the descriptor.
+  - **L6:** a hot journal planted next to the weave makes every read refuse it, and a build then goes on from the generation before (the number can go back). Accepted.
+  - **L7:** memory and time are bounded by the cut on the candidates and not by the square of the number of themes: 70 MB and 1.8 s at 1,000 random themes, 260 MB and 8 s at 2,000, 617 MB and
+    22 s at 4,000; tens of thousands of themes would need several gigabytes. A size limit for a far larger library, which the plan already puts out of scope.
+- **Not checked by the agent** (limits of the evidence): `os.link(follow_symlinks=False)` against a symlink swapped in a real race on macOS, a weave of hundreds of thousands of rows, the
+  `Store.read_book` path with a hostile `book.json`, and an index root owned by another user.
+- **The agent's evaluation and the owner's decision.** The agent recommends correcting L1, L3 and L5 (small, each with a test that fails first, and an independent second look, since a fix is
+  new attack surface) and recording L2, L4, L6 and L7 as accepted limits in the README. A correction is a change of the code beyond the six increments, which the approved plan does not name, so
+  it needs the owner's word and a new increment (E-A) with a new approval of the plan. **The owner's decision (2026-11-13): go with the agent's recommendation** (correct L1, L3 and L5 in
+  Increment E-A; write L2, L4, L6 and L7 down as accepted limits); the plan was approved again with E-A in it (region `fcc14d7a…2a1b`).
 
 ### Increment E (`theme-links status` and `repair`; committed)
 
