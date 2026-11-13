@@ -289,3 +289,31 @@ of the agreement are recomputed from the saved replies by a script other than th
   blocking for the wording of this Result only: the invented call, the exposure and the corrected statement (all above); not blocking and applied: the recomputation by a second script and the check, the changed form
   taken on the owner's word, the 20 and the 10 extra reported apart, the claims D must not make, and the model name not recorded.
 - **Not run.** A repeat or the other order for any model; any rating by a second person; a test of what the Codex sandbox can read. No push.
+
+### Increment D (the analysis and the evidence in the spec; committed)
+
+- **Done.** `analyze_d.py` (outside the repository) tabulates, for each local judge and for the owner's ratings, the share of "related or same mechanism" and the count of `same_mechanism` by tercile of
+  closeness, of wording closeness and of the gap, by band, and within a theme (its links ranked by closeness, the first three against the rest), with the size of every group; terciles are of the 269 pairs of the
+  sample, cut at the rank among them, ties by pair id. **`docs/specs/weave.md`** has one new "[measured]" evidence item with the provenance (what was run, Python 3.15.0, numpy 2.5.4 present and unused,
+  repository at `87d581f`, the models and their entries, the hashes of the prompt, the sample, the replies, the ratings and the scripts), the tables, the conclusion as far as the figures go, the limits and what was
+  not tested. No rule, band or floor changed. **Scripts (sha256):** `analyze_d.py` `1daa2b3ea62a3b6d313ab7f2c99b822e979f872a7f5cb7074a3188ee086eef75`; `test_analyze_d.py`
+  `7b73c5289a18f20b249f817e8a8a36fd0b5c220c38aefe18552eba0fefc43f6b`; `verify_d.py` `4f7a6ca5e46e43db1b239f59a116d4ff47baa80a9f6deef0fc6c0c81174457c1`; `breaks_analyze_d.py`
+  `78af78180c7ee977fb680ad86905bdc3403fd642655a96255467b44e36a65678`; the tables `tables_d.json` `9aa7c6077b7342fed3664c226066c6a9c5d9c638a9c46f8c3a82d66c90557118`.
+- **What the figures say (in this sample, per judge; the spec holds the numbers and the limits).** The share of pairs called related or better rose with closeness: `gpt-oss` 12, 31 and 55 percent over the three
+  closeness terciles, `qwen3` 2, 14 and 42 percent, the owner's 20 pairs 1 of 8, 4 of 6 and 4 of 6; it was highest in the band nearest in wording (52 and 46 percent against 24 to 29 and 7 to 15 percent in the three
+  farther bands); and the first three links of a theme by closeness were called related or better 49 and 38 percent of the time, the rest 24 and 10 percent. In an **exploratory cut** (the three farther bands only,
+  chosen after the other tables were seen, not in the plan's list) the rise sits in the highest closeness tercile, from about 0.66 (48 and 24 percent against 15 to 16 and 3 to 4 percent below it). The gap
+  between closeness and wording closeness was not a clean signal.
+- **Verification as run.** The analysis's 13 tests pass (the tercile cut by hand, ties by id whatever the order the pairs come in, counts by hand, failures left out of the denominator, each rater's own labels, the
+  bands taken from the pairs, the first three of a theme against the rest, a pair of two sampled themes counted for both); **10 deliberate breaks, each caught** (the script restored byte for byte, sha256 prefix
+  `1daa2b3ea62a`): the tercile cut one off; ties not broken by id; related counted without same, or same counted as related; a failure counted as valid; the first four and not three; a theme's links ranked
+  from the lowest; the band taken from the closeness; wording and closeness swapped; the owner's labels not counted (three of the tests that catch these were added after three breaks first passed unseen: the
+  ties in another order, the bands, two raters at once). **`verify_d.py`**, written differently (ranks by counting, groups by a loop), reproduced every cell of the main tables (0 differences) and printed the
+  exploratory table. `wb run code-work check`: no problems. The figures were then read against the spec item by the `reviewer` agent.
+- **Second look.** The `reviewer` agent (read only, given the raw numbers since the files are outside the project): every figure and the threshold matched; one blocking finding and seven not blocking, all applied
+  to the spec item: the conclusion said "pairs that both local judges called related" when the tables are each judge's own share; the owner's groups hold 3 to 14 pairs and not 3 to 8; the owner's wording and gap
+  groups and the `same_mechanism` counts were missing; the conclusion did not say that the farther-bands cut is exploratory and chosen after the other tables; the `qwen3` gap shares (19, 16, 24 percent) did not
+  rise steadily and were not "flat"; "related to one another" was not shown by any figure (it now says why the effects cannot be separated); numpy, the entries, the tie rule and the scripts that made the ratings were
+  missing from the provenance; and one clause says that 16, 14 and 17 of 20 are no ranking of the judges.
+- **Not run.** A test of significance (none is claimed), a cross-tabulation of closeness, wording closeness and band, a larger sample, the other order of the two texts, the summary text as input, a judge that is
+  not a language model, a repeat. No push.

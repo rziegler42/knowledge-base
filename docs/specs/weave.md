@@ -369,6 +369,36 @@ tested. It does not cover how themes are made or how the agent searches, which h
   seconds here) gives again what a build gives, which is why the owner may build again, for instance after about five repairs in a row
   ("five" is the number the experiment ran; nothing measured shows where the difference from a rebuild starts to matter). The owner's reading of the links of ten themes
   (2026-11-13) is under "The floor of strength" above.
+- **[measured]** Whether closeness puts the links that judges call related first, on 2026-11-13 (Python 3.15.0, repository at `87d581f`, the first weave over the real library, generation 1; the library is the
+  owner's and is not in this repository; no rule changed). From the 7,966 links, 30 themes with at least one link were drawn with seed 20261113 and every link of them taken once, **269 pairs**. Each pair was rated
+  from the title and the method text of its two themes, and nothing else, by two local models through the engine's own call (`gpt-oss:20b`, `qwen3:14b`) with one prompt (sha256
+  `1af1eda17e445acbc406b39c47120040a7a727bd7d37cf44858806efbfe5f551`) as `same_mechanism`, `related` or `unrelated`; the owner rated 20 of the pairs blind, and Codex (`gpt-5.6-terra`) rated those 20 and
+  10 more as a spot check (not used in the tables below). Against the owner's 20 the local judges were equal on 16 (`gpt-oss`) and 14 (`qwen3`), Codex on 17; the two local judges were equal on 200 of the 269
+  (kappa 0.374), `qwen3` being the stricter. **Terciles** are of the 269 pairs of the sample, not of the weave. Counts are "related or same mechanism" of the valid ratings, with `same_mechanism` in brackets.
+  - *By closeness* (groups of 90, 90 and 89 pairs; closeness 0.492 to 0.595, 0.598 to 0.680, 0.681 to 0.886): `gpt-oss` 11 (1), 28 (4), 49 (13); `qwen3` 2 (0), 13 (0), 37 (4); the owner's 20 pairs 1 of 8, 4 of 6,
+    4 of 6 (one `same_mechanism`, in the highest group).
+  - *By band* (51, 74, 76 and 68 pairs, from the farthest in wording): `gpt-oss` 13 (0), 18 (2), 22 (3), 35 (13); `qwen3` 5 (0), 5 (0), 11 (0), 31 (4); the owner 2 of 5, 1 of 5, 1 of 5, 5 of 5.
+  - *By wording closeness* (90, 90, 89): `gpt-oss` 23 (2), 27 (2), 38 (14); `qwen3` 9 (0), 9 (0), 34 (4); the owner 2 of 7, 2 of 8, 5 of 5 (one `same_mechanism`, in the highest group). *By the gap between
+    closeness and wording closeness* (90, 90, 89): `gpt-oss` 21 (5), 26 (6), 41 (7); `qwen3` 17 (1), 14 (1), 21 (2); the owner 4 of 7 (one `same_mechanism`), 3 of 10, 2 of 3.
+  - *Within a theme*, its links ranked by closeness (30 themes, 28 with more than three): the first three (89 pairs) `gpt-oss` 44 (12), `qwen3` 34 (4), the owner 4 of 6; the rest (180 pairs) `gpt-oss` 44 (6),
+    `qwen3` 18 (0), the owner 5 of 14.
+  - *Exploratory, not in the plan's list:* in the three farther bands only (201 pairs), closeness terciles of 67 pairs (0.493 to 0.567, 0.572 to 0.656, 0.659 to 0.841): `gpt-oss` 10 (0), 11 (0), 32 (5); `qwen3`
+    2 (0), 3 (0), 16 (0); the owner 1 of 8, 2 of 4, 1 of 3 (none `same_mechanism`; the owner's shares do not rise here, and groups of 3 to 8 pairs show nothing). This cut was chosen after the other tables were seen.
+  Conclusion, as far as the figures go: in this sample, for each of the two local judges, the share of pairs it called related or better rose with closeness, was highest in the band nearest in wording, and was
+  higher for the first three links of a theme than for the rest; in the exploratory cut (the three farther bands) the rise sits in the highest closeness tercile (from about 0.66), and the two lower terciles were
+  alike and low. The gap between closeness and wording closeness was not a clean signal (the share rose with it for `gpt-oss`, and for `qwen3` it did not rise steadily: 19, 16 and 24 percent). The nearest band is
+  the one with the highest wording closeness by how the bands are made, and no cross-tabulation of closeness, wording closeness and band was made, so these tables cannot separate their effects. The agreement of the
+  judges with the owner (16, 14 and 17 of 20) differs by one to three pairs and is no ranking of them. **Limits:** 30 themes with up to 12 links each, so the pairs are not independent; one prompt, one order of
+  the two texts, one run for each judge; the judges differ in strictness; the owner is one rater with 20 pairs, spread over the bands, and the groups of the owner's ratings hold 3 to 14 pairs; there are 18 `same_mechanism` labels from `gpt-oss` and 4 from `qwen3`, too few for a share by
+  group; no test of significance is made. **It does not say** that closeness ranks real same-mechanism matches first (the label is "related or same mechanism", from the texts), that a judge is right where it differs
+  from the owner, or that the floor or the bands should change: those stay the owner's decisions. **Not tested:** a larger sample, the other order of the two texts, the summary text as input, a judge that is not
+  a language model, repeatability. Files outside the repository, mode 600: the sample (sha256 `a01c8fd13b003930de8f2ea473115d7aefee938627ee7afed3f2ea57db045e15`), the replies of `gpt-oss`
+  (`4119ad1cc7b7c379726f5f06778f7cbbcf08bc58316dc24427ca4a7345cc8b19`), `qwen3` (`d90b126500d27fda3dc7ba66915e8fafe589ace71f81d4a858825c27392b5428`) and Codex
+  (`11b8be5adec64eb54c3f1329f05d52668e01132cc439c07b50ee968534687434`), the owner's ratings (`f31c26db7bd72bb2d2300a4a96942a05d2e7d8c2f7699e74c2a37544fd552672`); the scripts `analyze_d.py`
+  (`1daa2b3ea62a3b6d313ab7f2c99b822e979f872a7f5cb7074a3188ee086eef75`) and `verify_d.py` (`4f7a6ca5e46e43db1b239f59a116d4ff47baa80a9f6deef0fc6c0c81174457c1`), which agreed on every cell of the main
+  tables, and the scripts that made the ratings, `rate_links.py` (`2af3e29fcd09878aa7cfe5fd13fd49e4fa1c17c6edf31257c3cdb92d49cb6e98`) and `run_judges.py`
+  (`a2b461d9808f896d796df1b19fd2bf731fd56773d5d949c335b65047acb5663c`). The two local models are the entries `gptoss` and `checker` of the owner's config; numpy 2.5.4 was in the environment and was not used by
+  these scripts. The groups of a tercile are cut at the rank of each pair among the 269 sorted by the value, ties by pair id.
 
 ## Acceptance criteria
 
