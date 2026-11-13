@@ -32,6 +32,7 @@ A status line that says who accepted a record names that person by their git ide
 |---|---|
 | `2026-11-04-knowledge-base-is-a-standalone-package` | Accepted |
 | `2026-11-11-the-library-equips-a-research-agent-to-extrapolate` | Accepted |
+| `2026-11-13-the-engine-may-use-numpy` | Accepted |
 
 ## Contents
 
