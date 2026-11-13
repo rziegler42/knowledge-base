@@ -273,31 +273,27 @@ any model. No wider run.
 **Evidence:** the one local commit (the Result of this plan, and the spec's "Evidence" with the figures), with the trailer
 `Plan: 2026-11-13-link-themes-that-work-the-same-way#F`.
 
-### Increment G — a limit of its own for a full build, and when to build again
+### Increment G — what the measurements say about repair, and when to build again (documentation only)
 
-**Outcome:** a repair is due, as now, when the themes waiting reach 5 percent of the themes of the weave, but a full build is needed only when more than 10 percent of the themes of the weave
-changed or are gone, so that a few books made again are repaired and not refused; and the README and the spec say to build again after about five repairs, with the measured drift. The owner
-asked for both on 2026-11-13 ("go with your recommendation", after the results of Increment F), the first changing a number that the spec marks as a guess to tune in the plan.
-**Dependencies:** F (its measurements are the reason) and E (the code it changes).
-**Affected areas:** `engine/kb/weave.py` (`REPAIR_SHARE` and its uses in `_inspect` and the text of `status` and `repair`), `engine/tests/test_weave.py`, `engine/README.md`, `docs/specs/weave.md`
-(the batching rule and its evidence).
+**Outcome:** the README and the spec say, with the measured figures, that a repair is a quick way, that a full build takes about 5 seconds at 1,800 themes and is better when many themes changed,
+that the limit above which a full build is needed stays at 5 percent of the themes of the weave (the same number as the share that makes a repair due), and that the owner may build again after
+about five repairs in a row. The first version of this increment raised the limit to 10 percent; its measurement (step 1, done on 2026-11-13) did not support that, and the owner chose to keep 5
+percent and write the findings down ("yes, rewrite G as documentation only"). No code, test or constant changes.
+**Dependencies:** F (its measurements are the reason).
+**Affected areas:** `engine/README.md` (the paragraph of the weave), `docs/specs/weave.md` (the batching rule, its evidence and the floor's owner reading already there).
 **Steps:**
-1. Measure before changing, on throwaway copies of the file of vectors (nothing written to the real library, nothing sent to any model): with the new limit set for the run only, make the themes of
-   books that amount to about 7 percent and about 9 percent of the themes change by giving them another text hash and another vector (the shifts of the tests, so that the links really change),
-   repair, and compare with a full build over the same file the way Increment F did (links in common, mean closeness). Record the figures. If a repair at 9 percent is as close to the rebuild as a
-   repair of 10 percent of new themes was (81 percent in common), the limit of 10 percent stands; if it is far below, stop and report to the owner, who chooses the limit.
-2. Write the tests first and see them fail: themes changed or gone at 6 and at 9 percent of the weave make a repair due and allowed, and `status` says so and does not say that a full build is
-   needed; at more than 10 percent `status` says a full build is needed and `repair` refuses even with `--now` (as the tests of 5 percent do now, moved to 10); exactly 10 percent is allowed;
-   a repair is still due at exactly 5 percent of themes waiting, and not below it; the count of themes gone, of themes that lost vectors and of left-out themes is as before.
-3. Make the change: a second constant, `FULL_BUILD_SHARE = Fraction(1, 10)`, used only where "changed or gone" is compared; `REPAIR_SHARE` is left for what is due. The messages say which limit.
-4. Write in the README paragraph of the weave and in the spec's batching rule: the full-build limit is 10 percent, with the figures of step 1; and that a repair is a quick way and a full build
-   takes about 5 seconds at 1,800 themes, so after about five repairs in a row (which Increment F measured at 69 percent of the links in common with a rebuild and a mean closeness of 0.640
-   against 0.648) the owner may build again. The spec's batching rule keeps "the numbers are guesses to tune in the plan" and names this tuning.
-5. Deliberate breaks, each restored byte for byte and each caught: the full-build limit left at 5 percent; the full-build limit used where the repair is due; the comparison made with
-   `>=` instead of `>` at the full-build limit; the full-build limit applied to the themes waiting and not to those changed or gone.
-6. The `reviewer` agent, for a second look.
-**Verification:** `engine/.venv/bin/python -m unittest engine.tests.test_weave`, and the breaks of step 5. No wider run: only `weave.py` changes in the code, and nothing else imports it but the
-command line, which the tests of the weave exercise. The real library is not touched.
+1. The measurement, already made on throwaway copies of the file of vectors (nothing written to the real library, nothing sent to any model; the report is outside the repository, mode 600, sha256
+   `b6d2496ed8b62b930bf52b507e1fd0c0af2d4b60dbe828932b8d94907f4f1eb7`): the themes of books at 5, 7 and 9 percent of the themes were made again (another generation, a vector moved towards another
+   theme's; a text hash cannot change without the text, which the file checks) and repaired with the limit set to 10 percent for that run only. The links in common with a full build over the same file
+   were 69, 63 and 59 percent (the old links without a repair, 62, 53 and 49 percent), against 81 percent for a repair of 10 percent new themes. So a repair of changed themes recovers only 7 to 10
+   points over leaving the links as they were, and the limit stays at 5 percent.
+2. Write in the paragraph of the weave in `engine/README.md` and in the spec's batching rule, as measured and not as a promise: the figures of step 1 and of Increment F (a repair of new themes at 10
+   percent: 81 percent of the links in common with a rebuild, mean closeness 0.645 against 0.648; five repairs in a row: 69 percent and 0.640; one repair of 30 percent: 72 percent and 0.6425); that more
+   than 5 percent of the themes changed or gone means a full build, which takes about 5 seconds; that the owner may build again after about five repairs in a row; and that the numbers stay guesses to
+   tune. Put the figures in the spec's "Evidence" with their provenance (what was run, the tool versions, the commit, the conclusion).
+3. The `reviewer` agent, for a second look at the wording against the figures.
+**Verification:** `wb run code-work check`, and a read of each figure in the text against the two reports (`weave-real-run-d86ef289da13.json` and `weave-g-measure-b6d2496ed8b6.json`, outside the
+repository). No test run: no code changes. The real library is not touched.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-13-link-themes-that-work-the-same-way#G`.
 
 ## Verification for the plan as a whole
