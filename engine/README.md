@@ -6,7 +6,7 @@ workbench except for model calls, which this first slice does not make. The desi
 [`docs/plans/2026-11-05-first-slice-capture-search-read.md`](../docs/plans/2026-11-05-first-slice-capture-search-read.md).
 
 The engine sets up a library, captures web pages and arXiv papers, scans them, converts them to text, indexes the text, searches
-it by keyword and reads a passage back by locator. Requirements: Python 3.15 (the version it was written and tested with); the engine itself uses only the standard library. Two
+it by keyword and reads a passage back by locator. Requirements: Python 3.15 (the version it was written and tested with); the engine itself uses only the standard library today (the decision `docs/decisions/2026-11-13-the-engine-may-use-numpy.md` allows numpy where it helps, first to build the weaves, and no code imports it yet). Two
 of the converters need more, and the conversion section below says what: the pinned packages in `engine/.venv` for the article
 extractor, and poppler for PDFs.
 
