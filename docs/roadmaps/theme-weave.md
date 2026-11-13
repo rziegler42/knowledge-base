@@ -29,7 +29,7 @@ by meaning rank books, and `problem-search` merges the books found for up to fiv
 descriptions, which are single strings on the book. Themes, as `docs/specs/theme.md` designs them, are built and have been made for the owner's
 local library: 1,913 themes in 175 of its books on 2026-11-12 (made on 2026-11-11 and 2026-11-12 by the extraction and the check of
 `engine/kb/themeextract.py` and `themecheck.py`). Each has a title, a type, a summary, a description of five parts in words of no field, an anchor into the book, a
-confidence, a mark of stated or inferred on each part, and flags. They have no vectors and no links between them yet. The flag for a
+confidence, a mark of stated or inferred on each part, and flags. They have vectors (built on 2026-11-12) and are searched by meaning with `theme-search`, and they have no links between them yet. The flag for a
 word of the book's field is a rough reason to look: it is raised on 27 percent of the themes, and the limit it uses is a judgement with
 no ground truth. A trial of
 cross-field search measured retrieval of known transfers and found search alone looked enough on that measure, with caveats; it did
@@ -68,16 +68,43 @@ not measure extrapolation. The weave spec (`docs/specs/weave.md`) is a draft tha
   best theme of each book.
 - Trigger: the owner asks for a plan.
 
-### theme-links: Link themes from different fields
+### theme-links: Link themes that work the same way, across fields (the first weave)
 
 - ID: theme-links
-- Outcome: links between themes exist from sources that cost no model call per pair, such as closeness across fields, citations from
-  one book to another, and what one theme provides against what another needs. Weak and cross-field links are kept, and each link
-  records its kind and its reason.
+- Outcome: a weave of "same mechanism" links exists over the themes of the library: precomputed and stored, each link carrying its
+  closeness, its wording distance, the matched texts and the evidence to check it, kept by the slot rule and the floor of strength,
+  repaired in batches as books are added, and rebuilt on its own.
 - Dependencies: theme-vectors.
-- Boundary: in, the kinds of link, how they are chosen so that the strongest are not the only ones kept, and how they are stored. Out,
-  judging pairs by a model, stored judgments of pairs, and the walk.
+- Boundary: in, the weave of that one kind, its store, its build and repair, and a command to look at the links of a theme. Out, the
+  other kinds of weave, judging pairs by a model, and the walk.
 - Trigger: theme-vectors is done and the owner asks for a plan.
+
+### theme-links-same-problem: Link themes whose problem is the same and whose method differs
+
+- ID: theme-links-same-problem
+- Outcome: a weave of "same problem" links exists, with the same store, slot rule, floor and repair as the first weave, so that an
+  agent can see how other fields solved the same problem.
+- Dependencies: theme-links.
+- Boundary: in, the weave of that one kind. Out, the other kinds of weave and the walk.
+- Trigger: theme-links is done and the owner asks for a plan.
+
+### theme-links-fit-together: Link what one theme provides to what another needs
+
+- ID: theme-links-fit-together
+- Outcome: a directional weave of "fit together" links exists, each from the theme that provides to the theme that needs, with slots
+  and a floor on incoming links of its own, so that an agent can chain themes from different fields into one answer.
+- Dependencies: theme-links.
+- Boundary: in, the weave of that one kind, the slots for a directional weave and the floor on incoming links. Out, the other kinds
+  of weave and the walk.
+- Trigger: theme-links is done and the owner asks for a plan.
+
+### theme-links-alike: Link themes of similar subject, as a reference
+
+- ID: theme-links-alike
+- Outcome: a weave of "alike" links exists, kept as a reference for when an agent is in its home field and not walked by default.
+- Dependencies: theme-links.
+- Boundary: in, the weave of that one kind. Out, the other kinds of weave and the walk.
+- Trigger: theme-links is done and the owner asks for a plan.
 
 ### theme-walk: Let an agent walk from themes along the links
 
@@ -103,9 +130,11 @@ not measure extrapolation. The weave spec (`docs/specs/weave.md`) is a draft tha
 
 ## Deferred work
 
-- Which stage of the weave to build, stored threads or threads made at the time of the query: open until a measure of extrapolation
-  exists (`docs/specs/weave.md`).
-- Judging pairs by a model: not part of this scope until the trial says it would add anything.
+- Which stage of judged threads to build, stored or made at the time of the query: open until a measure of extrapolation exists
+  (`docs/specs/weave.md`). Links that no model judges are stored and precomputed, by the owner's decision of 2026-11-13.
+- Judging pairs by a model: not part of this scope until the trial says it would add anything. The weaves that need it,
+  *incompatible* and *disagrees*, wait for that.
+- The weave of *builds on*: it needs reference lists between books, which the library does not hold yet.
 - The variety of fields in the library: a limit that no setting removes. Adding sources is the owner's, and the crawler and the
   classification of sources are a different scope.
 - Visibility to a guest and the security work that goes with it.
