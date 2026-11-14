@@ -138,6 +138,28 @@ says it refuses.
 conversion are not touched.
 **Evidence:** the one local commit, with the trailer `Plan: 2026-11-13-let-an-agent-walk-from-themes-along-the-links#C`.
 
+### Increment C-A — Corrections from the security review of the walk
+
+**Outcome:** the four corrections that the security review of the walk asked for (its Medium 1, Low 1 and the two informational items) are made, each with a test that failed before the correction and a second look by
+the `reviewer` agent; and the one thing that is by design (Low 2: a title can carry an instruction) is said to the agent in the output, the README and the spec. The owner decided on 2026-11-13 ("Yes", to the recommendation).
+**Dependencies:** C. It follows the security review of the walk, whose findings and the owner's decision are in the Result.
+**Affected areas:** `engine/kb/walk.py` (`_lead_shown`, `_checked_questions`, `theme_walk`), `engine/tests/test_walk.py`, `engine/README.md`, `docs/specs/theme-walk.md` (the "Built" section).
+**Steps:**
+1. Write the tests first and see them fail. **Medium 1:** a vectors file whose themes hold a citation with the words of a marker (the start marker, the end marker, and `untrusted` and `text` split by white space) gives a
+   `citation` in which those words are withheld whole, so that no plain field of the output holds them and the count of markers in the whole output is twice the number of leads; a citation of 1,000 characters is cut to the
+   length of the clip. **Low 1:** with two or more questions, a later question that the search would refuse (a lone surrogate, text that is not UTF-8, only white space) is refused before the first question is embedded (a
+   counting stand-in for the embedding is called zero times). **Informational, the identity of the vectors:** a page whose `model` or `built` holds a newline, a marker, a control character or more than a short length is
+   refused or cleaned before it reaches the header; and a search whose `built` is not the build of the file that was read first (the file replaced in between) is refused with the command to ask again, before any lead is made.
+   **Low 2:** the header's `about` says that every title and the citation are also texts of books, not to be trusted (and holds no word of a marker).
+2. Make the corrections, the least that makes the tests pass. The README and the spec's "Built" section say what is checked before a question is sent (now every question's text), that the citation is cut and withheld
+   like the other texts, and that the titles are plain fields that are also untrusted.
+3. Deliberate breaks, each restored byte for byte and each caught: the citation not passed through the cleaning; the citation not clipped; a question checked only after the search; one of the checks of a question left
+   out; the model or the build not cleaned; the build of the search not compared with the build read; the sentence about the titles taken out of `about`.
+4. The `reviewer` agent, for a second look at the corrections: a correction is new surface.
+**Verification:** `engine/.venv/bin/python -m unittest engine.tests.test_walk` (and `engine.tests.test_themevectors`, which the walk depends on, if `themevectors.py` is not touched it is not rerun) and the breaks of
+step 3. No wider run: only `walk.py` changes in the code, and nothing else imports it but the command line, which the tests of the walk exercise.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-13-let-an-agent-walk-from-themes-along-the-links#C-A`.
+
 ### Increment D — The skill for an agent
 
 **Outcome:** an agent that installs the package has a skill that says how to use the walk.
@@ -327,3 +349,24 @@ Increment E rests on A to D and is taken after all of them. Nothing wider is run
 - **For the owner.** The readings and numbers above are in the spec's "Built" section and are yours to confirm or change; the known limit of the search's per-book limit with a visible set smaller than the library (Increment B) is
   recorded there too. A security review is recommended before the walk is run on the real library (Increment E), since the command takes an agent's text (questions and REFs) and shows text of books; it runs only if the owner asks.
 - **Not run.** Anything wider than the three test modules above. No call to any model and no read of the owner's library. No push.
+
+### Security review of the walk (asked for by the owner on 2026-11-13, after Increment C and before Increment D)
+
+- **What was reviewed.** The `security-reviewer` agent, on a copy of the repository in the scratchpad, with the test fixtures' temporary library, small weave and file of vectors and a stand-in for the embedding (no model, no network, the
+  owner's library, index root and config never read or written; it ran, by mistake, some old probe scripts of the weave's review that touch only the scratchpad). The command's code (`walk.py`, the `theme-walk` entry of
+  `__main__.py`) and what it reaches (`weave.read`, `themevectors`, `card._shown`, `textutil`, `ids`).
+- **Findings (advice, not a verdict): no Critical or High; one Medium, two Low, two informational.** **Medium 1:** `citation` is printed as a plain field with no marker-word check and no clip (a forged file of vectors, which needs write
+  access to the index root, could put the engine's own end marker in it; the honest build cannot, but it puts up to about 1,000 characters of book text outside a block). **Low 1:** with two or more questions, a later one that the search
+  refuses (a lone surrogate, for example from invalid UTF-8 in the command line) is refused only after the earlier ones were embedded, so the claim "refused before a question is sent" was too strong (only the agent's own earlier question
+  goes out). **Low 2:** a title is cleaned and withheld for the words of a marker, but an instruction in it survives (confirmed: a `SYSTEM:` line in `theme_title` and `route[].title`); by design, titles are plain fields as in the search, and the lead
+  says `untrusted`. **Informational:** the model and the build of the vectors are not cleaned when a caller passes its own search (nothing reaches the agent on the production path); and the build the search used is not compared with the
+  build read first (a file replaced in between, which needs write access). The known limit of the search's per-book limit with a visible set smaller than the library was agreed to be Low today.
+- **Found sound (tested):** 28 hostile forms of a REF through `--from`, `--seen` and `--drop` (all refused with a fixed message, or counted as unknown if valid); the questions (marker words, NUL, zero-width characters, a question over the length
+  refused before anything is sent); the output is ASCII; the refusal order for a bad REF, a bad level, a forged weave row and a forged vector row (no text sent); a weave or a vectors file that is a link, a FIFO, a directory or empty (refused,
+  no hang); nothing written (hashes and times of the index root unchanged; a hot journal refused or ignored); 19 variants of marker words in the title, summary and the four parts (case, spacing, hyphens, fullwidth, look-alikes, the literal
+  markers, `[stated]`, escape characters): no leak, the markers in the output exactly twice the number of leads; a forged type, mark, confidence or id (refused by the file check); a forged book title with marker words (refused); the size bound with
+  a 4,000-character citation (leads left out and counted); the cost (a dense forged graph of about 160,000 links, 25 starts, 400 seen or dropped: 0.25 s, `reached_by` at most 12); a weave naming a theme gone from the vectors; a weave built
+  from other vectors (the warning). `explain` is built only from ids that match the engine's strict patterns, so it holds no shell character and no leading dash.
+- **The owner's decision (2026-11-13, "Yes" to the recommendation):** fix Medium 1, Low 1 and both informational items in a correction increment, **C-A** (added to this plan, with its own tests, breaks and second look), and for Low 2 state
+  plainly, in the header's `about`, the README, the spec and the skill of Increment D, that every title and the citation are also untrusted, and not restructure the output.
+- **Limits of the review's evidence.** A stand-in embedder only; the existing suite was not run in full; the byte-size refusal of `models.embed` with the entry's prefix was read, not tested; concurrent replacement of a file was read, not tested.
