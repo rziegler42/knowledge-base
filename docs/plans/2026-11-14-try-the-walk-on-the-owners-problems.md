@@ -182,6 +182,18 @@ The `reviewer` agent (read only; it read the plan, the four files outside the re
 
 The fixes were not sent for a second round: they are small, and each has a test and a break. Reviewer exchanges used: 1 of 6.
 
+### Increment B
+
+The `reviewer` agent (read only), one round, no blocking finding. It read the plan, the script and `engine/kb/walk.py`, not the raw report (the owner's word of 2026-11-14, "go", to my recommendation to withhold it). It could not check any stored value, whether the tests pass, or the file names in the index root.
+
+- **1, applied.** The Result applied the Q1 rule by theme only. It now gives both readings (theme "differs", book "mixed") and does not pick one.
+- **2, applied.** The by-theme zero is near uninformative (the walk blocks and sorts last the ordinary set's themes). The Result now says so, with the counts that show it (466 to 515 reached, 30 in the ordinary set, 20 leads).
+- **3, applied.** The table lacked per-setting lanes and the reached counts by problem; both are in the Result, with the ordinary set's size from the header (30 in every call).
+- **4, applied.** The recomputation is not by hand and the Result says it deviates from the plan; the cross-check's limit is stated.
+- **5, applied.** The Result gives the weave and vectors hashes. The reviewer could not confirm the file names; the report's own listing names `weave-same-mechanism.sqlite` and `theme-vectors.sqlite`, and the 13-file comparison passed.
+- **7, deferred, not applied.** `sweep` does not catch a Ctrl-C (a report would be lost) and a call that raises is missing from the partial report. The sweep has run and finished; `call`, used by Increment C, has the same shape, so these are left for the owner to decide (the plan's Deferred work is not edited without a new approval), and changing the script changes its recorded hash.
+- Reviewer exchanges used: 1.
+
 ## Deferred work
 
 - A count of links per theme in the weave, to test the guess that a few generic themes turn up for unrelated questions, and a down-ranking of such themes if the count supports it: not on any roadmap (the owner's decision, `change-direction`).
@@ -220,3 +232,15 @@ The fixes were not sent for a second round: they are small, and each has a test 
 - **Review:** the `reviewer` agent, one round, no blocking finding; see the Review record. `wb run code-work check` was run on the plan before approval; it is run again before the commit.
 - **Step 4, the owner's reading of the questions (2026-11-14):** the owner said "Questions are good." and, in the same message, "Commi[t] a, start b". The questions stand unchanged (sha256 `ee84c13c…1a76`). Increment B's send still waits for the owner's "run it" after the exact send is shown.
 - **Not run:** any send, any read of the library, `sheet` and `marks` on real data, the install of anything. No push.
+
+### Increment B (the sweep and the ordinary lists; built and run on the owner's "Run it" of 2026-11-14; **not reviewed, not committed**)
+
+- **Run:** `wb run ask-ollama check` (ned, http, owner-network, unauthenticated, in the clear), then `trial_walk.py sweep` on the fixed questions (sha256 `ee84c13c…1a76`). 105 sentences were sent to `ned` (`qwen3-embedding:4b`): 15 ordinary pages of up to 50 and 30 walk calls, about 15 s each. Status `done`, every call exit 0, no `.partial`. Report `walk-trial/sweep.json` (mode 600, outside the repository), sha256 `961d4d1a2c5ad06fd65b2dcf1599fa5a331e0e97129acc2ecee08ca8e4bf4d7f`.
+- **Cross-check (step 3):** 0 disagreements in all 30 calls (every lead's `ordinary_rank` and book flag agree with the script's own merge). **Index files and their hashes before and after are identical** (`unchanged: True`), which covers the weave and the vectors held in the index root.
+- **Merged ordinary lists:** 112, 109, 102, 84 and 112 themes for p1 to p5; the first 30 are the ordinary set.
+- **Table:** every call offered 20 leads. Leads of the wide/3 call that are themes in the ordinary set: **0 in every problem**. At every setting of every problem the count is 0 except p3 narrow/1 and p3 medium/1 (1 each). Leads whose *book* appears in the ordinary results (of 20), by setting (narrow/1, medium/1, medium/2, wide/1, wide/2, wide/3): p1 4,4,5,4,5,4; p2 4,4,8,3,3,4; p3 9,10,6,6,8,7; p4 8,8,7,6,4,4; p5 9,9,7,9,8,8. Lanes (follow-through, exploration): 14 and 6 at every wide setting of every problem; narrow/1 and medium/1 give 14 to 17 follow-through. Themes reached at wide: 475, 515, 481, 466, 485.
+- **By the plan's reading rule (Q1), both readings, since the rule says "by theme and by book":** by theme, 0% in every problem at wide/3, so **"differs"**. By book (wide/3: p1 20%, p2 20%, p3 35%, p4 20%, p5 40%), p3 and p5 are above 25% and none reaches 60%, so **"mixed"**. The two readings disagree and I do not pick one; Increment E reports both. The theme reading is close to uninformative: the walk keeps the ordinary set's themes out of its leads and sorts them last (`engine/kb/walk.py`, `blocked = seen | drop | set(starts)`), and 466 to 515 themes are reached at wide against 20 leads taken, with an ordinary set of 30 themes (`ordinary_set.themes` = 30 in all 30 calls), so a count of 0 would come from any method that puts in-set themes last. The weight is on the owner's blind marks.
+- **Table by problem (reached at narrow, medium, wide; the same at every setting of a problem):** p1 36, 91, 475; p2 37, 89, 515; p3 29, 67, 481; p4 33, 79, 466; p5 36, 94, 485. Lanes (follow-through, exploration) by setting narrow/1, medium/1, medium/2, wide/1, wide/2, wide/3: p1 15/5, 15/5, 14/6, 14/6, 14/6, 14/6; p2 17/3, 17/3, 14/6, 14/6, 14/6, 14/6; p3 15/5, 16/4, 14/6 for each of the last four; p4 and p5 14/6 at all six. Offered 20 in all 30 cells. The weave and the vectors by the report's own hashes, before and after: weave `ebbba8f4…8fe3` and vectors `59fe6474…9229`, the values the plan cited, and the 13 index files listed are identical before and after.
+- **Limit of the cross-check:** it compares the walk's flags with a merge built from the same stored pages, so it would not catch a page fetched wrongly.
+- **Recomputed independently:** a second snippet, not the script's code, rebuilt each problem's merged order from the stored pages (best place, then question, then key) and the first 30 places; all 5 merges equal the script's, and all **600 leads** of the 30 calls agree on the theme flag and the book flag (0 disagreements). The one in-set theme of p3 narrow/1 sits at place 29. This is from the stored pages, so it checks the arithmetic and the merge, not the library; no new send and no library read were made.
+- **Owner's word on the reviewer (2026-11-14, "go" to my recommendation):** it gets the script, the tests, the plan and the printed tallies only, not the raw report. `wb run code-work check` passes.
