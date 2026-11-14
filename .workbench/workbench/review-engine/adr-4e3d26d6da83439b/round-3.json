@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "Context, second paragraph",
+      "problem": "The record says the walk trial found that library coverage, rather than the walk, limited the 3D-printing result. The cited trial explicitly says it did not establish whether the library contains relevant books; it only records the agent's impression that the leads were thin. This overstates and misattributes the evidence supporting the decision.",
+      "severity": "major",
+      "suggestion": "Revise this to say the trial produced thin 3D-printing leads and that the cause was not established, or cite separate evidence that demonstrates the coverage gap."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "The ADR's key trial-evidence claim overstates what the referenced plan concluded.",
+  "verdict": "changes_needed"
+}

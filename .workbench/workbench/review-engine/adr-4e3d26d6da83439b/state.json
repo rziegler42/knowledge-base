@@ -21,10 +21,17 @@
       "earlier": [],
       "finding": "R2-F1",
       "reason": "Correct. The record now takes the home shelf from the topic OpenAlex names as primary, makes the other recorded topics the secondary labels in OpenAlex order, sends a work with no primary topic or an unknown topic to the matcher, and says counts use home shelves only. No tie rule is needed because OpenAlex designates the primary."
+    },
+    {
+      "at": "2026-11-14T16:26:00Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R3-F1",
+      "reason": "Correct, and it was my own overstatement. The trial gave thin leads for one problem and an unclear result, and did not establish whether coverage or method was the cause. The Context and the Evidence now say that, and rest the decision on the owner judgement that 175 books are too few to judge findability. I also corrected my draft note and memory pointer."
     }
   ],
   "format": 1,
-  "generation": 6,
+  "generation": 8,
   "kind": "adr",
   "path": "docs/decisions/2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc.md",
   "rounds": [
@@ -89,9 +96,38 @@
         "total_tokens": null
       },
       "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-14T16:25:30Z",
+      "bridge": "ask-codex",
+      "document_sha256": "74d15149dda6d6c004cf806cb263c21f8cb63bcaae874f947194d188afc3243c",
+      "file": "round-3.json",
+      "findings": [
+        {
+          "id": "R3-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 3,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "ac779371cb199325ad584b8dee53dcb68b504acedff55b3ce6943335080a52c7",
+      "usage": {
+        "input_tokens": 118894,
+        "output_tokens": 1232,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
     }
   ],
-  "seal": "6102ebcdf5a08bfa3d635dbdb44dae4708eedd191e17788312774d1fab9612e6",
+  "seal": "2f4c5582239e13a52f1eaefb553f5a9cd419033b96a8366b8345a3cbdfe15606",
   "window": {
     "bound": 3,
     "first": 1

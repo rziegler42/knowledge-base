@@ -9,10 +9,11 @@ statement and rules, and that a classification such as OpenAlex's is only an opt
 merged by a reshelving list the owner approves. The fetch engine (the crawler and its seeding) is designed there and is not built.
 
 On 2026-11-14, in the brainstorm for the fetch engine, three things came together. The walk trial
-(`docs/plans/2026-11-14-try-the-walk-on-the-owners-problems.md`) found that the library's coverage, and not the walk, limited what it could
-show: for the 3D-printing problem the leads said little about building shapes layer by layer. The library holds 175 books, and the design's
-own expected scale is hundreds of thousands. And the finding that novelty comes from fields nobody has named means that growing the library only
-around the owner's stated interests is not enough. The owner asked how the engine should decide what to fetch and how to know what the
+(`docs/plans/2026-11-14-try-the-walk-on-the-owners-problems.md`) gave thin leads for the 3D-printing problem (the agent's impression, from two rounds)
+and an "unclear" answer on whether the wide walk adds anything over an ordinary search; **the trial did not establish whether the cause is the
+library's coverage or the method**. The owner's own judgement, which this record rests on, is that the library holds too little to judge whether novel
+concepts are findable: it holds 175 books, and the design's own expected scale is hundreds of thousands. And the owner's concern that a library grown only
+around the owner's stated interests limits the novelty it can offer means that growing it around those interests alone is not enough. The owner asked how the engine should decide what to fetch and how to know what the
 library holds, and worked out the shelving scheme below.
 
 ## Decision
@@ -116,5 +117,6 @@ in a separate step that is the owner's change of direction.
   - Dewey: OCLC owns it; the summaries are free under terms (https://oclc.org/research/activities/browser/terms.html).
   - Bliss BC2: 15 of about 28 volumes published, no web version (https://blissclassification.org.uk/bchist.shtml).
   - Colon Classification: faceted (PMEST), its present use is debated (https://isko.org/cyclo/colon_classification).
-- **What the owner's library showed:** the walk trial of 2026-11-14 (Results of the plan above) found the leads for the 3D-printing problem the
-  thinnest, and the trial's "unclear" result for whether the wide walk adds anything over an ordinary search.
+- **What the owner's library showed:** the walk trial of 2026-11-14 (Results of the plan above) gave the thinnest leads for the 3D-printing problem,
+  by the agent's impression from rounds 1 and 2 only, and an "unclear" result for whether the wide walk adds anything over an ordinary search. It
+  did not establish the cause, and it did not show whether the library holds books on layer-by-layer building.
