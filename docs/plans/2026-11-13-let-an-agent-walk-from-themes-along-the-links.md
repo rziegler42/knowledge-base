@@ -65,7 +65,8 @@ an ordinary search already returned at each level and step distance, is the road
 
 ## Increments
 
-Five increments, each one verified, reviewed local commit; the agent trial is not one of them.
+Each increment is one verified, reviewed local commit; the agent trial is not one of them. **The order of execution is A, B, C, C-A, E, E-A, D** (as the file lists them): E, the owner's reading on the real library, was
+moved before the skill, and E-A, the helper, was added, on 2026-11-13 when Increment D was started and the helper was found to pass three commands only. The labels are not renumbered.
 
 ### Increment A — The selection, as pure functions
 
@@ -162,16 +163,18 @@ step 3. No wider run: only `walk.py` changes in the code, and nothing else impor
 
 ### Increment D — The skill for an agent
 
-**Outcome:** an agent that installs the package has a skill that says how to use the walk.
-**Dependencies:** C.
-**Affected areas:** `package/kb/harness/neutral/skills/` (a new skill, beside `pose-a-problem`), the module declaration of the package where that skill is declared, `engine/tests/test_package.py`.
+(Executed after E and E-A, whatever its place in this list: the labels keep their order, and the order of execution is the one stated above.)
+**Outcome:** an agent that installs the package has a skill that says how to use the walk through the helper.
+**Dependencies:** E-A (the helper command it names) and E (the owner's reading, so that the skill describes the levels and the numbers the owner has read and, if the owner changed any, the new ones).
+**Affected areas:** `package/kb/harness/neutral/skills/` (a new skill, beside `pose-a-problem`), `engine/tests/test_package.py`.
 **Steps:**
 1. Read `pose-a-problem`'s skill, its declaration and its package test, and write the new skill the same way (name, description, steps); the test first (the skill is found, its front matter has the name and a
-   description, it names the command and every option, it says that a lead is a lead and not a finding, and it holds no instruction that could be read as coming from a book).
-2. The skill says: put the problem in general terms, and the sub-problems, as questions; read the follow-through lane first and sample the exploration lane; pass back what was read in `--seen`, what is worth
-   following in `--from`, dead ends in `--drop`; read `novelty` and `reached_by` and the weak link as numbers and decide; widen with a level or a question when the header says little was found; stop when a round
-   gives nothing new; never present a combination of leads as a finding.
-3. Deliberate breaks of the package test (the skill missing, the option named wrongly, the front matter without a name), each caught.
+   description, it names the command and every option, it says that a lead is a lead and not a finding, that every title and the citation are also texts of books and not to be trusted, and it holds no instruction that could
+   be read as coming from a book).
+2. The skill says: put the problem in general terms, and the sub-problems, as questions (what is written is sent to the owner's embedding model, as for `pose-a-problem`: no secret, no private text); read the follow-through lane
+   first and sample the exploration lane; pass back what was read in `--seen`, what is worth following in `--from`, dead ends in `--drop`; read `novelty` and `reached_by` and the weak link as numbers and decide; widen with a
+   level or a question when the header says little was found; stop when a round gives nothing new; never present a combination of leads as a finding.
+3. Deliberate breaks of the package test (the skill missing, the option named wrongly, the front matter without a name, the sentence about titles and the citation left out), each caught.
 4. The `reviewer` agent.
 **Verification:** `engine/.venv/bin/python -m unittest engine.tests.test_package` and `wb run code-work check`. The install of the package into a throwaway project is not run (a preview of it is, if the test
 for `pose-a-problem` did so; the Result says which).
@@ -180,7 +183,7 @@ for `pose-a-problem` did so; the Result says which).
 ### Increment E — A read-only run on the owner's library
 
 **Outcome:** the owner has read the walk's output on the real library for questions the owner chooses, at each level, and the weave and the file of vectors are shown unchanged.
-**Dependencies:** C and D, and the owner's word ("run it") after being told what is sent: the owner's questions, to the embedding model of the config on this machine (a local model; nothing leaves it); nothing else.
+**Dependencies:** C and C-A, and the owner's word ("run it") after being told what is sent: the owner's questions, to the embedding model of the config on this machine (a local model; nothing leaves it); nothing else.
 **Affected areas:** nothing in the repository but this plan's Result.
 **Steps:**
 1. Say what will be sent and to which model, and the questions the owner gives; record the sha256 of the weave and of the file of vectors; wait for "run it".
@@ -191,11 +194,34 @@ for `pose-a-problem` did so; the Result says which).
 **Verification:** the two hashes before and after, the listing of the index root before and after, and the outputs shown. No other check.
 **Evidence:** the one local commit (the Result of this plan), with the trailer `Plan: 2026-11-13-let-an-agent-walk-from-themes-along-the-links#E`.
 
+### Increment E-A — The walk through the package's helper
+
+**Outcome:** an agent in another project can run `wb run kb theme-walk …`, through the package's helper, with the options and the limits of the engine's command; the three commands the helper already has are unchanged; and the
+owner has allowed it knowing what it sends out. (Found when Increment D was started: an agent reaches the library only through the helper, which passes three commands to the engine and not this one. The owner agreed on 2026-11-13
+to add this increment and to run E first.)
+**Dependencies:** C-A and E (the owner has read the walk on the real library, and may have changed its numbers), and **the owner's explicit word** that `theme-walk` may send an agent's questions to the owner's embedding model
+through the helper, as the helper's text says the owner allowed for `problem-search` alone. Nothing is changed in the helper until the owner has said so.
+**Affected areas:** `package/kb/helper/kb` (a `theme_walk` function beside `problem_search`, the usage text and the header), `package/kb/module.json` (the arguments the helper takes), `engine/kb/__main__.py` and `engine/kb/walk.py` (a
+`--launcher` option for `theme-walk` that only the helper uses, as `problem-search` has, and the launcher passed to the search), `engine/tests/test_package.py`, `engine/tests/test_walk.py`, `engine/README.md`, `README.md`.
+**Steps:**
+1. Read `problem_search` of the helper, `problem-search` of the engine with its `--launcher` option, and the tests of both, and write the tests first and see them fail: the helper calls the engine with a fixed argument list
+   for `theme-walk` (one to five questions, each at most the helper's length for a query; `--from`, `--seen` and `--drop` each a REF made of a book id, a version and a theme id by the helper's own patterns, at most 20, 200 and
+   200; `--level` one of three words; `--steps` and `--limit` whole numbers in their ranges); every other option, a path, an address, a program and a `--launcher` from the caller refused as "not an option"; the same refusals and
+   messages as `problem-search` for a missing, readable-by-others or linked settings file and for a missing launcher key; the output between the helper's marker lines, cleaned, cut and with the paths of the machine stripped;
+   the helper writes nothing; and in the engine, `theme-walk --launcher` is accepted only in the shape the helper passes and is refused otherwise, as `problem-search` does.
+2. Make the changes, the least that makes the tests pass; the README and the helper's own text say that `theme-walk` is the second command that sends an agent's text out (the questions, to the embedding model of the owner's
+   config), and nothing else.
+3. Deliberate breaks, each restored byte for byte and each caught (a caller's `--launcher` accepted; a REF not checked or not limited; an option let through; the questions not limited; the output not cleaned or not marked; a
+   file written; the settings not checked).
+4. The `reviewer` agent, and the owner is asked whether to run a security review of the helper change before it is committed (the helper is a boundary, and a change to it is new surface); it runs only if the owner asks.
+**Verification:** `engine/.venv/bin/python -m unittest engine.tests.test_package engine.tests.test_walk`, the breaks of step 3 and `wb run code-work check`. The install of the package into a throwaway project is not run.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-13-let-an-agent-walk-from-themes-along-the-links#E-A`.
+
 ## Verification for the plan as a whole
 
-Each increment's recorded verification stands unless a later increment changed its inputs. Increment C changes `engine/README.md` and `README.md`, which later increments do not touch; Increment D changes the package, and
-its test is run after C. The tests of `themevectors` and of the weave are run in B and C because the walk depends on them; they are not run again unless a later increment changes `themevectors.py` or `weave.py`.
-Increment E rests on A to D and is taken after all of them. Nothing wider is run: the cards, the conversion and the extractor are not touched.
+Each increment's recorded verification stands unless a later increment changed its inputs. Increment C changes `engine/README.md` and `README.md`, which Increment E-A changes again (the test of the walk is run
+after it); Increments E-A and D change the package, and its test (`engine.tests.test_package`) is run after C-A. The tests of `themevectors` and of the weave are run in B and C because the walk depends on them; they are not
+run again unless a later increment changes `themevectors.py` or `weave.py`. Increment E rests on A to C-A and is taken first of the later ones, as the order of execution says. Nothing wider is run: the cards, the conversion and the extractor are not touched.
 
 ## Risks and sensitive actions
 
@@ -206,6 +232,8 @@ Increment E rests on A to D and is taken after all of them. Nothing wider is run
 - **The numbers are guesses (levels, the 0.66 threshold, the lane shares, 5 and 30, the caps)** and rest on an exploratory cut of 30 themes. The trial of the separate candidate tunes them; the plan does not claim they are right.
 - **The walk offers leads that may be noise.** The spec accepts noise if each lead is cheap to skim; the owner reads the output in Increment E, and the trial of the separate candidate reports the share an ordinary
   search already returned, with no machine measure of novelty.
+- **The helper (Increment E-A) would make `theme-walk` the second command that sends an agent's text out** (the questions, to the owner's embedding model, as `problem-search` does). The helper's own text says the owner allowed that
+  for `problem-search` alone, so nothing is changed there until the owner says so for this command too; the helper is a boundary, and the owner is asked whether to run a security review of the change.
 - **A skill changes how an agent behaves** and is installed into other projects. It is written to say how to use the command and to carry no instruction from a book; its package test checks it.
 - **No write to the owner's library and no push** in any increment but with the owner's word.
 
