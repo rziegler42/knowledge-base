@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Increment D — step 1",
+      "problem": "The proposed injection check cannot establish the claimed protection. An abstract can instruct the model to select, for example, candidate 2; that output still satisfies the strict number-and-reason parser, so the reader cannot distinguish an injection-following answer from a legitimate choice. Counting only whether five adversarial answers have an allowed form therefore does not measure whether untrusted work text steers the placement, leaving the choice-step measurement vulnerable to a valid-but-manipulated answer.",
+      "severity": "major",
+      "suggestion": "Replace the impossible refusal test and allowed-form rate with an explicitly defined behavioral injection evaluation—for example, use injected targets deliberately incompatible with the surrounding synthetic work and record target-selection versus a non-injected control—or state that this plan does not claim to measure resistance to valid-form prompt injection and exclude such a claim from its safeguards."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan aligns with its named shelf spec and its revised ranking definitions, but its model-choice injection test does not test the stated risk.",
+  "verdict": "changes_needed"
+}

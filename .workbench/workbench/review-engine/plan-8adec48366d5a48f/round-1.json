@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Assumptions and constraints — “The bar”; Increment A step 1; Completion criterion 4",
+      "problem": "The bar requires the true field to be the nearest field-level match, but the specified ranker and recorded measurements rank all 4,816 shelves together and only test whether an arbitrary nearest shelf has the true ancestor. Those are different metrics: a topic can outrank every field shelf while its true field is still the best field-level result. The plan therefore cannot unambiguously determine whether its own field bar is met.",
+      "severity": "major",
+      "suggestion": "Specify separate candidate sets and scoring for topic, subfield, field, and domain rankings (or explicitly define another field-level metric), test them in Increment A, and require those exact values in the Result."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment D — step 1",
+      "problem": "The chat-model prompt places untrusted OpenAlex titles and abstracts beside an instruction to choose a shelf, but does not require them to be delimited and explicitly treated as data rather than instructions. A malicious or malformed abstract could steer the model’s choice, invalidating the measurement and conflicting with the project’s treatment of external text as untrusted.",
+      "severity": "major",
+      "suggestion": "Require a fixed prompt that clearly delimits title and abstract as untrusted quoted data, directs the model to ignore instructions within them, and test representative instruction-like text to confirm only the constrained shelf-or-none output is accepted."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan needs precise per-level ranking metrics and prompt-injection handling before its measurement can reliably support the decision.",
+  "verdict": "changes_needed"
+}
