@@ -1,6 +1,6 @@
 # The shelf schema is our own list, built from OpenAlex and the Library of Congress, with finer shelves for OpenAlex topics
 
-Status: Proposed
+Status: Accepted by Robert Ziegler <25854477+rziegler42@users.noreply.github.com> on 2026-11-14
 
 ## Context
 
