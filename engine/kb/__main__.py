@@ -156,6 +156,7 @@ def main(argv=None):
                     help=f"continue from this theme (a lead's ref, `book_id/version_id/theme_id`) in place of the starting themes the questions find (at most {walk.MAX_FROM})")
     tw.add_argument("--seen", action="append", default=[], metavar="REF", help=f"a theme already read: never offered, never walked through (at most {walk.MAX_REFS})")
     tw.add_argument("--drop", action="append", default=[], metavar="REF", help=f"a dead end: neither offered nor walked through (at most {walk.MAX_REFS})")
+    tw.add_argument("--launcher", metavar="PATH", help="the absolute path of the workbench launcher (wb), for a caller whose PATH does not hold it; only the helper of the package gives it")
     tw.add_argument("--level", choices=list(walk.LEVELS), default=None, help="how far to go: narrow (1 step), medium (2), wide (3, the default)")
     tw.add_argument("--steps", type=int, default=None, help="fewer steps than the level's, never more")
     tw.add_argument("--limit", type=int, default=None, help=f"at most this many leads (1 to {walk.MAX_LIMIT}; default {walk.DEFAULT_LIMIT})")
@@ -317,7 +318,8 @@ def main(argv=None):
             return 0
         if args.command == "theme-walk":
             cfg = config.load()
-            print(json.dumps(walk.theme_walk(cfg["index_root"], cfg, args.questions, args.from_refs, args.seen, args.drop, level=args.level, steps=args.steps, limit=args.limit), indent=1))
+            print(json.dumps(walk.theme_walk(cfg["index_root"], cfg, args.questions, args.from_refs, args.seen, args.drop, level=args.level, steps=args.steps, limit=args.limit,
+                                          launcher=args.launcher), indent=1))
             return 0
         if args.command == "theme-search":
             cfg = config.load()

@@ -17,7 +17,7 @@ What the spec's table of levels leaves open, and how it is read here (to be writ
 import json
 from contextlib import closing
 
-from . import KbError, ids, models, themevectors, vectors, weave
+from . import KbError, ids, models, problem, themevectors, vectors, weave
 from . import read as reading
 from . import search as fulltext
 from .weave import BAND_NAMES, SCALE
@@ -344,12 +344,14 @@ def _lead_shown(lead, by_key, titles, lane):
             "weak_link": {"closeness": round(lead["weakest"] / SCALE, 2), "band": lead["weakest_band"], "band_name": BAND_NAMES[lead["weakest_band"]]}}
 
 
-def theme_walk(index_root, cfg, questions, from_refs=(), seen_refs=(), drop_refs=(), level=None, steps=None, limit=None, search=None):
+def theme_walk(index_root, cfg, questions, from_refs=(), seen_refs=(), drop_refs=(), level=None, steps=None, limit=None, search=None, launcher=None):
     """The walk for an agent's questions (`docs/specs/theme-walk.md`). Reads the file of theme vectors and the weave, read only, and writes nothing; the only thing sent to a model is each question,
     to the embedding model of the config, as the search sends it. `search(question, limit)` stands in for the search in tests. Everything is checked before the first question is sent: the arguments, the
     file of vectors, the weave. `level`, `steps` and `limit` are `None` when the agent gave none (the header says which defaults were used: the level `wide`, the steps of the level, the limit 12).
-    Returns the one object the command prints: a `warning` (or `None`) first, the `header`, and the two lanes."""
-    defaults = [n for n, v in (("level", level), ("steps", steps), ("limit", limit)) if v is None]
+    Returns the one object the command prints: a `warning` (or `None`) first, the `header`, and the two lanes. `launcher` is the absolute path of the workbench launcher, which only the helper of the package names (the
+    same check as for the problem search: an absolute path of an executable file); it is checked before anything is sent and only passed to the embedding."""
+    launcher = problem._launcher(launcher)
+    defaults =[n for n, v in (("level", level), ("steps", steps), ("limit", limit)) if v is None]
     level, limit = "wide" if level is None else level, DEFAULT_LIMIT if limit is None else limit
     steps_used = _check(level, steps, limit)
     questions = _checked_questions(questions)
@@ -373,7 +375,7 @@ def theme_walk(index_root, cfg, questions, from_refs=(), seen_refs=(), drop_refs
     unknown = {"from": len(from_keys) - len(known(from_keys)), "seen": len(seen_keys) - len(known(seen_keys)), "drop": len(drop_keys) - len(known(drop_keys))}
     links = [link for link in made["links"] if link[0] in by_key and link[1] in by_key]
     linked = set(build_graph(links))
-    searcher = search or (lambda question, size: themevectors.search(index_root, cfg, question, limit=size))
+    searcher = search or (lambda question, size: themevectors.search(index_root, cfg, question, limit=size, launcher=launcher))
     found = starting_themes(searcher, questions, linked)
     if (found["model"], found["built"]) != (vmeta["model"], vmeta["built"]):
         raise KbError("the file of theme vectors was replaced while the walk was running: ask again")

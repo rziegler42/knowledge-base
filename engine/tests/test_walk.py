@@ -14,6 +14,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import unittest.mock
 
 from engine.tests.test_themevectors import HOSTILE_HEADING, PerBookCase, strings_of, with_embedding
@@ -1412,12 +1413,14 @@ class WalkCommandTest(WalkCase):
         saved.update(with_embedding())
         kbconfig.save(saved)
         self.embedded = []
+        self.launchers = []
 
     def kb(self, *args):
         meta = self.meta()
 
         def embed(cfg, name, texts, launcher=None, root=None, kind="document"):
             self.embedded.append((kind, list(texts)))
+            self.launchers.append(launcher)
             return {"model": meta["model"], "dimension": 4, "vectors": [deg4(30 if t == "another way to say it" else 0) for t in texts]}
 
         out, err = io.StringIO(), io.StringIO()
@@ -1445,7 +1448,7 @@ class WalkCommandTest(WalkCase):
 
     def test_it_refuses_what_is_wrong_and_options_that_name_a_model_or_a_file(self):
         for args in (("--limit", "0"), ("--limit", "21"), ("--limit", "x"), ("--level", "wider"), ("--steps", "4"), ("--seen", "../x"), ("--from", "a/b/c"), ("--drop", "x"),
-                     ("--model", "x"), ("--server", "x"), ("--address", "x"), ("--host", "x"), ("--url", "x"), ("--launcher", "x"), ("--bridge", "x"), ("--weave", "x"), ("--index-root", "/tmp")):
+                     ("--model", "x"), ("--server", "x"), ("--address", "x"), ("--host", "x"), ("--url", "x"), ("--bridge", "x"), ("--weave", "x"), ("--index-root", "/tmp")):
             with self.subTest(args=args):
                 code, out, err = self.kb("theme-walk", "--question", self.QUESTION, *args)
                 self.assertEqual((code, out), (2, ""))
@@ -1456,6 +1459,52 @@ class WalkCommandTest(WalkCase):
         self.assertEqual(code, 2)
         self.assertIn("theme-links build", err)
         self.assertEqual(self.embedded, [])
+
+    def make_launcher(self, mode=0o755, name="wb"):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = os.path.join(os.path.realpath(folder.name), name)
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(path, mode)
+        return path
+
+    def test_a_launcher_is_passed_to_the_embedding_and_changes_nothing_else(self):
+        """Increment E-A: the helper of the package names the launcher; no caller's text does."""
+        path = self.make_launcher()
+        plain = self.kb("theme-walk", "--question", self.QUESTION, "--limit", "5")
+        self.assertEqual(self.launchers, [None])
+        code, out, err = self.kb("theme-walk", "--launcher", path, "--question", self.QUESTION, "--limit", "5")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.launchers, [None, path])
+        self.assertEqual(json.loads(out), json.loads(plain[1]))
+        self.assertEqual(walk.theme_walk(self.index_root(), self.mcfg, [self.QUESTION], limit=5, search=self.ask, launcher=path),
+                         walk.theme_walk(self.index_root(), self.mcfg, [self.QUESTION], limit=5, search=self.ask))
+
+    def test_a_launcher_that_is_not_an_absolute_executable_file_is_refused_before_a_question_is_sent(self):
+        folder = os.path.dirname(self.make_launcher())
+        for bad in ("wb", "bin/wb", "", os.path.join(folder, "missing"), folder, self.make_launcher(mode=0o644, name="plain")):
+            with self.subTest(launcher=bad):
+                code, out, err = self.kb("theme-walk", "--launcher", bad, "--question", self.QUESTION)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("launcher", err)
+                with self.assertRaises(KbError):
+                    walk.theme_walk(self.index_root(), self.mcfg, [self.QUESTION], search=self.ask, launcher=bad)
+        self.assertEqual(self.embedded, [])
+
+    def test_the_launcher_reaches_the_search_when_the_function_makes_the_search_itself(self):
+        path = self.make_launcher()
+        seen = []
+
+        def fake_search(index_root, cfg, query, limit=None, launcher=None, root=None, per_book=None):
+            seen.append((query, launcher))
+            raise KbError("stop here")
+        with unittest.mock.patch.object(themevectors, "search", fake_search):
+            with self.assertRaises(KbError):
+                walk.theme_walk(self.index_root(), self.mcfg, [self.QUESTION], launcher=path)
+            with self.assertRaises(KbError):
+                walk.theme_walk(self.index_root(), self.mcfg, [self.QUESTION])
+        self.assertEqual(seen, [(self.QUESTION, path), (self.QUESTION, None)])
 
     def test_it_runs_with_numpy_made_unavailable(self):
         with unittest.mock.patch.dict(sys.modules, {"numpy": None}):

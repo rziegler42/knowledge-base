@@ -56,12 +56,12 @@ the date the document gives, and nothing in the repository holds the data behind
 - **Takes a problem in sub-problems.** `python3 -m kb problem-search -- 'sub-problem' ...` takes one to five sub-problems, which the
   caller has put in general terms, and prints each one's ranked books and one list of the books found. The engine does not set
   aside the books of the problem's own field, because no card says which field a book belongs to: the caller does.
-- **Gives an agent in another project a way in.** The workbench package `kb` offers `wb run kb search`, `read` and `problem-search`
-  to an agent in a project you install it into, and a skill, `pose-a-problem`, that tells the agent how to put a problem in general
+- **Gives an agent in another project a way in.** The workbench package `kb` offers `wb run kb search`, `read`, `problem-search` and
+  `theme-walk` to an agent in a project you install it into, and a skill, `pose-a-problem`, that tells the agent how to put a problem in general
   terms, split it, set aside its own field, give a reason from the matched text and read the book before relying on it. The
-  package finds the engine only through `~/.config/knowledge-base/helper.json`, which you make. `problem-search` is the one
-  argument that sends anything out: the sub-problems an agent wrote go, in the clear, to your embedding model's server and nowhere
-  else. It was run once through the package, from a scratch project.
+  package finds the engine only through `~/.config/knowledge-base/helper.json`, which you make. `problem-search` and `theme-walk` are the two
+  arguments that send anything out: the sub-problems or questions an agent wrote go, in the clear, to your embedding model's server and
+  nowhere else. `problem-search` was run once through the package, from a scratch project; `theme-walk` has not been.
 
 Planned, not built: a trial on problems you choose that compares keyword search, search by meaning and the problem search, judging
 pairs of ideas that a search returned, search and links between themes, and a scheduled program that adds sources while
@@ -183,9 +183,10 @@ The library holds and parses untrusted content, and the engine is built on that 
 - each increment is reviewed independently before it is committed, and the parts that take untrusted input (capture, the tool
   runner and scan, conversion, search and read) have each had a security review whose findings and fixes are recorded in the
   plan's Result;
-- an agent in another project is allowed only reads, and only `problem-search` sends anything out: the sub-problems it wrote go,
-  over plain HTTP, to the embedding model that your config names, and the helper finds the engine and the workbench launcher only
-  in a settings file that is yours alone. Nothing checks those sub-problems for private text, and the server is trusted.
+- an agent in another project is allowed only reads, and only `problem-search` and `theme-walk` send anything out: the sub-problems
+  or questions it wrote go, over plain HTTP, to the embedding model that your config names (on your network, in the clear), and the
+  helper finds the engine and the workbench launcher only in a settings file that is yours alone. Nothing checks those texts for
+  private text, and the server is trusted.
 
 Limits that are known and documented in [engine/README.md](engine/README.md): the sandbox is macOS only, and `sandbox-exec` is
 deprecated by Apple; memory is not limited; a title or a text can still carry misleading words that no cleaning removes, which is

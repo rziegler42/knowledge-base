@@ -2,7 +2,7 @@
   "name": "kb",
   "version": "0.1.0",
   "type": "module",
-  "description": "Search the owner's library of outside sources by keyword, put a problem to it by meaning, and read a passage back; the owner builds the library.",
+  "description": "Search the owner's library of outside sources by keyword, put a problem to it by meaning, walk from themes along the links of the weave, and read a passage back; the owner builds the library.",
   "provides": [
     "kb:knowledge-search"
   ],
@@ -17,7 +17,8 @@
       "arguments": [
         "search",
         "read",
-        "problem-search"
+        "problem-search",
+        "theme-walk"
       ]
     }
   }

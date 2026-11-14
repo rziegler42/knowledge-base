@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The kb helper: keyword search of the owner's library, reading a passage back and posing a problem by meaning, for an agent in a
-project.
+"""The kb helper: keyword search of the owner's library, reading a passage back, posing a problem by meaning and walking from themes
+along the links of the weave, for an agent in a project.
 
 It is one file that imports the standard library and the workbench kit (``wbkit``); the launcher runs a
 private copy of it through the kit runner with nothing beside it.
@@ -8,21 +8,25 @@ private copy of it through the kit runner with nothing beside it.
     kb search [--limit <1-20>] [--] <query>
     kb read [--version v<N>] [--chars <100-20000>] <book> <locator-json>
     kb problem-search [--limit <1-10>] [--] <sub-problem> ... (one to five)
+    kb theme-walk [--level narrow|medium|wide] [--steps <1-3>] [--limit <1-20>] [--from <ref>]... [--seen <ref>]... [--drop <ref>]...
+                  [--] <question> ... (one to five)
 
-``search`` and ``read`` change nothing and send nothing out. ``problem-search`` is the one exception, which the owner allowed for this
-argument alone: the sub-problems an agent wrote go, through the engine, to the embedding model that the owner's config names for
-``card-embed`` (on the owner's server, over plain HTTP) and to nothing else. To reach it the engine runs the workbench launcher, which it
-finds only through an optional key ``launcher`` of the owner-only settings (an absolute path, with no link in it, to an executable
-file outside the project); no caller's text names a program, a server or a path.
+``search`` and ``read`` change nothing and send nothing out. ``problem-search`` and ``theme-walk`` are the two exceptions, which the owner
+allowed for these two commands alone: the sub-problems or the questions an agent wrote go, through the engine, to the embedding model that
+the owner's config names for ``card-embed`` (on the owner's server ``ned``, on the owner's network, over plain HTTP: in the clear) and to
+nothing else. A ref (``book/version/theme``, the identifier of a theme as a lead gave it) is only checked here and never sent anywhere
+but to the engine. To reach the model the engine runs the workbench launcher, which it finds only through an optional key ``launcher`` of
+the owner-only settings (an absolute path, with no link in it, to an executable file outside the project); no caller's text names a
+program, a server or a path.
 
-The helper starts the engine of the knowledge base (``python -m kb search``, ``read`` or ``problem-search``) on this machine, with no shell, a fixed
+The helper starts the engine of the knowledge base (``python -m kb search``, ``read``, ``problem-search`` or ``theme-walk``) on this machine, with no shell, a fixed
 argument shape, a time limit, a cap on its output and an environment built here. It finds the engine and the interpreter only in the
 owner-only file ``~/.config/knowledge-base/helper.json`` (``{"engine": "<absolute folder>", "python": "<absolute file>"}``),
 never in the project, and refuses a file that others can read or write, a link, or a path that leads into the project. No argument
 is a path, an address or a token: a book is its 26-character identifier, a locator is a small JSON object that a search returned,
-and every option is one of those above. What the engine prints is data from outside: it is cleaned, cut to a bound, stripped of
-the paths of this machine that the helper knows, and printed between two marker lines that carry a random token. The helper never
-runs it or believes it. It writes no file: none of the three engine commands does.
+a ref is three identifiers of fixed shape, and every option is one of those above. What the engine prints is data from outside: it is
+cleaned, cut to a bound, stripped of the paths of this machine that the helper knows, and printed between two marker lines that carry a
+random token. The helper never runs it or believes it. It writes no file: none of the four engine commands does.
 """
 
 import json
@@ -51,16 +55,25 @@ DEFAULT_LIMIT = 5
 CEILING_LIMIT = 20
 CEILING_PROBLEM_LIMIT = 10
 MAX_SUB_PROBLEMS = 5
+MAX_QUESTIONS = 5
+CEILING_WALK_LIMIT = 20
+MAX_WALK_STEPS = 3
+MAX_FROM = 20
+MAX_REFS = 200
+WALK_LEVELS = ("narrow", "medium", "wide")
 DEFAULT_CHARS = 4000
 SETTINGS = (".config", "knowledge-base", "helper.json")
 SETTINGS_FORM = ('{"engine": "<absolute path of the engine folder>", "python": "<absolute path of python3>"} and, only for '
-                 '`problem-search`, a third key "launcher": "<absolute path of the workbench launcher wb>"')
+                 '`problem-search` and `theme-walk`, a third key "launcher": "<absolute path of the workbench launcher wb>"')
 BOOK = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 VERSION = re.compile(r"^v[1-9][0-9]{0,5}$")
 NUMBER = re.compile(r"^[1-9][0-9]{0,4}$")
+REF = re.compile(r"[0-7][0-9A-HJKMNP-TV-Z]{25}/v[1-9][0-9]{0,5}/[a-z0-9][a-z0-9_-]{0,31}")   # book / version / theme id, as the engine's ids are, matched whole
 USAGE = ("usage: wb run kb search [--limit <1-%d>] [--] <query> | wb run kb read [--version v<N>] [--chars <100-20000>] "
-         "<book> <locator-json> | wb run kb problem-search [--limit <1-%d>] [--] <sub-problem> ... (1 to %d)"
-         % (CEILING_LIMIT, CEILING_PROBLEM_LIMIT, MAX_SUB_PROBLEMS))
+         "<book> <locator-json> | wb run kb problem-search [--limit <1-%d>] [--] <sub-problem> ... (1 to %d) | "
+         "wb run kb theme-walk [--level narrow|medium|wide] [--steps <1-%d>] [--limit <1-%d>] [--from <ref>]... [--seen <ref>]... "
+         "[--drop <ref>]... [--] <question> ... (1 to %d)"
+         % (CEILING_LIMIT, CEILING_PROBLEM_LIMIT, MAX_SUB_PROBLEMS, MAX_WALK_STEPS, CEILING_WALK_LIMIT, MAX_QUESTIONS))
 
 
 class Refused(Exception):
@@ -319,7 +332,7 @@ def query_engine(command, tail, cwd, with_launcher=False):
 
 
 def whole_number(text, low, high, name):
-    if not NUMBER.match(text) or not low <= int(text) <= high:
+    if not NUMBER.fullmatch(text) or not low <= int(text) <= high:
         raise Refused("%s is a whole number from %d to %d, without a sign, a fraction or a leading zero" % (name, low, high))
     return int(text)
 
@@ -358,8 +371,8 @@ def search(args, cwd):
 
 
 def problem_search(args, cwd):
-    """One to five sub-problems, each one line of text, searched by meaning by the engine. **This is the one argument of the helper that
-    sends anything out**: the sub-problems go, through the engine, to the embedding model that the owner's config names, and to nothing
+    """One to five sub-problems, each one line of text, searched by meaning by the engine. **This is one of the two arguments of the helper
+    that send anything out** (the other is ``theme-walk``): the sub-problems go, through the engine, to the embedding model that the owner's config names, and to nothing
     else. No caller's text names a program, a server or a path."""
     values, rest = options("problem-search", args, ("--limit",))
     limit = whole_number(values["--limit"], 1, CEILING_PROBLEM_LIMIT, "--limit") if "--limit" in values else DEFAULT_LIMIT
@@ -369,6 +382,65 @@ def problem_search(args, cwd):
         if not sub.strip() or len(sub) > MAX_QUERY or plain(sub) != sub:
             raise Refused("a sub-problem is one line of text of 1 to %d characters, with no control character" % MAX_QUERY)
     return query_engine("problem-search", ["--limit", str(limit), "--"] + rest, cwd, with_launcher=True)
+
+
+def walk_options(args):
+    """``(single, refs, rest)`` for ``theme-walk``: each of ``--level``, ``--steps`` and ``--limit`` at most once, each of ``--from``, ``--seen``
+    and ``--drop`` as often as the caller likes (the count is checked by the caller), all with a value, at the front of `args`, and what
+    follows (after a ``--`` if one ends the options)."""
+    single_names, ref_names = ("--level", "--steps", "--limit"), ("--from", "--seen", "--drop")
+    single, refs = {}, {name: [] for name in ref_names}
+    position = 0
+    while position < len(args) and args[position].startswith("--"):
+        name = args[position]
+        if name == "--":
+            position += 1
+            break
+        if name not in single_names + ref_names:
+            raise Refused("%s is not an option of theme-walk; the options are %s. %s"
+                          % (display.ascii_text(name)[:60], ", ".join(single_names + ref_names), USAGE))
+        if position + 1 >= len(args):
+            raise Refused("%s needs a value" % name)
+        if name in refs:
+            refs[name].append(args[position + 1])
+        elif name in single:
+            raise Refused("%s is given twice" % name)
+        else:
+            single[name] = args[position + 1]
+        position += 2
+    return single, refs, args[position:]
+
+
+def theme_walk(args, cwd):
+    """From one to five questions, the themes the weave leads to from the themes the questions find, as the engine's ``theme-walk`` offers them.
+    **This is the second argument of the helper that sends anything out**: the questions go, through the engine, to the embedding model
+    that the owner's config names, and to nothing else. The refs, the level, the steps and the limit are checked here and passed in a
+    fixed order; a question is passed as ``--question=<text>`` so that no text of it can be taken for an option. No caller's text names a
+    program, a server or a path."""
+    single, refs, rest = walk_options(args)
+    tail = []
+    if "--level" in single:
+        if single["--level"] not in WALK_LEVELS:
+            raise Refused("--level is one of %s" % ", ".join(WALK_LEVELS))
+        tail += ["--level", single["--level"]]
+    if "--steps" in single:
+        tail += ["--steps", str(whole_number(single["--steps"], 1, MAX_WALK_STEPS, "--steps"))]
+    if "--limit" in single:
+        tail += ["--limit", str(whole_number(single["--limit"], 1, CEILING_WALK_LIMIT, "--limit"))]
+    for name, most in (("--from", MAX_FROM), ("--seen", MAX_REFS), ("--drop", MAX_REFS)):
+        if len(refs[name]) > most:
+            raise Refused("%s takes at most %d refs" % (name, most))
+        for ref in refs[name]:
+            if not REF.fullmatch(ref):
+                raise Refused("%s takes a REF of a lead, `<book>/<version>/<theme>` (a 26-character book identifier, v and a number, and a theme "
+                              "identifier), and never a path or an address" % name)
+            tail += [name, ref]
+    if not 1 <= len(rest) <= MAX_QUESTIONS:
+        raise Refused("theme-walk takes from 1 to %d questions; %s" % (MAX_QUESTIONS, USAGE))
+    for question in rest:
+        if not question.strip() or len(question) > MAX_QUERY or plain(question) != question:
+            raise Refused("a question is one line of text of 1 to %d characters, with no control character" % MAX_QUERY)
+    return query_engine("theme-walk", tail + ["--question=" + question for question in rest], cwd, with_launcher=True)
 
 
 def depth(value, level=1):
@@ -403,7 +475,7 @@ def read(args, cwd):
 def main(argv, stdin, out, err, cwd):
     """Run one command from `cwd`. Returns the exit code. A refusal means nothing was started."""
     try:
-        commands = {"search": search, "read": read, "problem-search": problem_search}
+        commands = {"search": search, "read": read, "problem-search": problem_search, "theme-walk": theme_walk}
         if not argv or argv[0] not in commands:
             raise Refused(USAGE)
         text = commands[argv[0]](argv[1:], cwd)
