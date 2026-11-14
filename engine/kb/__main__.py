@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import shelfschema, themerun, themereflag, themevectors, walk, weave
+from . import shelfbuild, shelfschema, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -165,6 +165,13 @@ def main(argv=None):
                         "reads one file, writes nothing, needs no library and no config")
     sc.add_argument("path", help="the file to check")
     sc.add_argument("--custom", action="store_true", help="the file is a file of custom shelves and not the schema")
+    sb = sub.add_parser("shelf-schema-build", help="build the shelf schema file from the saved OpenAlex lists, the saved Library of Congress outline and the tracked file of custom shelves "
+                        "(each given by path); checks every saved page against the hash its report records and the result against the checker, writes one new file (never replaces one) "
+                        "and prints the counts, the snapshot and the hash; reads files, needs no network, no library and no config")
+    sb.add_argument("--openalex", required=True, metavar="DIR", help="the folder of the saved OpenAlex read (its report and pages)")
+    sb.add_argument("--lcc", required=True, metavar="DIR", help="the folder of the saved Library of Congress read (its report, pages and extract)")
+    sb.add_argument("--custom", required=True, metavar="FILE", help="the tracked file of custom shelves")
+    sb.add_argument("--out", required=True, metavar="FILE", help="the schema file to write; it must not exist")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -325,6 +332,9 @@ def main(argv=None):
             found = shelfschema.report(args.path, custom=args.custom)
             print(json.dumps(found, indent=1))
             return 1 if found["problems"] else 0
+        if args.command == "shelf-schema-build":
+            print(json.dumps(shelfbuild.run(args.openalex, args.lcc, args.custom, args.out), indent=1))
+            return 0
         if args.command == "theme-walk":
             cfg = config.load()
             print(json.dumps(walk.theme_walk(cfg["index_root"], cfg, args.questions, args.from_refs, args.seen, args.drop, level=args.level, steps=args.steps, limit=args.limit,
