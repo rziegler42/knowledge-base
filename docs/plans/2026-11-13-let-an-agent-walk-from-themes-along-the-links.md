@@ -250,3 +250,40 @@ Increment E rests on A to D and is taken after all of them. Nothing wider is run
 - **For Increment C, noted by the reviewer.** The header must report the counts of `lane_counts` as what each lane held and `lane_shares` as the shares; the message of `ids.check_id` repeats the refused text, so it
   must not be put into the JSON structure; and `held_back` has two more reasons than the plan's step 1 named (`seen`, `drop`), which C's tests must cover.
 - **Not run.** Anything wider than `engine.tests.test_walk`: nothing else imports `walk.py` yet. No security review (not asked; recommended before the command is used on the real library, as the plan says). No push.
+
+### Increment B (the starting themes and the ordinary set; committed)
+
+- **Done.** `engine/kb/walk.py` (now 273 lines, sha256 `6ef693d81fb83426a4b3032e0662b6c512fa434aa8b3d91f6ebb2977466abf32`) has a section for the search: `starting_themes(search, questions, linked, visible, wanted, size)`,
+  with `_checked_questions` and `_page_keys`. The search is a function passed in (`search(question, limit)` returning what `themevectors.search` returns), so the glue reads no file and calls no model. For each question
+  the search is asked once for a full page (`SEARCH_LIMIT` 50, the search's maximum), with its own limit of two themes of a book left alone; the results outside the visible set are dropped; the **starting themes** of a
+  question are the first 5 results with a link, the results passed over are counted; the **ordinary set** is the first 30 themes of all the questions together, each with its best rank, ordered by (best rank, question,
+  key); it reports the model, whether a query prefix is used and the build time, and refuses vectors that differ between two questions or a page that does not say which vectors it is from.
+- **Readings and additions of mine, for the owner and the spec's "Built" line in Increment C.** The ordinary set is the first 30 *themes of the merge* by best rank (not 30 from each question); the rank is the place among
+  the visible results of the page. **`MAX_QUESTIONS = 5`** is not in the spec (it says "once or more"): it bounds the embeddings and the searches of a call, and C refuses a sixth question; the spec needs a line for it.
+  `linked` must be `set(build_graph(links, visible))`, so that a visible theme whose only links go to hidden themes is not a starting theme (a test shows this with `build_graph`).
+- **A known limit, recorded and not fixed (spec criterion 9).** The search applies its own limit of two themes of a book, and cuts its page at 50, over the whole library and before the walk drops the hidden themes. So
+  with a visible set smaller than the library a hidden theme can still take a place of its book in the page and change a rank, a start or a count (a hidden A0 lets A1 in and keeps A2 out, where over the visible
+  themes alone both would be in). The visible set is the whole library today, so nothing is affected; a test records the behaviour (`test_known_limit_a_hidden_theme_still_takes_a_place_of_its_book_in_the_page`) and the
+  docstring says it. The options when guests exist are the owner's: the search itself over the visible set; or asking the search with no per-book limit and applying two inside the walk after the visible drop (which
+  costs depth in the page of 50 and departs from the plan's "the search's limit is used and not overridden").
+- **Tests.** `engine/tests/test_walk.py` (934 lines, sha256 `eef0009e475aad61d21b55c38a42b23e3b2780913d41a5b3e47667b348ab2b4a`): **83 tests OK** (25 new), and OK with plain `python3`; `engine.tests.test_themevectors` and
+  `engine.tests.test_walk` together: **194 tests OK** (the tests of the search were run because the walk depends on its shape, as the plan says). With a stand-in for the search: the starting themes (the first five with a
+  link, the passed-over counted, fewer than wanted said), the ordinary set (30 results, its ranks, themes without a link kept in it), several questions merged by the best rank, each question's own starting themes, a question
+  that finds nothing, what the vectors are, two builds or two models refused, a refusal of the search stopping the walk with no later question asked, the questions refused before any search, the numbers wanted, a page and
+  a result that are not the shape of the search refused (with a page that says which vectors it is from, so that only the results are at fault), a hostile text, the visible set dropping results before anything is made,
+  everything hidden as a question that found nothing, and the output feeding the selection with the book flag. Against the **real** `themevectors.search` over a small built file (books of four, two and one themes): the
+  page has the shape the walk reads and the per-book limit stands, a theme with no link is passed over and the next taken, two questions come from one build and merge, the known limit above, and a blank question refused.
+- **Deliberate breaks.** **52 in all for `walk.py`, each caught** (the file restored byte for byte, sha256 prefix `6ef693d81fb8`; the script outside the repository, sha256 `7218fbe1858f90c187e875d82312daa2553e963131c2e5750d81f53f277426fb`),
+  of which 15 are new for B: a starting theme with no link taken; the ordinary set taken from the starting themes; the merge by the first question; a hidden theme left in the pages; a refusal of the search swallowed;
+  the book flag from the starting themes only; the questions not checked before the search; a short page asked for; two builds not refused; the number of starting themes fixed at 5, or the size of the ordinary set at 30;
+  the shape of a page, of a result, or the identity of the vectors not checked; the passed-over results not counted. Two breaks first passed after a change of mine and were resolved: one had its caught reason replaced
+  by a new check (the tests of a hostile page now give the page a valid identity so that only the results are at fault), and one was a redundant line (`linked` intersected with the visible set, which dropped hidden
+  results already made unnecessary; it is removed and the contract is that `linked` comes from `build_graph(links, visible)`).
+- **Second look.** The `reviewer` agent (read only): no blocking finding. Applied: the docstring said "every rank and count is over the visible themes", which the known limit makes too strong (corrected); the identity of the
+  vectors (model, build time, use of a prefix) of a page is checked for shape; `linked` and `visible` (above); the real-search tests now include two questions and the known limit; a garbled comment. Not changed: the
+  search's `stale`, `without_vector` and `themes_searched` counts are not carried into the output (the spec does not ask for them); `fewer_than_wanted` does not tell few results from many results without links, and
+  `skipped_without_link` is reported beside it for that; a real test of a refusal for another model or a stale file is not made (the search's own tests cover its refusals, and the walk's test shows the refusal is
+  passed on).
+- **For Increment C.** The header reports `questions[i]` (`found`, `starts`, `skipped_without_link`, `found_nothing`, `fewer_than_wanted`) for each question; `MAX_QUESTIONS` goes into the spec's "Built" line; the
+  command builds `linked` from `build_graph(links, visible)`.
+- **Not run.** Anything wider than the tests of the search and of the walk. No call to any model and no read of the owner's library. No push.
