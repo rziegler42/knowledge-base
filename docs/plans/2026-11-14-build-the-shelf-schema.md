@@ -1,6 +1,6 @@
 # Build the shelf schema
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-14
 Candidate: none (the shelves, the fetch engine and the crawler are outside every roadmap, which say so; creating a roadmap for them is the owner's change of direction, and this plan is the first step the owner asked for)
 Specs: docs/specs/shelf.md
@@ -157,7 +157,27 @@ that clashes with another), which that test covers.
 
 ## Review record
 
-Empty until a review is asked for.
+### The plan (before approval)
+
+Reviewed with Codex through the project's review engine, two rounds of three (the files are in `.workbench/workbench/review-engine/plan-488dcf81640cd6e4/`). Round 1: one major finding, applied (the builder
+could not reproduce the custom shelves or the scope sentences; a tracked file of custom shelves and a fixed scope rule were added). Round 2: one major finding, applied (the outline was declared an input but the builder
+did not read it; it now does, and checks each custom entry against it). The owner approved the plan on 2026-11-14 after both.
+
+### Increment A
+
+The `reviewer` agent (read only), two exchanges of six. First exchange: one blocking finding and four not blocking; it read the plan, the checker, its tests, the command and the README, and ran nothing.
+
+- **1, blocking, applied.** `counts()` looked up a shelf's `level` in a dict, so a hostile file with a list or a dict as a level raised `TypeError`, the command ended in a traceback with exit 1 (the code for "problems found") and named
+  no problem. Reproduced first by new tests that failed with the error, then fixed (`type(level) is str` before the lookup). The same tests put 16 hostile values (null, booleans, a 400-digit integer, floats, empty and long strings,
+  lists, dicts) in every place of the schema and of the custom file, and found no other crash.
+- **2, not blocking, applied.** `load()` checked the path with `os.stat` and then opened it, so a pipe swapped in between could make the open wait. It now opens with `O_NONBLOCK` and reads the kind of file from the open descriptor.
+  A symlink to a regular file is read as that file, and the README now says so.
+- **3, not blocking, kept.** Every cycle also breaks a level rule, so the cycle check cannot be reached alone; it stays as a second line of defence and its test and break show it works.
+- **4, not blocking, applied.** README: the snapshot's `custom` entry holds a sha256 only, `--custom` prints only the number of custom shelves, `Infinity` is refused.
+- **5, observation.** The checker also refuses unknown keys inside the snapshot and the custom file, wider than the plan names and in the spirit of "identity only".
+
+Second exchange (the fixes only): both fixes remove their findings, nothing wrong in what they introduced, no blocking finding left. The reviewer ran nothing and did not read the breaks script; the runs are mine, below.
+A security review was not asked for: the checker reads one file as data and writes nothing. I recommended none for Increments A and D and one for B and C, and the owner has not yet answered.
 
 ## Deferred work
 
@@ -171,4 +191,27 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — the format and the checker (built, verified and reviewed; **not committed**)
+
+- **Built:** `engine/kb/shelfschema.py` (372 lines, sha256 `a57fdd0a…895fc`), the command `shelf-schema-check` in `engine/kb/__main__.py` (11 lines: an import, a parser with `--custom`, a dispatch that exits 1 for a problem, 2 for a
+  refused file), `engine/tests/test_shelfschema.py` (60 tests, 520 lines, sha256 `95b68b1e…e771`), and a section "The shelf schema" and a test-list entry in `engine/README.md`. No network, no library, no config and no model server are
+  used; the checker needs only the standard library and writes nothing.
+- **The rules, as the checker has them:** format 1 (an integer, not a boolean or a float); unique slugs of lowercase words joined by single hyphens; a name and a scope sentence of 1 to 200 and 1 to 500 characters with no control, hidden
+  or separator character; five levels with a parent rule for each (a domain has none, a field's is a domain, a subfield's a field, a topic's a subfield, a custom shelf's none or a domain); no cycle; one OpenAlex identifier on a shelf
+  that is not custom and one subclass code on a custom shelf and neither the other way; no duplicate identifier or code; a snapshot with the three sources and the fields of each; **any field the file does not know is a problem**
+  (so a state, a priority or a count cannot be put in), at the file, shelf, snapshot, source and custom levels; the file read as data, refused over 8 MB, not UTF-8 JSON, with a repeated key, `NaN` or `Infinity`, or not a regular
+  file (a pipe is refused without waiting); at most 200 problems shown with the count of the rest, each naming its shelf. The file of custom shelves has its own rules (code, name, parent, scope, reason, page, date, source) under `--custom`.
+- **Test-first, seen to fail:** the tests were run (1) with no module (an import error), (2) against an empty stub that finds nothing (71 failures and 8 errors counting each subtest), and then (3) against the checker. After the
+  review, the hostile-value tests were written first and run against the checker as it was, and failed with the `TypeError` of finding 1 before the fix.
+- **Verification as run (2026-11-14, at head `ab3bfcf` plus the uncommitted files):** `python3 -W error::ResourceWarning -m unittest engine.tests.test_shelfschema` 60 tests OK; with the neighbours `engine.tests.test_setup` and
+  `engine.tests.test_package` 195 tests OK, **77 skipped** (those of `test_package` need a workbench checkout that is not set here, so the helper tests did not run); `wb run code-work check` found no problems.
+- **Deliberate breaks:** `breaks_shelfschema.py` (outside the repository, sha256 `436519e7…454d`), **49** breaks, each dropping or weakening one rule or the command's exit code, each run against the tests and each file restored byte for
+  byte (checked by hash: `shelfschema.py` `a57fdd0a…`, `__main__.py` `c7f40d41…`). **All caught, after strengthening tests: the first run missed six** (a duplicate-slug test was caught by the duplicate-identifier rule instead; an lcc code
+  on a non-custom shelf the same; the date format was caught by the real-date check; an unknown snapshot source and the custom source's fields had no test; the size limit was caught by a truncated read), and a later run missed one
+  (the file-kind check, because a folder or a pipe was refused by another error). A real flaw found while writing the breaks and fixed first: `load()` opened a path before checking its kind, so a pipe would have blocked.
+- **By hand:** the command was run from a shell on a good file (exit 0, the counts by level), a bad file (exit 1, two problems named: a `state` field and a missing parent), a custom file (exit 0) and a missing file (exit 2,
+  "refused: cannot read … No such file or directory").
+- **Not run:** the tests of the engine that need the pinned environment or numpy (nothing they read changed: only the command table and the README changed outside the new modules), the helper tests of `test_package` (skipped),
+  any network read, any model. No push.
+- **Review:** see the Review record; one blocking finding, reproduced and fixed, none left after the second exchange.
+- **For the commit:** the paths are `engine/kb/shelfschema.py`, `engine/kb/__main__.py`, `engine/tests/test_shelfschema.py`, `engine/README.md` and this plan, with the trailer `Plan: 2026-11-14-build-the-shelf-schema#A`; the owner's word is awaited.

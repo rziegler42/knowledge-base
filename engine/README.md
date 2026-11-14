@@ -17,7 +17,7 @@ From the repository root:
 
 ```sh
 python3 -m unittest engine.tests.test_setup engine.tests.test_store engine.tests.test_stages engine.tests.test_textutil \
-    engine.tests.test_capture_url engine.tests.test_capture_arxiv engine.tests.test_scan engine.tests.test_convert_run
+    engine.tests.test_capture_url engine.tests.test_capture_arxiv engine.tests.test_scan engine.tests.test_convert_run engine.tests.test_shelfschema
 engine/.venv/bin/python -m unittest engine.tests.test_convert engine.tests.test_search engine.tests.test_read   # these use the pinned environment
 ```
 
@@ -1231,6 +1231,10 @@ The numbers of a book made in more than one go (`calls`, `input_tokens` and `out
 `seconds` are the time of the go that finished it. If the journal cannot be written, the book fails with `failed` (the answer would otherwise be lost without a word).
 *`status`* shows where each book has got to, with no text, and for a book that is waiting or failed `kept`, the number of its pieces that are in its journal (0 if there is none, or it cannot
 be read; `null` for a book that is done or dropped). The library is counted for the words of the fields once for a whole run.
+
+## The shelf schema
+
+**Checking the shelf schema file** (`kb/shelfschema.py`; `python3 -m kb shelf-schema-check PATH [--custom]`; the design is the decision `2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc` and `docs/specs/shelf.md`, "The schema and the standard classifications"; the plan is `2026-11-14-build-the-shelf-schema`). The shelf schema is a tracked JSON file that lists the shelves of the library: for each a slug of our own (lowercase words joined by hyphens, never changed), a name, a level (`domain`, `field`, `subfield`, `topic` or `custom`), its parent (a topic's is a subfield, a subfield's a field, a field's a domain, a domain has none, and a custom shelf has none or a domain), its OpenAlex identifier or, for a custom shelf, its Library of Congress subclass code, and one scope sentence; with a `snapshot` that names the source of each part (OpenAlex and the Library of Congress outline each by a URL, a retrieval date and a sha256, and the file of custom shelves by its sha256). It holds identity only: a field that it does not know, such as a state, a priority or a count, is a problem, so none can be put in it. With `--custom` the command checks the file of custom shelves that the builder reads (a code, a name, a parent, a scope sentence, the reason, the page it came from and its date). The command reads that one file as data (it refuses a file that is missing, not a regular file, over 8 MB, not UTF-8 JSON, that repeats a key or holds `NaN` or `Infinity`; it opens the path without waiting and takes the kind of file from the open descriptor, so a named pipe is refused at once, and a symlink to a regular file is read as that file), prints one JSON object with the file, its kind, the number of shelves, the counts by level (with `--custom`, only the number of custom shelves) and the problems (each names the shelf it is about, and at most 200 are shown, with a count of the rest), exits 0 for a file with no problem, 1 for one with a problem and 2 for a file it refuses, writes nothing, needs only the standard library, and reads no library and no config. The builder that makes the file from the saved OpenAlex lists is a later increment of the plan.
 
 ## Converting what is captured
 

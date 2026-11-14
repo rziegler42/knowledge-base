@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import themerun, themereflag, themevectors, walk, weave
+from . import shelfschema, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -160,6 +160,11 @@ def main(argv=None):
     tw.add_argument("--level", choices=list(walk.LEVELS), default=None, help="how far to go: narrow (1 step), medium (2), wide (3, the default)")
     tw.add_argument("--steps", type=int, default=None, help="fewer steps than the level's, never more")
     tw.add_argument("--limit", type=int, default=None, help=f"at most this many leads (1 to {walk.MAX_LIMIT}; default {walk.DEFAULT_LIMIT})")
+    sc = sub.add_parser("shelf-schema-check", help="check a shelf schema file (or, with --custom, a file of custom shelves) as data: the format, the slugs, the parents and "
+                        "levels, cycles, and any field the file should not hold (a state, a priority or a count); prints the counts and the problems and exits 1 if there is a problem; "
+                        "reads one file, writes nothing, needs no library and no config")
+    sc.add_argument("path", help="the file to check")
+    sc.add_argument("--custom", action="store_true", help="the file is a file of custom shelves and not the schema")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -316,6 +321,10 @@ def main(argv=None):
             else:
                 print(json.dumps(weave.build(cfg["index_root"], cfg)))
             return 0
+        if args.command == "shelf-schema-check":
+            found = shelfschema.report(args.path, custom=args.custom)
+            print(json.dumps(found, indent=1))
+            return 1 if found["problems"] else 0
         if args.command == "theme-walk":
             cfg = config.load()
             print(json.dumps(walk.theme_walk(cfg["index_root"], cfg, args.questions, args.from_refs, args.seen, args.drop, level=args.level, steps=args.steps, limit=args.limit,
