@@ -138,9 +138,9 @@ embedding model of the config, as the search does, and calls no other model.
 
 `python3 -m kb theme-walk` is built (`engine/kb/walk.py`, `engine/README.md`; the plan `2026-11-13-let-an-agent-walk-from-themes-along-the-links`, Increments A to E-A and D). It reads only, keeps no state, needs no numpy and sends only each
 question to the embedding model, as `theme-search` does. It is also offered to an agent in another project through the `kb` helper (`wb run kb theme-walk`, which the owner allowed on 2026-11-14 to send an agent's questions out, as `problem-search`
-does) and by the skill `walk-from-themes`. It is a Draft still: the owner has run it on the library (Increment E, 2026-11-14: three questions at the three levels, read only, the weave and the vectors unchanged) and the trial that tunes the
-numbers is the separate candidate `extrapolation-trial`. Where this spec was open or silent, the code reads it as follows. **These readings decide which leads exist. The owner confirmed them as they stand on 2026-11-14, after the run on the library;
-the numbers in them (the levels, 0.66, the lane shares, 5 and 30, the caps) stay provisional guesses to be tuned by the trial, and the questions under "Open questions" are still open.**
+does) and by the skill `walk-from-themes`. It is a Draft still: the owner has run it on the library (Increment E, 2026-11-14: three questions at the three levels, read only, the weave and the vectors unchanged); the agent trial `extrapolation-trial` was
+then run on five problems (see the last bullet below), and the owner decided on 2026-11-14 to leave the numbers as they are on that evidence. Where this spec was open or silent, the code reads it as follows. **These readings decide which leads exist. The owner confirmed them as they stand on 2026-11-14, after the run on the library;
+the numbers in them (the levels, 0.66, the lane shares, 5 and 30, the caps) stay provisional guesses, which the trial did not settle, and the questions under "Open questions" are still open.**
 
 - **The level table.** `narrow` follows a theme's links in bands 2 and 3, the strongest closeness first, at most 3, one step. `medium` follows links in every band, the strongest closeness first *whatever the band* (the table's
   "strongest first within a band" could be read band by band), at most 3 at the first step and 2 at the second. `wide` follows all of a theme's links (at most 12) at the first step and, at the second and third, two links, the
