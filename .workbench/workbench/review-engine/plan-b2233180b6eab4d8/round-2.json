@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Assumptions and constraints — “The owner's marks” (line 44); Increment C, steps 1–2 (lines 103–104); Risks (line 121)",
+      "problem": "The sheet reveals the model’s selected shelf before the owner assigns `best` and `also`. This directly biases the reference labels used to measure strict and lenient accuracy; asking for `best` before comparing figures does not remove exposure to the shown choice. The plan acknowledges the risk but has no control or mitigation, so its central result cannot reliably establish matcher accuracy on library books.",
+      "severity": "major",
+      "suggestion": "Hide the model choice until the owner’s marks are final. If seeing the proposal is required, collect a blinded primary mark first and clearly report any afterward proposal-aware assessment separately; alternatively randomize blinded versus shown batches and report them separately."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Assumptions and constraints — “A book the owner drops” and figures (lines 41, 46–53); Completion criteria 3–4 (lines 62–63)",
+      "problem": "The plan permits discretionary pre-send exclusions and removes post-send skipped books from every denominator, yet presents a Clopper-Pearson 95% interval as though the assessed books remain a random sample. Owner-selected drops and judgment-dependent skips can be associated with subject matter or difficulty, so the retained set no longer supports that inferential interpretation.",
+      "severity": "major",
+      "suggestion": "Either prohibit discretionary exclusions/skips from the primary estimate, or designate the figures and interval as descriptive of the retained set only and report the full drawn cohort with every exclusion, reason, and a conservative sensitivity analysis that treats skipped books as misses."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan is reproducible in several important respects, but its outcome labels are unblinded and its stated uncertainty does not account for selective exclusion.",
+  "verdict": "changes_needed"
+}

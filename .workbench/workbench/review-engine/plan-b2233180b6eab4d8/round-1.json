@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Candidate line",
+      "problem": "`Candidate: none` is reserved for work too small to need roadmap direction, but this is a three-increment, multi-commit experiment with new scripts, owner review, and a new evidence finish line. The document itself says it needs a new roadmap for shelves. It therefore lacks the roadmap candidate required for this scope.",
+      "severity": "major",
+      "suggestion": "Have the owner establish an appropriate shelves/matcher roadmap and candidate, then cite it here; or reduce the work to a genuinely small, standalone plan."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Assumptions and constraints — “The owner’s marks”; Increment C, step 1",
+      "problem": "The marks format permits an internally inconsistent `best: none` plus nonempty `also`, and the field-agreement metric has no defined denominator when either the owner’s best or the model choice is `none`. That makes the report and independent recount non-deterministic.",
+      "severity": "major",
+      "suggestion": "Refuse `also` when `best` is `none`, and define the exact inclusion/exclusion and denominator rules for every metric involving a field, including model `none` and skipped books."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Assumptions and constraints — “The sample”; Increment A, steps 1–2; Completion criterion 1",
+      "problem": "The plan calls the seed draw repeatable but records neither an immutable snapshot/digest of the catalog population nor the chosen card-generation identifiers/hashes. Active/current cards can change, so another reviewer cannot reproduce or validate the stated population, exclusions, or text selection from the recorded sample alone.",
+      "severity": "major",
+      "suggestion": "Before drawing, save and hash a manifest of the eligible population, including book ID, kind, selected card generation and relevant card-text hash; make the draw operate solely on that manifest."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Increment A, step 4; Scope and Completion criterion 2",
+      "problem": "The owner may drop a sampled book after the draw, but the plan does not define whether or how it is replaced. Continuing with fewer than 40 conflicts with the fixed 30/10 sample and criterion 2; replacing it ad hoc breaks the fixed-sample rule.",
+      "severity": "major",
+      "suggestion": "Define a deterministic replacement rule from the pre-recorded population, or state that any post-draw exclusion requires a documented plan amendment and renewed approval."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan needs a roadmap candidate and several methodological definitions before it can yield an auditable measurement.",
+  "verdict": "changes_needed"
+}
