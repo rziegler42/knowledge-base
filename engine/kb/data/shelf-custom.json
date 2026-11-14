@@ -1,0 +1,172 @@
+{
+ "format": 1,
+ "source": {
+  "url": "https://www.loc.gov/catdir/cpso/lcco/",
+  "retrieved": "2026-11-14",
+  "sha256": "fe5570863d6a3f7fe0fb85a77b956326e40318e4b2d46fe4cc9e88c72f0cb8b4"
+ },
+ "shelves": [
+  {
+   "code": "GV",
+   "name": "Recreation. Leisure",
+   "parent": null,
+   "scope": "Recreation and leisure: sports, games, dance, outdoor recreation and amusements.",
+   "reason": "OpenAlex has no subfield named for recreation, sports and games. Its topics on them (for example Sociology, History and Politics of Sport; Recreation, Leisure, Wilderness Management; Digital Games and Media; Diversity and Impact of Dance) are scattered over many subfields, among them Sociology and Political Science, Education, Orthopedics and Sports Medicine and Tourism, Leisure and Hospitality Management.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_g.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "TT",
+   "name": "Handicrafts. Arts and crafts",
+   "parent": null,
+   "scope": "Handicrafts and the arts and crafts: making things by hand.",
+   "reason": "OpenAlex has no subfield named for handicrafts. One topic, Crafts, Textile, and Design, sits under Museology.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_t.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "TX",
+   "name": "Home economics",
+   "parent": null,
+   "scope": "Home economics: cooking, nutrition, household management and homemaking.",
+   "reason": "OpenAlex has no subfield named for home economics. Its nearest topic, Culinary Culture and Tourism, sits under Tourism, Leisure and Hospitality Management, and Food Science covers part of the subject.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_t.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "TR",
+   "name": "Photography",
+   "parent": null,
+   "scope": "Photography: the making of photographs and the processes and equipment it uses.",
+   "reason": "OpenAlex has no subfield named for photography. Two topics touch it: Photographic and Visual Arts (under Museology) and Photography and Visual Culture (under History).",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_t.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "SK",
+   "name": "Hunting sports",
+   "parent": null,
+   "scope": "Hunting as a sport: methods, equipment and the pursuit of game animals.",
+   "reason": "OpenAlex has no subfield and no topic named for hunting; the nearest topic, Rangeland and Wildlife Management, sits under Ecology.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_s.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "U",
+   "name": "Military science (General)",
+   "parent": null,
+   "scope": "Military science in general: the organization, strategy and conduct of armed forces.",
+   "reason": "OpenAlex has no subfield named for military science. About a dozen topics on military subjects (for example Military History and Strategy; Military Defense Systems Analysis) are scattered under Political Science and International Relations, Aerospace Engineering, History and others.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_u.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "UG",
+   "name": "Military engineering. Air forces",
+   "parent": null,
+   "scope": "Military engineering and air forces: fortification, field engineering and military aviation.",
+   "reason": "OpenAlex has no subfield named for military engineering or air forces; Aerospace Engineering has topics on military technology (for example Military Technology and Strategies).",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_u.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "UC",
+   "name": "Maintenance and transportation",
+   "parent": null,
+   "scope": "Maintenance and transportation of armed forces: supply, logistics and military transport.",
+   "reason": "OpenAlex has no subfield and no topic named for military logistics; the nearest topics are on military strategy and on maritime ports and logistics.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_u.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "V",
+   "name": "Naval science (General)",
+   "parent": null,
+   "scope": "Naval science in general: the organization and conduct of navies.",
+   "reason": "OpenAlex has no subfield and no topic named for naval science; Maritime Security and History (under Political Science and International Relations) is the nearest topic.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_v.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "VK",
+   "name": "Navigation. Merchant marine",
+   "parent": null,
+   "scope": "Navigation and the merchant marine: finding and keeping a course at sea, and commercial shipping.",
+   "reason": "OpenAlex has no subfield named for navigation at sea or the merchant marine; topics cover parts of it: Maritime Navigation and Safety (under Ocean Engineering), Maritime Ports and Logistics and Maritime Transport Emissions and Efficiency.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_v.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "NK",
+   "name": "Decorative arts",
+   "parent": null,
+   "scope": "Decorative arts: ceramics, glass, furniture, metalwork, textiles and ornament.",
+   "reason": "OpenAlex has no subfield named for decorative arts; the topic names that mention ceramics are about technical ceramic materials, and the nearest subfield, Visual Arts and Performing Arts, is coarse.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_n.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "NC",
+   "name": "Drawing. Design. Illustration",
+   "parent": null,
+   "scope": "Drawing, design and illustration: the technique and practice of drawing and graphic design.",
+   "reason": "OpenAlex has no subfield named for drawing, design and illustration; one topic, Graphic Design and Typography, sits under the coarse subfield Visual Arts and Performing Arts.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_n.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "GR",
+   "name": "Folklore",
+   "parent": null,
+   "scope": "Folklore: traditional tales, beliefs, customs and oral traditions.",
+   "reason": "OpenAlex has no subfield named for folklore; one topic, Folklore, Mythology, and Literature Studies, sits under Literature and Literary Theory, and Cultural Studies and Anthropology cover related ground.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_g.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "TS",
+   "name": "Manufactures",
+   "parent": null,
+   "scope": "Manufactures: the making of goods, including textiles, clothing, leather, wood and metal products.",
+   "reason": "Partly covered: OpenAlex has no subfield named for the trades of textiles, clothing, leather and wood; four topics touch textiles (for example Fashion and Cultural Textiles; Textile materials and evaluations), and Industrial and Manufacturing Engineering covers manufacturing in general.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_t.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "SH",
+   "name": "Aquaculture. Fisheries. Angling",
+   "parent": null,
+   "scope": "Aquaculture, fisheries and angling: raising and catching fish and other aquatic animals.",
+   "reason": "Partly covered: OpenAlex has topics on fisheries and aquaculture (for example Marine and fisheries research; Aquaculture Nutrition and Growth, under Aquatic Science) but none named for angling or recreational fishing.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_s.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "VM",
+   "name": "Naval architecture. Shipbuilding. Marine engineering",
+   "parent": null,
+   "scope": "Naval architecture, shipbuilding and marine engineering: the design and construction of ships and their machinery.",
+   "reason": "OpenAlex has no subfield and no topic named for naval architecture or shipbuilding; Ocean Engineering is the nearest subfield.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_v.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "NE",
+   "name": "Print media",
+   "parent": null,
+   "scope": "Print media: the print-making arts such as engraving, etching, woodcut and lithography.",
+   "reason": "OpenAlex has no subfield or topic named for print-making as an art; its one name match, Nanofabrication and Lithography Techniques, is a technical process, and the nearest subfield, Visual Arts and Performing Arts, is coarse.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_n.pdf",
+   "retrieved": "2026-11-14"
+  },
+  {
+   "code": "HV",
+   "name": "Social pathology. Social and public welfare. Criminology",
+   "parent": null,
+   "scope": "Social pathology, social and public welfare and criminology: crime, punishment, poverty and relief.",
+   "reason": "Partly covered: OpenAlex has topics on criminal justice and poverty (for example Criminal Justice and Penology, under Law; Income, Poverty, and Inequality, under Sociology and Political Science) but no subfield named for social pathology and welfare.",
+   "page": "https://www.loc.gov/aba/cataloging/classification/lcco/lcco_h.pdf",
+   "retrieved": "2026-11-14"
+  }
+ ]
+}
