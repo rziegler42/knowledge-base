@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import themerun, themereflag, themevectors, weave
+from . import themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -146,6 +146,19 @@ def main(argv=None):
     ts.add_argument("--limit", type=int, default=catalog.DEFAULT_LIMIT, help=f"at most this many themes (1 to {catalog.MAX_LIMIT})")
     ts.add_argument("--per-book", type=int, default=themevectors.DEFAULT_PER_BOOK, dest="per_book",
                     help=f"at most this many themes of one book in the results (0 to {catalog.MAX_LIMIT}; 0 is no limit; default {themevectors.DEFAULT_PER_BOOK})")
+    tw = sub.add_parser("theme-walk", help="offer an agent themes it did not ask for: each --question goes to the embedding model of the config as a search sends it; the themes found are "
+                                           "the starting themes, and the links of the weave of same mechanism are followed from them, a few steps (--level), into leads in two lanes, "
+                                           "each with its route and whether an ordinary search of the questions returns it; pass back --seen, --from and --drop to go on; read only, "
+                                           "keeps no state; needs `theme-vectors` and `theme-links build` run first")
+    tw.add_argument("--question", action="append", required=True, dest="questions", metavar="TEXT",
+                    help=f"the problem, a restatement of it, a sub-problem (once to {walk.MAX_QUESTIONS} times)")
+    tw.add_argument("--from", action="append", default=[], dest="from_refs", metavar="REF",
+                    help=f"continue from this theme (a lead's ref, `book_id/version_id/theme_id`) in place of the starting themes the questions find (at most {walk.MAX_FROM})")
+    tw.add_argument("--seen", action="append", default=[], metavar="REF", help=f"a theme already read: never offered, never walked through (at most {walk.MAX_REFS})")
+    tw.add_argument("--drop", action="append", default=[], metavar="REF", help=f"a dead end: neither offered nor walked through (at most {walk.MAX_REFS})")
+    tw.add_argument("--level", choices=list(walk.LEVELS), default=None, help="how far to go: narrow (1 step), medium (2), wide (3, the default)")
+    tw.add_argument("--steps", type=int, default=None, help="fewer steps than the level's, never more")
+    tw.add_argument("--limit", type=int, default=None, help=f"at most this many leads (1 to {walk.MAX_LIMIT}; default {walk.DEFAULT_LIMIT})")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -301,6 +314,10 @@ def main(argv=None):
                 print(json.dumps(weave.show(cfg["index_root"], cfg, args.book_id, args.theme_id, version_id=args.version_id), indent=1))
             else:
                 print(json.dumps(weave.build(cfg["index_root"], cfg)))
+            return 0
+        if args.command == "theme-walk":
+            cfg = config.load()
+            print(json.dumps(walk.theme_walk(cfg["index_root"], cfg, args.questions, args.from_refs, args.seen, args.drop, level=args.level, steps=args.steps, limit=args.limit), indent=1))
             return 0
         if args.command == "theme-search":
             cfg = config.load()

@@ -287,3 +287,43 @@ Increment E rests on A to D and is taken after all of them. Nothing wider is run
 - **For Increment C.** The header reports `questions[i]` (`found`, `starts`, `skipped_without_link`, `found_nothing`, `fewer_than_wanted`) for each question; `MAX_QUESTIONS` goes into the spec's "Built" line; the
   command builds `linked` from `build_graph(links, visible)`.
 - **Not run.** Anything wider than the tests of the search and of the walk. No call to any model and no read of the owner's library. No push.
+
+### Increment C (the command and its output; committed)
+
+- **Done.** `python3 -m kb theme-walk --question TEXT [--question …] [--from REF …] [--seen REF …] [--drop REF …] [--level …] [--steps N] [--limit M]` (`engine/kb/__main__.py`), over `walk.theme_walk` in
+  `engine/kb/walk.py` (now 412 lines, sha256 `59af38bd5f8faca6cba57e86e30a5b1f177f8ea3ac5f2590cae5037eb780d5c2`; `__main__.py` sha256 `c1f305200395010268f3adb11422096c53fe7706d9fc47fe1dcafaeb5cb9f56f`). It checks the arguments, the
+  questions and the REFs, reads the file of theme vectors (checked for the configured model, dimension and prefix) and the weave read only, and only then asks the first question; it keeps no state, writes nothing and needs no numpy.
+  It prints one JSON object: `warning` (first; the out-of-date note or null), `header`, `follow_through`, `exploration`. A lead has its `ref`, `lane`, titles, `citation`, a marked `text` (title, summary and the four
+  neutral parts, each with its `stated` or `inferred` mark taken from the file), the `route`, a marked `why` (the methods of the theme before it and of itself), `explain`, `novelty` (`ordinary_rank`,
+  `book_in_ordinary_results`), `reached_by` and `weak_link`. The header says the questions (cleaned), what was used by default, the embedding model and build, the starting themes and the passed-over ones, the themes each
+  level reaches, the ordinary set, the lanes' shares and counts, what was held back and why (`book`, `start`, `limit`, `seen`, `drop`, `size`), the unknown REFs, the weave, the notes with their hints, and that the leads
+  are leads. The README (`engine/README.md`, a paragraph; `README.md`, a clause on numpy) and the spec's new "Built" section say what exists, with the readings below.
+- **What I decided where the spec was silent or too small, for the owner to confirm (all in the spec's "Built" section).** The readings of the level table and of the caps (Increment A's Result); `MAX_QUESTIONS` 5, `--from` at most
+  20, `--seen` and `--drop` at most 200; texts cut to 140 characters a part and 100 a title; the size of a lead is about 2 KB and not 1,500 bytes as the spec said, and the whole output is kept under 60,000 bytes
+  as printed by leaving out the last leads of the longer lane (a text outside ASCII is escaped at six bytes a character: the first version refused instead, and a library in another script would have been refused; the
+  header's `held_back.size` says how many were left out); `novelty` carries `ordinary_rank` (null when not in the first 30) and not an `ordinary_set` phrase; `lane` is in each lead; `defaults_used` lists what the
+  agent did not give; with `--from` and no REF a theme of the weave the note is `from_refs_unknown`.
+- **Tests.** `engine/tests/test_walk.py` (1,468 lines, sha256 `fe08575935eb11741c7a64d24d4d4161cce39a40be3fc5825a10a2ba505e8174`): **120 tests OK** (37 new for C), and 359 OK with `engine.tests.test_themevectors` and
+  `engine.tests.test_weave` (which share the command line and the weave); with plain `python3` the walk's tests pass and the 35 that build a weave are skipped as they need numpy. They run on a real weave built over a real small
+  file of theme vectors (six books of three themes, some parts `inferred`), the real search behind the command and only the embedding stood in. They check: the fields of a lead, its marks and citation against the file, the
+  routes against the weave's own links and the level's steps, the same bytes for the same arguments, `explain` accepted by `theme-links show`, the lanes and the order, the size of a lead and of the output (also with the longest texts
+  a theme may have and with texts of another script), iteration (`--seen`, `--from` with the questions still asked, `--drop`), unknown REFs counted and a REF that is not a REF refused, a dead end said with its hint,
+  every refusal before any question is sent (arguments, a missing, foreign or out-of-date weave, a file for another configured model or dimension), the search's own refusal passed on, nothing written (the files of the
+  index root unchanged by hash and time), hostile text (a summary, a method, a question, with the words of a marker: withheld whole inside the marked text, nothing outside it holds those words, the structure intact), the command
+  line (only the questions embedded; every bad option refused; a run with numpy made unavailable).
+- **Deliberate breaks.** **83 for `walk.py`, each caught** (the file restored byte for byte, sha256 prefix `59af38bd5f8f`; the script outside the repository, sha256 `37111026df9ccfa902c8baa3ca6ec3168ba596bbef3bfdc0f2b30bbf23e62193`), 31 of
+  them new for C: a text not cleaned or a part shown uncleaned; the markers left out; the REFs not limited; the output not bounded, measured compact, or the leads left out from the shorter lane; the lane counts or the
+  number left out not reported; a file written; a field, the lane, a mark or the citation missing; the explanation pointing at the wrong link; `--from` not used or its themes listed twice; seen and drop, the ordinary set, the
+  limit or the level not passed on; a question not cleaned; out of date never said; the warning not first; the reason without the theme before it or from the first theme of the route; the unknown REFs not counted or the
+  unknown `--from` not told apart; a text not cut; a given value said to be a default; the vectors file not checked. Three of these first passed or were never applied, and were mended: the over-limit REF lists had used
+  REFs that were refused anyway; three breaks aimed at code I had since changed.
+- **What my own tests found.** The header's own sentence held the words of the marker (reworded: nothing outside a marked text may hold them); the printed JSON escapes non-ASCII at six bytes a character (the bound now leaves
+  leads out and says so); a file whose answering model differs is refused by the search only after the question is embedded, as for `theme-search`, so the README says what is checked before a question is sent.
+- **Order of work.** The glue was written before its tests, as in A and B; the breaks and the review are the evidence the tests bite.
+- **Second look.** The `reviewer` agent (read only): no blocking finding and no leak of hostile text outside a marked block (it traced `explain`, which is built from checked ids and never from a REF the agent passes). Applied:
+  the missing `lane`, the duplicate `starts` for a repeated `--from`, `defaults_used` for a value given, the hint for an unknown `--from`, the size measured as printed, the README's claim about the file of vectors, the spec's numbers
+  and names (above), and tests for a foreign vectors file, a repeated REF, `held_back` for seen and dropped, and explicit defaults. Not tested: a hostile *title* through the command (the fixture's theme check refuses one; the
+  cleaning is the same `_shown` that the summary and parts go through, and `ClipTest` checks it), and the visible set through `theme_walk` (it passes none: the whole library; the selection and the search glue test it).
+- **For the owner.** The readings and numbers above are in the spec's "Built" section and are yours to confirm or change; the known limit of the search's per-book limit with a visible set smaller than the library (Increment B) is
+  recorded there too. A security review is recommended before the walk is run on the real library (Increment E), since the command takes an agent's text (questions and REFs) and shows text of books; it runs only if the owner asks.
+- **Not run.** Anything wider than the three test modules above. No call to any model and no read of the owner's library. No push.

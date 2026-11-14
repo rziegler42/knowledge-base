@@ -134,6 +134,36 @@ and never over the whole library, so that no count or flag depends on a theme th
 cleaned. The command reads the weave and the file of theme vectors read only and writes nothing; it takes no option that names a file, and a REF is an identifier and never a path. It embeds the questions with the
 embedding model of the config, as the search does, and calls no other model.
 
+## Built (what exists, and the readings the owner is asked to confirm)
+
+`python3 -m kb theme-walk` is built (`engine/kb/walk.py`, `engine/README.md`; the plan `2026-11-13-let-an-agent-walk-from-themes-along-the-links`, Increments A to C). It reads only, keeps no state, needs no numpy and sends only each
+question to the embedding model, as `theme-search` does. It is a Draft still: the owner has not run it on the library (Increment E), and the trial that tunes the numbers is the separate candidate `extrapolation-trial`. Where this
+spec was open or silent, the code reads it as follows. **These readings decide which leads exist, and are the owner's to confirm or change.**
+
+- **The level table.** `narrow` follows a theme's links in bands 2 and 3, the strongest closeness first, at most 3, one step. `medium` follows links in every band, the strongest closeness first *whatever the band* (the table's
+  "strongest first within a band" could be read band by band), at most 3 at the first step and 2 at the second. `wide` follows all of a theme's links (at most 12) at the first step and, at the second and third, two links, the
+  farthest band first and then the strongest. A tie in closeness goes to the key of the partner.
+- **The cap on a theme's links** applies to the links that can still be followed: a link to a seen, dropped, starting or on-route theme does not use one of the places, so a round that passes back what it has seen finds new leads.
+- **A route** never visits a theme twice, never passes through a starting, `--seen` or `--drop` theme, and never joins two themes of one book. The threshold of the follow-through lane is the integer 660,000,000 billionths, at or
+  above. When two links of a route are equally weak, the weakest band is that of the first. `reached_by` counts the routes found within the level after the caps on a theme's links.
+- **The ordinary set** is the first 30 *themes of the merge* of all the questions by best rank (not 30 from each question), the rank being a theme's place among the visible results of the question where it comes first. The
+  starting themes are the first 5 results of each question that have a link, the ones passed over being counted in the header.
+- **Numbers the spec did not state:** a call asks at most **5 questions** (`MAX_QUESTIONS`), continues from at most **20** themes (`--from`), and takes at most 200 REFs in each of `--seen` and `--drop`; the search is asked for a
+  full page of 50; a lead's texts are cut to 140 characters a part and 100 a title; the printed output is kept under 60,000 bytes by leaving out the last leads of the longer lane (`held_back.size` says how many).
+- **Format and size: the built numbers replace the ones above.** A lead is about 2 KB (the tests assert under 2,600 bytes, with texts as long as a theme may be) and not about 1,500, because it carries the four neutral parts, the
+  summary and the matched methods; the whole output is kept under 60,000 bytes *as it is printed* (indented) by leaving out the last leads of the longer lane. A text outside ASCII is escaped at six bytes a character, so a library in another script
+  has fewer leads on a page, and the header says how many were left out; measured, a lead with the longest texts a theme may have is about 2.5 KB, and twenty of them come to about 55 KB, not 40.
+- **Names that differ from the spec's words.** `novelty` has `ordinary_rank` (the rank, or null when the theme is not among the first 30) and `book_in_ordinary_results`; the header's `defaults_used` lists only what the agent did not
+  give; when `--from` gives no theme of the weave the note is `from_refs_unknown` and not `no_starting_theme`, with its own hint.
+- **The output.** One JSON object: `warning` (first; null unless the weave is out of date), `header`, `follow_through` and `exploration`. A lead carries its `ref`, its `lane`, titles, `citation`, a marked `text` (title, summary and the
+  four neutral parts, each part with its `stated` or `inferred` mark taken from the file), the `route`, `why` (the methods of the theme before it and of itself, marked), `explain`, `novelty`, `reached_by` and `weak_link`.
+  `lane_shares` (the places a lane is given) and `lane_counts` (what it shows) are different numbers, and `held_back` says how many leads were left out for a book, a starting theme, the limit, and how many themes were left out
+  for being `--seen` or `--drop`.
+- **A known limit (criterion 9).** The search keeps its own two themes of a book and its page of 50 over the whole library before the walk drops the themes outside the visible set, so with a visible set smaller than the library a
+  hidden theme could still take a book's place in the page. The visible set is the whole library today, so nothing is affected; the search itself will need the visible set when guests exist. A REF that names a theme outside the
+  visible set is counted as unknown, in the same words as one not in the weave.
+- **Not built:** the skill that tells an agent how to use the walk (Increment D), the read-only run on the owner's library (Increment E), and the agent trial (`extrapolation-trial`).
+
 ## Acceptance criteria
 
 1. For a question, the command returns starting themes and leads, each lead with a route of at most the level's number of steps in which every link is a link of the weave and every theme is of a different book

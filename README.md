@@ -78,7 +78,7 @@ Two of the converters need more:
 
 - the article extractor needs a virtual environment built from hashes: `python3 -m venv engine/.venv`, then
   `engine/.venv/bin/python -m pip install --require-hashes --no-deps -r engine/requirements.lock`. The same lock pins numpy, which
-  `python3 -m kb theme-links build` and `theme-links repair` need (run them with `engine/.venv/bin/python`); no other command needs it;
+  `python3 -m kb theme-links build` and `theme-links repair` need (run them with `engine/.venv/bin/python`); no other command needs it, `theme-walk` included;
 - PDFs need poppler: `brew install poppler`.
 
 Then, from `engine/`:
