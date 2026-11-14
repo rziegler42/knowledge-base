@@ -81,11 +81,12 @@ an MCP door onto the reading interface.
 
 - The workbench's `knowledge-tools` spec reserves this module, proposes the capability name `knowledge-base`, and fixes its
   boundaries: library content is reference data and untrusted as instruction, a tracked document cites it by source URL, retrieval
-  date and content hash and never by path, and an agent may run only reads that change nothing and send nothing out. **One
-  exception, allowed by the owner on 2026-11-10** (plan `2026-11-10-pose-a-problem-to-the-search-by-meaning`, which cites this line):
-  the helper argument `problem-search` sends the sub-problems an agent wrote to the embedding model that the owner's config names for
-  the `card-embed` task, on the owner's server, and to nothing else; the destination is not chosen by the caller, and `search` and
-  `read` still send nothing out. The workbench's own `knowledge-tools` spec is outside this project and is not changed here: it is the
+  date and content hash and never by path, and an agent may run only reads that change nothing and send nothing out. **Two
+  exceptions, allowed by the owner** (the first on 2026-11-10, plan `2026-11-10-pose-a-problem-to-the-search-by-meaning`, which cites this line; the second on 2026-11-14,
+  plan `2026-11-13-let-an-agent-walk-from-themes-along-the-links`, Increment E-A, where the owner answered "Yes, allow it" to the question whether `theme-walk` may send an
+  agent's questions out through the helper): the helper arguments `problem-search` and `theme-walk` send the sub-problems or questions an agent wrote to the embedding
+  model that the owner's config names for the `card-embed` task, on the owner's server (on the owner's network, over plain HTTP: in the clear), and to nothing else; the
+  destination is not chosen by the caller, and `search` and `read` still send nothing out. The workbench's own `knowledge-tools` spec is outside this project and is not changed here: it is the
   owner's to reconcile with this exception.
 - The workbench decision `2026-10-20-fixed-store-location` explains why a store's location must not be changeable by an option, an
   environment variable or a committed file. The same reasoning is applied below to addresses, tokens and the model registry.
