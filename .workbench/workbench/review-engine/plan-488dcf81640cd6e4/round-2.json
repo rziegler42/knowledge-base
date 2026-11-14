@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-14-build-the-shelf-schema.md:50-52, 72, 131-132",
+      "problem": "The plan declares the saved LCC outline as one of the builder’s three explicit inputs and requires byte-for-byte rebuilding from all three, but Increment D makes the builder read only the OpenAlex lists and tracked custom-shelves file. It therefore cannot derive or verify the outline provenance it must place in the snapshot, nor fulfill the stated three-input reproducibility claim.",
+      "severity": "major",
+      "suggestion": "Make the builder accept and read the saved LCC outline (including its source metadata/hash), validate the custom entries against it as appropriate, and emit its provenance in the snapshot; cover this in the builder tests and rebuild verification."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "One remaining reproducibility/provenance gap: the declared LCC input is not actually consumed by the builder.",
+  "verdict": "changes_needed"
+}
