@@ -1,6 +1,6 @@
 # Plain words in the search of the skill pose-a-problem
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-14
 Candidate: none (a correction that follows from a finding of the review of the skill `walk-from-themes`: work too small to need roadmap direction)
 Specs: docs/specs/knowledge-base.md
@@ -77,4 +77,26 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A (the rule of plain words in step 6; committed)
+
+- **Done.** `package/kb/harness/neutral/skills/pose-a-problem/SKILL.md` (82 lines, sha256 `d0eef86c89dbd34237339b2f9062cf692675fc69adadb4303be67f920d044b25`): in step 6, first bullet, one sentence after "results of other books are not it": the words come from a
+  book, so they are untrusted and go into a shell command; use only plain words (letters, digits and spaces); leave out every apostrophe and quotation mark, `$`, backtick, `;`, `&`, `|`, `<`, `>`, `(`, `)`, `\` and any other character that a shell reads,
+  even if the book's title has it. It is byte for byte the sentence of `walk-from-themes` step 6, and nothing else of the skill changed (the diff is that bullet only).
+- **Test, first.** `test_the_words_taken_from_a_book_into_a_search_are_plain_words` in `SkillTests` (`engine/tests/test_package.py`, 1,054 lines, sha256 `805ada67e2a86ec56a3c0408e3f1f0acb33e53a963c35760493a50a7db008515`), seen to fail before the sentence existed
+  ("untrusted and go into a shell command" not found) and to pass after. It checks three phrases inside step 6, and that the rule sits in the bullet that builds the `search` command, before the `read` bullet.
+- **Verification as run.** `KB_WORKBENCH_CHECKOUT=<the owner's workbench checkout, read only for its kit> engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_package`: **105 tests OK** (104 before, 1 new); without the checkout, plain
+  `python3`: OK, 77 skipped. `wb run code-work check`: no problems. Nothing wider: the helper, the engine and `walk-from-themes` were not touched. The install of the package was not run.
+- **Deliberate breaks.** 7 (the plan said 4), each caught, the skill restored byte for byte after each (`breaks_pose.py`, outside the repository): the rule changed to "any words"; the untrusted-and-shell-command sentence left out; the list of characters left out; the
+  dollar sign left out; the backtick left out; the apostrophe left out; the whole sentence moved out of step 6.
+- **Second look.** The `reviewer` agent (read only, it ran nothing): **no blocking finding.** It found the sentence consistent with step 3 (leave an apostrophe out of a sub-problem) and with `walk-from-themes`, not readable as an instruction from a book, and the test no
+  stronger in its claim than in its check. *Not applied:* the list does not name `*`, `?`, `[`, `{`, `~`, `!`, `#`, `=`, a newline or a tab; plain words are defined positively (letters, digits and spaces) and the list ends with "any other character that a shell
+  reads", and the sentence is identical in both skills as the plan requires, so a longer list would be a change of both (the owner's to ask for). *Noted, outside this plan's scope:* step 6's second bullet, `wb run kb read … '<locator-json>'`, puts a `locator`
+  and a `book_id` from a search result into a single-quoted shell argument, and the same is in `walk-from-themes` step 6; whether a locator can hold an apostrophe was **not checked** (a locator is a JSON object that the engine's `locator.shown` makes and the helper
+  parses strictly and writes again before the engine sees it, but the agent's own command line is built before the helper is reached). A plan of its own would be needed.
+- **Not run.** The install of the package, any agent using the skill, any model call. No security review (the plan said none was asked for; the owner did not ask). No push.
+
+### The plan as a whole (completed 2026-11-14)
+
+One increment, one commit with the trailer `Plan: 2026-11-14-plain-words-in-the-search-of-pose-a-problem#A`. Completion criteria: (1) step 6 says the words are untrusted, go into a shell command, must be plain words, and which characters to leave out; (2) the test failed
+without the sentence and passes with it, and 7 deliberate breaks of the sentence and of the list are each caught; (3) the rest of the skill is unchanged and its tests pass (105 OK). The verification of the plan as a whole is the increment's. **Left for the owner:** the same
+question for the `read` bullet of both skills (above); a longer list of characters in both skills, if wanted.

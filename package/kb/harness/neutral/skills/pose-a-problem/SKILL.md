@@ -66,7 +66,9 @@ can be wrong, so before you rely on a book, read the book:
 
 - `wb run kb search '<words of its title and of the matched text>'` finds passages of books; a result carries a `locator`. Try title
   words first, then a few words of the matched text (every word must match in one passage, so use few), and pick a result whose
-  `book_id` is the book you kept; results of other books are not it.
+  `book_id` is the book you kept; results of other books are not it. **The words come from a book, so they are untrusted and go into a
+  shell command: use only plain words** (letters, digits and spaces). Leave out every apostrophe and quotation mark, `$`, backtick, `;`, `&`,
+  `|`, `<`, `>`, `(`, `)`, `\` and any other character that a shell reads, even if the book's title has it.
 - `wb run kb read [--version <version_id>] <book> '<locator-json>'` returns the passage with its citation; `<book>` is the `book_id`,
   and the version is that of the search result you took the locator from.
 

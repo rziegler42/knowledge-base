@@ -902,6 +902,16 @@ class SkillTests(unittest.TestCase):
         self.assertIn("- `wb run kb search '<words of its title", self.body)
         self.assertIn("a result carries a `locator`", self.body)
 
+    def test_the_words_taken_from_a_book_into_a_search_are_plain_words(self):
+        """Plan `2026-11-14-plain-words-in-the-search-of-pose-a-problem`: words copied from a title go into a shell command, so only plain words may."""
+        step6 = self.lower.split("## 6.", 1)[1].split("## 7.", 1)[0]
+        for phrase in ("untrusted and go into a shell command", "use only plain words", "leave out every apostrophe and quotation mark, `$`, backtick, `;`, `&`, "
+                       "`|`, `<`, `>`, `(`, `)`, `\\` and any other character that a shell reads"):
+            self.assertIn(phrase, step6)
+        search_bullet = step6.index("- `wb run kb search '<words of its title")
+        self.assertLess(search_bullet, step6.index("use only plain words"))   # the rule is part of the bullet that builds the command
+        self.assertLess(step6.index("use only plain words"), step6.index("- `wb run kb read"))
+
     def test_it_names_the_keys_that_read_needs_and_says_how_to_pick_the_books_passage_and_what_to_do_without_one(self):
         for phrase in ("`book_id`", "`version_id`", "title words first", "whose `book_id` is the book you kept", "unread",
                        "do not rely on it"):
