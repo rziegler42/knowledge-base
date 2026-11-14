@@ -168,8 +168,15 @@ the numbers in them (the levels, 0.66, the lane shares, 5 and 30, the caps) stay
 - **A known limit (criterion 9).** The search keeps its own two themes of a book and its page of 50 over the whole library before the walk drops the themes outside the visible set, so with a visible set smaller than the library a
   hidden theme could still take a book's place in the page. The visible set is the whole library today, so nothing is affected; the search itself will need the visible set when guests exist. A REF that names a theme outside the
   visible set is counted as unknown, in the same words as one not in the weave.
-- **Not built:** the agent trial (`extrapolation-trial`). Known from the owner's run (a reading by the assistant, not the owner's labels): a few generic themes with short method texts turned up for unrelated questions, which looks like noise
-  and is not measured; a count of links per theme in the weave would test it.
+- **The agent trial was run (criterion 11; the plan `2026-11-14-try-the-walk-on-the-owners-problems`, 2026-11-14), on five problems the owner chose where the criterion says two or three.** Run with this session's agent standing in for the research
+  agent: 30 walk calls (six settings, limit 20), 5 ordinary searches, 15 rounds of an agent at the wide default, and a blind sheet of 40 themes that the owner marked; 150 sentences (15 questions in general terms, sent in turn) went to the embedding model, and the weave
+  and the vectors (`ebbba8f4…8fe3`, `59fe6474…9229`) were unchanged. Result, with its limits (five problems, three from one neighbourhood of the library, one reader, 10 themes a source, nothing tested for significance, a stand-in agent that is
+  not blind): at the wide call none of the 20 leads of a problem is among the first 30 themes of the ordinary set, which the walk's ordering all but guarantees, and 20 to 40 percent of them come from a book the ordinary search also returned;
+  the owner would follow 5 of 10 themes from the next page of an ordinary search, 3 of 10 from the wide follow-through lane, and none of 10 from the exploration lane or of 10 random themes, so by the plan's written rule whether the wide call adds
+  anything over asking the ordinary search for more is **unclear**. The numbers, the lanes and the threshold were not changed. The script and its outputs are outside the repository (script `12d8cba2…782061`, sweep `961d4d1a…e4bf4d7f`, key
+  `9d278f8d…036d`, sheet `04caeff3…e618af`); the plan's Result holds the tables.
+- **Known from the owner's earlier run** (a reading by the assistant, not the owner's labels): a few generic themes with short method texts turned up for unrelated questions, which looks like noise and is not measured; a count of links per theme
+  in the weave would test it.
 
 ## Acceptance criteria
 
