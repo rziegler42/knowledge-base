@@ -153,12 +153,16 @@ spec was open or silent, the code reads it as follows. **These readings decide w
 - **Format and size: the built numbers replace the ones above.** A lead is about 2 KB (the tests assert under 2,600 bytes, with texts as long as a theme may be) and not about 1,500, because it carries the four neutral parts, the
   summary and the matched methods; the whole output is kept under 60,000 bytes *as it is printed* (indented) by leaving out the last leads of the longer lane. A text outside ASCII is escaped at six bytes a character, so a library in another script
   has fewer leads on a page, and the header says how many were left out; measured, a lead with the longest texts a theme may have is about 2.5 KB, and twenty of them come to about 55 KB, not 40.
+- **The questions are not shown exactly as given:** the header shows each cleaned and cut to 300 characters, and a question that holds the words of a marker is withheld whole (the spec said "as given, cleaned").
 - **Names that differ from the spec's words.** `novelty` has `ordinary_rank` (the rank, or null when the theme is not among the first 30) and `book_in_ordinary_results`; the header's `defaults_used` lists only what the agent did not
   give; when `--from` gives no theme of the weave the note is `from_refs_unknown` and not `no_starting_theme`, with its own hint.
 - **The output.** One JSON object: `warning` (first; null unless the weave is out of date), `header`, `follow_through` and `exploration`. A lead carries its `ref`, its `lane`, titles, `citation`, a marked `text` (title, summary and the
   four neutral parts, each part with its `stated` or `inferred` mark taken from the file), the `route`, `why` (the methods of the theme before it and of itself, marked), `explain`, `novelty`, `reached_by` and `weak_link`.
   `lane_shares` (the places a lane is given) and `lane_counts` (what it shows) are different numbers, and `held_back` says how many leads were left out for a book, a starting theme, the limit, and how many themes were left out
   for being `--seen` or `--drop`.
+- **After the security review of the walk (2026-11-13; Increment C-A).** Every question is checked as the search checks a query before the first is sent. The `citation` is cut to 400 characters and withheld whole if it holds the
+  words of a marker, like the other texts. The titles and the citation are plain fields and are texts of books, so they are also not to be trusted: the header's `about` says so, and the skill must. The model and the build in
+  the header are checked to be in the form the engine writes, and a file of vectors replaced while the walk runs is refused ("ask again").
 - **A known limit (criterion 9).** The search keeps its own two themes of a book and its page of 50 over the whole library before the walk drops the themes outside the visible set, so with a visible set smaller than the library a
   hidden theme could still take a book's place in the page. The visible set is the whole library today, so nothing is affected; the search itself will need the visible set when guests exist. A REF that names a theme outside the
   visible set is counted as unknown, in the same words as one not in the weave.

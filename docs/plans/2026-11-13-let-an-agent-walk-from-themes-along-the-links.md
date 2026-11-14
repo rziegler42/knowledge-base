@@ -370,3 +370,30 @@ Increment E rests on A to D and is taken after all of them. Nothing wider is run
 - **The owner's decision (2026-11-13, "Yes" to the recommendation):** fix Medium 1, Low 1 and both informational items in a correction increment, **C-A** (added to this plan, with its own tests, breaks and second look), and for Low 2 state
   plainly, in the header's `about`, the README, the spec and the skill of Increment D, that every title and the citation are also untrusted, and not restructure the output.
 - **Limits of the review's evidence.** A stand-in embedder only; the existing suite was not run in full; the byte-size refusal of `models.embed` with the entry's prefix was read, not tested; concurrent replacement of a file was read, not tested.
+
+### Increment C-A (corrections from the security review of the walk; committed)
+
+- **Done**, in `engine/kb/walk.py` (414 lines, sha256 `fae8d79ba0d2b39562847b12beeaddfbe26315aee49b338f6515f5908a7317a3`). **Medium 1:** the `citation` of a lead is `_shown(…, 400)`: cleaned, withheld whole if it holds the words of a marker, and
+  cut to 400 characters like the other texts. **Low 1:** `_checked_questions` calls `vectors._query` for every question, the very check the search makes of a query (text, length, not blank, encodable as UTF-8: no lone surrogate), so that
+  no question is refused after an earlier one was embedded; my own duplicate of those checks is gone, so the two cannot drift apart. **Informational:** `starting_themes` refuses a page whose `model` is not `models._valid_model`, whose
+  `built` is not the form the build writes (`themevectors._BUILT`) or whose `query_prefix` is not a boolean; and `theme_walk` refuses with "ask again" when the search answered from another model or build than the file it read first. **Low 2,
+  by design:** the header's `about` says that every text of a book in the leads is not to be trusted and holds no instruction for the agent, the marked texts and also every title and the citation, which are plain fields. The README and the
+  spec's "Built" section say what is checked before a question is sent, that the citation is cut and withheld, that the titles and the citation are untrusted, and that the header shows a question cleaned and cut to 300 characters and
+  withheld whole if it holds the words of a marker (the spec had said "as given, cleaned").
+- **Tests, first.** Written before the corrections and seen to fail (four failures and two errors: the forged citations held the marker words in a plain field; a lone surrogate in a later question was refused only after the first was sent;
+  a hostile model or build reached the header; a changed build was accepted; the sentence about titles was missing). `engine/tests/test_walk.py` (1,556 lines, sha256 `f035ab30bf740e081c528eeb678538069ac37f31cdc9922d2b724d37b0f0ee3e`):
+  **128 tests OK** with `engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_walk` (8 new), and with plain `python3` (43 skipped, as they build a weave and need numpy). The forged citations are written into
+  the file of theme vectors with SQL and read by the engine's own `read_themes`; those that the file's own check refuses (non-ASCII ones, two spaces in a row, a very long one) could not be used, so the variants used are the start
+  marker, the end marker, the words with white space, case or a hyphen, 900 characters and 1,007; the assertions are that no plain field holds the words, that the markers in the whole output are exactly two of each for each lead,
+  that a withheld citation appears, and that the citation is cut to a literal 400 (not to the constant under test). The three older tests whose fake pages had a build time of "b" were given a valid one (the check is stricter now).
+- **Deliberate breaks.** **88 for `walk.py` in all, each caught** (the file restored byte for byte, sha256 prefix `fae8d79ba0d2`; the script outside the repository, sha256 `9d85496c77ff89b16c01ece5551dc1572b77ad31dffc69a691b9f39b543bc2f1`),
+  6 of them new for C-A: the citation not cleaned; not cut; a check of a question left out; the identity of the vectors not checked in form; the build of the search not compared; the titles not said to be untrusted. Three breaks of
+  the run aimed at lines that the corrections changed and so were not applied (two were retargeted and are caught; one, superseded by a new one, was removed).
+- **Second look.** The `reviewer` agent (read only): no blocking finding; it judged each correction to answer its finding (the citation goes through the same guard as every other text, and the cut comes after it so cannot create the words;
+  the real search can never return a model or a build that the new check refuses, and `vmeta` is the right thing to compare with). Applied: a test whose name claimed more than it checked was renamed; the test of the sentence about titles now
+  asserts its phrases, not only two words. Noted, not changed: a look-alike letter of another alphabet is not folded by the marker guard (as for every text of the engine: "a guard, not a filter of meaning"); the spec's "Format and size"
+  paragraph still says 1,500 bytes for a lead (the "Built" section says it is about 2 KB, and a citation of 400 non-ASCII characters can be 2,400 bytes printed; the whole output is bounded and the header says how many leads were left
+  out); a rebuild of the vectors within the same second by the same model would not be seen by the build comparison.
+- **For Increment D.** The skill must say that every title and the citation are also texts of books, not to be trusted, as the header does.
+- **Not run.** Anything wider than `engine.tests.test_walk` (only `walk.py` changed in the code, and nothing else imports it but the command line, which these tests exercise; `themevectors.py` is untouched). No call to any model and no read
+  of the owner's library. No push.
