@@ -136,9 +136,11 @@ embedding model of the config, as the search does, and calls no other model.
 
 ## Built (what exists, and the readings the owner is asked to confirm)
 
-`python3 -m kb theme-walk` is built (`engine/kb/walk.py`, `engine/README.md`; the plan `2026-11-13-let-an-agent-walk-from-themes-along-the-links`, Increments A to C). It reads only, keeps no state, needs no numpy and sends only each
-question to the embedding model, as `theme-search` does. It is a Draft still: the owner has not run it on the library (Increment E), and the trial that tunes the numbers is the separate candidate `extrapolation-trial`. Where this
-spec was open or silent, the code reads it as follows. **These readings decide which leads exist, and are the owner's to confirm or change.**
+`python3 -m kb theme-walk` is built (`engine/kb/walk.py`, `engine/README.md`; the plan `2026-11-13-let-an-agent-walk-from-themes-along-the-links`, Increments A to E-A and D). It reads only, keeps no state, needs no numpy and sends only each
+question to the embedding model, as `theme-search` does. It is also offered to an agent in another project through the `kb` helper (`wb run kb theme-walk`, which the owner allowed on 2026-11-14 to send an agent's questions out, as `problem-search`
+does) and by the skill `walk-from-themes`. It is a Draft still: the owner has run it on the library (Increment E, 2026-11-14: three questions at the three levels, read only, the weave and the vectors unchanged) and the trial that tunes the
+numbers is the separate candidate `extrapolation-trial`. Where this spec was open or silent, the code reads it as follows. **These readings decide which leads exist. The owner confirmed them as they stand on 2026-11-14, after the run on the library;
+the numbers in them (the levels, 0.66, the lane shares, 5 and 30, the caps) stay provisional guesses to be tuned by the trial, and the questions under "Open questions" are still open.**
 
 - **The level table.** `narrow` follows a theme's links in bands 2 and 3, the strongest closeness first, at most 3, one step. `medium` follows links in every band, the strongest closeness first *whatever the band* (the table's
   "strongest first within a band" could be read band by band), at most 3 at the first step and 2 at the second. `wide` follows all of a theme's links (at most 12) at the first step and, at the second and third, two links, the
@@ -166,7 +168,8 @@ spec was open or silent, the code reads it as follows. **These readings decide w
 - **A known limit (criterion 9).** The search keeps its own two themes of a book and its page of 50 over the whole library before the walk drops the themes outside the visible set, so with a visible set smaller than the library a
   hidden theme could still take a book's place in the page. The visible set is the whole library today, so nothing is affected; the search itself will need the visible set when guests exist. A REF that names a theme outside the
   visible set is counted as unknown, in the same words as one not in the weave.
-- **Not built:** the skill that tells an agent how to use the walk (Increment D), the read-only run on the owner's library (Increment E), and the agent trial (`extrapolation-trial`).
+- **Not built:** the agent trial (`extrapolation-trial`). Known from the owner's run (a reading by the assistant, not the owner's labels): a few generic themes with short method texts turned up for unrelated questions, which looks like noise
+  and is not measured; a count of links per theme in the weave would test it.
 
 ## Acceptance criteria
 
