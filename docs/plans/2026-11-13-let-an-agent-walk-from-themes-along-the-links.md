@@ -212,4 +212,41 @@ Increment E rests on A to D and is taken after all of them. Nothing wider is run
 
 ## Result
 
-Empty until work starts.
+### Increment A (the selection, as pure functions; committed)
+
+- **Done.** `engine/kb/walk.py` (194 lines, sha256 `2c00aaa85daffb1ab53e2ed71fa34503f9be1c5cfceea9eac7562a98734351d2`) holds the selection of the spec over plain data, with no search, no file and no model: `key_of` and
+  `ref_of` (a REF is three identifiers, validated with the engine's own patterns and never a path), `build_graph` (two-way links; a link inside one book, a link to the same theme and a link with a hidden end are
+  left out), `routes` (every simple route of the level's length from the starting themes, never through a blocked theme), and `select`, which returns the two lanes, the held-back counts (`book`, `start`, `limit`,
+  and the themes the walk would have offered but for `seen` and for `drop`), the themes reachable at each level, the starting themes and those without a link, the shares and the counts of the lanes, and the notes
+  that say why little or nothing was found (`no_starting_theme`, `no_starting_theme_has_a_link`, `nothing_reached`, `everything_reached_is_seen_or_dropped`, `everything_reached_is_in_the_ordinary_set`).
+- **How the spec's table was read where it is open (for the owner to confirm; Increment C writes them into the spec's "Built" line).** `narrow` and `medium` follow the strongest closeness first whatever the band
+  (the spec says "strongest first within a band" for medium, which a reader could take as band by band); `wide` follows all of a theme's links (at most 12) at step 1, and at steps 2 and 3 two links, the farthest
+  band first and then the strongest; ties in closeness go to the key; the cap on the links of a theme applies to the links that can still be followed, so a seen, dropped or on-route theme does not use a place
+  (otherwise a round that passes back what it saw would find nothing new); the closeness is compared as an integer in billionths at 660,000,000, at or above; when two links of a route are equally weak, the
+  weakest band is that of the first on the route; a lead held by the book cap does not use a place of the cap on its starting theme; `reached_by` counts the routes found within the level after those caps. These readings
+  decide which leads exist, not only their order.
+- **Tests.** `engine/tests/test_walk.py` (694 lines, sha256 `7a79fbda40d00525c3e301397352d9d386c6c364516b51a0c088e2da221f3842`): **58 tests OK** with `engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_walk`, and OK
+  with plain `python3` (the selection needs no numpy). By hand: the REFs and the refusals (a path, a newline, a space, an upper-case theme id, a long id, a wrong number of parts, not text); the graph; every
+  level (the bands and the number of links at each step, ties, the cap of 12 where it bites with 13 links, a blocked theme not using a place); no theme twice on a route; the best route (the highest weakest
+  link, the fewest steps, the smallest REFs even when the route with the larger REFs is found first, with the links given in every order); the threshold at 0.66 exactly; the order inside each lane; the ordinary
+  set last; the book flag; the caps per book and per starting theme; the places (two thirds rounded up, a short lane giving its places away, the shares and the counts apart); `--seen`, `--drop` and the other
+  starting themes; a second round with what was seen offering none of it again; `reached_by` on a diamond and across starting themes; the themes reached at each level; the notes; the visible set (a hidden
+  theme, start, route, count, flag and rank leave no trace); determinism over any order of the rows, the starts and the ends of a link; and `reference_walk`, a plain slow enumeration written apart from the code,
+  compared on **300 random worlds** with seen, dropped, ordinary and visible sets, every level, steps and limit.
+- **Deliberate breaks.** **37, each caught** (the file restored byte for byte, sha256 prefix `2c00aaa85daf`; the script outside the repository, sha256 `3a3926a7b74922b11f87bfc16c2f0f0114b3b80398d048ae8f54a6b751be54a5`): the
+  bounds of a level; a route that revisits a theme; the threshold with `>`; the lanes blended; a short lane keeping its places; the ordinary set not put last; no cap on a book or a starting theme; the best route by
+  the strongest link, the longest, or with no final tie-break; seen walked through; drop ignored; the other starting themes passed through; `reached_by` as one; the visible set not used for the graph, the ordinary
+  set, seen or drop; the book flag lost; the places of blocked themes used up; a link inside a book followed; the weakest band from the last link; the lane orders reversed; the limit, the steps and a REF not
+  checked; two thirds rounded down; wide at later steps in closeness order; narrow with a third band; the reached-by-level counts lost; the start of a lead from the last route; wide following 13 links; the
+  seen themes held back not counted; a seen and dropped theme counted twice; no separate note for everything seen; the lane counts equal to the shares. Two breaks passed at first and the tests were strengthened
+  (no final tie-break of the best route: a case where the order in which routes are found differs from the order of the REFs; the cap of 12 at wide step 1).
+- **Order of work.** The code was written before the tests, which is not the order the plan asks for. The first run of the tests had eight failures, all mistakes in the tests (test ids that were not valid
+  book ids, a start with more leads than the cap of three per start allows, four miscounted expectations), and the breaks above are the evidence that the tests bite.
+- **Second look.** The `reviewer` agent (read only): no blocking finding. Applied: the held-back counts for `--seen` and `--drop` that the spec's header names (a second pass without the block), a note that
+  tells "everything reached is seen or dropped" from "nothing to reach", `lane_shares` (the nominal places) apart from `lane_counts` (what each lane shows), the cap of 12 tested where it bites, a docstring
+  that said "before any cap" for what is "before the caps on leads", and the unused imports. Not changed: the readings above (flagged for the owner); the tie-break compares the sequence of REFs as a tuple of
+  strings, which differs from comparing them joined only when one theme id is a prefix of another and the next character is `-` or `.`; the selection takes keys as it is given them (a string would become a tuple
+  of characters), which is safe as long as Increment C passes only the output of `key_of`; and a REF that names a hidden theme must be reported by C as unknown, in the same words as a REF not in the weave.
+- **For Increment C, noted by the reviewer.** The header must report the counts of `lane_counts` as what each lane held and `lane_shares` as the shares; the message of `ids.check_id` repeats the refused text, so it
+  must not be put into the JSON structure; and `held_back` has two more reasons than the plan's step 1 named (`seen`, `drop`), which C's tests must cover.
+- **Not run.** Anything wider than `engine.tests.test_walk`: nothing else imports `walk.py` yet. No security review (not asked; recommended before the command is used on the real library, as the plan says). No push.
