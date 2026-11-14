@@ -183,7 +183,7 @@ for `pose-a-problem` did so; the Result says which).
 ### Increment E — A read-only run on the owner's library
 
 **Outcome:** the owner has read the walk's output on the real library for questions the owner chooses, at each level, and the weave and the file of vectors are shown unchanged.
-**Dependencies:** C and C-A, and the owner's word ("run it") after being told what is sent: the owner's questions, to the embedding model of the config on this machine (a local model; nothing leaves it); nothing else.
+**Dependencies:** C and C-A, and the owner's word ("run it") after being told what is sent: the owner's questions, to the embedding model of the config (`qwen3-embedding:4b` on the server `ned`, on the owner's network, over plain unauthenticated HTTP: a question travels in the clear, and the model is not on this machine); nothing else.
 **Affected areas:** nothing in the repository but this plan's Result.
 **Steps:**
 1. Say what will be sent and to which model, and the questions the owner gives; record the sha256 of the weave and of the file of vectors; wait for "run it".
@@ -225,9 +225,9 @@ run again unless a later increment changes `themevectors.py` or `weave.py`. Incr
 
 ## Risks and sensitive actions
 
-- **The command takes an agent's text (questions and REFs) as input and shows text of books.** The questions go only to the local embedding model; the REF is an identifier and never a path; the text shown is
+- **The command takes an agent's text (questions and REFs) as input and shows text of books.** The questions go only to the embedding model of the config (on the server `ned` on the owner's network, in the clear); the REF is an identifier and never a path; the text shown is
   cleaned, marked and withheld whole if it holds a marker's words, as `theme-links show` does. Increment C recommends a security review to the owner; it runs only if the owner asks.
-- **The owner's questions in Increment E are sent to the embedding model of the config.** It is a local model on this machine; the owner is told before each run and says "run it".
+- **The owner's questions in Increment E are sent to the embedding model of the config.** It runs on the server `ned` on the owner's network, over plain unauthenticated HTTP (`wb run ask-ollama check` says so), not on this machine; the owner is told before each run and says "run it".
 - **The visible set is built for guests and tokens that the engine does not have.** If the spec's rule is wrong when they arrive, the walk's input is the only thing to change; the plan builds no part of them.
 - **The numbers are guesses (levels, the 0.66 threshold, the lane shares, 5 and 30, the caps)** and rest on an exploratory cut of 30 themes. The trial of the separate candidate tunes them; the plan does not claim they are right.
 - **The walk offers leads that may be noise.** The spec accepts noise if each lead is cheap to skim; the owner reads the output in Increment E, and the trial of the separate candidate reports the share an ordinary

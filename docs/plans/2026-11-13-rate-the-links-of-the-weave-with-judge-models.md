@@ -179,6 +179,16 @@ of the agreement are recomputed from the saved replies by a script other than th
 
 ## Result
 
+### Correction of 2026-11-14: where the "local" models are
+
+This plan, and what I said to the owner while doing it, called the judges `gptoss` (gpt-oss:20b) and `checker` (qwen3:14b) "local", said that "a local run sends text to models on this machine only", and said in the Result of Increment B
+that "nothing left the machine". **That was wrong, and I had not checked it.** `wb run ask-ollama check` (read only, no connection) prints for the server `ned`, which every model entry of the owner's config uses: `scheme=http
+location=owner-network authenticated=false`, with the warning "unauthenticated http away from loopback; content sent to it travels in the clear". So the models run on a server on the owner's network, not on this machine, and a
+prompt travels to it unencrypted. What went there in this plan: the two timing calls of Increment B (an invented pair, no library text) and the 538 prompts of Increment B (269 to each model, each holding two theme titles and two
+method sentences of the owner's library). Increment A's dry run and Increments C and D called no model but Codex (an outside service, described as such). In this plan "local" therefore means only "not Codex": the models on the
+owner's own server. The statements in the Scope, Assumptions and Risks of this plan that say the opposite are in the part of the plan that the owner approved, and are left as they were written; this correction is the record. The
+owner was told on 2026-11-14, before any further call.
+
 ### Increment A (the sample, the prompt and a dry run; committed)
 
 - **Done.** A script outside the repository (`rate_links.py`, with its tests `test_rate_links.py`, the breaks `breaks_rate_links.py` and the dry run `dryrun_rate_links.py`, all in the session's scratchpad) that
@@ -213,8 +223,9 @@ of the agreement are recomputed from the saved replies by a script other than th
 
 - **What was sent, with the owner's word ("Run it", 2026-11-13, after being told).** The 269 prompts of the sample (sample sha256 `a01c8fd13b003930de8f2ea473115d7aefee938627ee7afed3f2ea57db045e15`; prompt
   sha256 of the block `1af1eda17e445acbc406b39c47120040a7a727bd7d37cf44858806efbfe5f551`; 766 to 1,029 bytes each, 239,154 bytes in all), once each, one at a time, to `gptoss` (gpt-oss:20b) and then to
-  `checker` (qwen3:14b), both local, through `kb.models.call`; the first judge finished all pairs before the second began. Each outcome was appended to a file (mode 600) as it came, with the sha256 of the
-  prompt, the replies, the asks and the seconds. Nothing left the machine; the library and the config were only read. **A call outside the 269:** before the owner's word, one invented pair (merge sort and
+  `checker` (qwen3:14b), through `kb.models.call`; the first judge finished all pairs before the second began. Each outcome was appended to a file (mode 600) as it came, with the sha256 of the
+  prompt, the replies, the asks and the seconds. **Corrected on 2026-11-14: this said "both local" and "Nothing left the machine", which was wrong** (see the correction at the head of this Result): the 538 prompts went to
+  the server `ned` on the owner's network, over plain HTTP, in the clear. The library and the config were only read. **A call outside the 269:** before the owner's word, one invented pair (merge sort and
   the closest pair of points; no text of the library) was sent once to each model to time them (7.9 s and 5.7 s; both replies parsed), and the owner was told of it in the same message as the request.
 - **Outcome.** Every pair has a valid rating from each judge: 269 rated and 0 failures for each, of which 0 `unparseable` and 0 `call_error`, and none needed a second ask. The run took about 10 minutes (gptoss
   348 s, 1.29 s a pair on average, at most 4.24 s; checker 265 s, 0.98 s, at most 3.67 s). The estimate given to the owner was about an hour, from the two timing calls, which included loading the models, so it

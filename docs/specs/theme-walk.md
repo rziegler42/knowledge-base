@@ -48,7 +48,7 @@ into sub-problems and restates it in other words); and output not shaped for a p
 
 ## What the evidence says about the weave (measured; `weave.md`, "Evidence")
 
-On the first weave over the real library, judged by two local models and rated blind by the owner on 20 pairs: the share of links called related or better rose with closeness; it was highest in the band nearest in
+On the first weave over the real library, judged by two models on the owner's server (not Codex; see `weave.md`) and rated blind by the owner on 20 pairs: the share of links called related or better rose with closeness; it was highest in the band nearest in
 wording; a theme's first three links by closeness were called related or better about twice as often as the rest; within the three farther bands the rise sat in the highest closeness tercile, from about 0.66
 (exploratory, chosen after the other tables were seen); the gap between closeness and wording closeness was not a clean signal; the method sentence of a theme is often short and generic. Few links were judged
 *same mechanism* (18 and 4 of 269). These figures are from 30 themes, one prompt and one order, and say nothing about novelty. They are why the walk separates solid leads from wild ones, and why it shows more than

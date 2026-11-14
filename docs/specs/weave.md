@@ -371,7 +371,8 @@ tested. It does not cover how themes are made or how the agent searches, which h
   (2026-11-13) is under "The floor of strength" above.
 - **[measured]** Whether closeness puts the links that judges call related first, on 2026-11-13 (Python 3.15.0, repository at `87d581f`, the first weave over the real library, generation 1; the library is the
   owner's and is not in this repository; no rule changed). From the 7,966 links, 30 themes with at least one link were drawn with seed 20261113 and every link of them taken once, **269 pairs**. Each pair was rated
-  from the title and the method text of its two themes, and nothing else, by two local models through the engine's own call (`gpt-oss:20b`, `qwen3:14b`) with one prompt (sha256
+  from the title and the method text of its two themes, and nothing else, by two models ("the local judges" below: not Codex; they run on the owner's own server `ned`, on the owner's network, reached over plain unauthenticated
+  HTTP, so the prompts travelled in the clear, and not on the machine that ran the engine) through the engine's own call (`gpt-oss:20b`, `qwen3:14b`) with one prompt (sha256
   `1af1eda17e445acbc406b39c47120040a7a727bd7d37cf44858806efbfe5f551`) as `same_mechanism`, `related` or `unrelated`; the owner rated 20 of the pairs blind, and Codex (`gpt-5.6-terra`) rated those 20 and
   10 more as a spot check (not used in the tables below). Against the owner's 20 the local judges were equal on 16 (`gpt-oss`) and 14 (`qwen3`), Codex on 17; the two local judges were equal on 200 of the 269
   (kappa 0.374), `qwen3` being the stricter. **Terciles** are of the 269 pairs of the sample, not of the weave. Counts are "related or same mechanism" of the valid ratings, with `same_mechanism` in brackets.
