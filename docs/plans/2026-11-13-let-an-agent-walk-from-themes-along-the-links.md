@@ -1,6 +1,6 @@
 # Let an agent walk from themes along the links
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-13
 Candidate: theme-weave#theme-walk
 Specs: docs/specs/theme-walk.md, docs/specs/weave.md
@@ -524,3 +524,31 @@ run again unless a later increment changes `themevectors.py` or `weave.py`. Incr
 - **The owner's confirmation (2026-11-14, "Confirm as stands").** Shown the readings of the "Built" section of `docs/specs/theme-walk.md` (the level table, the cap on a theme's links, the routes and the 0.66 threshold, the ordinary set and the starting themes,
   the numbers the spec did not state) and the open questions, the owner confirmed the readings as they stand. The spec records it, and says that the numbers stay provisional and the open questions open; its stale sentences (the run on the library and the
   skill "not built") were corrected in the commit of the spec that follows this one. The spec's status stays Draft: that is the owner's to change.
+
+### The plan as a whole (completed 2026-11-14)
+
+Seven increments, each one local commit with the trailer `Plan: 2026-11-13-let-an-agent-walk-from-themes-along-the-links#<label>`, in the order A, B, C, C-A, E, E-A, D (the order of execution stated in the plan; C-A, E-A and the move of E before D were added or
+made during the work, each with the owner's word and, for the plan's text, a new approval). Each criterion, with where its evidence is recorded:
+
+1. **Routes, levels and `--steps`** (criterion 1): Increment A (the selection as pure functions, compared with a slow reference on 300 random worlds) and the level tests of C.
+2. **The two lanes and the best route** (2): Increment A; the real-library run of E showed both lanes filled, and the exploration lane empty at narrow and medium for one question, as designed.
+3. **Determinism, no state, nothing written, another model refused** (3): Increments A to C and C-A; E showed the weave and the file of vectors, and every file of the index root, unchanged by nine runs (sha256 before and after).
+4. **`--from`, `--seen`, `--drop`, REF as an identifier only** (4): Increments A, C and C-A (and E-A for the helper's own check of a REF).
+5. **The flags and the header** (5): Increments B and C; shown on the real library in E.
+6. **The visible set** (6): Increments A and B (tests with hidden themes); the known limit of the search's own limit over the whole library is recorded in the spec (criterion 9 there); the visible set is the whole library today.
+7. **Texts cleaned and withheld, hostile input, the `stated`/`inferred` marks, the bounds** (7): Increments C and C-A and the security review of the walk; the output bound the plan states (about 1,500 bytes a lead, about 40 KB) was replaced by the built numbers (about
+   2 KB a lead, 60,000 bytes as printed), which the spec's "Built" section records and the owner confirmed on 2026-11-14.
+8. **The skill and the package test** (8): Increment D (`walk-from-themes`, 16 tests, 36 deliberate breaks); and, because an agent in another project reaches the library only through the helper, Increment E-A (`wb run kb theme-walk`, 23 tests, 29 breaks, a
+   review by the `reviewer` agent and a security review).
+9. **The run on the owner's library** (9): Increment E, three questions chosen by the owner at the three levels, read only; the weave and the file of vectors unchanged. The owner was shown the leads and asked that the reading be recorded; **the reading recorded is the
+   assistant's, and the owner gave no labels of the owner's own** (the Result of E says so); the owner then confirmed the spec's readings as they stand.
+
+**Verification of the plan as a whole.** Each increment's recorded verification stands. The later changes were Increments E-A and D to `walk.py`, `__main__.py`, the helper, the package, the READMEs and the two test files, so the two test files were run once more on the final
+tree, at `7d24f57`: `KB_WORKBENCH_CHECKOUT=<the owner's workbench checkout, read only for its kit> engine/.venv/bin/python -W error::ResourceWarning -m unittest engine.tests.test_walk engine.tests.test_package` -> **235 tests OK** (131 walk, 104 package). `wb run code-work check`:
+no problems. Not run: the whole suite (nothing outside the walk, the helper, the package and the READMEs and specs changed), the install of the package into a throwaway project, any live run of the helper or of the skill by an agent.
+
+**Sent out, recorded.** The nine questions of Increment E (three of the owner's questions at three levels) went to `qwen3-embedding:4b` on the server `ned`, **on the owner's network over plain HTTP, in the clear, not on this machine** (the plan had said local; corrected on
+2026-11-14, commit `10bb5a1`). The helper's `theme-walk` is the second command that sends an agent's questions out: the owner allowed it on 2026-11-14 ("Yes, allow it") and the specs `knowledge-base.md` and `library.md` say so. Nothing else was sent.
+
+**Left for the owner.** The spec's status (Draft) and its open questions; the agent trial (`theme-weave#extrapolation-trial`), which needs a plan of its own; a count of links per theme in the weave to test the guess about generic themes (not on any roadmap; adding a
+candidate is the owner's); the same shell-quoting gap in the step 6 of `pose-a-problem`; the `refused` folder of the index root; and the push (no push was made).
