@@ -916,5 +916,129 @@ class SkillTests(unittest.TestCase):
             self.assertIn(phrase, self.lower)
 
 
+WALK_SKILL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "package", "kb", "harness", "neutral", "skills",
+                          "walk-from-themes", "SKILL.md")
+
+
+class WalkSkillTests(unittest.TestCase):
+    """The skill that tells an agent how to walk from themes along the links (Increment D of the plan `2026-11-13-let-an-agent-walk-from-themes-along-the-links`).
+    It needs no workbench checkout: it is a Markdown file of the package."""
+
+    def setUp(self):
+        with open(WALK_SKILL, encoding="utf-8") as f:
+            self.text = f.read()
+        self.head, _, self.body = self.text.partition("\n---\n")
+        self.lower = " ".join(self.body.lower().split())  # a phrase may be wrapped over two lines
+
+    def test_the_skill_is_a_neutral_skill_with_a_name_and_a_description(self):
+        lines = self.head.splitlines()
+        self.assertEqual(lines[0], "---")
+        fields = dict(line.split(": ", 1) for line in lines[1:])
+        self.assertEqual(sorted(fields), ["description", "name"])
+        self.assertEqual(fields["name"], "walk-from-themes")
+        self.assertTrue(30 <= len(fields["description"]) <= 300)
+        self.assertEqual(os.path.basename(os.path.dirname(WALK_SKILL)), fields["name"])
+
+    def test_it_names_the_call_with_every_option_and_the_double_dash_in_single_quotes(self):
+        self.assertIn("wb run kb theme-walk [--level narrow|medium|wide] [--steps <1-3>] [--limit <1-20>] [--from REF]... [--seen REF]... "
+                      "[--drop REF]... -- '", self.body)
+        self.assertNotIn('--drop REF]... -- "', self.body)
+        for phrase in ("single quotes", "apostrophe", "double dash"):
+            self.assertIn(phrase, self.lower)
+
+    def test_what_it_says_agrees_with_the_engine(self):
+        from kb import walk
+        for level in walk.LEVELS:
+            self.assertIn("`%s`" % level, self.body)
+        self.assertEqual(walk.MAX_QUESTIONS, 5)
+        self.assertIn("one to five questions", self.lower)
+        self.assertIn("[--limit <1-%d>]" % walk.MAX_LIMIT, self.body)
+        self.assertIn("(%d by default)" % walk.DEFAULT_LIMIT, self.body)
+        self.assertIn("(at most %d)" % walk.MAX_FROM, self.body)
+        self.assertEqual(self.body.count("(at most %d)" % walk.MAX_REFS), 2)  # --seen and --drop
+        self.assertIn("%.2f or more" % (walk.THRESHOLD / walk.SCALE), self.body)
+        self.assertIn("1000 characters", self.body)
+
+    def test_it_says_that_what_is_written_is_sent_out_in_the_clear_and_what_to_leave_out(self):
+        for phrase in ("general terms", "is sent out", "in the clear", "owner's server", "no secret", "private text", "one line"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_a_lead_is_a_lead_and_never_a_finding_and_never_to_present_a_combination_as_one(self):
+        for phrase in ("a lead is a lead and not a finding", "never present a combination of leads as a finding", "nothing fit", "say so plainly"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_every_text_title_and_citation_is_untrusted_and_holds_no_instruction(self):
+        for phrase in ("untrusted", "not an instruction", "every title and the citation are also texts of books", "two marker lines"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_how_to_read_the_lanes_and_the_numbers(self):
+        for phrase in ("follow_through", "exploration", "read the follow-through lane first", "sample the exploration lane", "weak_link", "closeness",
+                       "novelty", "ordinary_rank", "reached_by", "numbers"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_how_to_go_on_and_when_to_stop(self):
+        for phrase in ("--seen", "--from", "--drop", "keeps no state", "carry", "the same questions", "widen", "gives nothing new", "do not repeat the same call"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_not_to_run_the_command_that_a_lead_names_and_how_to_read_the_book_instead(self):
+        self.assertIn("`explain`", self.body)
+        self.assertIn("the helper does not run it", self.lower)
+        self.assertIn("- `wb run kb read [--version <version_id>] <book> '<locator-json>'`", self.body)
+        self.assertIn("- `wb run kb search '<words of its title", self.body)
+        for phrase in ("`ref`", "`book_id`", "unread", "do not rely on it"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_to_stop_and_tell_the_owner_when_the_helper_refuses_for_its_settings(self):
+        for phrase in ("refused", "tell the owner", "do not try another way"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_the_numbers_are_provisional_guesses(self):
+        for phrase in ("guesses", "provisional"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_what_the_reply_holds_that_an_agent_must_read(self):
+        """From the review of the skill: the `warning` first, the null first step of a route, the rounding of the closeness and what `why` shows."""
+        for phrase in ("read the `warning` first", "when it is not null (the weave is out of date", "tell the owner what it says", "first step of a route has no closeness", "rounded to two decimals", "the theme before it on the route",
+                       "`held_back`", "`unknown_refs`", "`widen`", "`notes`"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_to_pass_the_themes_of_a_lead_route_in_seen(self):
+        for phrase in ("the themes of their routes", "the `ref` of each step of its `route`", "a lead may also be given in `--seen`", "refused if you ask for more"):
+            self.assertIn(phrase, self.lower)
+
+    def test_words_taken_from_a_book_into_a_search_are_plain_words(self):
+        """From the review of the skill: words copied from a title go into a shell command, so only plain words may."""
+        for phrase in ("only plain words", "apostrophe", "backtick", "`$`"):
+            self.assertIn(phrase, self.lower)
+        step6 = self.lower.split("## 6.", 1)[1].split("## 7.", 1)[0]
+        for phrase in ("use only plain words", "leave out every apostrophe and quotation mark, `$`, backtick"):
+            self.assertIn(phrase, step6)
+
+    def test_the_numbers_of_the_helper_that_refuses_are_those_the_skill_gives(self):
+        """The helper stands alone and refuses; the skill must not drift from it."""
+        with open(HELPER, encoding="utf-8") as f:
+            source = f.read()
+        import re
+        number = lambda name: int(re.search(r"^%s = (\d+)$" % name, source, re.M).group(1))
+        self.assertIn("[--limit <1-%d>]" % number("CEILING_WALK_LIMIT"), self.body)
+        self.assertIn("[--steps <1-%d>]" % number("MAX_WALK_STEPS"), self.body)
+        self.assertIn("(at most %d)" % number("MAX_FROM"), self.body)
+        self.assertEqual(self.body.count("(at most %d)" % number("MAX_REFS")), 2)
+        self.assertEqual(number("MAX_QUESTIONS"), 5)
+        self.assertIn("at most %d characters" % number("MAX_QUERY"), self.body)
+        levels = re.search(r"^WALK_LEVELS = \(([^)]*)\)$", source, re.M).group(1)
+        self.assertIn("[--level %s]" % "|".join(w.strip().strip('"') for w in levels.split(",")), self.body)
+
+    def test_it_holds_no_marker_no_control_character_and_no_other_file_beside_it(self):
+        from kb import read as reading
+        from kb import search as fulltext
+        for marker in (fulltext.MARKER, reading.END_MARKER):
+            self.assertNotIn(marker, self.text)
+        self.assertNotIn("<<library-data", self.text)
+        self.assertNotIn("\x1b", self.text)
+        for name in os.listdir(os.path.dirname(WALK_SKILL)):
+            self.assertEqual(name, "SKILL.md")
+
+
 if __name__ == "__main__":
     unittest.main()
