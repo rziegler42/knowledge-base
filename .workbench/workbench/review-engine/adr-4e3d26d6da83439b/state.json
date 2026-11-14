@@ -1,0 +1,99 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-14T16:22:03Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "Real contradiction. The record now says every OpenAlex topic is in the file from the start, so drill-down activates an existing shelf and adds nothing to the file; only a topic OpenAlex lacks, a custom shelf or a new snapshot is a schema revision. The agent proposal wording and the consequences were aligned."
+    },
+    {
+      "at": "2026-11-14T16:22:03Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Fair. Keeping state and priority in library data is my refinement of the owner decision that every shelf has a flag and a priority. The record now says so, names the library data as the authoritative home, defines dormant as a shelf with no entry, and asks the owner to confirm it."
+    },
+    {
+      "at": "2026-11-14T16:24:22Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "Correct. The record now takes the home shelf from the topic OpenAlex names as primary, makes the other recorded topics the secondary labels in OpenAlex order, sends a work with no primary topic or an unknown topic to the matcher, and says counts use home shelves only. No tie rule is needed because OpenAlex designates the primary."
+    }
+  ],
+  "format": 1,
+  "generation": 6,
+  "kind": "adr",
+  "path": "docs/decisions/2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc.md",
+  "rounds": [
+    {
+      "at": "2026-11-14T16:21:25Z",
+      "bridge": "ask-codex",
+      "document_sha256": "fe163d0be9af112283d46255a0fbf913425787cf506f0e3512ebd00b59ce4a09",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "2b23fc9570a5c92019b9c8cc25e1904a07a1917c149530d1fd30109a9fa453b3",
+      "usage": {
+        "input_tokens": 164423,
+        "output_tokens": 1925,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-14T16:24:07Z",
+      "bridge": "ask-codex",
+      "document_sha256": "3f3ec577ce220850a04fb686b34f339156fcfefd4574a18c2932e58d54ca00cd",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "f55921f31ae6d9372a2976091e6f760fdd80e16db07dc394af2aa96513db6d45",
+      "usage": {
+        "input_tokens": 133661,
+        "output_tokens": 1561,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "6102ebcdf5a08bfa3d635dbdb44dae4708eedd191e17788312774d1fab9612e6",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

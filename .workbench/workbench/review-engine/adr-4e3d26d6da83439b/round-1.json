@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Decision, items 3 and 5–6; proposed item 5; Consequences, second bullet",
+      "problem": "The record simultaneously implies that the schema contains all roughly 4,500 OpenAlex topic shelves (including dormant ones) and that evidence-driven drill-down adds only selected topics under a subfield. It never distinguishes activating existing dormant topics from adding new schema entries, so the schema builder and later scouting work can implement incompatible lifecycle models.",
+      "severity": "major",
+      "suggestion": "Choose and state one model: either include every OpenAlex topic in the initial schema and define drill-down as activation, or add topics incrementally and remove the all-topics/dormant-topic consequence. Define what an agent's proposal to add a topic means under that model."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Decision item 4; proposed item 1",
+      "problem": "The owner's stated decision says every shelf has scout/active status and priority, while the proposal moves both out of the schema file into library data (and introduces dormant). The record does not say whether this is an intentional refinement requiring owner confirmation or a change to the decision.",
+      "severity": "major",
+      "suggestion": "Resolve this explicitly before acceptance: state whether status and priority belong in the tracked schema, in separate library state, or in both, and define the authoritative representation."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "Two unresolved contradictions leave the schema’s topic lifecycle and shelf-state authority ambiguous.",
+  "verdict": "changes_needed"
+}

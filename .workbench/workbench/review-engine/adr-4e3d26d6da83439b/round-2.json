@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Decision — proposed item 3",
+      "problem": "A paper may have up to three OpenAlex topics (as the Evidence section states), but the record says such a paper takes “its shelf” from an OpenAlex topic while also requiring exactly one home shelf for counts. It never defines which topic supplies that home or how the remaining topics become secondary labels. This leaves counts and priority-driven fetch focus nondeterministic for multi-topic papers.",
+      "severity": "major",
+      "suggestion": "Specify a deterministic home-shelf rule for multiple OpenAlex topics (including tie and missing-score handling), and state how the other OpenAlex topics map to the allowed secondary labels."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The ADR is materially clearer after round 1, but its direct OpenAlex placement rule still lacks a required multi-topic resolution.",
+  "verdict": "changes_needed"
+}

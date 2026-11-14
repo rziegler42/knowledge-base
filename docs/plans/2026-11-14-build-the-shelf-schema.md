@@ -1,0 +1,154 @@
+# Build the shelf schema
+
+Status: Proposed
+Created: 2026-11-14
+Candidate: none (the shelves, the fetch engine and the crawler are outside every roadmap, which say so; creating a roadmap for them is the owner's change of direction, and this plan is the first step the owner asked for)
+Specs: docs/specs/shelf.md
+
+## Goal
+
+The library has a fixed list of shelves, kept as a tracked file in this project, built from OpenAlex's subfields and topics and from a short, reviewed list of
+Library of Congress subclasses for fields OpenAlex does not cover, as the decision
+`2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc` says. When the plan is done:
+
+1. A checker validates the file, and its tests were seen to fail first and are shown to catch deliberate breaks.
+2. The two public lists were read once from the network, and their size, retrieval date and hash are recorded, so the file can be rebuilt and compared.
+3. The owner has reviewed the Library of Congress list, and the owner's marks are recorded as given.
+4. The file is committed with its provenance, and it can be rebuilt byte for byte from the recorded inputs.
+
+This plan builds data and a checker. It does not match books to shelves, scout, fetch or change `docs/specs/shelf.md`.
+
+## Scope
+
+- A format for the schema file and a checker for it (`engine/kb`, with tests).
+- One read of OpenAlex's public lists of fields, subfields and topics, and one read of the Library of Congress classification outline, each saved outside the
+  repository and cited by hash.
+- A list of Library of Congress subclasses for fields OpenAlex lacks, proposed by the agent and reviewed by the owner.
+- A builder that makes the file from those inputs, and the file.
+
+## Non-goals
+
+- The matcher that places a book on a shelf, and the test of it on OpenAlex-labelled papers (a plan of its own).
+- The state of a shelf (scout, active, dormant), its priority and its counts: they are the library's data, not the file's.
+- Scouting, the fetch engine, drill-down, the exploration share, and any use of Wikipedia's lists.
+- Any change to `docs/specs/shelf.md` (a change of direction, the owner's), to a roadmap, to the library, the cards, the themes, the weave or the walk.
+- The schedules of the Library of Congress: only the names and codes of subclasses are kept.
+
+## Assumptions and constraints
+
+- **The decision is accepted before Increment A starts.** `docs/decisions/2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc.md` is `Proposed`; the
+  owner accepts it (or changes it) first, and this plan follows what it says then.
+- **The format (a proposal):** one JSON file with a `format` number, a `snapshot` (the OpenAlex lists' retrieval date and hash and the outline's), and a list of shelves,
+  each with `slug` (lowercase kebab-case, unique, never changed), `name`, `level` (`domain`, `field`, `subfield`, `topic` or `custom`), `parent` (a slug or null),
+  `openalex` (the identifier, or null), `lcc` (a subclass code, or null) and `scope` (one sentence). Nothing about scout or active state, priority or counts.
+  Where the file lives is fixed in Increment A, inside `engine/kb/`.
+- **Network.** Two plain reads of public data (OpenAlex's list endpoints and the Library of Congress's outline pages), from this machine, with no query that carries
+  anything of the owner's and nothing sent to the model server. The owner says "run it" before each (Increments B and C). The files read are untrusted data: parsed as
+  data, never run, size-limited, and saved with mode 600 outside the repository.
+- **Counts the lookup gave (second-hand, to be verified in B):** 4 domains, 26 fields, 252 subfields, 4,516 topics for OpenAlex; "over 225" subclasses for the Library of Congress.
+  If the real lists differ, B says how and the plan uses the real lists.
+- The Library of Congress terms have not been checked. The file keeps names and codes only, and the owner decides in Increment C whether that is acceptable, with the
+  repository's visibility in mind.
+- The engine's own code uses the standard library; the checker and the builder need nothing more.
+
+## Completion criteria
+
+1. The decision record is `Accepted` before Increment A starts, and the plan follows it.
+2. `python3 -m kb shelf-schema-check` validates a schema file: format, unique slugs, parents that exist, levels in order (a topic under a subfield, a subfield under a field, a field under a domain, a custom shelf under none or a domain), no cycle, and the counts it
+   reports; its tests were seen to fail first, and deliberate breaks of the checker are caught.
+3. The two public lists were read, and the Result records each one's URL, retrieval date, size, hash and counts, and how they differ from the second-hand figures.
+4. The owner has marked each proposed Library of Congress subclass (keep, drop, or add one), and the marks are recorded as given.
+5. The schema file is committed, passes the checker, has the counts the Result records, and the builder reproduces it byte for byte from the recorded inputs.
+6. The owner has read the names of the fields and subfields in the file and the custom shelves.
+7. `wb run code-work check` finds no problems, and nothing outside this plan, the checker, the builder, the file and the engine's README changes.
+
+## Increments
+
+### Increment A — The format and the checker
+
+**Outcome:** a checker for the schema file exists, with tests and deliberate breaks, and no data and no network.
+**Dependencies:** the decision record accepted.
+**Affected areas:** `engine/kb/shelfschema.py` (new), `engine/kb/__main__.py` (the command `shelf-schema-check`), `engine/tests/test_shelfschema.py` (new), `engine/README.md` (the command).
+**Steps:**
+1. Write the tests first from a small fixture of a schema (two domains, a field, two subfields, three topics, a custom shelf), and see them fail: a valid file passes; each rule above is broken in
+   turn (duplicate slug, missing parent, a topic under a field, a cycle, a missing field of a shelf, a slug with capitals or spaces, an unknown level, a custom shelf under a topic, an unknown format number).
+2. Write the checker to make them pass: it reads the file as data, refuses a file over a size limit and a value of the wrong type, and prints the counts by level and the problems found, with the line or shelf of each.
+3. Register the command and write its README entry (what it reads, that it writes nothing, that it needs only the standard library).
+4. Deliberate breaks: edit the checker to drop each rule in turn, run the tests, expect a failure, and restore the file byte for byte.
+5. The `reviewer` agent reads the checker, its tests and the breaks.
+**Verification:** `python3 -m unittest engine.tests.test_shelfschema` (and the nearest neighbours that read the command table: `engine.tests.test_package`), the breaks all caught and the file restored by hash, and `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-14-build-the-shelf-schema#A`.
+
+### Increment B — The two public lists
+
+**Outcome:** OpenAlex's fields, subfields and topics are saved outside the repository with their size, hash and counts recorded.
+**Dependencies:** A, and the owner's word ("run it") after being told what is read.
+**Affected areas:** this plan's Result; raw files outside the repository (mode 600).
+**Steps:**
+1. Tell the owner exactly what is read (the addresses, the fact that it is a plain GET from this machine with nothing of the owner's in it, and the limit on size) and wait for "run it".
+2. Read the lists with a small script held outside the repository (cited by hash), one request at a time, with a size limit and a time limit, and save each reply unchanged.
+3. Record in the Result, for each file, its URL, the retrieval date, its size and its sha256; the counts by level; the version or date the source gives; how the counts differ from 4, 26, 252 and 4,516; and any topic that has no subfield or any other irregularity.
+4. The `reviewer` agent reads the script and the Result (not the raw files, which hold only public data but need no cloud model).
+**Verification:** the counts recomputed by a second snippet from the saved files and equal to the recorded ones; each file's hash recorded twice; `wb run code-work check`. No test of the engine is run: nothing tracked but this plan changes.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-14-build-the-shelf-schema#B`.
+
+### Increment C — The Library of Congress list
+
+**Outcome:** the list of Library of Congress subclasses that become custom shelves is fixed by the owner.
+**Dependencies:** B (it needs to know which fields OpenAlex's subfields already cover), and the owner's word ("run it") for the read.
+**Affected areas:** this plan's Result; the saved outline outside the repository.
+**Steps:**
+1. Tell the owner what is read (the Library of Congress classification outline pages, a plain GET) and wait for "run it". Save each page unchanged with its URL, date, size and hash.
+2. Extract the main classes and subclasses with a script held outside the repository, and record the count.
+3. Propose, from the subclass names, those that cover fields no OpenAlex subfield covers (crafts and trades, recreation, the military, the arts and the humanities), each with a one-line reason, and show the proposal to
+   the owner with the subclasses left out beside it.
+4. The owner marks each *keep* or *drop* and may add one, and says whether keeping only names and codes is acceptable; record the marks as the owner gave them.
+5. The `reviewer` agent reads the proposal and the Result.
+**Verification:** the count of subclasses recomputed from the saved pages by a second snippet; every kept entry has its code and its page; the owner's marks match the list. `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-14-build-the-shelf-schema#C`.
+
+### Increment D — Build and commit the schema
+
+**Outcome:** the schema file is in the repository, passes the checker and can be rebuilt byte for byte from the recorded inputs.
+**Dependencies:** A, B and C.
+**Affected areas:** `engine/kb/shelfbuild.py` (new), `engine/tests/test_shelfbuild.py` (new), the schema file under `engine/kb/`, `engine/README.md`.
+**Steps:**
+1. Write the builder's tests first on a small fixture of both inputs (a stable slug for each name, a clash between two names resolved the same way every time, parents set, a custom shelf, the snapshot block), and see them fail.
+2. Write the builder: it reads the saved files by path (arguments, never hard-coded), makes the slugs, orders the shelves in a fixed order, and writes the file with the snapshot block (each source's URL, date and hash).
+3. Build the file from the real inputs, run the checker, and compare the counts with the Result of B and C; rebuild into a second file and compare the bytes.
+4. Show the owner the names of the fields and subfields and the custom shelves (a single page), and record anything the owner changes.
+5. Deliberate breaks of the builder (a slug rule, the order, a parent, the snapshot hash) and their restoring.
+6. The `reviewer` agent reads the builder, its tests and the file's counts.
+**Verification:** `python3 -m unittest engine.tests.test_shelfschema engine.tests.test_shelfbuild`, the checker on the file, the rebuild equal byte for byte, the breaks caught, `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-14-build-the-shelf-schema#D`.
+
+## Verification for the plan as a whole
+
+Each increment's recorded verification stands unless a later one changed its inputs. At the end the checker is run once more on the file, the saved inputs' hashes are compared with those recorded, and the two test modules are rerun.
+The engine's other tests are not rerun: only the command table in `__main__.py` and the README change outside the new modules, and `engine.tests.test_package` reads that table. What could break outside the tested area: the command table (an entry
+that clashes with another), which that test covers.
+
+## Risks and sensitive actions
+
+- **Two network reads of public data.** They send nothing of the owner's and nothing to the model server. The owner is told before each and says "run it". The replies are untrusted: parsed as data, size-limited, never run.
+  Parsing untrusted JSON and HTML is a place to look for a flaw; the owner is asked once whether to run a security review of the reader.
+- **The Library of Congress terms are unchecked.** Only names and codes are kept; the owner decides in Increment C.
+- **The public lists may differ from the second-hand figures,** or have irregular entries (a topic without a subfield, duplicate names). B records them; the builder refuses what it cannot place and says so.
+- **Slugs are permanent.** A badly chosen slug rule would be hard to change once books are placed. The rule is fixed in D's tests and the owner reads the names before the commit.
+- **No push** and no change of the library, the weave, the vectors, the skills, the helper or the spec of shelves.
+
+## Review record
+
+Empty until a review is asked for.
+
+## Deferred work
+
+- The matcher that places a book on a shelf, with its test on OpenAlex-labelled papers.
+- The state of a shelf, its priority and its counts, and the library's config that holds them.
+- The scouting pass (about 3 books for each subfield), the fetch engine's first slice, and the pilot of topic-level scouts.
+- Revising `docs/specs/shelf.md` to match the decision (a change of direction: the owner's), and a roadmap for shelves and the crawler (the owner's).
+- Wikipedia's lists as a map for choosing scouts, as a source of its own decision.
+
+## Result
+
+Empty until work starts.
