@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Behavior — `--from REF`; Acceptance criterion 4",
+      "problem": "A single REF does not carry the lead's earlier route, so the command cannot guarantee that a follow-up excludes that route's earlier themes as required.",
+      "severity": "major",
+      "suggestion": "Require callers to pass the earlier route themes explicitly (for example via `--seen`), or introduce a route/token handle that preserves the route context."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Scope, Behavior, and Safety",
+      "problem": "The spec does not require filtering the walk, counts, ordinary-set comparison, or convergence data to the themes visible to the caller's token. The governing weave spec requires private themes and derived counts to be invisible to guests, so this omission could permit information leakage.",
+      "severity": "major",
+      "suggestion": "Specify that every query and all derived output operate on the caller's authorized visible subset, and add acceptance tests for private themes, links, counts, and hints."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Acceptance criterion 10; Governing roadmap reference",
+      "problem": "The trial acceptance criterion measures new leads and owner-selected follow-through, while the roadmap's stated outcome requires reporting the share of offered themes already returned by ordinary search at each setting and distance. The spec therefore does not require the roadmap's finish-line metric.",
+      "severity": "major",
+      "suggestion": "Require the written trial result to report the ordinary-search overlap share for every level and step distance, while optionally retaining the new-lead and owner-followed counts."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Behavior — “One lead per theme”",
+      "problem": "The claimed deterministic ordering is underspecified when multiple routes to a theme have equal weakest-link closeness and equal step count; no tie-break is given for selecting the best route.",
+      "severity": "minor",
+      "suggestion": "Add a deterministic final tie-break, such as lexicographic route REF sequence, and use it consistently for route selection and output."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The spec has three major gaps involving route continuation, visibility isolation, and the required trial metric, plus an underspecified deterministic tie-break.",
+  "verdict": "changes_needed"
+}

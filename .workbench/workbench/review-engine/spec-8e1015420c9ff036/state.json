@@ -1,0 +1,132 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-14T00:10:47Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "A REF names a theme and not a route, so the spec now says the agent passes back the themes of the route it has seen in --seen, the command only guarantees that a route never visits a theme twice and never returns to a --from theme, and criterion 4 says so."
+    },
+    {
+      "at": "2026-11-14T00:10:47Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "The engine has no guests or tokens yet, but the weave spec requires counts and links over the visible subset; the walk spec now takes the visible set as an input to the selection, computes every count and flag over it, and has an acceptance criterion with a fixture and a deliberate break."
+    },
+    {
+      "at": "2026-11-14T00:10:47Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F3",
+      "reason": "The roadmap finish line for the trial is the share of offered themes an ordinary search already returned at each setting and distance; the trial criterion now requires that figure for every level and step distance used."
+    },
+    {
+      "at": "2026-11-14T00:10:47Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F4",
+      "reason": "The best route of a theme now has a final tie-break, the smallest sequence of the theme REFs compared as text, so the choice does not depend on the order in which routes are found."
+    },
+    {
+      "at": "2026-11-14T00:13:14Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "The embedding configuration is now a deterministic input: criterion 3 names the model and query prefix, the command refuses a vectors file or a reply from another model before any lead is made as the search does, and the header reports the model, the prefix use and the build time."
+    },
+    {
+      "at": "2026-11-14T00:13:14Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F2",
+      "reason": "The limit is now a whole number from 1 to 20 and a value outside it is refused, so the lane shares and the held-back counts describe the real result and the format cap is not a hidden second limit."
+    }
+  ],
+  "format": 1,
+  "generation": 9,
+  "kind": "spec",
+  "path": "docs/specs/theme-walk.md",
+  "rounds": [
+    {
+      "at": "2026-11-14T00:10:07Z",
+      "bridge": "ask-codex",
+      "document_sha256": "76988ce8fad7767edce05d8522fa16436f6cb00b755ed26352654cb41af5c1f3",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F3",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F4",
+          "severity": "minor"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-luna",
+      "n": 1,
+      "profile": "measured",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-luna",
+        "options": {}
+      },
+      "sha256": "d9175530ab66cca3297152b937479ae692b87685ac2a9d61a8f0321c160d0ea2",
+      "usage": {
+        "input_tokens": 158315,
+        "output_tokens": 2924,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-14T00:12:54Z",
+      "bridge": "ask-codex",
+      "document_sha256": "4c5717fbbc13c8cb7185a3072f9aef40fa478c722bf688d889c2e7d2f8c1d403",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F2",
+          "severity": "minor"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-luna",
+      "n": 2,
+      "profile": "measured",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-luna",
+        "options": {}
+      },
+      "sha256": "84c00702545389ed6cbfb82410555d8728721f3ed14a9d54598e03a3151649e1",
+      "usage": {
+        "input_tokens": 235768,
+        "output_tokens": 3401,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "e20a755842300f5e5575051a0dd31bc6a49b2e41705bdd9f44de01736fb11442",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

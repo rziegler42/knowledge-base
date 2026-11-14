@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/specs/theme-walk.md:132-140",
+      "problem": "The determinism claim is incomplete: query embeddings depend on the current embedding configuration, including the query prefix, but the acceptance criterion only fixes the arguments, weave, and vectors. Repeating the same call after a configuration change can therefore produce different starting themes, ordinary-set membership, and leads.",
+      "severity": "major",
+      "suggestion": "Make the embedding model/config part of the deterministic inputs, or require the command to pin and validate the model and query-prefix metadata used for the vectors before running."
+    },
+    {
+      "id": "R2-F2",
+      "location": "docs/specs/theme-walk.md:98,123-126",
+      "problem": "The lane allocation is defined from the requested --limit, but output is independently capped at 20 leads. For --limit values above 20, the stated lane shares and held-back counts cannot describe the actual result, and the header's listed reasons omit this cap.",
+      "severity": "minor",
+      "suggestion": "Either constrain --limit to 20 or less, or define an effective limit of min(--limit, 20) and include the format cap in allocation and held-back accounting."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "Two specification gaps remain: deterministic output does not account for mutable query-embedding configuration, and --limit conflicts with the hard 20-lead output cap.",
+  "verdict": "changes_needed"
+}
