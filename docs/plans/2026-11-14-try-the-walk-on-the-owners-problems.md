@@ -1,6 +1,6 @@
 # Try the walk on the owner's problems
 
-Status: In Progress
+Status: Completed
 Created: 2026-11-14
 Candidate: theme-weave#extrapolation-trial
 Specs: docs/specs/theme-walk.md
@@ -331,8 +331,15 @@ The `reviewer` agent (read only), one round, no blocking finding. It read the wh
 
 **Recommendation (mine; the decision is the owner's).** (1) Do not change the walk's numbers on this evidence: it is unclear whether the wide call adds anything over asking the ordinary search for more, and this sample cannot settle it. (2) The cheapest next look is a larger sheet from the same sweep (60 items, 3 a source for each problem, S2 and S3 split by problem), which sends nothing, with the same marks by a second reader. (3) Three possible plans are named and not made, each a change of direction to be added to a roadmap only on the owner's word (`change-direction`): the exploration lane's share (one third) when it got 0 of 10 *would follow*; down-ranking generic themes; a count of links per theme in the weave. The trial gave no evidence for or against down-ranking generic themes or a count of links per theme: they come from the owner's earlier run. (4) My impression from rounds 1 and 2 is that the walk's leads for p4 said little about building shapes layer by layer; whether the library holds such books is not known from this trial.
 
-**The owner's decision:** not given when Increment E was committed. The owner's word then (2026-11-14) was "commit e", with no decision on the recommendation. It is to be written here as the owner gives it, and until then criterion 5 is not met and the plan is not complete.
+**The owner's decision (2026-11-14):** not given when Increment E was committed (the owner's word then was "commit e"). Given afterwards, on my recommendation, in the owner's words: "go with your recommendation on accepted, no change the the walk's numbers or lanes on this evidence" (typed so). The wording I proposed and the owner accepted: *Accepted: no change to the walk's numbers or lanes on this evidence. The result is unclear and stays recorded as unclear. No larger sheet or second reader now. The three possible plans stay unmade.* The lane shares and the threshold stay among the spec's open questions; a later look at the exploration lane, a larger sheet or a second reader would be a plan of its own, added to a roadmap only on the owner's word.
 
 **The spec.** `docs/specs/theme-walk.md`, "Built", records that the trial was run, with this result, its limits and the hashes, and that five problems were used where criterion 11 says two or three; the criterion's wording, the numbers, the status and the open questions are not changed.
 
-**Not done in E:** the owner's decision (see above). The reviewer's reading is done (Review record, Increment E); the hand check of the share for one problem is above (p3).
+**Not done in E:** nothing; the owner's decision is above.
+
+### Verification of the whole plan (2026-11-14, after the owner's decision)
+
+- **Confirmed unchanged:** the hashes of the script, its tests and breaks, the questions, the sweep, the key, the sheet and both files of marks are the ones recorded in Increments A to E (checked again, first twelve characters of each); the weave `ebbba8f4…8fe3` and the vectors `59fe6474…9229` are unchanged since before Increment B. The questions were never changed after the owner's reading.
+- **Not rerun, by the plan's own text:** the tests of the engine, the helper and the skills (nothing tracked but this plan and one paragraph of `docs/specs/theme-walk.md` changed; `git diff` of `engine` and `package` against HEAD is empty). The script's 38 tests and 51 breaks were run in Increment A and the script has not changed since.
+- **Completion criteria:** 1 to 4 as recorded in Increments A to D; 5 met by the Result of E (counts, reading, what cannot be concluded, a recommendation and the owner's decision; no number, code, weave or skill changed); 6, `wb run code-work check` finds no problems.
+- **Left open, for the owner:** the deferred script gaps (an interrupt before a report is written; a call that raises is missing from the partial report; the unwritten tests of `sheet` and `marks`); the quoted theme titles and one truncated ref in Result B if the repository is ever pushed; the spec's status line, which still speaks of the trial as the separate candidate. No push. The reviewer's reading is done (Review record, Increment E); the hand check of the share for one problem is above (p3).
