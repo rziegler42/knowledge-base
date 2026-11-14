@@ -425,3 +425,30 @@ run again unless a later increment changes `themevectors.py` or `weave.py`. Incr
 - **For Increment D.** The skill must say that every title and the citation are also texts of books, not to be trusted, as the header does.
 - **Not run.** Anything wider than `engine.tests.test_walk` (only `walk.py` changed in the code, and nothing else imports it but the command line, which these tests exercise; `themevectors.py` is untouched). No call to any model and no read
   of the owner's library. No push.
+
+### Increment E (the owner's read-only run on the real library; committed)
+
+- **What was sent, with the owner's word ("Commit, approve, then run it", 2026-11-14, after being told).** The owner's three questions, as the owner gave them, once for each of the three levels (9 runs, 9 embedding calls of 65 to 122
+  characters), to `qwen3-embedding:4b` on the server `ned`, which `wb run ask-ollama check` shows as `scheme=http location=owner-network authenticated=false`: **on the owner's network, in the clear, not on this machine.** Nothing else was sent.
+  The questions: (1) how to apply AI to computer players of nondeterministic card games that would normally use a Monte Carlo search tree; (2) how to improve on traditional simulated annealing with modern AI techniques; (3) how to
+  optimize a minimax search with a learning algorithm. The plan's text had said the model was local; it was corrected and re-approved first (commit `10bb5a1`).
+- **Run.** `python3 -m kb theme-walk --question <q> --level narrow|medium|wide --limit 12` from `engine/`, one run at a time, by a script outside the repository (`run_walk_e.py`, in the session's scratchpad). Each run took 5.6 to 7.7
+  seconds and exited 0. The raw outputs are in `~/.local/share/knowledge-base/trial/walk-e-b2e45548feef.json` (mode 600, sha256 `b2e45548feef392558b5eb754153c123c0ee6c62fad64e0e189e47f8d14b1029`; untracked, so cited by this hash and not
+  by its path in anything tracked).
+- **Read only, shown.** The weave `weave-same-mechanism.sqlite` (sha256 `ebbba8f45128d0e7f75e3d63bfc0c981d0d640e763b8668f30ccab0058e68fe3`) and `theme-vectors.sqlite` (sha256 `59fe64746b3c854aaad1b3324120a0827fa5baf691c8b247108970580d1f9229`)
+  hash the same before and after, as does every other file of the index root (13 files before and after). Engine at `10bb5a1`, Python of `engine/.venv`.
+- **What came back.** Every run gave 12 leads. Follow-through and exploration leads: Q1 11+1, 9+3, 8+4; Q2 12+0, 12+0, 8+4; Q3 9+3, 8+4, 8+4 (narrow, medium, wide). At wide, all 12 leads of each question were themes that the ordinary search
+  (its first 30 themes) had not returned; at narrow 7, 12 and 10 of 12 were not. Themes reached: 14 to 15 at narrow, 29 to 39 at medium, 231 to 271 at wide, of which about 200 were held back at the start cap and 14 to 18 by the limit at wide.
+  Q2 had no exploration lead at narrow or medium (every link there is above the 0.66 threshold, so the lane gave its places away, as designed).
+- **The reading (the assistant's, read from the titles and one method sentence of each lead, not checked against the books; the owner asked that it be recorded and has not given labels of the owner's own).**
+  *Leads that look useful:* Q1, "Limited depth lookahead via learned intuition" (DeepStack, 0.80), "Actor-Critic and Policy Gradient Equivalence" (0.80), "Numerical Integration and Simulation" from *Numerical analysis* (0.76);
+  Q2, "Metropolis algorithm for state sampling" from the *Ising model* (0.82), "Simulation-Based Planning" from the Monte Carlo tree search book, "Stigmergy as a mechanism of indirect coordination" (exploration, 0.66);
+  Q3, "Cross-entropy method" from *Simulated annealing* (exploration, 0.65), "Implicit model for planning" (0.81), "Continual Re-Solving with CFR-D Gadget" (0.74). *Leads that look like noise:* "Geometric Design Learning Materials"
+  (Computer-aided design; in Q1 and Q2), "Derivative component" (PID controller; in Q1 and Q3), "The configuration model" and "Erdős–Rényi Model" (exploration at narrow and medium in Q1 and Q3), "Future Directions for CAD
+  Reconstruction" (Q1, 0.72), "Passive immunity" (Q2, 0.75). The recurring ones look like generic themes with short method text and many links; **that is a guess, not measured.** *The levels:* narrow and medium share about half their leads;
+  only wide reached the cross-field leads above; the limit of 12 is what binds at wide, so an agent has to page with `--seen` and `--drop`.
+- **Decision recorded.** The numbers and levels (the three levels, the 0.66 threshold, the two thirds and one third, the default of 12 and the maximum of 20, 5 starting themes, the ordinary set of 30) **are left as they are, provisional.**
+  Three questions from one neighbourhood of the library, one reader, and a proxy for novelty are not evidence to tune them on. The spec's "Built" section still has readings for the owner to confirm; they are not confirmed by this run.
+- **Not done, for the owner.** A count of links per theme in the weave (read only, no model) to test the guess about generic themes, and a down-ranking of such themes if the count supports it, are not done and not on any roadmap: adding a
+  candidate is the owner's decision (`change-direction`). More questions, and runs with `--seen`, `--from` and `--drop` to try an agent's loop, are not done.
+- **Not run.** No test (nothing in the repository changed but this plan). No security review. No push.
