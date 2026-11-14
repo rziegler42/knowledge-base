@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "docs/plans/2026-11-13-let-an-agent-walk-from-themes-along-the-links.md — Increment F",
+      "problem": "The plan includes the agent trial, but the named roadmap candidate is `theme-walk`. The roadmap places that trial, written result, and owner reading in the separate `extrapolation-trial` candidate, whose dependency is `theme-walk`; this expands the plan beyond its candidate boundary.",
+      "severity": "major",
+      "suggestion": "End this plan after the walk and its skill (and any necessary owner-operated smoke check), then create a separate plan with Candidate `theme-weave#extrapolation-trial` for Increment F."
+    },
+    {
+      "id": "R1-F2",
+      "location": "docs/plans/2026-11-13-let-an-agent-walk-from-themes-along-the-links.md — Completion criteria 7 and Increment C, step 1",
+      "problem": "The planned output fields and tests omit the stated/inferred marks for the theme fields and the theme/book citation. `docs/specs/theme-walk.md` requires the neutral fields to be marked, and the roadmap finish line requires each offered theme to carry its mark and citation. Cleaning and untrusted-text markers do not supply either provenance field.",
+      "severity": "major",
+      "suggestion": "Specify the exact mark and citation fields in the command output, and add assertions for them to Increment C and the completion criteria."
+    },
+    {
+      "id": "R1-F3",
+      "location": "docs/plans/2026-11-13-let-an-agent-walk-from-themes-along-the-links.md — Scope; Increments C and F",
+      "problem": "The scope says the spec’s open questions will be tuned and its status moved to Current when the walk is built, while Increment C only adds a Built line and Increment F says Current only if the owner agrees after the trial. These are conflicting transition points for a Draft spec whose open questions are explicitly for the owner.",
+      "severity": "minor",
+      "suggestion": "State that Increment C records only what is built; reserve any status change or tuning of owner questions for Increment F, after the owner’s explicit decision."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan needs scope alignment with the roadmap and must preserve the marks and citations required by the spec.",
+  "verdict": "changes_needed"
+}

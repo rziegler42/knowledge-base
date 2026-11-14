@@ -105,7 +105,8 @@ blended into one ranking:
 ### One lead (cheap to skim, and enough to decide) **[my call]**
 
 - `ref`; the theme's title and type and its book's title (cleaned); its neutral **problem**, **method**, **needs** and **provides** (what it gives), in the domain-neutral words of the theme (its fields `neutral.problem`, `neutral.method`,
-  `neutral.needs` and `neutral.provides`; the `limits` stay with the theme and are read when the agent opens it), each cleaned and marked, and its one-line summary; the `lane`.
+  `neutral.needs` and `neutral.provides`; the `limits` stay with the theme and are read when the agent opens it), each cleaned and carrying its mark, `stated` or `inferred` (one of two fixed words taken from the file, never from text), and its one-line summary; the theme's `citation`, as a search result carries it;
+  the `lane`.
 - `route`: the chain from the starting theme, each step with the theme's ref and title, the closeness to two decimals, and the band's name (so the agent sees how far in wording each step went).
 - `why`: the matched method texts of the **last** link, both sides, cleaned; and `explain`, the exact `theme-links show` arguments for the last link, so that the agent can open the whole route's matched texts when
   it chooses to (one step at a time, not in every item).
