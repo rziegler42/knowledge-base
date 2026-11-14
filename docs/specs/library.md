@@ -402,7 +402,8 @@ pipeline runs, or the models; they have their own specs.
 | shelf-resume | Owner scope | block | block, ask, delegated, none |
 | shelf-reseed | Owner scope | block | block, ask, delegated, none |
 | book-weed | Owner scope | block | block, ask, delegated, none |
-| shelf-remove | Owner scope | block | block, ask, delegated, none |
+| shelf-retire | Owner scope | block | block, ask, delegated, none |
+| schema-adopt | Owner scope | block | block, ask, delegated, none |
 | Regenerate cards or themes (reprocessing run, sends content to models) | Owner scope | block | block, ask, delegated, none |
 | Upstream version check on request | Owner scope | block | block, ask, delegated, none |
 | Pull back a rejected candidate | Owner scope | block | block, ask, delegated, none |

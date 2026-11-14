@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/specs/shelf.md:50-64, 285-286, 335-336",
+      "problem": "The shelf has a scope statement in both the schema identity and the approved rules, but scope changes update the rules while the schema statement changes only through a separate schema revision. Since placement is said to match the schema identity while filing uses the rules, the two can diverge and produce inconsistent placement and filing behavior.",
+      "severity": "major",
+      "suggestion": "Define one authoritative scope for matching and filing, or specify exactly how schema scope and rules scope must remain synchronized and which governs each operation."
+    },
+    {
+      "id": "R2-F2",
+      "location": "docs/specs/shelf.md:427-439, 461-463",
+      "problem": "Making a shared shelf private is permitted, but the spec does not revoke or invalidate guest-visible cards, themes, excerpts, citation lines, search results, caches, or indexes that may have been exposed before the change. The claim that guests see nothing from a private shelf is therefore not enforceable after a visibility change.",
+      "severity": "major",
+      "suggestion": "Specify visibility-transition behavior, including immediate access revocation, removal or filtering of derived artifacts and caches, and acceptance tests proving previously shared content is no longer returned to guest tokens."
+    },
+    {
+      "id": "R2-F3",
+      "location": "docs/specs/shelf.md:64-66, 85-104, 445-450",
+      "problem": "A hand-edited rules file changes its digest and must be approved again, but the runtime behavior between edit and reapproval is unspecified. It is unclear whether the active shelf continues using the last approved immutable rules, pauses, or can accidentally read the unapproved file.",
+      "severity": "major",
+      "suggestion": "Require versioned approved rule snapshots and state that execution remains pinned to the last approved digest (or pauses safely) until the new digest is approved; add this to the acceptance criteria."
+    },
+    {
+      "id": "R2-F4",
+      "location": "docs/specs/shelf.md:304-306, 360-361",
+      "problem": "The state model defines dormant as having no rules file and no state, while retirement keeps the shelf's rules file and marks it retired but also says the shelf returns to dormant. The resulting state and allowed transitions are contradictory.",
+      "severity": "minor",
+      "suggestion": "Distinguish an archival retired state from dormant, or explicitly define retired records as non-operational metadata outside the dormant-state invariant."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The revisions address the earlier findings, but scope authority, visibility revocation, unapproved rule-file handling, and retired-state semantics remain underspecified or contradictory.",
+  "verdict": "changes_needed"
+}

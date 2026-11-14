@@ -156,14 +156,15 @@ The shelf is specified in `shelf.md`: creation and rules, permission levels, rel
 emptying and removing, classifications, licenses, candidates and filing, states and seeding, the crawler, reshelving, safeguards,
 and shared and private. This section keeps only the summary.
 
-- **[agreed]** A shelf is an owner-defined area of interest with a scope statement and rules. The owner, with the help of an AI,
-  defines it and approves its rules, after which filing is automatic. The owner can do this remotely, without a terminal, through the
-  workbench's permission levels.
+- **[agreed]** A shelf is a place in a fixed schema of topics, our own combination of OpenAlex and the Library of Congress classification
+  (decision `2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc`), with a scope statement. The owner, with the help of an AI,
+  activates a shelf and approves its rules, as a slim scout or an active shelf, after which filing is automatic. The owner can do this remotely,
+  without a terminal, through the workbench's permission levels.
 - **[agreed]** A shelf is shared by default and can be made private. A guest sees nothing of a private shelf.
 - **[agreed]** There is no limit on the size of a shelf, its number of books, or the number of shelves, unless the owner sets one.
 - **[agreed]** Licenses never restrict by default; permission is assumed unless a source specifically says otherwise.
-- **[agreed]** The owner can give priority to some shelves, and no shelf is starved by it. The library may suggest splitting or
-  combining shelves, and emptying a shelf moves its books to other shelves and deletes nothing.
+- **[agreed]** The owner can give priority to some shelves, and no shelf is starved by it. The library may suggest a revision
+  of the schema, and emptying a shelf moves its books to other shelves and deletes nothing.
 
 ### Books
 

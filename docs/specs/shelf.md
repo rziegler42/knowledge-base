@@ -2,7 +2,7 @@
 
 Status: Draft
 
-This specifies the shelf, the domain or area of interest that groups books, carries the rules under which books are filed
+This specifies the shelf, a place in a fixed schema of topics that groups books, carries the rules under which books are filed
 automatically, and decides who may see what. It belongs to the design in `knowledge-base.md` and builds on the book in `book.md`.
 **Nothing here is final.** The spec stays `Draft` until the owner approves it, and any statement can be reopened. Each statement
 carries one of three marks:
@@ -16,9 +16,11 @@ conversation that followed.
 
 ## Scope
 
-A shelf is a named area of interest with a scope statement and a set of rules. This spec covers how a shelf is created and
-defined, the limits it can carry, its states (new, seeding, steady, paused, removed), how it is seeded and kept growing, how the crawler
-behaves, how its books are reshelved, its safeguards, and whether it is shared or private. It does not cover what a book is
+A shelf is a place in a fixed schema, a tracked list of shelves built from OpenAlex and the Library of Congress classification (decision
+`2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc`). It has a scope statement, and, once activated, a set of rules and a state, which
+are kept in the library. This spec covers the schema and how a shelf is activated and defined, the limits it can carry, its states (dormant, scout,
+active; an active shelf is new, seeding, steady or paused), how it is seeded and kept growing, how the crawler behaves, how books are placed and
+placed again, its safeguards, and whether it is shared or private. It does not cover what a book is
 (`book.md`), the themes inside books (`theme.md`), the card, the weave, or the library as a whole; they have their own specs.
 
 ## Non-goals
@@ -46,12 +48,17 @@ behaves, how its books are reshelved, its safeguards, and whether it is shared o
 
 - **[agreed]** The owner can create shelves remotely, without a terminal, and the actions that need the owner use the workbench's
   permission levels (`block`, `ask`, `delegated`, `none`), set per action by the owner. See "Permission levels" below.
-- **[agreed]** Creating a shelf has two parts: an agent may propose one, and approving the proposal is the governed action.
-- **[proposed]** A shelf is a folder with a name and a one- or two-sentence scope statement, which placement matches against. No
-  charter or required question list.
+- **[agreed]** Activating a shelf has two parts: an agent may propose it, and approving the proposal is the governed action. A shelf that
+  is in the schema and has no rules file is dormant; approving rules for it makes it a scout or an active shelf. A shelf outside the schema is a
+  schema revision (see "The schema and the standard classifications").
+- **[proposed]** A shelf's identity is its entry in the schema: a stable slug, a name and a one-sentence scope statement, which placement
+  matches against. Its rules, state and priority are in the library. No charter or required question list.
 - **[agreed]** Filing is mostly automated. The owner, with the help of an AI, defines a shelf together with its limits, such as
   license, size and fetch speed. Once the owner approves those rules, candidates that meet them are filed without per-book approval.
-- **[proposed]** The limits a shelf can carry: the scope statement, allowed sources and file types, an optional license rule (none
+- **[proposed]** A shelf has two scopes, which need not match. The scope sentence in the schema is for placement: a book is matched against it. The
+  *fetch scope* in the rules is for the crawler: what it looks for and what relevance is scored against. It starts as the schema's sentence and may be
+  narrower or wider; the library report shows where they differ. Placement uses the first and filing uses the second.
+- **[proposed]** The limits a shelf can carry: the fetch scope, allowed sources and file types, an optional license rule (none
   by default), a size limit per item, optional limits on total size and book count (none by default), fetch speed per site, a daily
   budget for fetches and model calls, and a relevance threshold. An AI proposes the rules and defaults, the owner reviews them, and
   the approval action approves the exact rules, bound to a digest of them. A change to a rule needs a new approval, and an agent
@@ -61,6 +68,8 @@ behaves, how its books are reshelved, its safeguards, and whether it is shared o
   sets one.
 - **[agreed]** The owner may edit a shelf's rules file by hand or change it through the AI and commands. Either way the change
   alters the file's digest, so it takes effect only after it is approved again.
+- **[proposed]** Until then the shelf keeps working under the last approved rules: the host keeps each approved version of the rules as a snapshot
+  bound to its digest, and the crawler reads the snapshot and never the file that was edited. If the host cannot find the approved snapshot, the shelf pauses.
 - **[proposed]** The rules are a small plain-text file per shelf, kept in the library and not in the repository. The proposal shows
   the owner a plain-English summary: what will be fetched and from where, how fast, what it will not do, the daily budget, and
   whether the shelf is shared. A changed proposal shows what changed.
@@ -68,7 +77,8 @@ behaves, how its books are reshelved, its safeguards, and whether it is shared o
   shared.
 - **[agreed]** The owner does not want to limit the size of a shelf, the number of books on it, or the number of shelves in a
   library. There is no such limit unless the owner sets one for a shelf.
-- **[idea]** Grouping shelves into sections, if hundreds of shelves make flat placement slow and noisy.
+- **[proposed]** The schema's levels (domain, field, subfield, topic) are the sections, so no grouping of hundreds of shelves needs to be designed
+  apart from the schema.
 
 ### Permission levels
 
@@ -79,15 +89,19 @@ The owner sets a level per action in their personal settings, and the workbench 
 
 - **[agreed]** These shelf actions are governed, each with its own key. The key names are provisional. Every one defaults to
   `block`, as the workbench does, and the owner opts in per action with `ask`.
-  - `shelf-approve`: approve a shelf's rules, which also creates the shelf and starts seeding. It is the action that matters most.
-    A change of scope, name, priority or any other rule goes through it too.
+  - `shelf-approve`: approve a shelf's rules, which also activates the shelf, as a scout or an active shelf, and starts seeding. It is the
+    action that matters most. A change of scope, priority or any other rule goes through it too.
   - `shelf-visibility`: change a shelf from shared to private or the reverse.
-  - `reshelve-approve`: approve a reshelving list, which shows any change of visibility. Emptying, merging, splitting and moving
-    books to a new shelf are all reshelving lists.
+  - `reshelve-approve`: approve a reshelving list, which shows any change of visibility. Emptying a shelf, and placing books again after a
+    schema revision or a change of the matcher, are reshelving lists.
   - `shelf-resume`: resume a paused shelf.
   - `shelf-reseed`: run seeding again.
   - `book-weed`: remove books, one or a whole shelf's worth, which deletes data.
-  - `shelf-remove`: remove a shelf that has no active books.
+  - `shelf-retire`: return a shelf that has no active books to dormant. A shelf is never deleted from the schema.
+  - `schema-adopt`: take a new version of the schema file into use in the library. A revision of the schema is first made as a change to
+    the tracked file through the project's plan and decision process, which is where the owner approves its content; this action is the library's
+    own step. Its preview prints the digest of the new file and the reshelving list it causes, the command carries that digest, and a file that
+    differs from the previewed one is refused. Like the others it ships at `block`, offers all four levels, and is logged.
 - **[proposed]** These are agent-safe and need no level: *propose a shelf* or a rule change (it writes only a pending proposal, which
   has no effect), *preview a proposal* (prints the summary and its digest), and every read.
 - **[proposed]** Each governed action has a preview that prints the digest, as the workbench requires of a command that offers
@@ -135,35 +149,40 @@ The owner sets a level per action in their personal settings, and the workbench 
 - **[agreed]** The near-scope flag is a label. It is returned in results so an agent can weigh it, and it does not demote the book
   in ranking, because losing a lead is worse than noise.
 
-### Shelves and standard classifications
+### The schema and the standard classifications
 
-- **[agreed]** Shelves stay owner-defined and flat. They are not a library classification such as Dewey: a shelf is an interest
-  area with a scope statement and rules, may span several classes, and a fixed field-based tree would reinforce the boundaries the
-  library is meant to find ideas across.
-- **[agreed]** A standard classification is optional book metadata (`book.md`), recorded when a source provides it. The weave uses it
-  as a cheap, model-independent measure of how far apart two fields are, and placement may use it as a hint.
-- **[agreed]** The owner wants to borrow the buckets of a library classification such as Dewey, not its call numbers, so that the
-  tooling does not invent its own scheme.
-- **[proposed]** A shelf may carry an optional *bucket*: a broad category from a named scheme, stored in its rules file with the
-  scheme's name. It is a label for grouping and not a rule, and a shelf that spans several buckets lists them.
-- **[proposed]** Buckets are used in four ways. When a shelf is proposed, the AI suggests its bucket or buckets and shows the
-  neighbouring shelves. A library report shows which buckets have shelves and which have none, so the library grows in breadth, as
-  the brainstorm report's tiers intend. Sections, if hundreds of shelves need them, follow the buckets. The weave reads the distance between
-  the buckets of two themes' shelves as a cheap measure of how far apart the fields are.
-- **[agreed]** The default scheme for buckets is OpenAlex's domains and fields, because most of the library will be papers and
-  papers arrive tagged by OpenAlex or arXiv, so the bucket comes from the source and is not guessed. The Library of Congress
-  Classification is the supported alternate, suited to book-heavy and humanities shelves and to subjects such as games, and Dewey
-  is used only if someone maps it in.
-- **[agreed]** The tooling bundles no classification schedule. Buckets come from the source's own tags or from a mapping the owner
-  supplies, so the rights of any schedule are not the tooling's concern.
-- **[agreed]** When a topic fits the default scheme badly, such as games and recreation in OpenAlex, the owner can add a custom
-  bucket with their own name, marked as custom. It is not used for field distance, which is unknown for that shelf.
-- **[proposed]** A library has one default scheme. A shelf may carry extra labels from other schemes, each stored with its scheme's
-  name, and the tooling never compares codes across schemes. The weave's field distance uses the default scheme only.
-- **[proposed]** The vocabulary of buckets is a setting, with a mapping so that another scheme can be used. A bucket is broad, two
-  levels at most, so that an owner's own interests are never forced into a fine category.
-- **[idea]** A shelf proposal could suggest a scope by listing the categories that most of its seed candidates fall in, as
-  information for the owner and not as a rule.
+This section replaces the earlier position that shelves are owner-defined, flat and not a classification, and that a classification is only an optional
+label (a "bucket"). The decision `2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc` (accepted) sets the position below; where this
+spec and that record differ, the record wins.
+
+- **[agreed]** A shelf is a place in a fixed schema kept as a file in this project. The shelving exists to focus the fetch engine on a topic
+  and to know how many books the library holds on it. A model places each new book on the best-fitting shelf, and a book is not reshelved as the
+  library grows.
+- **[agreed]** The schema is the project's own combination of OpenAlex and the Library of Congress Classification, and not either alone.
+  Finer shelves are OpenAlex's topics, as children under its subfields. The owner would rather have too many shelves than too few.
+- **[agreed]** Each shelf has a flag that says whether it is a slim *scout*, holding a small number of anchor books that the weave can reach, or an
+  *active* shelf that the engine fills, and a priority of importance. Scouts are placed at the subfield level only; a drill-down to the topics under a
+  subfield starts on evidence. A research agent proposes and does not command; the owner approves.
+- **[agreed]** The schema is built before the experiments that need it (`docs/plans/2026-11-14-build-the-shelf-schema.md`).
+- **[proposed]** The file holds identity only: for each shelf a slug of our own (lowercase, unique, never changed), a name, a level (domain, field,
+  subfield, topic or custom), its parent, its OpenAlex identifier, for the shelves taken from the Library of Congress its subclass code, and one scope
+  sentence; and it names the OpenAlex snapshot it was built from and the source of every part, with a retrieval date and a hash. The flag, the
+  priority, the counts and the state of a shelf are the library's data, not the file's. A shelf with no entry there is dormant and takes its parent's priority.
+- **[proposed]** Every OpenAlex topic is in the file from the start. A drill-down therefore activates a shelf already in the file and adds nothing to it.
+  Only a topic OpenAlex does not have (a custom shelf), a new OpenAlex snapshot, or a finer shelf under a parent is a **revision** of the file, recorded
+  and approved by the owner. A shelf is never deleted, and only the books of a parent shelf are placed again after a revision.
+- **[proposed]** The Library of Congress part is a short, reviewed list of subclasses for fields OpenAlex does not cover (crafts and trades,
+  recreation, the military, the arts and the humanities), as shelves of level custom. Only names and codes of subclasses are kept.
+- **[agreed]** The tooling bundles no classification schedule. The file holds names and codes only, so the rights of any schedule are not the
+  tooling's concern.
+- **[agreed]** A standard classification is also optional book metadata (`book.md`), recorded when a source provides it, and placement may use it as a hint.
+- **[proposed]** The weave reads the distance between the shelves of two themes from the schema: the level at which their shelves first share an
+  ancestor (the same subfield, the same field, the same domain, or none). This is a cheap, model-independent measure of how far apart two fields
+  are, and a custom shelf has no known distance.
+- **[proposed]** A library report shows which subfields have scouts or active shelves and which have none, so that the library grows in breadth, as
+  the brainstorm report's tiers intend. The levels of the schema are its sections.
+- **[idea]** A shelf proposal could suggest a scope by listing the shelves that most of its seed candidates fall on, as information for the
+  owner and not as a rule.
 
 ### Priority between shelves
 
@@ -180,6 +199,11 @@ The owner sets a level per action in their personal settings, and the workbench 
   because other shelves keep arriving.
 - **[agreed]** Priority affects only how fast a shelf grows and is processed. It does not affect what a search returns or how
   results are ranked, so a low-priority shelf is searched on equal terms.
+- **[proposed]** A topic shelf with no weight of its own takes its subfield's. The weight may also be raised by bonuses for how often searches
+  reach the shelf and for an agent's proposal, each capped, and a scout has a fixed small allotment that no weight takes away. A bonus changes
+  only how fast a shelf grows, never what a search returns.
+- **[proposed]** A share of the fetch budget (a setting; the first guess is 20 percent) is exploration: it goes to scouting fields that no weight,
+  interest or demand has asked for, so that growth does not follow only what is already asked.
 - **[proposed]** The library report shows, for each shelf, its weight, the share of capacity it actually received, and the age of
   its oldest waiting item, so the owner can see whether a shelf is being starved.
 - **[idea]** How the shares are scheduled is defined in `pipeline.md` ("Scheduling and priority"). The weights here are only the
@@ -208,11 +232,18 @@ The owner sets a level per action in their personal settings, and the workbench 
   written from a private project may carry it in ordinary words. The derived query describes the subject in general terms and not
   the project's wording, and the owner can turn external queries off for a shelf or for the library, which stops this step and
   nothing else.
-- **[agreed]** A wanted topic that falls inside a shelf's scope becomes an extra seed query for that shelf's crawler. It is
+- **[agreed]** A wanted topic that falls inside an active shelf's scope becomes an extra seed query for that shelf's crawler. It is
   searched across the sources the shelf already allows, under the shelf's approved rules, so it needs no new approval. A candidate
   it finds goes through the normal relevance filter and filing.
-- **[agreed]** A wanted topic that falls outside every shelf's scope becomes a proposal for a new shelf or for widening a
-  scope. It is never applied on its own. Approval is the usual governed action (`shelf-approve`).
+- **[proposed]** A wanted topic that falls on a dormant shelf or on a scout becomes a proposal to activate it (a scout to become active, or a dormant
+  topic to become a scout or an active shelf); one that fits no shelf of the schema becomes a proposal for a schema revision (a custom or a finer
+  shelf). It is never applied on its own. Approval is the usual governed action (`shelf-approve`), or the owner's acceptance of a revision.
+- **[agreed]** A research agent may propose a topic of interest, a shelf to fill or a scout to become active, and does not command the engine.
+- **[proposed]** A topic proposed by an agent enters as a wanted topic of its own kind, under the same repetition rule, the same cap and the
+  same logged and dismissible queries as a topic derived from gaps, so that an agent's own knowledge, which is common, cannot steer growth alone.
+- **[proposed]** What starts a drill-down from a scout to its topics is evidence: on day one the number of links from the scout's themes to themes of
+  other fields and how often the fixed questions of the walk trial reach it, and later agent use, searches that find little, and the owner's request.
+  A drill-down proposes the two or three topics nearest to the lead that was followed, not all of a subfield's children.
 - **[agreed]** Demand is one input among several and has a cap. A setting limits the share of the crawler's capacity that demand
   may take, so the rest still goes to the shelf's own scope and to following the citations of books already held. The owner's shelf
   weights stay primary (`shelf.md`, "Priority between shelves"): demand adjusts emphasis inside a shelf and proposes new shelves, and
@@ -232,15 +263,18 @@ The owner sets a level per action in their personal settings, and the workbench 
   the owner, which limits how far an injected query can steer the crawler.
 - **[proposed]** A wanted topic that matches a private shelf stays private: it is invisible to a guest, as the shelf is.
 
-### Suggesting splits and merges
+### Suggesting schema revisions
 
-- **[agreed]** The library may suggest splitting or combining shelves.
+The schema is fixed, so shelves are not split or merged. The library may still suggest a change of the schema.
+
+- **[agreed]** The library may suggest a revision of the schema, such as a finer shelf under a parent.
 - **[proposed]** A suggestion is information and never acts on its own. It appears in the library report with its evidence, and
-  if the owner accepts it, it becomes an ordinary reshelving proposal, listed and approved as a list, with any change of
-  visibility shown.
+  if the owner accepts it, it becomes a revision of the schema file (made and approved through the project's plan and decision process, and taken
+  into use by `schema-adopt`) and an ordinary reshelving proposal for the books of the parent shelf, listed and approved as a list, with any
+  change of visibility shown.
 - **[proposed]** The signals are measurable and use the card embeddings the library already holds, with no model call. A shelf
-  whose cards fall into distinct, far-apart groups may be two shelves. Two shelves that overlap heavily, or that keep producing
-  near-tie placements, may be one. A shelf that stays very small after seeding is a candidate to fold into a neighbour.
+  whose cards fall into distinct, far-apart groups may need a finer shelf. Books that keep producing near-tie placements, or that fit no shelf
+  well, may need a custom shelf. A scout that stays small is not a signal: scouts are small by design.
 - **[proposed]** A suggestion shows the groups it found, with sample books from each, so the owner can judge whether a cluster is
   meaningful. A cluster is not always a topic, and the owner decides.
 - **[proposed]** A suggestion that was declined is remembered, so it is not repeated unless the evidence has changed.
@@ -250,14 +284,14 @@ The owner sets a level per action in their personal settings, and the workbench 
 - **[proposed]** A shelf has a stable id, like a book's, and a name. Books, the seen list, the event log and the catalog refer to the
   shelf by its id, so renaming changes no bytes and breaks no reference.
 - **[proposed]** The previous names are kept as aliases, so a command, a skill or a note that uses an old name still finds the
-  shelf, and the result says the name has changed. An old or removed shelf name asked for by a token that cannot see the shelf gets
+  shelf, and the result says the name has changed. An old or retired shelf name asked for by a token that cannot see the shelf gets
   the same answer as a name that never existed ("no such shelf"). Aliases created while a shelf was private are dropped when it is
   made shared.
-- **[proposed]** The name is part of the rules file, so a rename is a rules change and needs a new approval like any other. This
-  keeps one rule: an agent cannot change a shelf's rules.
+- **[proposed]** The name is part of the schema, so a rename is a revision of the schema file, approved by the owner. A slug is never
+  changed. This keeps one rule: an agent cannot change a shelf's rules or the schema.
 - **[proposed]** On a shared shelf, a guest sees the new name at once. A private shelf stays invisible whatever its name.
-- **[proposed]** Merging two shelves and splitting one are reshelving operations and not renames: a proposal moves books, shows any
-  change of visibility, and is approved as a list.
+- **[proposed]** Adding a finer shelf under a parent is a revision of the schema and not a rename: a proposal places the parent's books
+  again, shows any change of visibility, and is approved as a list. Shelves are not merged, and a shelf is never deleted.
 
 ### Emptying and removing a shelf
 
@@ -272,10 +306,10 @@ The owner sets a level per action in their personal settings, and the workbench 
   (`book-weed`), run on the whole shelf, and it is listed and approved as a list.
 - **[proposed]** An emptied shelf is paused, because its scope would otherwise let the crawler refill it at the next steady-mode run.
   The owner resumes it, or changes its scope, when they want it to grow again.
-- **[proposed]** A shelf may be removed when it has no active books ("empty" means no active books). Weeded and removed books keep
-  their records with the shelf's id. The shelf's rules file, id and aliases are kept as a record, marked removed, so references to
-  it still resolve to a clear "this shelf was removed" for a token that can see it, and not to nothing.
-- **[proposed]** Emptying is a reshelving list (`reshelve-approve`) and removing is its own action (`shelf-remove`). A book that is
+- **[proposed]** A shelf that has no active books ("empty" means no active books) may be retired: it returns to dormant and stays in the
+  schema. Weeded books keep their records with the shelf's id. The shelf's rules file, id and aliases are kept as a record, marked retired, so
+  references to it still resolve to a clear "this shelf was retired" for a token that can see it, and not to nothing.
+- **[proposed]** Emptying is a reshelving list (`reshelve-approve`) and retiring is its own action (`shelf-retire`). A book that is
   private stays private whichever way it leaves a shelf.
 
 ### Placement when more than one shelf fits
@@ -284,6 +318,16 @@ The owner sets a level per action in their personal settings, and the workbench 
   in visibility, a tie goes to the private one, because hiding a book from a guest by mistake can be undone and exposing one cannot.
 - **[proposed]** What counts as "about equally well" is a small margin between the scores, set as a rule. A book placed by a tie is
   marked so that reshelving proposals can show it first.
+- **[proposed]** A paper that carries OpenAlex topics takes its home shelf from the topic OpenAlex names as its primary topic, and the other topics
+  OpenAlex records for it (at most two more) are its secondary labels, in OpenAlex's order, so no tie has to be resolved. Any other book, a paper with no
+  primary topic, or one whose primary topic is not in the pinned snapshot, is matched in two steps: the nearest shelf descriptions by embedding, then a
+  model's choice among them with a one-line reason, with the model and the prompt version recorded and the choice sampled and audited. A book has one
+  home shelf, which is what counts, and up to two secondary labels; counts roll up to the subfield, the field and the domain. The matcher is first
+  measured on papers that carry an OpenAlex topic, with the label hidden.
+- **[proposed]** Placement names a home shelf for counting and does not by itself file anything. Whether a candidate is filed is decided by the rules
+  of the shelf whose crawl found it (its allowed sources and file types, size, license rule and relevance), or by the owner's direct say-so for a
+  source the owner gives. A book whose home shelf has no rules file is filed under the finding shelf's rules, counts on its home shelf, and does not
+  activate that shelf; a candidate the finding shelf's rules refuse is not filed, whatever its primary topic.
 
 ### Changing a shelf's scope
 
@@ -293,7 +337,8 @@ The owner sets a level per action in their personal settings, and the workbench 
 - **[proposed]** Weeding is a supported, owner-governed action (it has its own permission level), and it is unlikely to be common for
   this owner. It stays supported because other owners of this tooling may use it often, and nothing in the design should assume
   that books are kept forever. The flag on a book that no longer fits is information and is not a removal.
-- **[proposed]** A scope change is a rules change, so it needs a new approval like any other.
+- **[proposed]** A change of the fetch scope is a rules change, so it needs a new approval like any other. It changes what is fetched; the scope sentence
+  of the shelf in the schema changes only by a revision of the schema.
 
 ### Licenses and permission
 
@@ -307,7 +352,7 @@ The owner sets a level per action in their personal settings, and the workbench 
 
 ### Candidates and filing
 
-- **[proposed]** Candidates are proposed with a reason and a proposed shelf, and a new shelf is proposed when none fits. Candidates
+- **[proposed]** Candidates are proposed with a reason and a proposed shelf, and a revision of the schema (a custom shelf) is proposed when none fits. Candidates
   are proposed in the same three tiers as the brainstorm report, so the library grows in breadth. Candidates that meet the shelf's approved
   rules are filed automatically; a source the owner gives directly is filed on the owner's say-so, and is still subject to the shelf's allowed sources and to the
   crawler's address rules below; and a candidate that fits no shelf's rules waits for the owner.
@@ -317,14 +362,17 @@ The owner sets a level per action in their personal settings, and the workbench 
 ### States, seeding and steady growth
 
 - **[agreed]** A shelf has a fast mode to seed it, followed by a slow mode that keeps looking for more books.
-- **[proposed]** A shelf's state is new, seeding, steady, paused or removed. Seeding runs a bounded burst: an AI turns the scope into
+- **[proposed]** A shelf is dormant (in the schema, with no operational rules file and no state; the archived record of a retired shelf's rules is not operational and does not count), a scout (a shelf with a small seed limit), or active; an active shelf
+  is new, seeding, steady or paused, and a retired shelf returns to dormant. Seeding runs a bounded burst: an AI turns the scope into
   queries across several sources, and the burst stops when its target is met,
   its candidates run out, or its time limit passes. It can be run again, for example after the scope is widened. Fast means
   breadth, with many sites fetched in parallel and one request at a time to any one site; the per-site speed is a setting, and
   raising it makes a block more likely. Steady mode uses a low daily budget and the human-like pace, and looks for work cited by
   books already held, newly published work in the shelf's areas, and new versions of held books. Seeding creates a large backlog
   of model work, which the priority queue absorbs.
-- **[agreed]** The seed limit is set when a shelf is created, with a default of about 250 books.
+- **[agreed]** The seed limit is set when a shelf is activated, with a default of about 250 books for an active shelf.
+- **[proposed]** The seed limit of a scout is a few books (a guess: about 3), chosen as anchors that are rich in mechanisms, such as an overview or
+  a survey, and not an arbitrary book of the field. Wikipedia's lists of vital articles and outlines serve as a map for choosing them.
 - **[proposed]** When steady mode checks for new versions of held books, it also re-reads each source's retraction or withdrawal flag
   and its quality signals, and updates the caveat and the hints (`book.md`). A newly flagged book is listed in the library report.
 - **[agreed]** A shelf is searchable as soon as it has anything in it, including while it is still being seeded. How the pipeline
@@ -349,13 +397,15 @@ The owner sets a level per action in their personal settings, and the workbench 
   repository, an archive, or the author's own page). The work's identity (a DOI, an arXiv id, or title and authors) is what is
   matched, and the manifest records which source the copy came from. If no other copy is found, that is recorded in the seen list
   and the crawler moves on.
-- **[proposed]** The crawler refuses private, loopback and link-local destinations and revalidates every redirect hop, whatever
-  text supplied the URL (a citation, a DOI, an alternate copy, a direct submission).
+- **[proposed]** The crawler accepts only the schemes `http` and `https` and only public destinations: it resolves the host of every hop, including
+  every redirect, and refuses any address that is private, loopback, link-local, unspecified, multicast or otherwise reserved, in any
+  encoding of it, whatever text supplied the URL (a citation, a DOI, an alternate copy, a direct submission). It checks the resolved address
+  again at the moment of connecting, so that a name that resolves differently a second time is refused.
 
 ### Reshelving
 
-- **[agreed]** When a new shelf is created, the tooling looks at the books on the other shelves, including the holding shelf, to see
-  whether any belong on the new one, and proposes those moves.
+- **[agreed]** When the schema gains a shelf (a custom or a finer one), the tooling looks at the books of its parent and of the holding shelf to see
+  whether any belong on the new one, and proposes those moves. Activating a shelf that is already in the schema moves no book.
 - **[proposed]** This pass runs before the new shelf is seeded, using the same relevance scoring as filing, on each book's card
   and not on its text, so it is cheap. A book is proposed for the new shelf only when it fits clearly better than its current
   shelf, by more than the tie margin. A book that fits both about equally stays where it is. Seeding then skips anything already
@@ -367,7 +417,7 @@ The owner sets a level per action in their personal settings, and the workbench 
 ### The seen list
 
 - **[agreed]** The seen list lives in the index root, once per library, keyed by the work's identity. Each entry records the shelf
-  it was considered for, its score and its reason. A removed shelf's entries stay, so the crawler does not fetch those works again.
+  it was considered for, its score and its reason. A retired shelf's entries stay, so the crawler does not fetch those works again.
 
 ### Safeguards
 
@@ -385,6 +435,9 @@ The owner sets a level per action in their personal settings, and the workbench 
   sensitive: a private shelf may hold public sources that the owner simply does not want shared with others. So a guest sees
   nothing of a private shelf, including its name, its scope statement and its book counts.
 - **[agreed]** A shelf is shared by default; the owner can make it private.
+- **[proposed]** A change of visibility takes effect at once. Every query is evaluated against the visible subset as it is at that moment, and no
+  card, theme, excerpt, result, count or notice is kept for a token beyond the request that made it, so a guest's next query after a shelf is made private
+  returns nothing from it.
 - **[proposed]** Three kinds of token: a machine token and a project token (owner scope) see everything unless a project is narrowed
   on the host, and a guest token sees only shared shelves. A guest gets cards, themes, short excerpts and citation lines; full text
   and originals need an owner-scope token, and a guest never gets them. Auto-filed books are marked as such.
@@ -397,12 +450,14 @@ The owner sets a level per action in their personal settings, and the workbench 
 
 All of these are provisional until the spec is approved.
 
-- Creating a shelf with a scope statement and rules, then approving the rules, lets candidates that meet them be filed without
+- Activating a shelf of the schema with rules, then approving the rules, lets candidates that meet them be filed without
   per-book approval, and a changed rule is not applied until it is approved again.
+- The schema file passes its checker (unique slugs, existing parents, levels in order, no cycle), holds every OpenAlex topic of the snapshot it names,
+  keeps no state, priority or count, and is rebuilt byte for byte from its recorded inputs. A drill-down activates a shelf and changes the file in no way.
 - With the approval action at `ask`, a shelf can be approved from a remote channel without a terminal, and the confirmation is
   refused if the rules file differs from the digest that was previewed.
 - At `block`, approval is refused without a terminal; at `none`, it runs without one and is logged.
-- An agent can propose a shelf, and a proposal has no effect until approved. At `block` and `ask` an agent cannot apply a rule on
+- An agent can propose activating a shelf or taking up a topic, and a proposal has no effect until approved. At `block` and `ask` an agent cannot apply a rule on
   its own; at `none` the owner has chosen to let an agent approve.
 - Seeding stops at the seed limit, when candidates run out, or at its time limit, and the shelf's status shows sample accepts and
   rejects near the threshold.
@@ -414,10 +469,15 @@ All of these are provisional until the spec is approved.
 - A guest's query returns nothing from a private shelf: its name, scope, counts, and threads touching it are absent.
 - The same holds for every token through its visible subset: a project narrowed on the host sees no count, hint, thread, error,
   answered notice, library report line or alias that reveals a shelf it cannot see, and a guest never receives full text or originals.
-- The crawler refuses a private, loopback or link-local destination, including after a redirect, whatever text supplied the URL.
+- The crawler refuses a private, loopback, link-local, unspecified, multicast or reserved destination, in any encoding, including after a redirect and
+  when a name resolves to a different address the second time, and it follows no scheme but `http` and `https`, whatever text supplied the URL.
+- After a rules file is edited and before it is approved again, the shelf keeps running under the last approved rules and the crawler never reads
+  the edited file; after a shelf is made private, a guest's next query returns nothing from it.
+- A new schema version is taken into use only by `schema-adopt`, which is refused if the file differs from the previewed digest, and which shows the
+  reshelving list it causes. A book whose home shelf has no rules is filed only under the finding shelf's rules and does not activate that shelf.
 - Repeating one search from one project and token does not make a wanted topic, "not useful" feedback alone does not make a gap, and
   the answered check never reveals a hit on a shelf the reader cannot see.
-- A name of a removed or renamed shelf, asked for by a token that cannot see it, gets the same answer as a name that never existed.
+- A name of a retired or renamed shelf, asked for by a token that cannot see it, gets the same answer as a name that never existed.
 - Reshelving moves a book without changing its id or moving bytes, and the proposal shows any change of visibility.
 - With one shelf at a high weight and another at the lowest, the high one receives the larger share of capacity and the low one
   still advances at no less than its minimum share. The oldest waiting item of the low shelf is eventually served, and a search
@@ -428,8 +488,12 @@ All of these are provisional until the spec is approved.
   URL causes no fetch of that URL.
 - A dismissed wanted topic is suppressed, a topic added by hand is acted on without repetition, and a topic whose stored queries now
   find results is marked answered.
-- A shelf with two clearly separate groups of cards is reported as a split candidate, with sample books from each group. Two
-  heavily overlapping shelves are reported as a merge candidate. Nothing moves until the owner approves a reshelving list.
+- A shelf whose cards fall into two clearly separate groups is reported as a candidate for a finer shelf, with sample books from each group.
+  Nothing moves until the owner approves a revision of the schema and a reshelving list.
+- A paper with an OpenAlex primary topic that is in the snapshot is placed on that topic's shelf, with its other topics (at most two) as secondary
+  labels; any other book is placed by the two-step matcher with a logged reason; the counts of home shelves roll up to the subfield, field and domain.
+- A scout holds only its few anchor books, takes no share of the fetch budget beyond its fixed allotment whatever its weight, and becomes active only
+  by an approved proposal.
 
 ## Open questions
 
@@ -439,14 +503,21 @@ These need a trial on a real shelf or real scale, so they are left open on purpo
 - The size of the margin that counts as a tie. It is a setting, tuned on real shelves.
 - The default fetch speed, daily budgets and the free-space floor. Start conservative, with the floor at 10 percent of the drive
   unless the owner sets another number.
-- How sections of shelves would work if there are hundreds. Not worth designing before about fifty shelves.
+- How accurate the matcher is, on papers with a hidden OpenAlex topic and on other books, and how the audit samples. Only a run can tell.
+- How many anchor books a scout needs, how they are chosen, and whether a pilot of scouts at the topic level in a few subfields is worth its cost.
+  The time per book on the model server is not measured.
+- The share of the fetch budget that exploration takes (a guess of 20 percent), the bonuses for hits and for an agent's proposal, and their caps.
+- The Library of Congress terms of use are unchecked, and which subclasses become custom shelves is for the owner to review.
+- Whether the first slice of the fetch engine may fetch only what the engine can capture now (public pages and arXiv papers) and skip the
+  references that sit behind a paywall.
 - The thresholds for demand: the score floors that make a search a gap, how many separate searches and days make a wanted topic,
   and the default cap on the crawler's capacity that demand may take. These need real searches to tune.
 - How a wanted topic is turned into queries for a shelf's sources, and how its representative description is chosen.
 
 ## Governing decisions and references
 
-- Decisions: none recorded in this repository yet.
+- Decisions: `docs/decisions/2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc.md` (accepted 2026-11-14): the shelf schema.
+  The plan that builds it is `docs/plans/2026-11-14-build-the-shelf-schema.md`.
 - References: none.
 - The design this belongs to is `knowledge-base.md`. The related specs are `book.md`, `theme.md`, `card.md`, `library.md` and
   `testing.md`. The pipeline is in `pipeline.md`; the models are in `models.md`, the reading module in `reading.md` and the weave in `weave.md`.

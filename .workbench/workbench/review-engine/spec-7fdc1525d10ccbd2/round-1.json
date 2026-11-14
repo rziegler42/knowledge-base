@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "docs/specs/shelf.md:85-104, 261-264, 280-284",
+      "problem": "Schema revisions and renames require owner approval, but no governed action, permission key, preview/digest rule, or acceptance criterion is defined for approving the schema-file change itself.",
+      "severity": "major",
+      "suggestion": "Define a dedicated schema-approval action and its preview, digest, host-ceiling, audit, and checkpoint semantics, or explicitly make schema revisions part of an existing governed action."
+    },
+    {
+      "id": "R1-F2",
+      "location": "docs/specs/shelf.md:311-316, 341-344, 351-359",
+      "problem": "OpenAlex primary-topic placement is stated as unconditional, even though dormant shelves have no rules and automatic filing is allowed only when candidates meet an activated shelf's approved rules. The spec does not say what happens when the primary-topic shelf is dormant or rejects the source by its rules.",
+      "severity": "major",
+      "suggestion": "Make primary-topic placement conditional on an eligible activated shelf and all approved source, file-type, size, license, and relevance rules; otherwise define the proposal, fallback, or holding-shelf behavior."
+    },
+    {
+      "id": "R1-F3",
+      "location": "docs/specs/shelf.md:218-225",
+      "problem": "A wanted topic derived from searches across projects can be sent to external search engines without owner review, while the document explicitly admits the filter cannot reliably remove private details. This creates an acknowledged private-data exfiltration path with no hard guarantee or per-topic confirmation.",
+      "severity": "major",
+      "suggestion": "Require an explicit owner-approved external-query policy and deterministic redaction/allowlisting before transmission, or keep demand-derived queries local until reviewed."
+    },
+    {
+      "id": "R1-F4",
+      "location": "docs/specs/shelf.md:369-387, 453",
+      "problem": "The crawler's destination safeguard only names private, loopback, and link-local addresses. It does not specify DNS resolution and revalidation at connection time, protection against DNS rebinding, or equivalent encodings and reserved/unspecified address ranges, so an untrusted URL or redirect may still reach internal services.",
+      "severity": "major",
+      "suggestion": "Specify a complete destination policy: resolve every hop, reject all non-public/reserved address ranges and unsafe schemes, and re-check the resolved address immediately before connecting and across redirects."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The draft has unresolved approval semantics for schema changes, an undefined path for OpenAlex placement into inactive or rule-ineligible shelves, an acknowledged external-query privacy leak, and incomplete SSRF destination protections.",
+  "verdict": "changes_needed"
+}
