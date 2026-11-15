@@ -142,6 +142,10 @@ Each increment's recorded verification stands unless a later one changed its inp
 
 ## Review record
 
+### Increment E
+
+The `reviewer` agent, one exchange (fifth of the plan), read only: it read the plan, the sheet, the marks file, the report, the pooled file, the choices and the first plan's report, and **recounted the figures by hand from the raw marks, sheet and choices**; it did not read the scripts, tests or breaks. **No blocking finding.** It confirmed: each `said` line equals its parsed marks (all 28), the closing line and the sheet hash, a sheet with no kind, group, rank, score, choice or item (a key search, and a read of books 1 to 19), the 28 books' figures, the three misses, the pooled counts from the two reports and the reading "clearly good". Applied: the stale heading of the Result, the model's `none` books with the nearest shelf's status (and that the report's `none_books` is the owner's `none` books), the seed named as a departure, the pooled count of 68, the check run, and the interval method named. It could not check the hash chain, the shasum values, the counts of tests and breaks, or that the owner never saw the choices before closing (the closing came before any comparison in this session).
+
 ### Increment D
 
 The `reviewer` agent, one exchange (fourth of the plan), read only; it was told not to read the answers file, so that it does not need them and the owner's marks stay blind. **No blocking finding.** It read the plan, the wrapper, its tests and breaks, the earlier script and the final sample, and ran nothing: it found no way for the patch to change what is sent or which texts are sent (the validated texts are the texts sent; `group` and `item` reach no call). Applied: the limits above are said in the Result (nothing saved ties the files to the wrapper, the pin is checked after the import, some types are not checked, the plan says 30 where the sample is 28). It could not compute hashes, run the tests or breaks, or check the counts of the sends and the answers; those are read here from the commands as run.
@@ -165,6 +169,50 @@ The `reviewer` agent, one exchange of the cap of 6, read only: it read the plan,
 - A side check of OpenAlex topic descriptions that disagree with their names.
 
 ## Result
+
+### Increment E — the owner's marks and the report (done on 2026-11-15; not yet committed; the owner's reading is still to come)
+
+**What was made** (outside the repository, in `~/.local/share/knowledge-base/trial/hard/`, mode 600): `sheet_hard.py` (`aba03b14…3b3fd0`) and `report_hard.py` (`a6224a6d…4a64f0`), thin wrappers of the earlier plan's `sheet_books.py` (pinned `e74c3399…cad1`) and `report_books.py` (pinned `bea9742b…ba85d`), both unchanged; tests `test_sheet_hard.py` (`c8308ef8…96f70`, 27 at the last run) and breaks `breaks_sheet_hard.py` (`bc7a3b6b…64b9`, 20; 20 of 20 caught, files restored byte for byte; the first run missed 7, of which 1 was an equivalent break that was removed and 6 showed gaps in the tests, for which tests were added). The earlier scripts' own tests were rerun and pass (49, 36, 52). **Departures, said plainly:** the sheet has **four batches of seven, not batches of ten** (28 books do not split into tens, and the earlier script fixes the batch size, so the wrapper sets 4 by 7, which keeps all its checks); the shuffle seed is 2; the wrappers replace the earlier scripts' loader, counts and batch size and nothing else. For the wrappers the tests were written before the code and failed first (the module was missing).
+
+**The sheet and the marks.** `sheet-hard.json` (`976e7e1c…bcd5`): 28 books in four batches of seven, blind (title, address, summary and five shelves in alphabetical order; no kind, group, rank, score or choice). The owner marked in four batches (messages of 2026-11-15) and each batch was repeated back before the next; **the marks are the owner's as given** (`marks-hard.jsonl`, `91a02c06…94ca58`, closed with a last line holding the hash of the four batch lines, `d96a1775…ee3cf`; 28 marked, 0 skipped; the file was closed on the owner's word "close" and compared with nothing before that). **Retyping, said plainly:** the batches were shown to the owner as messages that I retyped from the tool output (the owner's view of tool output was not sure); I said so each time and found these slips: book 5, shelf 4 of batch 1 (`sociolinguistic` written `sociolinguistics`), straight apostrophes for curly ones throughout, and book 28, shelf 5 of batch 4 (the scope sentence of "Power Line Inspection Robots" shortened); none changes a shelf name or an address, and the owner's marks are of the numbers.
+
+**The figures** (`report-hard.json`, `66879414…f2173f`, made by `report_hard.py report …` on the closed file; **recounted by a snippet that uses none of these scripts, from the raw marks, sheet, choices and candidates files: the counts agree**):
+
+| figure | all 28 | web pages 20 | preprints 8 |
+|---|---|---|---|
+| strict (the model's pick is the owner's best; `none` against `none` is right) | 25 (89.3%) | 18 | 7 |
+| lenient (strict, or one of the owner's `also` shelves) | 25 (89.3%), rough interval 71.8 to 97.7% | 18 | 7 |
+| nearest shelf is the owner's best | 13 (46.4%) | 10 | 3 |
+| ceiling (the owner's best is a shelf: one of the five is a fair home) | 26 (92.9%) | 18 | 8 |
+| none of the five fits | 2 (7.1%) | 2 | 0 |
+| model said `none` (and the owner's best was also `none`) | 2 (1) | 1 (1) | 1 (0) |
+| field of the pick = field of the best (books where both are shelves) | 25 of 25 (3 left out) | 18 of 18 | 7 of 7 |
+
+The sensitivity figure (skipped counted wrong) is the same (none skipped). **Reading against the bar fixed in the plan before anything was fetched** (lenient at least 75 percent and none-of-five at most 15 percent): **meets, on both readings**; and by the plan's own words, **clearly good** (lenient at least 75 percent with the lower end of the rough interval, 71.8 percent, at least 55 percent). **The lenient figure equals the strict one: no `also` shelf rescued a pick.**
+
+**The three books the pick missed** (the owner's words are the marks): book 3, *Existence of continuous euclidean embeddings…* (model `none`; the owner's best is shelf 2, Advanced Topology and Set Theory, so a fair home was offered); book 5, *Zeugma* (the owner's best is `none`; the model picked Linguistic research and analysis); book 12, *NIST SP 1300* (the nearest shelf, Cybersecurity and Information Systems, was the owner's best; the model picked Diverse Interdisciplinary Research Studies). **The two books where none of the five fits** are the beehive-frame patent US1425295 (the model also said `none`: right) and Zeugma. **Where the nearest shelf alone is right and the choice is wrong:** book 12 only (the report's own list). Compared with the figures the plan names: the first 40 books had lenient 34 of 40 (85.0%), strict 29 of 40, nearest 21 of 40 and none-of-five 0 of 40; the 300 papers had exact 58.7 percent and nearest 46.7 percent.
+
+**The model's two `none` books, with the nearest shelf's status, as the plan asks** (note that the report's `none_books` list holds the books where the *owner's* best is `none`, books 1 and 5, not these): **book 1**, the beehive-frame patent US1425295: the model said `none`, the owner's best is `none` (right); the nearest shelf (Insect and Pesticide Research) is not the owner's best, since the owner's best is `none`. **Book 3**, the Euclidean-embeddings paper: the model said `none`, the owner's best is shelf 2 Advanced Topology and Set Theory (wrong); the nearest shelf (Fixed Point Theorems Analysis) is neither the owner's best nor acceptable (the owner gave no `also`), so the nearest shelf would have been wrong too. The earlier reading stands: a bare `none` means "unsure, ask the owner".
+
+**More departures from the plan's text, said plainly:** the plan names the new shuffle `sheet:hard`; the earlier script needs an integer seed, so the seed is 2. The pooled figure is over 68 books, not the 70 the plan's first words imply (the sample is 28, not 30: Increments A to C record why). The intervals are the earlier script's exact (Clopper-Pearson) intervals, called rough because the picks were not a random draw. `wb run code-work check` was run after this Result was written: no problems.
+
+**An error of mine in the conversation, said plainly:** after the marks I told the owner that four of their marks were `none`; the report shows two (books 1 and 5). I corrected it as soon as I read the report.
+
+**The pooled figure over the first 40 and these 28 (68 books)**, made by `pool_hard.py` (`97d6142f…1dcfd2`; tests `test_pool_hard.py` `84461043…567fd`, 25; breaks `breaks_pool_hard.py` `476c4643…97ae9`, 35 of 35 caught after the first run missed 10, which showed that several checks were caught only by a neighbouring check and tests for each were added; file restored byte for byte), which imports the earlier script's interval and bar functions unchanged and is pinned with them; output `pooled-hard.json` (`500e9093…940cea`). **The two samples were chosen in different ways (the first drawn at random, the second picked by hand), so the pooled figure is a rough guide to the books judged and not an estimate for a population.**
+
+| pooled over 68 books | all 68 | web pages 50 | preprints 18 |
+|---|---|---|---|
+| strict | 54 (79.4%), rough interval 67.9 to 88.3% | 38 | 16 |
+| lenient | 59 (86.8%), rough interval 76.4 to 93.8% | 42 | 17 |
+| nearest shelf is the owner's best | 34 (50.0%) | 25 | 9 |
+| one of the five is a fair home | 66 (97.1%) | 48 | 18 |
+| none of the five fits | 2 (2.9%) | 2 | 0 |
+| model said `none` | 5 | 4 | 1 |
+| right field when both are shelves | 58 of 62 | 41 of 45 | 17 of 17 |
+
+The bar (lenient at least 75 percent, none-of-five at most 15 percent) is met on the pooled counts. **The second sample by group** (strict and lenient are equal in each): other web pages 9 of 10, English Wikipedia 5 of 6, Wikipedia in other languages 4 of 4, preprints 7 of 8 (the three misses are one in each of the first three: NIST SP 1300, Zeugma and the Euclidean-embeddings paper). **The pooled counts were also worked by hand in the tests** (the real-report test expects 68, 54, 59, 34, 66 and 2).
+
+**Not done yet:** the `reviewer` agent's reading; the owner's reading (completion criterion 6); the commit. **The shell's gate closed during this step** (`packages/workbench/code-work`, the sixth time in the session that it closed after the owner cleared it, with a different package); the owner cleared it again.
 
 ### Increment D — the five nearest shelves and the choice (done on 2026-11-15; not yet committed)
 
