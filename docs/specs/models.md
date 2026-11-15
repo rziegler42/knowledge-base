@@ -196,6 +196,10 @@ rules, which this spec depends on.
   (`qwen3-embedding:4b`): the command refuses an entry that names another model or has a prefix, and a model the bridge reports as another,
   and says that another model needs a new measurement. The file of the shelf vectors records the model, the dimension, the document prefix
   and the hash of the schema file, is replaced and never mixed, and is refused by the reader when the schema file has changed since.
+- **[proposed]** Built in the engine: the kind of work `place` names the chat entry that chooses the home shelf of a book among its five nearest
+  shelves (`kb.placement`, `python3 -m kb place-propose`). Like `card-more` it may be left unset, and the command then says so and does nothing. It
+  must name the measured chat model (`gemma4:12b`) with thinking off; another entry is refused, as is a model the bridge reports as another, and the
+  reason is the same as for `place-embed`: another model needs a new measurement. The book texts are sent to the `place-embed` entry as documents.
 - **[proposed]** Built in the engine: an embedding entry may carry a `query_prefix` and a `document_prefix`, each text of 1 to 400
   printable characters (a line break is allowed; no control, format or private-use character, which does not make the text sure to be
   what it looks like), and `kb.models.embed` puts the one for the kind of text (a query,

@@ -124,9 +124,9 @@ def _entry(name, e):
 
 
 REQUIRED_TASKS = ("card-notes", "card", "card-check")  # the kinds of model work that a card needs; the engine attaches no model to any of them
-OPTIONAL_TASKS = ("card-more", "theme", "theme-check")  # the kinds that may be left unset: the work is then not done, and that is said.
+OPTIONAL_TASKS = ("card-more", "theme", "theme-check", "place")  # the kinds that may be left unset: the work is then not done, and that is said.
 # `theme` makes the themes of a book (`themeextract`) and `theme-check` checks what a description says against the excerpt
-# (`themecheck`); a card needs neither
+# (`themecheck`); a card needs neither. `place` chooses the home shelf of a book among the five nearest (`placement`)
 TASKS = REQUIRED_TASKS + OPTIONAL_TASKS
 EMBED_TASKS = ("card-embed", "place-embed")  # the kinds of work that turn text into vectors: each names an entry of the kind embedding, no card task may
 # `place-embed` makes the vectors of the shelves of the schema (`shelfvectors`); the placement of a book uses the vectors of one model only, the one that was measured

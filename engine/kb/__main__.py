@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
+from . import placement, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -124,6 +124,12 @@ def main(argv=None):
                                               "model only); a vector whose text has not changed is kept; the shelf texts go to that model, so run it with --check first")
     sv.add_argument("--check", action="store_true", help="print what would be sent, and send and write nothing")
     sv.add_argument("--again", action="store_true", help="make every vector again")
+    pp = sub.add_parser("place-propose", help="propose a home shelf for each book that is still on the shelf default: the text of its newest card is embedded, the five nearest shelves are found "
+                                              "and the chat model of the task place chooses one or says none; one line in the book's own event log, and nothing else changes; the book texts "
+                                              "go to those models, so run it with --check first")
+    pp.add_argument("--check", action="store_true", help="print what would be sent, and send and write nothing")
+    pp.add_argument("--again", action="store_true", help="propose again for books that already have a current proposal")
+    pp.add_argument("--book", action="append", metavar="BOOK_ID", help="place this book (whatever its shelf); give it once for each book")
     tv = sub.add_parser("theme-vectors", help="make the vectors of the themes (the summary, the whole description and each of the five parts of "
                                               "every theme, up to seven texts) with the embedding model that the config sets for card-embed; a vector "
                                               "whose text has not changed is kept; those texts go to that model")
@@ -318,6 +324,13 @@ def main(argv=None):
                 print(shelfvectors.describe(cfg, index_root=cfg["index_root"], again=args.again))
                 return 0
             print(json.dumps(shelfvectors.build(Store.open(), cfg, again=args.again)))
+            return 0
+        if args.command == "place-propose":
+            cfg = config.load()
+            if args.check:
+                print(placement.describe(Store.open(write=False), cfg, book_ids=args.book, again=args.again))
+                return 0
+            print(json.dumps(placement.propose(Store.open(), cfg, book_ids=args.book, again=args.again)))
             return 0
         if args.command == "theme-vectors":
             counts = themevectors.build(Store.open(), config.load(), again=args.again)
