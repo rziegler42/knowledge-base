@@ -142,7 +142,9 @@ Each increment's recorded verification stands unless a later one changed its inp
 
 ## Review record
 
-Empty until a review is asked for.
+### Increment A
+
+The `reviewer` agent, one exchange of the cap of 6, read only: it read the plan, the Result and the four files of the folder, and ran nothing. **No blocking finding.** Applied: that the second half of step 5 was not reported (the Result now says it was not checked and moves it to B), and that the test of addresses already held covers carded books only (the Result says so). Not applied as changes, since the Result already says them and the owner decides: the owner's word "implement" taken as "fetch it" (the owner is asked to confirm), the script without tests, `wb run code-work check` not rerun, and the redirect failure's cause left as the engine's own words. It could not check the logs, the hashes, the failed books in the store or the approval record; those are read here from the commands as run (the hashes are those printed by `shasum -a 256` after the run).
 
 ## Deferred work
 
@@ -152,4 +154,19 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — fetch and process the 30 books (done on 2026-11-15; not yet committed)
+
+**What was run.** The plan was committed at `111f17c` and approved with `wb approve-plan` at the level `ask` (digest `ab0a38cf…`). The owner's word "implement" was taken as the word "fetch it": the list had been written in the plan and its groups shown in chat before. Outside the repository, in `~/.local/share/knowledge-base/trial/hard/` (mode 600): `hard-list.json` (`aecd713d…c12c6e`, 41 items), `snapshot_hard.py` (`3731eadb…5549b9`, a read-only script; it has no tests, which is a departure from the order of work for a short throwaway reader, said here), `snapshot-before.json` and `snapshot-after.json` (both `e274bb4b…8b75f3`).
+
+1. **Before the fetch** the catalog held 175 current cards, and none of the 41 addresses of the list was already held (by the address or arXiv id of a card).
+2. **The route:** `python3 -m kb capture-url` reached the network from here (the RFC filed); the shell's `curl` had timed out earlier, so the two routes differ.
+3. **Captures**, one at a time, in the order of the plan: **29 filed, 4 failed.** Failed: `ocw.mit.edu/.../1-72-groundwater-hydrology-fall-2005/lecture-notes` (too many redirects, or a redirect loop; book 01M7FKBTMXH06BYG5325XDNT21), `si.edu/object/mariners-astrolabe…` (HTTP 403; 01M7FKBXG0NQQA8B2P78WYGF5H), the first web reserve `nrcs.usda.gov/…Rangeland_Soil_Quality_Compaction_0.pdf` (`capture-url` refuses a PDF: not a web page; 01M7FKC79VW76Z1WS5RJNR9ST7), and the third web reserve `si.edu/es/object/dorothy-liebess-…` (HTTP 403; 01M7FKCNG94X2R3VYKBMTDTPZK). The second web reserve (`patents.google.com/patent/US1425295`) filed. **No address was retried.** The four failed attempts are books in the store with a failed fetch; they have no payload and no card.
+4. **By group:** preprints 8 of 8 (all main, none of the reserve used); web pages 11 of 12 (**the group's three reserves are used up: the group is one book short**); obscure English Wikipedia 6 of 6; Wikipedia in other languages 4 of 4. Total **29 books, not 30.**
+5. **`python3 -m kb process`** ran scan, convert and index; a second run found nothing left to do. The stage record of each of the 29 books reads found, fetched, scanned, converted and indexed, all `done`.
+6. **The earlier books are unchanged:** the hash of the card of each of the 175 books (generation and text) is the same before and after (`snapshot-before.json` and `snapshot-after.json` are identical). The 29 new books have no card yet.
+
+**Narrower than step 5 asks, said plainly:** the second half of step 5 (the 29 new books are in the catalog's list of books with their kinds and addresses) was **not** checked: the catalog lists books through their cards and the 29 have none yet. What shows they are in the library is the `filed` result and the stage record of each. The check of the catalog is moved to Increment B (step 3 there counts 30 new current cards by kind and address). The test for an address already held covers carded books only (a book with no card, such as an earlier failed fetch, would not show); no earlier failed fetch of these addresses is known.
+
+**The owner's decision on the short group:** "go with 29". The sample is 29 books (8 preprints, 11 web pages, 6 obscure English Wikipedia articles, 4 Wikipedia articles in other languages); the figures say 29 and no book is added. The plan's text speaks of 30 and is not changed; the Result's numbers stand for it.
+
+**Not done:** the commit. **For the owner:** the web group is one short (a PDF or a museum record could not be captured). Options: go on with 29 (the figures say so), or add one web page the owner names (an amendment, since the reserve is used up and the plan lets only the owner add a book). `wb run code-work check` has not been rerun since the plan was approved.
