@@ -97,6 +97,9 @@ python3 -m kb card-index             # build the catalog of cards
 python3 -m kb card-vectors           # vectors of the neutral fields; their text goes to your embedding model
 python3 -m kb card-search 'a problem in a few sentences' --meaning
 python3 -m kb problem-search -- 'first sub-problem' 'second sub-problem'
+python3 -m kb shelf-vectors --check  # the vectors of the shelves of the schema: what would go to your embedding model (nothing is sent by --check)
+python3 -m kb place-propose --check  # propose a home shelf for each book still on `default`: what would go to your models (nothing is sent by --check)
+python3 -m kb place-review           # go through the proposals one book at a time and answer each; needs a terminal; moves no book
 ```
 
 The model commands need a model registry in the config (`python3 -m kb models` lists it and makes no call); the section "Calling a

@@ -328,6 +328,18 @@ The schema is fixed, so shelves are not split or merged. The library may still s
   of the shelf whose crawl found it (its allowed sources and file types, size, license rule and relevance), or by the owner's direct say-so for a
   source the owner gives. A book whose home shelf has no rules file is filed under the finding shelf's rules, counts on its home shelf, and does not
   activate that shelf; a candidate the finding shelf's rules refuse is not filed, whatever its primary topic.
+- **[proposed]** Built in the engine (the plan `2026-11-15-propose-a-shelf-for-each-book`; `engine/README.md`, "Placing a book on a shelf"): the matcher of the two steps above
+  for a book that carries no OpenAlex topic. `python3 -m kb shelf-vectors` makes the vectors of the shelves of the schema; `python3 -m kb place-propose` writes, for each book that
+  is still on `default`, one proposal into the book's own event log (the five nearest shelves, the chat model's choice or `none` with a one-line reason, and what made it); and
+  `python3 -m kb place-review` shows the proposals to the owner one book at a time, in the owner's terminal, and records each answer as one more line of that log. **A proposal and an answer
+  are records. They change no book's shelf and no file of the book but its event log, to which each adds one line.** The matcher is fixed to what was measured (the embedding model `qwen3-embedding:4b` with no prefix, the chat model `gemma4:12b`,
+  the prompt `place-1`, five candidates), and another model is a new measurement. Not built: moving a book onto a shelf, placement at capture, placement by an OpenAlex primary topic, the sampling and audit of choices, counts
+  per shelf, the holding shelf and the tie margin.
+- **[proposed]** What an owner's answer is, and what it is not: the confirmation command refuses unless its input is a terminal, which stops a pipe, a file and an argument, but it is an interlock of the
+  command line and **not proof that a person typed** (a program that holds a pseudo-terminal passes it, and anything that can write the library as the owner can append the same line). **A
+  recorded answer is therefore a record and not an approval.** The step that moves books onto shelves (the governed `reshelve-approve` and `schema-adopt` above) must not take such a line as the
+  owner's approval: it uses its own governed action, with a preview that shows what it will do and a digest of it, at the level the owner has set for it. That a record is not an approval is implied by the permission
+  levels above; it is recorded here so that the step is planned with it.
 
 ### Changing a shelf's scope
 
