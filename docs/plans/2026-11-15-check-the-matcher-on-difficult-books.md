@@ -1,6 +1,6 @@
 # Check the shelf matcher on difficult books
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-15
 Candidate: none (the shelves, the fetch engine and the crawler are outside every roadmap, which say so; creating a roadmap for them is the owner's change of direction; this plan follows the plan `2026-11-14-check-the-matcher-on-the-librarys-books` and the owner's reading of it)
 Specs: docs/specs/shelf.md, docs/specs/card.md, docs/specs/pipeline.md
@@ -169,6 +169,14 @@ The `reviewer` agent, one exchange of the cap of 6, read only: it read the plan,
 - A side check of OpenAlex topic descriptions that disagree with their names.
 
 ## Result
+
+### The owner's reading (completion criterion 6)
+
+The owner was shown the figures and my recommended reading and said **"go with your recommendation"**. The recommended reading, which is therefore the owner's, is: **(1)** the matcher does as well on the hand-picked difficult books as on the first 40: 25 of 28 strict and lenient (89.3 percent, rough interval 72 to 98 percent), and 59 of 68 lenient over both samples (86.8 percent, 76 to 94 percent), above the bar fixed beforehand, and by the plan's words clearly good. **(2)** The choice step is good enough to **propose** a shelf for a book that the owner then confirms; it files nothing, as the reading of the first books-check said. **(3)** A bare `none` from the model means "unsure, ask the owner": it was right once and wrong once of two. **(4)** The evidence is 68 books (Wikipedia articles in four languages, preprints, standards, a patent, lecture notes, a forum thread and a book); the second sample is hand-picked and small, so it does not say how the matcher does on the whole library, and no more tuning on these books is allowed (a variant needs fresh books). The owner added nothing to the reading.
+
+### The whole plan — verified and closed (2026-11-15)
+
+Each increment's recorded verification stands, and these were rerun at the end because later steps could invalidate them: **the hashes of the 30 outside files** that this Result names were recomputed (`shasum -a 256`) and the first eight characters of each appear in this plan (the folder holds nothing else but `vectors-hard/`; a stray `__pycache__` that test runs had made was removed); **the tests of every script were rerun and pass:** `test_hard_sample` 51, `test_run_hard` 20, `test_sheet_hard` 27, `test_pool_hard` 25, and the earlier plan's `test_books_sample` 61, `test_run_books` 52, `test_sheet_books` 49 and `test_report_books` 36; **the 175 books that were in the library before Increment A have the same cards** (the whole card's hash of each, compared with `snapshot-before.json`: unchanged; the catalog now holds 204 cards); `wb run code-work check` finds no problems. The breaks were not rerun (each script's last run is recorded above, and no script changed after it). Nothing in the repository changed except this plan. **Completion criteria:** 1 met (29 books fetched and carded, 28 in the sample; the 175 earlier cards unchanged; the one missing book and its card without a summary are recorded); 2 met (rule `text-1` fixed before the fetch; manifest and sample cited by hash; no drops); 3 met (the embedding and the choice with the entries, prompt and times recorded; nothing changed in the pipeline); 4 met (28 books marked blind, none skipped, as given, final before the comparison); 5 met (the figures with denominators, intervals, kinds and groups, beside the first 40 and pooled over 68, the whole cohort, an independent recount and the reading against the bar); 6 met (above); 7 met (the check is clean; only this plan changed). **Recommendations the owner declined:** none. **Left open:** the unexplained fifth book without a card in the catalog (Increment B); the web group's one missing book; the placement command; the next plan, which the owner decides.
 
 ### Increment E — the owner's marks and the report (done on 2026-11-15; not yet committed; the owner's reading is still to come)
 
