@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import placement, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
+from . import placement, placereview, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -130,6 +130,11 @@ def main(argv=None):
     pp.add_argument("--check", action="store_true", help="print what would be sent, and send and write nothing")
     pp.add_argument("--again", action="store_true", help="propose again for books that already have a current proposal")
     pp.add_argument("--book", action="append", metavar="BOOK_ID", help="place this book (whatever its shelf); give it once for each book")
+    pr = sub.add_parser("place-review", help="go through the proposed shelves one book at a time in your own terminal and record your answer for each as a line of the book's own event log; "
+                                             "it changes no book's shelf; it refuses unless its input is a terminal; --list prints where each book stands and needs none")
+    pr.add_argument("--list", action="store_true", help="print the counts of where each book stands, read only")
+    pr.add_argument("--again", action="store_true", help="ask again about books you have already answered")
+    pr.add_argument("--book", action="append", metavar="BOOK_ID", help="go through this book only; give it once for each book")
     tv = sub.add_parser("theme-vectors", help="make the vectors of the themes (the summary, the whole description and each of the five parts of "
                                               "every theme, up to seven texts) with the embedding model that the config sets for card-embed; a vector "
                                               "whose text has not changed is kept; those texts go to that model")
@@ -331,6 +336,12 @@ def main(argv=None):
                 print(placement.describe(Store.open(write=False), cfg, book_ids=args.book, again=args.again))
                 return 0
             print(json.dumps(placement.propose(Store.open(), cfg, book_ids=args.book, again=args.again)))
+            return 0
+        if args.command == "place-review":
+            if args.list:
+                print(json.dumps(placereview.listing(Store.open(write=False))))
+                return 0
+            print(json.dumps(placereview.review(Store.open(), book_ids=args.book, again=args.again)))
             return 0
         if args.command == "theme-vectors":
             counts = themevectors.build(Store.open(), config.load(), again=args.again)

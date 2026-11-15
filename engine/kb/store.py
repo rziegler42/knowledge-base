@@ -19,6 +19,7 @@ import math
 import os
 import re
 import shutil
+import stat
 from datetime import datetime, timezone
 
 from . import KbError, config, ids, incoming, library, stages, textutil
@@ -28,6 +29,7 @@ FORMAT = 1
 TITLE_CHARS = 500  # a title is kept to this length (the limit an arXiv title was already cut to)
 _VERSION = re.compile(r"v[1-9][0-9]{0,5}")
 _PAYLOAD = re.compile(r"original|derived/[a-z0-9][a-z0-9._-]{0,63}/[0-9]{1,6}")
+MAX_EVENTS_BYTES = 64 * 1024 * 1024  # the largest event log `read_events` takes; a book's log is a few lines for each thing that happened to it
 _SHELF = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _TOOL = re.compile(r"[a-z][a-z0-9-]{0,40}")
 _TOOL_VERSION = re.compile(r"[0-9A-Za-z._-]{1,40}")
@@ -364,16 +366,39 @@ class Store:
             os.close(fd)
 
     def read_events(self, book_id):
+        """The lines of the book's event log, parsed. The log is a file that anything with write access to the library can change, so it is opened without following a link and without waiting on a pipe,
+        must be a plain file of at most MAX_EVENTS_BYTES, and must be UTF-8 text of JSON lines; anything else is a refusal of ours (a KbError) and never a crash or a wait. A missing log is empty."""
         self.read_book(book_id)
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
         try:
-            with open(self.events_file(book_id)) as f:
-                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            fd = os.open(self.events_file(book_id), flags)
         except FileNotFoundError:
             return []
+        except OSError as e:
+            raise KbError(f"the event log cannot be opened: {e.strerror}") from None
+        try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise KbError("the event log is not a plain file")
+            if info.st_size > MAX_EVENTS_BYTES:
+                raise KbError(f"the event log is larger than {MAX_EVENTS_BYTES} bytes")
+            try:
+                with os.fdopen(fd, "rb", closefd=False) as f:
+                    raw = f.read(MAX_EVENTS_BYTES + 1)
+            except OSError as e:
+                raise KbError(f"the event log cannot be read: {e.strerror}") from None
+        finally:
+            os.close(fd)
+        if len(raw) > MAX_EVENTS_BYTES:
+            raise KbError(f"the event log is larger than {MAX_EVENTS_BYTES} bytes")
+        try:
+            lines = [ln for ln in raw.decode("utf-8").splitlines() if ln.strip()]
+        except UnicodeDecodeError:
+            raise KbError("the event log is not UTF-8 text") from None
         try:
             return [json.loads(ln) for ln in lines]
-        except ValueError as e:
-            raise KbError(f"the event log cannot be read: {e}") from None
+        except (ValueError, RecursionError) as e:  # a line nested too deeply is too much for the parser: an error of ours, not a crash
+            raise KbError(f"the event log cannot be read: {type(e).__name__}") from None
 
     def file_payload(self, book_id, version_id, name, files, primary=None, tool=None, untrusted=False):
         """File a payload: `files` maps a relative name to its bytes. Returns the hash list.

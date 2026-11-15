@@ -10,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -242,7 +243,7 @@ class PlaceCase(CatalogCase):
         return placement.propose(self.store, cfg or self.cfg_models, **kw)
 
     def proposals(self, book):
-        return [e for e in self.store.read_events(book) if e["event"] == "placement_proposed"]
+        return [e for e in self.store.read_events(book) if isinstance(e, dict) and e.get("event") == "placement_proposed"]
 
     def number_of(self, prompt, name):
         for line in prompt.split("Shelves:\n")[1].splitlines():
@@ -530,6 +531,179 @@ class Skipping(PlaceCase):
         with mock.patch.object(placement, "PROMPT_VERSION", "place-2"):
             self.propose()
         self.assertEqual(len(self.proposals(book)), 2)
+
+
+class DamagedLogs(PlaceCase):
+    """The event logs are files of lines that anything with write access to the library can change; one bad log must not stop the run for every other book."""
+
+    def write_log(self, book, text):
+        with open(self.store.events_file(book), "a") as f:
+            f.write(text)
+
+    def test_lines_that_are_not_objects_do_not_crash_the_skip_rule(self):
+        item = {"generation": 1, "version": "v1", "text_sha256": "a" * 64}
+        loaded = {"meta": {"schema_sha256": "b" * 64}, "identity": "c" * 64}
+        good = {"event": "placement_proposed", "generation": 1, "version": "v1", "text_sha256": "a" * 64, "schema_sha256": "b" * 64, "vectors": "c" * 64, "prompt": "place-1",
+                "answer": {"kind": "shelf"}}
+        self.assertTrue(placement._is_current([[1, 2], 7, "text", None, 1.5, good], item, loaded))
+        self.assertFalse(placement._is_current([[1, 2], 7, "text", None], item, loaded))
+
+    def test_a_book_whose_log_cannot_be_read_is_left_out_and_counted_and_the_others_are_placed(self):
+        bad, _ = self.book_with("Damaged log")
+        self.write_log(bad, '{"event": "filed"\n')                       # a truncated line
+        good, _ = self.book_with("Good book")
+        counts = self.propose()
+        self.assertEqual(counts["left_out"], {"the event log cannot be read": 1})
+        self.assertEqual(len(self.proposals(good)), 1)
+        with open(self.store.events_file(bad)) as f:
+            self.assertNotIn("placement_proposed", f.read())                 # nothing was written to the damaged log
+
+    def test_a_line_nested_too_deeply_is_an_error_of_ours_and_not_a_crash(self):
+        bad, _ = self.book_with("Deep log")
+        self.write_log(bad, "[" * 200000 + "]" * 200000 + "\n")
+        with self.assertRaises(KbError):
+            self.store.read_events(bad)
+        good, _ = self.book_with("Good book")
+        counts = self.propose()
+        self.assertEqual(counts["left_out"], {"the event log cannot be read": 1})
+        self.assertEqual(len(self.proposals(good)), 1)
+
+    def odd_log(self, book, how):
+        path = self.store.events_file(book)
+        if os.path.lexists(path):
+            os.remove(path)
+        if how == "bytes":
+            with open(path, "wb") as f:
+                f.write(b'{"event": "filed"}\n\xff\xfe\n')
+        elif how == "directory":
+            os.mkdir(path)
+        elif how == "symlink":
+            os.symlink(os.path.join(self.base, "elsewhere.jsonl"), path)
+            with open(os.path.join(self.base, "elsewhere.jsonl"), "w") as f:
+                f.write('{"event": "filed"}\n')
+        elif how == "fifo":
+            os.mkfifo(path)
+        elif how == "large":
+            with open(path, "w") as f:
+                f.write(('{"event": "filed", "pad": "' + "x" * 200 + '"}\n') * 100)
+
+    def test_a_log_that_is_not_a_plain_readable_file_is_an_error_of_ours_and_the_run_goes_on(self):
+        from kb import store as store_module
+        for how in ("bytes", "directory", "symlink", "fifo", "large"):
+            with self.subTest(how=how):
+                bad, _ = self.book_with("Odd log " + how)
+                self.odd_log(bad, how)
+                good, _ = self.book_with("Good after " + how)
+                started = time.time()
+                with mock.patch.object(store_module, "MAX_EVENTS_BYTES", 5000):
+                    with self.assertRaises(KbError):
+                        self.store.read_events(bad)
+                    counts = self.propose()
+                self.assertLess(time.time() - started, 20)                      # a FIFO must not stall the run
+                self.assertEqual(counts["left_out"], {"the event log cannot be read": 1}, how)
+                self.assertEqual(len(self.proposals(good)), 1)
+                self.store.set_state(bad, "weeded")                                # out of the way for the next case
+                self.store.set_state(good, "weeded")
+
+    def test_blank_lines_are_skipped_no_descriptor_is_left_open_and_the_cap_is_what_the_comment_says(self):
+        from kb import store as store_module
+        self.assertEqual(store_module.MAX_EVENTS_BYTES, 64 * 1024 * 1024)
+        book, _ = self.book_with("A book")
+        self.store.append_event(book, "filed", sha256="a" * 64)
+        with open(self.store.events_file(book), "a") as f:
+            f.write("\n   \n\t\n")
+        self.store.append_event(book, "sighting", sha256="b" * 64)
+        self.assertEqual([e["event"] for e in self.store.read_events(book)], ["filed", "sighting"])
+        before = len(os.listdir("/dev/fd"))
+        for _ in range(300):
+            self.store.read_events(book)
+            with self.assertRaises(KbError):
+                self.store.read_events(self.book_with_a_bad_log())
+        self.assertLessEqual(len(os.listdir("/dev/fd")), before + 2)
+
+    def book_with_a_bad_log(self):
+        if not hasattr(self, "_bad_log_book"):
+            self._bad_log_book, _ = self.book_with("Bad log book")
+            with open(self.store.events_file(self._bad_log_book), "wb") as f:
+                f.write(b"\xff\n")
+        return self._bad_log_book
+
+    def test_an_ordinary_log_still_reads_and_a_missing_one_is_empty(self):
+        book, _ = self.book_with("A book")
+        self.assertEqual(self.store.read_events(book), [])
+        self.store.append_event(book, "filed", sha256="a" * 64)
+        self.assertEqual([e["event"] for e in self.store.read_events(book)], ["filed"])
+
+    def test_a_log_with_a_line_that_is_a_list_or_a_number_is_read_and_the_book_is_placed(self):
+        book, _ = self.book_with("A book")
+        self.write_log(book, "[1, 2]\n7\n\"text\"\nnull\n")
+        counts = self.propose()
+        self.assertEqual((counts["proposed"], counts["left_out"]), (1, {}))
+        self.assertEqual(len(self.proposals(book)), 1)
+
+
+class InGroups(PlaceCase):
+    """The book texts are embedded one group at a time and each group is placed and recorded before the next is embedded: memory stays bounded and a stop keeps what was done."""
+
+    def test_each_group_is_embedded_placed_and_recorded_before_the_next(self):
+        order = []
+        books = [self.book_with("Book %d" % i)[0] for i in range(5)]
+        plain_embed, plain_call = self.embed, self.call
+
+        def embed(*a, **k):
+            order.append("embed")
+            return plain_embed(*a, **k)
+
+        def call(*a, **k):
+            order.append("chat")
+            return plain_call(*a, **k)
+        with mock.patch.object(models, "MAX_EMBED_NUMBERS", 8):                     # two texts of four numbers at a time
+            self.propose(embed=embed, call=call)
+        self.assertEqual(order, ["embed", "chat", "chat", "embed", "chat", "chat", "embed", "chat"])
+        self.assertEqual(sum(len(self.proposals(b)) for b in books), 5)
+
+    def test_a_failure_in_a_later_group_keeps_the_events_of_the_earlier_ones(self):
+        books = [self.book_with("Book %d" % i)[0] for i in range(5)]
+        plain_embed = self.embed
+        calls = []
+
+        def embed(*a, **k):
+            calls.append(1)
+            if len(calls) == 3:
+                raise KbError("the model server went away")
+            return plain_embed(*a, **k)
+        with mock.patch.object(models, "MAX_EMBED_NUMBERS", 8):
+            with self.assertRaisesRegex(KbError, "went away"):
+                self.propose(embed=embed)
+        self.assertEqual(sum(len(self.proposals(b)) for b in books), 4)             # the first two groups were recorded
+        counts = self.propose()                                                       # the next run does only the rest
+        self.assertEqual((counts["skipped"], counts["proposed"]), (4, 1))
+
+    def test_the_errors_in_a_row_stop_the_run_across_groups(self):
+        books = [self.book_with("Book %d" % i)[0] for i in range(8)]
+        for i in range(8):
+            self.answers["Book %d" % i] = KbError("down")
+        with mock.patch.object(models, "MAX_EMBED_NUMBERS", 8):
+            counts = self.propose()
+        self.assertTrue(counts["stopped"])
+        self.assertEqual(len(self.prompts), 5)
+
+
+class GroupSize(PlaceCase):
+    def test_a_group_is_never_larger_than_the_cap_whatever_the_memory_allows(self):
+        for i in range(7):
+            self.book_with("Book %d" % i)
+        sizes = []
+        plain = self.embed
+
+        def embed(cfg, name, texts, **kw):
+            sizes.append(len(texts))
+            return plain(cfg, name, texts, **kw)
+        with mock.patch.object(placement, "GROUP", 3):
+            self.propose(embed=embed)
+        self.assertEqual(sizes, [3, 3, 1])
+        self.assertGreaterEqual(placement.GROUP, 1)
+        self.assertLessEqual(placement.GROUP, 500)
 
 
 class Refusals(PlaceCase):

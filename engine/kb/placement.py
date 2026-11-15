@@ -35,6 +35,7 @@ MAX_PROMPT_TEXT = 3000
 MAX_REASON = 200
 KEEP_REPLY = 300
 ERRORS_IN_A_ROW = 5
+GROUP = 200            # the most books embedded, placed and recorded at a time, whatever the memory of a call would allow
 MAX_MARK_RUN = 3       # combining marks kept in a row
 INVISIBLE = frozenset([0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x2800, 0x3164, 0xFFA0] + list(range(0xFE00, 0xFE10)) + list(range(0xE0100, 0xE01F0)))
 ANSWER = re.compile(r"([1-5]|none): (.{1,%d})" % MAX_REASON)
@@ -213,7 +214,7 @@ def textutil_sha(text):
 def _is_current(events, item, loaded):
     """True if the book has a proposal for this card generation and text, this schema, these shelf vectors and this prompt version that is not an error."""
     for event in events:
-        if (event.get("event") == EVENT and isinstance(event.get("answer"), dict) and event["answer"].get("kind") != "error"
+        if (isinstance(event, dict) and event.get("event") == EVENT and isinstance(event.get("answer"), dict) and event["answer"].get("kind") != "error"
                 and event.get("generation") == item["generation"] and event.get("version") == item["version"] and event.get("text_sha256") == item["text_sha256"]
                 and event.get("schema_sha256") == loaded["meta"]["schema_sha256"] and event.get("vectors") == loaded["identity"] and event.get("prompt") == PROMPT_VERSION):
             return True
@@ -230,10 +231,16 @@ def _plan(store, cfg, book_ids, again, schema_path):
     items, left = select(store, book_ids)
     todo, skipped = [], 0
     for item in items:
-        if not again and _is_current(store.read_events(item["book"]), item, loaded):
-            skipped += 1
-        else:
-            todo.append(item)
+        if not again:
+            try:
+                events = store.read_events(item["book"])
+            except KbError:  # one damaged log leaves that book out and counted; it does not stop the run for the others
+                left["the event log cannot be read"] = left.get("the event log cannot be read", 0) + 1
+                continue
+            if _is_current(events, item, loaded):
+                skipped += 1
+                continue
+        todo.append(item)
     return (embed_name, embed_entry), (chat_name, chat_entry), loaded, todo, skipped, left, items
 
 
@@ -268,45 +275,44 @@ def propose(store, cfg, book_ids=None, again=False, schema_path=None, launcher=N
         return counts
     embed = embed or models.embed
     call = call or models.call
-    vectors = []
-    per = max(1, models.MAX_EMBED_NUMBERS // embed_entry["dimension"])
+    space = shelfmatch.build_space(loaded["schema"], loaded["vectors"])
+    by_slug = loaded["schema"].by_slug
+    per = max(1, min(GROUP, models.MAX_EMBED_NUMBERS // embed_entry["dimension"]))  # a group is small enough that its vectors stay a few megabytes, and a stop keeps all the earlier groups
+    in_a_row = 0
     for start in range(0, len(todo), per):
+        # one group at a time: it is embedded, placed and recorded before the next is embedded, so memory stays bounded and a stop keeps what was done
         group = todo[start:start + per]
         got = embed(cfg, embed_name, [i["text"] for i in group], launcher=launcher, root=root, kind="document")
         if got["model"] != shelfvectors.MEASURED_MODEL or got["model"] != loaded["meta"]["model"]:
-            raise KbError(f"the model the bridge reports ({textutil.clean(got['model'], 60)}) is not the measured one ({shelfvectors.MEASURED_MODEL}) that made the shelf vectors; nothing was recorded")
+            raise KbError(f"the model the bridge reports ({textutil.clean(got['model'], 60)}) is not the measured one ({shelfvectors.MEASURED_MODEL}) that made the shelf vectors; nothing was recorded for this group")
         if len(got["vectors"]) != len(group) or any(len(v) != embed_entry["dimension"] for v in got["vectors"]):
-            raise KbError("the embedding model answered with another number of vectors, or other widths, than were asked for; nothing was recorded")
-        vectors += got["vectors"]
-    space = shelfmatch.build_space(loaded["schema"], loaded["vectors"])
-    by_slug = loaded["schema"].by_slug
-    in_a_row = 0
-    for item, vector in zip(todo, vectors):
-        near = shelfmatch.place(space, vector, k=K)["home"]
-        shelves = [(slug, by_slug[slug]["name"], by_slug[slug]["scope"]) for slug, _ in near]
-        prompt, order = build_prompt(item["text"], shelves)
-        started = clock()
-        chat_model = None
-        try:
-            got = call(cfg, chat_name, prompt, launcher=launcher, root=root)
-        except KbError as e:
-            answer = {"kind": "error", "index": None, "chosen": None, "reason": None, "why": plain(e, MAX_REASON), "reply": None}
-        else:
-            chat_model = got.get("model")
-            if chat_model != MEASURED_CHAT_MODEL:
-                raise KbError(f"the model the bridge reports ({textutil.clean(chat_model, 60)}) is not the measured one ({MEASURED_CHAT_MODEL}); nothing was recorded for this book")
-            parsed = parse_answer(got["reply"])
-            answer = {"kind": parsed["kind"], "index": parsed["index"], "chosen": order[parsed["index"] - 1] if parsed["kind"] == "shelf" else None,
-                      "reason": parsed["reason"], "why": parsed["why"], "reply": plain(got["reply"], KEEP_REPLY)}
-        store.append_event(item["book"], EVENT, version=item["version"], generation=item["generation"], text_sha256=item["text_sha256"],
-                           schema_sha256=loaded["meta"]["schema_sha256"], vectors=loaded["identity"], embed_model=got_model_of(loaded), chat_model=chat_model, prompt=PROMPT_VERSION,
-                           candidates=[[slug, round(score, 6)] for slug, score in near], order=order, answer=answer, seconds=round(clock() - started, 3))
-        kind = answer["kind"]
-        counts["errors" if kind == "error" else "proposed" if kind == "shelf" else kind] += 1
-        in_a_row = in_a_row + 1 if kind == "error" else 0
-        if in_a_row >= ERRORS_IN_A_ROW:
-            counts["stopped"] = True
-            break
+            raise KbError("the embedding model answered with another number of vectors, or other widths, than were asked for; nothing was recorded for this group")
+        for item, vector in zip(group, got["vectors"]):
+            near = shelfmatch.place(space, vector, k=K)["home"]
+            shelves = [(slug, by_slug[slug]["name"], by_slug[slug]["scope"]) for slug, _ in near]
+            prompt, order = build_prompt(item["text"], shelves)
+            started = clock()
+            chat_model = None
+            try:
+                answered = call(cfg, chat_name, prompt, launcher=launcher, root=root)
+            except KbError as e:
+                answer = {"kind": "error", "index": None, "chosen": None, "reason": None, "why": plain(e, MAX_REASON), "reply": None}
+            else:
+                chat_model = answered.get("model")
+                if chat_model != MEASURED_CHAT_MODEL:
+                    raise KbError(f"the model the bridge reports ({textutil.clean(chat_model, 60)}) is not the measured one ({MEASURED_CHAT_MODEL}); nothing was recorded for this book")
+                parsed = parse_answer(answered["reply"])
+                answer = {"kind": parsed["kind"], "index": parsed["index"], "chosen": order[parsed["index"] - 1] if parsed["kind"] == "shelf" else None,
+                          "reason": parsed["reason"], "why": parsed["why"], "reply": plain(answered["reply"], KEEP_REPLY)}
+            store.append_event(item["book"], EVENT, version=item["version"], generation=item["generation"], text_sha256=item["text_sha256"],
+                               schema_sha256=loaded["meta"]["schema_sha256"], vectors=loaded["identity"], embed_model=got_model_of(loaded), chat_model=chat_model, prompt=PROMPT_VERSION,
+                               candidates=[[slug, round(score, 6)] for slug, score in near], order=order, answer=answer, seconds=round(clock() - started, 3))
+            kind = answer["kind"]
+            counts["errors" if kind == "error" else "proposed" if kind == "shelf" else kind] += 1
+            in_a_row = in_a_row + 1 if kind == "error" else 0
+            if in_a_row >= ERRORS_IN_A_ROW:
+                counts["stopped"] = True
+                return counts
     return counts
 
 
