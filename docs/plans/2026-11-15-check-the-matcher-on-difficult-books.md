@@ -142,6 +142,10 @@ Each increment's recorded verification stands unless a later one changed its inp
 
 ## Review record
 
+### Increment B
+
+The `reviewer` agent, one exchange (second of the plan), read only. **No blocking finding.** Applied: the fifth book without a card is said to be unexplained (175 + 29 + 4 is 208, not 209), the hash is named exactly (the whole card's JSON), the 7 partial books are named, and the run of `wb run code-work check` is stated. Not applied as changes: that no byte count was printed before "run it" (the Result says so; the owner gave the word on the plan's own description), and that the counts of the engine's outputs could not be read by the reviewer (they are read here from the commands as run).
+
 ### Increment A
 
 The `reviewer` agent, one exchange of the cap of 6, read only: it read the plan, the Result and the four files of the folder, and ran nothing. **No blocking finding.** Applied: that the second half of step 5 was not reported (the Result now says it was not checked and moves it to B), and that the test of addresses already held covers carded books only (the Result says so). Not applied as changes, since the Result already says them and the owner decides: the owner's word "implement" taken as "fetch it" (the owner is asked to confirm), the script without tests, `wb run code-work check` not rerun, and the redirect failure's cause left as the engine's own words. It could not check the logs, the hashes, the failed books in the store or the approval record; those are read here from the commands as run (the hashes are those printed by `shasum -a 256` after the run).
@@ -153,6 +157,19 @@ The `reviewer` agent, one exchange of the cap of 6, read only: it read the plan,
 - A side check of OpenAlex topic descriptions that disagree with their names.
 
 ## Result
+
+### Increment B — cards for the books (done on 2026-11-15; not yet committed)
+
+**What was run.** On the owner's word "run it" (given with the word to commit A, after the plan said how the cards go: the books' text to `ned` in the clear, as for the earlier cards), `python3 -m kb cards --book <id>` was run for each of the 29 books, one at a time, in the order of Increment A; then `python3 -m kb card-index`. The models are the library's own entries: `gemma4:12b` (card-notes), `gpt-oss:20b` (card), `phi4` (card-check), `qwen3:14b` (card-more where needed). No byte count was printed beforehand; the books are public pages and papers.
+
+1. **All 29 books were carded** (`status: carded`, generation 1; 29 results of 29). **7 of them are marked `partial: true`** (the engine's own flag; I did not look into what it means beyond the flag): the NIST SP 1300 page (01M7FKBHE2MR0E9HQ1NWNGGFX1), the Paul Graham essay (01M7FKBHZZD28VZG85AH9QZ9Q7), the London Taught Course Centre page (01M7FKBME7T7ETRVXHPZ5XS74Q, the one with no summary), *Walden* (01M7FKBWW1BGYBARA8SCP181Z0), Zeugma (01M7FKC95JN97WWN33ND187H99), Pomology (01M7FKCA4QBF18W6TQDKZP14K4) and the preprint 1506.08743 (01M7FKD1FZ45203KXJWD290FPK). One card (the patent US1425295) went through no check call (`checked` 0), which is the engine's own output.
+2. **The catalog** now reads 209 books, 204 cards, 0 failed (204 cards are the 175 earlier and the 29 new; of the 5 books without a card, 4 are the failed captures of A, and **the fifth is not explained here**: 175 + 29 + 4 is 208, and I did not look into the one more). **The 175 earlier cards are unchanged**: `snapshot-after-cards.json` (`2f324650…c53478`) holds 204 cards and the generation and the hash of the whole card (`card_sha256`, of the card's JSON) of each earlier one equals `snapshot-before.json`. The 29 new cards are 21 web pages and 8 preprints, each with the address of its page (the two RFCs carry `rfc-editor.org/info/…` as their final address).
+3. **The text rule (`text-1`, read-only, run on the 29 new cards): 28 are eligible and 1 is not: the London Taught Course Centre page (`01M7FKBME7T7ETRVXHPZ5XS74Q`) has no summary in its card.** The plan says a book whose card has no summary is recorded and replaced by the reserve; the web reserves are used up. The sample stands at **28 books** unless the owner decides otherwise (options: go on with 28; make the card again as a new generation, `kb cards --book … --again`, once, which is not tuning but is a second model call on the same text; or name another page, an amendment).
+
+4. **The owner's decision ("go with your recommendation", after the recommendation to make that card again once and, if it still has no summary, to go on with 28):** the card of the London Taught Course Centre page was made again once with `kb cards --book … --again`. The result was generation 2, `partial: true`, **0 pieces and 0 model calls**, and after `kb card-index` the card still has no summary (the text rule still reads it as `no summary`). **The sample is 28 books** (8 preprints, 10 web pages, 6 obscure English Wikipedia articles, 4 Wikipedia articles in other languages). The book keeps its card of generation 2 in the library and is not in the sample. Nothing else was changed.
+5. `wb run code-work check` was run after this Result was written: no problems.
+
+**Not done:** the commit.
 
 ### Increment A — fetch and process the 30 books (done on 2026-11-15; not yet committed)
 
