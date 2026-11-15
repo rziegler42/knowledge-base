@@ -6,7 +6,7 @@ import sys
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
-from . import shelfbuild, shelfschema, themerun, themereflag, themevectors, walk, weave
+from . import shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import problem
 from . import problemtrial
@@ -120,6 +120,10 @@ def main(argv=None):
     cv = sub.add_parser("card-vectors", help="make the vectors of the cards (three neutral fields of each) with the embedding model that the config "
                                              "sets for card-embed; a vector whose text has not changed is kept; the text of those fields goes to that model")
     cv.add_argument("--again", action="store_true", help="make every vector again")
+    sv = sub.add_parser("shelf-vectors", help="make the vectors of the shelves of the schema with the embedding model that the config sets for place-embed (the measured "
+                                              "model only); a vector whose text has not changed is kept; the shelf texts go to that model, so run it with --check first")
+    sv.add_argument("--check", action="store_true", help="print what would be sent, and send and write nothing")
+    sv.add_argument("--again", action="store_true", help="make every vector again")
     tv = sub.add_parser("theme-vectors", help="make the vectors of the themes (the summary, the whole description and each of the five parts of "
                                               "every theme, up to seven texts) with the embedding model that the config sets for card-embed; a vector "
                                               "whose text has not changed is kept; those texts go to that model")
@@ -307,6 +311,13 @@ def main(argv=None):
             if counts["left_out"]:
                 print(f"{counts['left_out']} book or card could not be read and has no vectors", file=sys.stderr)
                 return 1
+            return 0
+        if args.command == "shelf-vectors":
+            cfg = config.load()
+            if args.check:
+                print(shelfvectors.describe(cfg, index_root=cfg["index_root"], again=args.again))
+                return 0
+            print(json.dumps(shelfvectors.build(Store.open(), cfg, again=args.again)))
             return 0
         if args.command == "theme-vectors":
             counts = themevectors.build(Store.open(), config.load(), again=args.again)

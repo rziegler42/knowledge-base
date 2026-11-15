@@ -190,6 +190,12 @@ rules, which this spec depends on.
   call if one is wrong. The file of vectors (`card.md`, "Where it is stored") records the model and the dimension that made it, holds
   one model at a time, and is replaced, never mixed, when the model changes. The file of the vectors of the themes (`theme.md`, "Search and reading") is
   made with the entry that `card-embed` names too, and records the model, the dimension and the document prefix in the same way.
+- **[proposed]** Built in the engine: the kind of work `place-embed` names the embedding entry that makes the vectors of the shelves of the
+  schema (`shelf.md`, "Placement when more than one shelf fits"; `kb.shelfvectors`, `python3 -m kb shelf-vectors`). It is a task of its own,
+  and `card-embed` does not stand in for it, because the placement was measured with one embedding model and no document prefix
+  (`qwen3-embedding:4b`): the command refuses an entry that names another model or has a prefix, and a model the bridge reports as another,
+  and says that another model needs a new measurement. The file of the shelf vectors records the model, the dimension, the document prefix
+  and the hash of the schema file, is replaced and never mixed, and is refused by the reader when the schema file has changed since.
 - **[proposed]** Built in the engine: an embedding entry may carry a `query_prefix` and a `document_prefix`, each text of 1 to 400
   printable characters (a line break is allowed; no control, format or private-use character, which does not make the text sure to be
   what it looks like), and `kb.models.embed` puts the one for the kind of text (a query,

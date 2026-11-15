@@ -128,7 +128,8 @@ OPTIONAL_TASKS = ("card-more", "theme", "theme-check")  # the kinds that may be 
 # `theme` makes the themes of a book (`themeextract`) and `theme-check` checks what a description says against the excerpt
 # (`themecheck`); a card needs neither
 TASKS = REQUIRED_TASKS + OPTIONAL_TASKS
-EMBED_TASKS = ("card-embed",)  # the kind of work that turns text into vectors: it names an entry of the kind embedding, no card task may
+EMBED_TASKS = ("card-embed", "place-embed")  # the kinds of work that turn text into vectors: each names an entry of the kind embedding, no card task may
+# `place-embed` makes the vectors of the shelves of the schema (`shelfvectors`); the placement of a book uses the vectors of one model only, the one that was measured
 
 
 def _settings(cfg, entries):

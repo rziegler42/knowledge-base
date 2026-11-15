@@ -1092,9 +1092,19 @@ class EmbeddingRegistryTest(Base):
         self.refused_registry(config(emb=embedding(bridge="ask-codex")))
 
     def test_the_kind_of_work_for_embeddings_is_named_in_the_engine_and_is_not_one_of_the_card_tasks(self):
-        self.assertEqual(models.EMBED_TASKS, ("card-embed",))
-        self.assertNotIn("card-embed", models.TASKS)
-        self.assertNotIn("card-embed", models.REQUIRED_TASKS)
+        self.assertEqual(models.EMBED_TASKS, ("card-embed", "place-embed"))
+        for task in models.EMBED_TASKS:
+            self.assertNotIn(task, models.TASKS)
+            self.assertNotIn(task, models.REQUIRED_TASKS)
+
+    def test_place_embed_names_an_embedding_entry_and_no_chat_entry(self):
+        cfg = with_tasks({"place-embed": "emb"}, local=entry(), emb=embedding())
+        self.assertEqual(models.choose(cfg, "place-embed")[0], "emb")
+        self.assertEqual(models.listing(cfg)["tasks"], {"place-embed": "emb"})
+        with self.assertRaises(KbError):
+            models.registry(with_tasks({"place-embed": "local"}, local=entry(), emb=embedding()))
+        with self.assertRaises(KbError):
+            models.choose(with_tasks({"card-embed": "emb"}, local=entry(), emb=embedding()), "place-embed")
 
     def test_card_embed_names_the_embedding_entry(self):
         cfg = with_tasks({"card-embed": "emb"}, local=entry(), emb=embedding())
