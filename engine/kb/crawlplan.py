@@ -176,7 +176,13 @@ def _list_value(key, raw, number):
 
 def read_plan(path):
     """The plan file at `path` as a flat dictionary of every key (the spec's default for each key the file leaves out), or a `KbError` that names a line and never quotes it."""
-    text = crawltopics.read_text(path, "the crawl plan file")
+    return parse_plan(crawltopics.read_text(path, "the crawl plan file"))
+
+
+def parse_plan(text):
+    """The same from the text of a plan that has been read already (so that the bytes that are approved are the bytes that are parsed)."""
+    if not isinstance(text, str):
+        raise KbError("the crawl plan file: the plan is text")
     if len(text.encode("utf-8")) > MAX_BYTES:
         raise KbError(f"the crawl plan file: it is over {MAX_BYTES // 1024} KiB")
     plan = defaults()

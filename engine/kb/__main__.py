@@ -1,6 +1,7 @@
 """Command line: `python3 -m kb setup <bulk-root> <index-root> [--allow-main-disk]` and `python3 -m kb check`."""
 import argparse
 import json
+import os
 import sys
 
 from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
@@ -9,6 +10,7 @@ from . import cardmarks, cardqueue
 from . import placeapply, placement, placereview, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import discover
+from . import crawlapprove
 from . import problem
 from . import problemtrial
 from . import vectors
@@ -197,6 +199,11 @@ def main(argv=None):
     cdi.add_argument("plan", help="the crawl plan file (its discovery keys are read; the rest are the runner's)")
     cdi.add_argument("topics", help="the topics file")
     cdi.add_argument("--check", action="store_true", help="show what a refill would do; required")
+    # the commands of the unattended crawl's runner (plan R), kept together
+    ca = sub.add_parser("crawl-approve", help="print a plain summary of your crawl plan, with the grant that approving it makes and a digest (read only); with --digest, store the approval, in your own terminal, "
+                                              "if the plan, topics and allow files still have that digest")
+    ca.add_argument("--plan", metavar="FILE", help="the crawl plan file (default: crawl-plan.txt in the config folder)")
+    ca.add_argument("--digest", metavar="DIGEST", help="the digest on the last line of the summary you read; it stores the approval and needs a terminal")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -410,6 +417,12 @@ def main(argv=None):
             if not args.check:
                 raise KbError("a real refill of the queue is the runner's and needs the owner's word: run with --check to see what it would send")
             print(json.dumps(discover.check(args.plan, args.topics), indent=1))
+            return 0
+        if args.command == "crawl-approve":
+            cfg = config.load()
+            plan_path = args.plan or os.path.join(config.config_dir(), "crawl-plan.txt")
+            out = crawlapprove.approve(cfg["index_root"], cfg, plan_path, digest=args.digest)
+            print(out[0] if args.digest is None else json.dumps(out))
             return 0
         if args.command == "trial-problems":
             print(json.dumps(problemtrial.run(Store.open(write=False), config.load(), args.corpus, args.report, replace=args.replace,
