@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Increment E, step 1 and completion criteria 7",
+      "problem": "`fill` and the check command require `queue_low`, `target`, `queries_per_topic`, and per-source gaps, but `population.md`'s crawl-plan format defines none of those values or defaults. The plan therefore cannot deterministically read the approved plan or implement its refill and query-allocation behavior from the specified configuration.",
+      "severity": "major",
+      "suggestion": "Add these settings and their bounded defaults to `population.md`'s crawl-plan format, then name the exact keys and semantics used by `fill` and `crawl-discover --check`."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment F heading: “The web search adapter (if time)”",
+      "problem": "Making DuckDuckGo optional conflicts with `population.md`, which lists a best-effort web-search source among the components built before the first unattended run. The plan can complete while omitting a required first-version source.",
+      "severity": "major",
+      "suggestion": "Make Increment F required, or update the governing specification through the appropriate owner-approved direction change before treating the adapter as deferred."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has two material gaps against the population specification: required configuration is absent, and the required web-search adapter is optional.",
+  "verdict": "changes_needed"
+}
