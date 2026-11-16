@@ -1,0 +1,74 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-16T12:39:47Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The Cards roadmap does name reshelving as work that follows it, though it lists no candidate. I corrected the candidate line to say that and made it the owner choice whether the plan stands with none or waits for a roadmap change; I cannot change a roadmap myself."
+    },
+    {
+      "at": "2026-11-16T12:39:47Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "The terminal command covers only the block level of the spec governed action and cannot honor the other levels or the host ceiling. The plan already said so in a non-goal; I made the goal and the deferred work state outright that the spec requirement stays unmet and that the owner decides whether it must be met before any book moves."
+    },
+    {
+      "at": "2026-11-16T12:39:48Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F3",
+      "reason": "Checked in the code: the store has no lock over root files, only a catalog lock in the index root, and set_shelf is an unlocked read and replace. My claim of a writer lock was wrong. The plan now holds the catalog lock, re-reads each root file before and after a write, states the narrow guarantee, asks the owner to run nothing else meanwhile, and defers a shared root-file lock."
+    }
+  ],
+  "format": 1,
+  "generation": 5,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-16-move-confirmed-books-onto-their-shelves.md",
+  "rounds": [
+    {
+      "at": "2026-11-16T12:38:51Z",
+      "bridge": "ask-codex",
+      "document_sha256": "132063beb0291eb3be56c5c47348a376853a234a3b5a7c2ceff8d5d4ec22ed23",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F3",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "b12c086c725742c256de388e9a02ed13798d094666c9cb46282d207adbdf9a8e",
+      "usage": {
+        "input_tokens": 400966,
+        "output_tokens": 2035,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "b2611483d45d14e584e48691d0b80a023777f44667b758baf7a3317b4fa435c2",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

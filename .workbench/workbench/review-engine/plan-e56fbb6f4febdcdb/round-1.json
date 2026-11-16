@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Candidate line",
+      "problem": "It says shelving and reshelving are outside every roadmap, but the active Cards roadmap explicitly places “Shelf filing and reshelving by card” under that roadmap. The plan therefore has no valid roadmap candidate and its stated rationale conflicts with the roadmap.",
+      "severity": "major",
+      "suggestion": "Have the owner authorize the appropriate roadmap change and name the resulting candidate (for example, a dedicated reshelving candidate under the Cards roadmap) before seeking plan approval."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Scope — “The move”; Non-goals — “The workbench key `reshelve-approve`”; Increment B",
+      "problem": "The plan substitutes a terminal-only `place-apply` command for the governed `reshelve-approve` action. This drifts from `docs/specs/shelf.md`, which requires that action to have its own key, preview, digest, and all permission levels, with the host applying the configured level and ceiling. A terminal interlock implements only the default block case and cannot honor an owner-selected `ask` or `none` level.",
+      "severity": "major",
+      "suggestion": "Plan the governed `reshelve-approve` action and its workbench integration, or revise the spec through the required direction/decision process before relying on a terminal-only command."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Scope — “The move”; Increment B step 2; Completion criterion 2",
+      "problem": "The plan requires recomputing and applying the list inside “the lock that guards the library’s writers,” while also saying `store.py` is used but not changed. The current store has no shared writer lock: `Store._guard()` only checks writability, and `set_shelf` and `append_event` independently write. A lock added only in `placeapply.py` would not exclude other existing writers, so the claimed race protection cannot be met.",
+      "severity": "major",
+      "suggestion": "Add a shared library writer-lock mechanism used by all relevant writers, or narrow and document a different concurrency guarantee; update the affected-area and verification plans accordingly."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has roadmap and shelf-spec drift, and its promised atomic digest/race guarantee has no supporting shared writer lock.",
+  "verdict": "changes_needed"
+}
