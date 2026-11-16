@@ -1,0 +1,57 @@
+{
+  "query_status": "ok",
+  "urls": [
+    {
+      "id": "3000001",
+      "urlhaus_reference": "https://urlhaus.abuse.ch/url/3000001/",
+      "url": "http://203.0.113.9/bins/payload.sh",
+      "url_status": "online",
+      "host": "203.0.113.9",
+      "date_added": "2026-11-16 12:00:05 UTC",
+      "threat": "malware_download",
+      "blacklists": {"spamhaus_dbl": "not listed", "surbl": "not listed"},
+      "reporter": "example_reporter",
+      "larted": "false",
+      "tags": ["elf", "mirai"]
+    },
+    {
+      "id": "3000002",
+      "urlhaus_reference": "https://urlhaus.abuse.ch/url/3000002/",
+      "url": "https://github.com/example-owner/example-repo/raw/main/payload.bin",
+      "url_status": "online",
+      "host": "github.com",
+      "date_added": "2026-11-16 11:58:41 UTC",
+      "threat": "malware_download",
+      "blacklists": {"spamhaus_dbl": "not listed", "surbl": "not listed"},
+      "reporter": "example_reporter",
+      "larted": "true",
+      "tags": ["exe"]
+    },
+    {
+      "id": "3000003",
+      "urlhaus_reference": "https://urlhaus.abuse.ch/url/3000003/",
+      "url": "HTTP://Bad-Files.Example./dl/a.exe?utm_source=x#frag",
+      "url_status": "offline",
+      "host": "bad-files.example",
+      "date_added": "2026-11-13 09:00:00 UTC",
+      "threat": "malware_download",
+      "blacklists": {},
+      "reporter": "example_reporter",
+      "larted": "false",
+      "tags": null
+    },
+    {
+      "id": "3000004",
+      "urlhaus_reference": "https://urlhaus.abuse.ch/url/3000004/",
+      "url": "not a url at all",
+      "url_status": "online",
+      "host": "",
+      "date_added": "2026-11-16 10:00:00 UTC",
+      "threat": "malware_download",
+      "blacklists": {},
+      "reporter": "example_reporter",
+      "larted": "false",
+      "tags": []
+    }
+  ]
+}

@@ -282,6 +282,28 @@ def _from_iso(text):
     return datetime.datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
 
 
+def ensure_private_dir(path):
+    """A folder that is a plain folder of ours (not a link, not someone else's), made with mode 700 if missing and tightened to 700 if it is looser; `ListError` otherwise."""
+    try:
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            os.mkdir(path, 0o700)
+            info = os.lstat(path)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise ListError("the lists folder is not a plain folder")
+        if info.st_uid != os.getuid():
+            raise ListError("the lists folder is not ours")
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fchmod(fd, 0o700)
+        finally:
+            os.close(fd)
+    except OSError as e:
+        raise ListError(f"the lists folder cannot be made ready ({e.strerror})") from None
+
+
 class Matcher:
     """See the module's text. `Matcher(owner_blacklist_path, allow_path, lists_dir, pinned_hosts)`; the stored copies are read at once."""
 
@@ -473,26 +495,7 @@ class Matcher:
             return report
 
     def _ensure_dir(self):
-        """The lists folder: a real folder that is ours (not a link, not someone else's), made with mode 700 if missing and tightened to 700 if it is looser."""
-        path = self._dir
-        try:
-            try:
-                info = os.lstat(path)
-            except FileNotFoundError:
-                os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-                os.mkdir(path, 0o700)
-                info = os.lstat(path)
-            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-                raise ListError("the lists folder is not a plain folder")
-            if info.st_uid != os.getuid():
-                raise ListError("the lists folder is not ours")
-            fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                os.fchmod(fd, 0o700)
-            finally:
-                os.close(fd)
-        except OSError as e:
-            raise ListError(f"the lists folder cannot be made ready ({e.strerror})") from None
+        ensure_private_dir(self._dir)
 
     @staticmethod
     def _plain(value):
