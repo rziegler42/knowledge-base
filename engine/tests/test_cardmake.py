@@ -1686,7 +1686,7 @@ class JobTest(unittest.TestCase):
 
     def test_the_jobs_are_the_kinds_of_work_the_engine_knows(self):
         self.assertEqual({cardmake.CARD_JOB.name, cardmake.NOTES_JOB.name, cardmake.check_job(1).name, cardmake.MORE_JOB.name},
-                         set(models.TASKS) - {"theme", "theme-check"})   # the kinds of work of `themeextract` and `themecheck`, not of a card
+                         set(models.TASKS) - {"theme", "theme-check", "place", "crawl-query"})   # the kinds of work of `themeextract` and `themecheck`, of the placement of a book and of the crawl's queries, not of a card
 
     def test_each_job_has_a_prompt_version(self):
         self.assertEqual((cardmake.CARD_JOB.prompt_version, cardmake.NOTES_JOB.prompt_version), ("v6", "v3"))
