@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Completion criterion 7; Increment C, step 4; Risks and sensitive actions, “No key or header is printed”",
+      "problem": "The plan requires fixture-held credentials and request headers never to appear in output, but explicitly specifies that a queue/log `reason` containing `Cookie:` or `Authorization:` is shown as ordinary cleaned text. `placereview.safe` removes unsafe characters; it does not redact credential-bearing content. This makes the stated no-header/no-key guarantee and its proposed test impossible.",
+      "severity": "major",
+      "suggestion": "Define and test a redaction rule applied to every output field before cleaning/cutting, or reject/suppress affected records. Remove the conflicting instruction to print such reasons unchanged."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Assumptions and constraints, decision 6; Increment C, step 3",
+      "problem": "The status design reports only `phishing_domains` and `public_suffix`. The referenced spec says the owner chose URLhaus recent mode as an in-use public list, and requires status to show the lists in use and their age. The completed web-list work also keeps URLhaus state separately, so it will not be covered by the metadata-reader described here.",
+      "severity": "major",
+      "suggestion": "Add URLhaus state to the status contract and fixtures, reporting whether it is enabled/usable and its relevant freshness/last-update state without exposing list entries or credentials."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Read-only constraint; Completion criterion 4; Increment C verification; Risks and sensitive actions, “Opening a WAL database”",
+      "problem": "The plan simultaneously promises that `crawl-status` writes nothing and that the index-root snapshot is unchanged, while accepting that opening the WAL database may create `-wal`/`-shm` files and merely naming them in the Result. That exception contradicts the completion criterion and leaves the read-only contract unresolved.",
+      "severity": "major",
+      "suggestion": "Choose and document an approach that guarantees no auxiliary SQLite writes for status reads, or explicitly narrow the read-only criterion and test the exact permitted side effects, including their cleanup and behavior with an active WAL."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has three material gaps: credential-bearing text can be emitted, the in-use URLhaus list is omitted from status, and the SQLite read-only guarantee conflicts with acknowledged side effects.",
+  "verdict": "changes_needed"
+}
