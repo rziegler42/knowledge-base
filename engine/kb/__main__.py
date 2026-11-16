@@ -10,7 +10,7 @@ from . import cardmarks, cardqueue
 from . import placeapply, placement, placereview, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import discover
-from . import crawlapprove
+from . import crawlapprove, crawlguard
 from . import problem
 from . import problemtrial
 from . import vectors
@@ -204,6 +204,8 @@ def main(argv=None):
                                               "if the plan, topics and allow files still have that digest")
     ca.add_argument("--plan", metavar="FILE", help="the crawl plan file (default: crawl-plan.txt in the config folder)")
     ca.add_argument("--digest", metavar="DIGEST", help="the digest on the last line of the summary you read; it stores the approval and needs a terminal")
+    cc = sub.add_parser("crawl-clear", help="clear the circuit breaker of the unattended crawl; it changes nothing without --yes and without a terminal, and it does not remove the stop file")
+    cc.add_argument("--yes", action="store_true", help="clear it (in your own terminal)")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -423,6 +425,10 @@ def main(argv=None):
             plan_path = args.plan or os.path.join(config.config_dir(), "crawl-plan.txt")
             out = crawlapprove.approve(cfg["index_root"], cfg, plan_path, digest=args.digest)
             print(out[0] if args.digest is None else json.dumps(out))
+            return 0
+        if args.command == "crawl-clear":
+            crawlguard.clear(config.load()["index_root"], yes=args.yes)
+            print("the circuit breaker is cleared; the stop file and any site stopped for the day are as they were")
             return 0
         if args.command == "trial-problems":
             print(json.dumps(problemtrial.run(Store.open(write=False), config.load(), args.corpus, args.report, replace=args.replace,
