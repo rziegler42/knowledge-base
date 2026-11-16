@@ -273,8 +273,17 @@ def load_suffixes(path):
         _refuse(f"the suffix list cannot be read ({e.strerror})")
     finally:
         os.close(fd)
+    return parse_suffixes(data)
+
+
+def parse_suffixes(data):
+    """The rules of a Public Suffix List given as bytes (what `load_suffixes` reads from a file), so that the bytes that were checked are the bytes that are parsed."""
+    if not isinstance(data, (bytes, bytearray)):
+        _refuse("the suffix list must be bytes")
+    if len(data) > MAX_SUFFIX_BYTES:
+        _refuse("the suffix list is too large")
     try:
-        text = data.decode("utf-8")
+        text = bytes(data).decode("utf-8")
     except UnicodeDecodeError:
         _refuse("the suffix list is not UTF-8")
     rules, count = set(), 0

@@ -417,6 +417,16 @@ class SiteOf(unittest.TestCase):
                 webaddr.load_suffixes(many)
         self.assertEqual(len(webaddr.load_suffixes(many)), 11)
 
+    def test_rules_are_read_from_bytes_as_from_a_file(self):
+        self.assertEqual(webaddr.parse_suffixes(PSL.encode("utf-8")), self.suffixes)
+        with self.assertRaises(webaddr.AddressError):
+            webaddr.parse_suffixes(b"com\n\xff\xfe\n")
+        with self.assertRaises(webaddr.AddressError):
+            webaddr.parse_suffixes("a".encode() * (webaddr.MAX_SUFFIX_BYTES + 1))
+        with self.assertRaises(webaddr.AddressError):
+            webaddr.parse_suffixes("not bytes")
+        self.assertEqual(webaddr.parse_suffixes(b""), frozenset())
+
     def test_a_line_that_is_not_a_rule_is_ignored_and_an_empty_file_is_an_empty_set(self):
         junk = os.path.join(self.dir, "junk")
         with open(junk, "w") as f:
@@ -435,7 +445,8 @@ class SiteOf(unittest.TestCase):
 
 class NoNetwork(unittest.TestCase):
     def test_the_module_makes_no_request_and_imports_no_network_code(self):
-        source = open(os.path.join(ENGINE_DIR, "kb", "webaddr.py"), encoding="utf-8").read()
+        with open(os.path.join(ENGINE_DIR, "kb", "webaddr.py"), encoding="utf-8") as f:
+            source = f.read()
         for word in ("import socket", "urllib.request", "http.client", "import ssl", "urlopen", "subprocess", "import requests"):
             self.assertNotIn(word, source, word)
         self.assertIsNotNone(re.search(r"^from \. import .*KbError", source, re.M))
