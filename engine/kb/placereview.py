@@ -21,6 +21,7 @@ import re
 import sys
 
 from . import KbError, card, placement, shelfvectors, textutil
+from .store import _SHELF
 
 EVENT = "placement_confirmed"
 MAX_WORDS = 300
@@ -87,7 +88,8 @@ def _confirmation_ok(event, schema):
 
 def state_of(store, book_id, schema, schema_hash):
     """`(state, proposal, confirmation)` of one book, or None if it has no proposal event at all. The state is `unreadable` (the newest proposal is not the shape this engine writes), `no_proposal` (it is
-    an error), `stale` (the card, the text or the schema is not the one the proposal was made for), `unconfirmed` or `confirmed` (the newest answer is to the newest proposal)."""
+    an error), `moved` (the book is no longer on the shelf `default`: it has been moved onto a shelf, which `place-apply` does), `stale` (the card, the text or the schema is not the one the proposal was made
+    for), `unconfirmed` or `confirmed` (the newest answer is to the newest proposal)."""
     try:
         events = store.read_events(book_id)
     except KbError:
@@ -98,6 +100,12 @@ def state_of(store, book_id, schema, schema_hash):
     proposal = proposals[-1]
     if not _proposal_ok(proposal, schema):
         return "unreadable", proposal, None
+    try:
+        shelf = store.read_book(book_id).get("shelf")
+    except KbError:
+        shelf = "default"  # a root file that cannot be read is not a move: the check of the card below says what is wrong
+    if type(shelf) is str and shelf != "default" and _SHELF.fullmatch(shelf):  # a missing or odd value is not a move: it is not a shelf
+        return "moved", proposal, None
     if proposal["answer"]["kind"] == "error":
         return "no_proposal", proposal, None
     try:
@@ -113,9 +121,9 @@ def state_of(store, book_id, schema, schema_hash):
 
 def listing(store, schema_path=None):
     """The counts of where each book stands, read only: the books with a proposal event (`books`), those `unconfirmed` and `confirmed`, the confirmed by what the owner said (`accepted_pick`,
-    `other_shelf`, `none`, `skipped`) and the books `stale`, `no_proposal` (the model's call failed) and `unreadable`. A skipped book counts as `skipped` and not as `confirmed`."""
+    `other_shelf`, `none`, `skipped`) and the books `moved`, `stale`, `no_proposal` (the model's call failed) and `unreadable`. A skipped book counts as `skipped` and not as `confirmed`."""
     schema, schema_hash = shelfvectors._read_schema(schema_path or shelfvectors.DEFAULT_SCHEMA)
-    counts = {"books": 0, "unconfirmed": 0, "confirmed": 0, "accepted_pick": 0, "other_shelf": 0, "none": 0, "skipped": 0, "stale": 0, "no_proposal": 0, "unreadable": 0}
+    counts = {"books": 0, "unconfirmed": 0, "confirmed": 0, "accepted_pick": 0, "other_shelf": 0, "none": 0, "skipped": 0, "stale": 0, "no_proposal": 0, "unreadable": 0, "moved": 0}
     for book_id in store.list_books():
         found = state_of(store, book_id, schema, schema_hash)
         if found is None:
@@ -232,17 +240,19 @@ def review(store, schema_path=None, book_ids=None, again=False, input_fn=input, 
         wanted = list(book_ids)
     else:
         wanted = store.list_books()
-    counts = {"asked": 0, "confirmed": 0, "skipped": 0, "stale": 0, "no_proposal": 0, "unreadable": 0, "stopped": False}
+    counts = {"asked": 0, "confirmed": 0, "skipped": 0, "stale": 0, "no_proposal": 0, "unreadable": 0, "moved": 0, "stopped": False}
     todo = []
     for book_id in wanted:
         found = state_of(store, book_id, schema, schema_hash)
         if found is None:
             continue
         state, proposal, answered = found
-        if state in ("stale", "no_proposal", "unreadable"):
+        if state in ("stale", "no_proposal", "unreadable", "moved"):
             counts[state] += 1
             if state == "stale":
                 say("The proposal for the book %s is out of date (its card or the schema changed); run `place-propose --book %s` first." % (safe(book_id, 40), safe(book_id, 40)))
+            elif state == "moved" and book_ids is not None:
+                say("The book %s is no longer on the shelf default, so there is nothing to answer." % safe(book_id, 40))
             continue
         if state == "confirmed" and not again:
             continue

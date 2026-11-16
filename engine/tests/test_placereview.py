@@ -584,6 +584,68 @@ class Choosing(ReviewCase):
             self.session(["1"], again="yes")
 
 
+class MovedBooks(ReviewCase):
+    """A book that has been moved onto a shelf is not on `default` any more: its shelf is decided, so it is neither stale nor asked again (Increment B of the plan `2026-11-16-move-confirmed-books-onto-their-shelves`)."""
+
+    def moved(self, title, answer="2: Because.", key=None):
+        book, _ = self.proposed(title, answer=answer)
+        if key:
+            self.session([key], book_ids=[book])
+        self.store.set_shelf(book, "gene-editing")
+        return book
+
+    def test_an_unanswered_book_that_was_moved_is_counted_as_moved_and_not_as_stale_or_unconfirmed(self):
+        self.moved("The gene book")
+        counts = placereview.listing(self.store, schema_path=self.schema_path)
+        self.assertEqual((counts["moved"], counts["stale"], counts["unconfirmed"], counts["confirmed"]), (1, 0, 0, 0))
+
+    def test_an_answered_book_that_was_moved_is_counted_as_moved_and_not_as_confirmed(self):
+        self.moved("The gene book", key="ok")
+        counts = placereview.listing(self.store, schema_path=self.schema_path)
+        self.assertEqual((counts["moved"], counts["confirmed"], counts["accepted_pick"], counts["books"]), (1, 0, 0, 1))
+
+    def test_a_moved_book_is_not_asked_about_again_even_with_again(self):
+        book = self.moved("The gene book", key="ok")
+        for again in (False, True):
+            with self.subTest(again=again):
+                counts, out, asked = self.session(["1"], again=again)
+                self.assertEqual((asked, counts["moved"], counts["asked"]), ([], 1, 0))
+        self.assertEqual(len(self.confirmations(book)), 1)
+
+    def test_a_moved_book_that_is_named_is_said_to_be_moved(self):
+        book = self.moved("The gene book")
+        counts, out, asked = self.session(["1"], book_ids=[book])
+        self.assertEqual((asked, counts["moved"]), ([], 1))
+        self.assertIn("no longer on the shelf default", out)
+
+    def test_a_book_with_no_shelf_or_a_shelf_that_is_not_a_shelf_name_is_not_taken_for_moved(self):
+        for name, value in (("none", None), ("a list", ["x"]), ("empty", ""), ("a path", "../x"), ("a number", 5), ("upper case", "Gene")):
+            with self.subTest(name):
+                self.setUp()
+                book, _ = self.proposed("The gene book")
+                self.store._rewrite(self.store.book_file(book), lambda root: root.__setitem__("shelf", value))
+                counts = placereview.listing(self.store, schema_path=self.schema_path)
+                self.assertEqual(counts["moved"], 0, name)
+
+    def test_a_moved_book_that_is_not_named_is_counted_without_a_word_said(self):
+        self.moved("The gene book")
+        counts, out, asked = self.session(["1"])
+        self.assertEqual((counts["moved"], asked), (1, []))
+        self.assertNotIn("no longer on the shelf", out)
+
+    def test_a_moved_book_with_a_failed_proposal_is_moved_all_the_same(self):
+        self.moved("The gene book", answer=KbError("the server is down"))
+        counts = placereview.listing(self.store, schema_path=self.schema_path)
+        self.assertEqual((counts["moved"], counts["no_proposal"]), (1, 0))
+
+    def test_a_book_whose_root_file_cannot_be_read_is_not_taken_for_moved(self):
+        book, _ = self.proposed("The gene book")
+        with open(self.store.book_file(book), "w") as f:
+            f.write("{")
+        counts = placereview.listing(self.store, schema_path=self.schema_path)
+        self.assertEqual((counts["moved"], counts["unreadable"]), (0, 1))   # the reader of the event log reads the root file first, so such a book is unreadable
+
+
 class CommandLine(ReviewCase):
     def test_the_flags_are_handed_on_and_the_listing_prints_counts_as_json(self):
         from kb import __main__ as cli

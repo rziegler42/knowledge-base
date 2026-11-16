@@ -135,9 +135,9 @@ def main(argv=None):
     pr.add_argument("--list", action="store_true", help="print the counts of where each book stands, read only")
     pr.add_argument("--again", action="store_true", help="ask again about books you have already answered")
     pr.add_argument("--book", action="append", metavar="BOOK_ID", help="go through this book only; give it once for each book")
-    pa = sub.add_parser("place-apply", help="print the list of books that your answers would move onto their shelves, with a digest of that list; read only: it changes no book "
-                                            "(giving a digest, which will make the moves, is not built yet)")
-    pa.add_argument("--digest", metavar="DIGEST", help="not built yet")
+    pa = sub.add_parser("place-apply", help="print the list of books that your answers would move onto their shelves, with a digest of that list (read only); with --digest, make exactly those moves, "
+                                            "in your own terminal, if the list still has that digest")
+    pa.add_argument("--digest", metavar="DIGEST", help="the digest on the last line of the list you read; it makes the moves and needs a terminal")
     tv = sub.add_parser("theme-vectors", help="make the vectors of the themes (the summary, the whole description and each of the five parts of "
                                               "every theme, up to seven texts) with the embedding model that the config sets for card-embed; a vector "
                                               "whose text has not changed is kept; those texts go to that model")
@@ -348,7 +348,8 @@ def main(argv=None):
             return 0
         if args.command == "place-apply":
             if args.digest is not None:
-                raise KbError("place-apply with a digest is not built yet: this version only prints the list and its digest")
+                print(json.dumps(placeapply.apply(Store.open(), args.digest)))
+                return 0
             print(placeapply.preview(Store.open(write=False))[0])
             return 0
         if args.command == "theme-vectors":
