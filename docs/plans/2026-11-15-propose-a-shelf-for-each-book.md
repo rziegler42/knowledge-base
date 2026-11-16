@@ -1,6 +1,6 @@
 # Propose a shelf for each book, and record the owner's confirmation
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-15
 Candidate: none (the shelves, the fetch engine and the crawler are outside every roadmap, which say so; creating a roadmap for them is the owner's change of direction; this plan follows the two checks of the shelf matcher on the library's books, `2026-11-14-check-the-matcher-on-the-librarys-books` and `2026-11-15-check-the-matcher-on-difficult-books`, and the owner's reading of them)
 Specs: docs/specs/shelf.md, docs/specs/card.md, docs/specs/book.md
@@ -179,6 +179,10 @@ Reviewed with Codex through the project's review engine (the bridge `ask-codex`,
 - A new measurement if the embedding or chat model, the prompt or the number of candidates changes.
 
 ## Result
+
+### The owner's reading (completion criterion 6)
+
+The owner was shown the verification of the whole plan below, with these limits stated in plain words: **completion criterion 4 is not met as written** (no hash of each book's root file was taken before the run of Increment D, so the comparison could not be made, and what stands in its place is weaker); the 21 answers are the library's first books in order of their ids, a small and unrepresentative batch, and their counts are **not a measure of the matcher's accuracy**; the model's pick was shown to the owner when they answered; and nine of the 202 proposals are `none`, six of them overview pages. The owner said **"close both plans"**, this plan and the plan that moves the confirmed books. The owner **did not name a next step**; the questions that follow from this plan (what to do with the proposals the owner has not answered, with the books the model leaves with `none`, and with the governed move at the levels `ask`, `delegated` and `none`) are on the owner's todo list and in the Deferred work of the later plan. **The plan is closed on the owner's word with criterion 4 unmet as written.** Completed on 2026-11-16.
 
 ### Verification of the whole plan (run on 2026-11-15 at commit `9d982f1`)
 
