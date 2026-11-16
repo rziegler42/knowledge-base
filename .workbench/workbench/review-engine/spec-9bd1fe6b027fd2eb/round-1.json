@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "docs/specs/population.md:136,183, acceptance criterion 16",
+      "problem": "The spec requires rejecting DNS-rebinding attacks, but only says to resolve and check the address before connecting. It does not require connecting to the validated IP or verifying that the actual socket peer is the validated public address, so a changed DNS answer can still route the request to a private or metadata address.",
+      "severity": "major",
+      "suggestion": "Specify an implementation that binds the connection to the validated IP, preserves the intended Host/SNI, and verifies the connected peer; add a test covering a DNS answer change between validation and connect."
+    },
+    {
+      "id": "R1-F2",
+      "location": "docs/specs/population.md:180,183, acceptance criterion 16",
+      "problem": "Protection against hostile-content memory exhaustion is left as an unresolved alternative: either impose a memory limit or reduce the PDF size limit. The default still permits unknown-host PDFs up to 50 MB, while conversion and scanning have no selected memory bound.",
+      "severity": "major",
+      "suggestion": "Choose explicit pre-processing limits for resident memory, CPU/time, processes, output size, and decompression, and make the runner refuse or park content when those limits cannot be enforced."
+    },
+    {
+      "id": "R1-F3",
+      "location": "docs/specs/population.md:122,126,128,134",
+      "problem": "The default plan enables URLhaus and DuckDuckGo even though the document records unresolved terms and fair-use/compliance questions, leaving an unattended automated crawler to operate before the owner has accepted those conditions.",
+      "severity": "major",
+      "suggestion": "Make sources with unresolved usage terms disabled by default and require an explicit owner-controlled enablement with documented rate and terms checks before unattended use."
+    },
+    {
+      "id": "R1-F4",
+      "location": "docs/specs/population.md:113-114",
+      "problem": "The approval digest covers only the plan, topics, and allow files. It does not bind the executable code, source adapters, parser and scan versions, schema, prompts, or model configuration, so a later implementation or model change can materially alter unattended fetching, judging, or moves under an old standing approval.",
+      "severity": "major",
+      "suggestion": "Bind approval to the relevant code/configuration/tool/model/schema versions, or require a compatibility/version check that invalidates the approval whenever behavior-affecting components change."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The spec has material gaps in network-boundary enforcement, hostile-content resource limits, source compliance, and the scope of standing approval.",
+  "verdict": "changes_needed"
+}

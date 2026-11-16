@@ -1,0 +1,241 @@
+# Populating the library unattended
+
+Status: Draft
+
+This specifies how the library takes in books by itself, in small bounded batches, with no one at the keyboard. It builds on the crawler, the seen list and the safeguards of `shelf.md` and on the pipeline of `pipeline.md`. It was revised on 2026-11-16 after a design review and a threat review of its first draft; the findings are applied below. **The owner approved this design on 2026-11-16 as the design to build, including the five changes to other specs listed below.** It can still change, and it stays `Draft`, as `shelf.md` does, until what it describes is built and the text says what is true. Each statement carries a mark:
+
+- **[agreed]** The owner said it, on 2026-11-16. It is the working position and it can still change.
+- **[proposed]** The assistant's suggestion. The owner has not decided it.
+- **[idea]** Exploratory, and not a requirement.
+
+**What this spec changes in other specs, which the owner is asked to accept when approving it:** (1) the owner's rules are approved, for now, as one **crawl plan** and not as a rules file for each shelf (`shelf.md`, "Creating and defining a shelf"); (2) the plan carries a **standing approval** for moves by the model's pick of books the runner itself fetched, where `shelf.md` has the owner approve each list of moves; (3) a candidate that fits no listed shelf is filed under the plan's global limits and not left to wait for the owner; (4) **`shelf.md`'s statement that text from a fetched page cannot add a new source domain no longer holds**, because the owner chose no whitelist (search results, and the pages and works found through them, add domains); (5) topic weights are whole numbers, as `shelf.md` has for priorities, and are a different thing from a shelf's priority.
+
+## Scope
+
+- Finding candidate books in scholarly sources and by web search, keeping a queue and a seen list, fetching them slowly, filing them through the existing pipeline (capture, scan, convert, index, card, placement), judging whether to keep each, and moving each kept book onto a shelf by the model's pick, marked as such.
+- The safeguards that let this run unattended: ceilings, a stop switch, disk floors, a circuit breaker, pacing, a log, the owner's blacklist and public lists of malicious sites.
+- Scheduling by the owner's own scheduler, and a status command and a report for the owner to read.
+
+## Built first, and designed but built later
+
+Nobody is at the keyboard to add a piece while a run is unattended, so the first version contains only what must run unattended. **The rest stays in the design and is not ruled out.**
+
+| First version (built before the first unattended run) | Designed, built later |
+|---|---|
+| Sources: OpenAlex search and **its citation links** (the works a work cites and is cited by) as the way to leave the topics, arXiv search, Wikipedia search, and **a web search engine, best effort** | Following HTML links from any fetched page to any site; Wikipedia's links to other Wikipedia pages |
+| Files: web pages (HTML) and arXiv papers | PDFs on other hosts; plain text |
+| The crawl plan (global limits) with weighted topics | **Shelf entries and scouts**: per-shelf rules, seed limits, states, seeding and steady growth (`shelf.md`); the owner's request is that they are not ruled out |
+| Phishing.Database list; URLhaus recent mode (built last, off if not finished by the supervised run) | URLhaus lookups; other public lists |
+| One report and `crawl-status` | A summary of the whole unattended period, per-shelf and per-site breakdowns |
+| Runner, stop file, breaker, ceilings, log | Alternate copies after a refusal; `robots.txt` (not built; off, as `shelf.md` records) |
+
+## Non-goals
+
+- Anything that serves research use of the library (search, themes, the weave, the walk, reading). It waits until the owner is back. **In particular the runner does not run `card-index`, `card-vectors` or themes, so new books are not found by card search until the owner runs them.**
+- Shelf visibility, and the workbench levels `ask`, `delegated` and `none` for approving a plan (until the workbench declares them, approval is the owner at a terminal with a digest).
+- Moving the 172 proposals the owner has not answered. That is a separate decision (a staged or all-at-once move by the model's pick) with its own plan; the runner never touches them (see "Filing and placement").
+- A daemon. The runner does a bounded batch and exits.
+- A judgement on copyright, licence or terms of service. Those stay the owner's.
+- Defeating a login, a paywall or a CAPTCHA, and rotating addresses to avoid a block.
+
+## Assumptions and constraints
+
+- **[agreed]** The owner wants the library to grow by itself, with no one at the keyboard.
+- **[agreed]** The owner gives a list of topics that **seed** the search; **the search is not limited to them.** **No site is whitelisted.**
+- **[agreed]** The sources are OpenAlex scholarly search, Wikipedia and arXiv as ordinary sources among the others, and a web search engine ("such as Bing, Google or DuckDuckGo") to help find sources. **For the first version the way the search leaves the topics is OpenAlex's citation links, not arbitrary HTML links** (the owner chose that the riskiest piece waits).
+- **[agreed]** Each book that is fetched is filed, and placed and moved by the model's pick when the model offers a shelf.
+- **[agreed]** The ceiling is decided after the system is built and timed and the owner has weighed the risk of running it unattended. If the work is finished and verified early, the ceiling may be higher. **The plan therefore ships with small default ceilings.**
+- **[proposed]** The models are on the owner's server `ned`, reached over plain http on the owner's network, in the clear (`models.md`); book text goes to it. Nothing here may send the owner's name, email or address to any outside service. The scholarly and search sources are asked **without** a contact address, with an honest generic user-agent; whether a source refuses that is logged and is not worked around.
+- **[proposed]** The runner is a program the owner schedules, not an agent: it holds no tool. The models it calls can only write text into a card or a reply that a strict reader checks, and the answer to a placement is one of five shelves offered or `none`. **Text from a fetched page is untrusted data at every step, including the text of a crawled book's card for any agent that reads it later.**
+- **[proposed]** The owner runs nothing that writes the library while a run is in progress. The writers of a root file take no lock (`placeapply.py` says so), so an owner command in the same instant can lose a write. The runner takes the catalog lock for each move.
+- The library is small (0.26 GB for 209 books on 2026-11-16, the index another 0.26 GB). The drive that holds the index has about 34 GB free; the bulk drive about 1.5 TB (measured 2026-11-16). A web page is capped at 20 MB and an arXiv paper at 50 MB (`capture_url.MAX_BYTES`, `capture_arxiv.PDF_MAX_BYTES`).
+
+## Behavior
+
+### Addresses, hosts and sites: one canonical form
+
+- **[proposed]** **One module (`kb/webaddr.py`) is the only place that canonicalises, and everything else calls it:** `canon_host(name)` lower-cases, strips a single trailing dot, converts to ASCII by IDNA (UTS 46) and refuses on failure; `canon_address(url)` keeps only `http` and `https`, canonicalises the host, drops the default port (80 and 443) and the fragment, removes the common tracking parameters (`utm_*`, `fbclid`, `gclid`, `mc_*`), refuses any other port, refuses an address over 2,048 characters, and strips bidirectional and control characters; `site_of(host)` is the **registrable domain** by the Public Suffix List (a copy kept in the index root, refreshed like a public list; without it, the last two labels, and the caps are halved). The identity key of a page is its canonical address; of an arXiv paper `arxiv:<id without version>`. A DOI is never a key: a work found by DOI is resolved to an arXiv id or a landing address first.
+- **[proposed]** The same functions are used for identity keys, every blacklist and list match, and every per-site counter. A trailing dot, an upper-case name, an IDN form and `:80` all give one key.
+- **[proposed]** Only ports 80 and 443 are used, at every hop. **A "site" is its registrable domain**, and the per-site daily cap and the pacing apply to the registrable domain and to the resolved IP address, so that many names pointing at one machine are one site. An address that resolves to an address of this machine is refused (the existing check). A name that resolves to the owner's own outside address (hairpin NAT) is **not detected** and is a recorded residual risk.
+
+### The crawl plan
+
+- **[proposed]** The owner writes one plain-text plan file, kept outside the repository, in this form (`key = value`; a `#` starts a comment; every key has a default; the values shown are the proposed defaults, which are small):
+
+```
+[limits]
+fetches_per_day = 20        # candidate fetches started per local day
+filed_total = 200           # books the crawl may file in all
+per_domain_per_day = 3      # fetches per registrable domain per day
+batch = 8                   # candidates fetched per run
+cards_per_day = 30          # books given a card per day
+queued_total = 20000        # rows with status queued
+queued_per_domain = 50
+retries = 3
+fetch_timeout_s = 60
+timezone = local            # the day is a day in this zone (local, or an IANA name)
+[pacing]
+min_gap_s = 8               # between requests to one registrable domain and to one IP
+jitter = 0.5
+user_agent = browser        # pages; the scholarly and search sources always use an honest generic agent
+[disk]
+bulk_floor_gb = 50
+index_floor_gb = 10
+[breaker]
+consecutive_failures = 8
+failure_share = 0.5         # over the last `window` fetches
+window = 20
+model_down_minutes = 30
+domain_refusals = 3         # 403, 429 or an abuse signal from one site stops that site for the day
+[sources]
+openalex = on
+arxiv = on
+wikipedia = on
+web_search = off            # duckduckgo to use it; its terms are unresolved, so it is off until the owner turns it on
+wander_share = 0.2          # share of a batch taken from citation links, not from topic queries
+[lists]
+phishing_domains = on       # required: the run stops if there is no copy of it at all
+urlhaus_recent = off        # on to use it; needs the key file and the owner's reading of abuse.ch's terms; built last
+[scan]
+hold_kinds =                # the scan findings that hold a book (see "Filing and placement")
+[judge]
+threshold =                 # set in the supervised run; a run refuses to fetch while it is empty
+min_chars = 400
+[moves]
+model_pick = on
+[files]
+topics = ~/.config/knowledge-base/crawl-topics.txt
+blacklist = ~/.config/knowledge-base/crawl-blacklist.txt
+allow = ~/.config/knowledge-base/crawl-allow.txt
+```
+
+- **[agreed]** **The topics are approved** (2026-11-16): 118 topics in three sections, **74 core, 43 exploratory and one low-priority topic (SystemVerilog)**, kept in a private file outside the repository and not in this spec. **[proposed]** The topics file: one topic to a line; a line that starts with `[` opens a section and sets its integer weight (`[core weight=10]`, `[exploratory weight=5]`, `[low weight=1]`); `#` starts a comment. A topic's share of the topic queries is its weight over the sum of all weights. A topic weight is not a shelf's priority (`shelf.md`).
+- **[proposed]** **The owner approves the plan at a terminal** (`crawl-approve`, as `place-apply` does: without an argument it prints a plain summary (the ceilings, the disk floors, the topic count and weights, the sources, the lists, the scan kinds that hold, whether moves by the model's pick are on) and a digest; with `--digest HEX` and a terminal it stores the approval). **The digest is the first 32 hexadecimal characters of the SHA-256 of the exact bytes of the plan file, the topics file and the allow file** (the blacklist and the key file are not in it: the blacklist can only reduce what the runner does, and the key is a credential). The approved copies are stored read-only (mode 0400) in `<index root>/crawl/approved/<digest>/`, and `<index root>/crawl/approved/current` holds the digest. **`crawl-run` takes no argument that names a plan:** it reads `current`, recomputes the digest of the stored copies and refuses to run if it is missing or does not match. A missing or unreadable plan, state or free-space reading means do not run. An agent cannot approve a plan.
+- **[proposed]** **Sources with unresolved or restrictive terms are off in the shipped default plan** (`web_search = duckduckgo` and `urlhaus_recent`), and **`crawl-approve`'s preview names each one that is on and says in words that its terms are for the owner to have read** (DuckDuckGo's use of its HTML results is unresolved; abuse.ch's terms say not-for-profit use under fair-use limits). The owner has decided to use both (2026-11-16), so the plan the owner approves has them on; the system does not turn them on by itself.
+- **[proposed]** **The approval is also bound to what will run.** `crawl-approve` computes a **behaviour fingerprint**: the SHA-256 of the bytes of every module of `engine/kb`, of the schema file, and of the models section of the engine's config that names the models and entries for the card, placement and embedding tasks (not the rest of the config, which holds the owner's secrets); the prompt versions are in the modules. It is stored with the approved copies and **`crawl-run` recomputes it and refuses to run if it differs**, so that a later pull, merge or edit of the engine, or a change of model, cannot change what an unattended run fetches, judges or moves under an old approval; the owner approves again after any such change. The preview prints the fingerprint's first 12 characters and the date the code was last changed.
+- **[proposed]** **Standing approval.** The owner's approval of a plan is also the owner's approval for the moves by the model's pick made **by this runner, on books it fetched itself, up to the plan's ceilings**, and for nothing else. It is a larger grant than one list of moves: it covers a long period of unattended action. The terminal check is an interlock and not proof that a person typed (`shelf.md`), and the preview must therefore show the grant in words.
+
+### Sites that are off limits
+
+- **[agreed]** The owner has a **blacklist** of sites that are off limits, and the system uses **public lists of known-malicious sites**, or at least has the option to. **The owner's blacklist starts empty.**
+- **[proposed]** **The owner's blacklist** is a plain file of hostnames, one per line, outside the repository. An entry blocks that host and every host below it. It is empty until the owner adds to it, and the system never adds to it. **Because it can only reduce what the runner does, the owner may add to it at any time without a new approval**, and the runner reads it again at the start of every run.
+- **[proposed]** **The allow file widens what the runner may fetch**, so unlike the blacklist it is part of the approved plan (in the digest). An entry overrides a public list for that host and **nothing overrides the owner's blacklist**. A fixed set of hosts the runner cannot work without (the scholarly and search sources) is **never blocked by a public list**, so a poisoned list cannot switch the sources off; only the owner's blacklist can block them.
+- **[proposed]** **Public lists.** The plan names each by its address and format. The runner downloads each at most once in the plan's hours, with a conditional request, keeps the last good copy in the index root with its retrieval date and hash, and uses it if a download fails. A **required** list with no copy at all stops the run (fail closed); an optional one is skipped and the log and the report say so. A list is **data, not instruction**: only valid hostnames or addresses are taken; a list over a size limit, or one that has suddenly become far smaller than its last good copy, or one that changes by more than a set number of entries in one refresh, is refused and the last copy stays in use.
+- **[agreed]** The list in use by default is the MIT-licensed one (**Phishing.Database's active phishing domains**). **URLhaus is an option used only if the owner has an abuse.ch Auth-Key** (the owner has one, 2026-11-16) and is on in its **recent** mode; its **lookup** mode is off (it tells abuse.ch which hosts the library is about to fetch). No list that needs a key is requested without one.
+- **[proposed]** **How an entry matches** (after `canon_host`): an entry of the owner's blacklist blocks that host and every host below it. An entry of a **public list of hosts** blocks **that exact hostname only**, so that an entry for a subdomain cannot block a whole service. An entry of a **public list of URLs** (URLhaus's) blocks **that exact canonical URL**, and a whole host only when it is a bare IP address; on 2026-11-16 one of the three newest URLhaus entries had the host `github.com`, so blocking by host would have blocked every page on it. **Matching a URL list exactly is a weak control** (a changed query string evades it) and is not relied on alone. The check is made **before any request**: on every candidate, on every redirect hop, and on every address found (a blocked address is recorded as `blocked` and never queued as work).
+- **[proposed]** A hit is recorded with the list it came from (`blocked`, `reason: owner` or `reason: list:<name>`) and counted in the report.
+- **[proposed]** **A key is a credential.** For URLhaus it is kept in `~/.config/knowledge-base/urlhaus.key` (mode 600 and owned by the owner, or the runner refuses the file), never in the plan, the log, the report, an error message, a model prompt, an environment variable, a command line, an address or the repository. It is sent **only over https, only to the host the plan names (`urlhaus-api.abuse.ch`), in the HTTP header `Auth-Key`, and no redirect is followed:** any 3xx is a refusal, the key is not sent again that day, and the log says so. The log and the report record the host and the status, never a request header.
+- **[proposed]** **URLhaus recent mode:** the URLs added in the past 3 days (at most 1,000 a time, `GET /v1/urls/recent/`) are read about once an hour and kept in the local copy for a number of days the plan sets. The runner reads the `X-RateLimit-*` headers of every reply and **stops using URLhaus for the rest of the day when the remaining count reaches zero, or on any refusal.** Its limits are the owner's to read (abuse.ch's terms, 2026-11-16: not-for-profit use under fair-use limits; accounts with unusually high query volume may be limited for up to 72 hours).
+- **[proposed]** What the lists are worth: they catch **known** bad sites, not new ones, so they do not replace the scan of what is fetched.
+- **[proposed]** **Which lists, as read on 2026-11-16 (the terms are the owner's to read; they were read by an agent from the pages and a content hash of each page was not taken):** *Phishing.Database* (active phishing domains): MIT licence, no key, "updated regularly", file format not described on its page. *abuse.ch URLhaus API*: needs a key, for not-for-profit use under fair-use limits, forbids high-volume scripted harvesting without consent; its bulk-downloads page returned `410 Gone`; the v1 API offers recent URLs and per-host, per-URL and per-payload lookups, not a file of hosts. *StevenBlack's unified hosts*: MIT for the repository, adware and malware (about 76,000 domains), sources with differing licences including non-commercial ones, no malware-only variant: not used. *OpenPhish community feed*: free, no key, 12-hourly, terms limit use to personal, academic or independent research and name automation among prohibited business uses: not used unless the owner decides. *Google Safe Browsing*: needs a Google Cloud key, non-commercial, a 30-minute freshness rule: not offered.
+
+### Discovery
+
+- **[proposed]** The chat model turns each topic into a bounded number of queries (a few each, a plan value). The text of fetched pages is never used to make queries.
+- **[proposed]** **OpenAlex** search by those queries gives works; a work is resolved to an arXiv id, or to a landing page when that page is HTML. **A work whose only full text is a PDF at another host is rejected for its type** (`rejected: type`, counted in the report so that the owner sees what was missed). **Wandering:** the works a kept work cites and is cited by, to depth 2 from a topic and at most 5 per work, are candidates (`found_from: openalex:<id>`), up to the plan's `wander_share` of a batch. **arXiv** search and **Wikipedia** search by the queries give papers and pages.
+- **[agreed]** **A web search engine** may be used to help find sources. **[proposed]** There is no clean keyless one: the Bing search API was retired on 2025-08-11, Google's Custom Search JSON API is closed to new customers and ends on 2027-01-01, DuckDuckGo has no official full-results API, and Brave's search API has no free tier (a card and about $5 of credit a month; read from secondary sources on 2026-11-16). The first version therefore has one adapter, **DuckDuckGo's HTML results, best effort**: at most one query in the plan's gap, a stop for the day on any CAPTCHA, block or unusual page (never worked around), and the log says so. Whether that use complies with DuckDuckGo's terms is unresolved (read from secondary sources); it is the owner's responsibility. A keyed engine (Brave) can be added as another adapter if the owner supplies a key.
+- **[proposed]** **Bounds against flooding.** Every candidate row carries its `depth`, its registrable `domain` and its resolved `ip` when known; the queue is capped in all (`queued_total`) and per domain (`queued_per_domain`), at most a set number of links are taken from one page or one work, and an address over 2,048 characters is dropped. A link's words only order candidates; they never bypass a cap.
+- **[proposed]** Only `http` and `https` and only public destinations. **The shared client resolves a host once, checks every answer, and connects to the address it checked** (sending the intended `Host` and TLS server name), then **verifies that the peer address of the connected socket is that address**; it never resolves again between the check and the connect, at the first request or at any redirect hop. A DNS answer that changes in between is therefore harmless. This is what the existing `capture_url` guard does (`_connect_checked`, tested by the threat review on 2026-11-16), and the shared client must keep it for discovery's own requests and for list downloads.
+
+### The queue and the seen list (the interface between discovery and the runner)
+
+- **[proposed]** One SQLite file in the index root, `candidates.sqlite`, holds every candidate ever found, and it is the seen list: a row is never deleted. It is created by the first of the two to open it, with `PRAGMA user_version = 1` and an exact-shape check as `catalog.connect` does, WAL mode and a `busy_timeout` of 30 seconds (SQLite's own locking; no other lock). Discovery inserts with `INSERT OR IGNORE` on `identity_key`.
+
+```
+candidates(
+  id INTEGER PRIMARY KEY, identity_key TEXT UNIQUE NOT NULL, address TEXT NOT NULL,
+  source TEXT NOT NULL,        -- openalex | arxiv | wikipedia | web-search
+  found_from TEXT,             -- openalex:<work id>, the query, or a topic
+  topic TEXT, weight INTEGER,  -- the topic and its weight, or NULL for a wandered candidate
+  depth INTEGER NOT NULL DEFAULT 0, domain TEXT, ip TEXT,
+  status TEXT NOT NULL,        -- queued | fetching | kept | rejected | failed | blocked
+  reason TEXT, score REAL, book_id TEXT,
+  tries INTEGER NOT NULL DEFAULT 0, run_id TEXT,
+  added TEXT NOT NULL, updated TEXT NOT NULL, next_try TEXT)
+counters(day TEXT, key TEXT, n INTEGER, PRIMARY KEY(day, key))   -- fetches started, by day and by domain
+```
+
+- **[proposed]** **Who writes what.** Discovery inserts `queued` rows, and `blocked` rows for an address it finds on the blacklist or a list. The runner changes the status of the rest. **Status transitions:** `queued` → `fetching` (the runner, in the same transaction that reserves one unit of the ceilings in `counters`) → `kept` (a book exists; its `book_id` is set; the later steps are followed from the book, not from this row), `rejected` (final: the judgement said no, or a type, size or duplicate rule said no) or `failed` (a network or capture error; back to `queued` at `next_try` after 1 hour, then 6, then 24, and `rejected: failed 3 times` when `tries` reaches the plan's `retries`). A `fetching` row older than 30 minutes returns to `queued` and **counts as a try**, so that a page that kills the converter does not loop. A refusal (403, 429) is a `failed` with a long delay and also counts toward the domain's refusals; **no alternate copy is searched for (not built)**. A candidate that the capture reports as already held or a duplicate becomes `rejected: already held` with the book's id.
+- **[proposed]** **The order of work.** For each run the batch is filled by round-robin over the topics in proportion to their weights, oldest `added` first within a topic, with `wander_share` of the batch taken from wandered candidates.
+
+### Filing and placement
+
+- **[proposed]** **The order of one run (`crawl-run`)**, which takes no argument but `--dry-run` and exits when its batch is done or a limit is met:
+  1. Checks, in order, and any failure ends the run with a log line and an exit code: the run lock (`flock` on `crawl.lock` in the index root; held means exit 0, quietly), the approved plan and its digest, the stop file, the breaker, the disk floors, the ceilings (an exhausted ceiling stops fetching new candidates, not the later steps of books already fetched), and, before any model step, that `ned` answers (one call of the existing `embed` on one short text; failing for longer than the plan's `model_down_minutes` trips the breaker).
+  2. Refreshes the public lists if due.
+  3. **Finishes earlier work first:** every book of the crawl (a book with a `crawl_found` event and no terminal event, see below) is taken through the steps it has not finished, in order: scan, hold check, convert, index, judge, card, proposal, move. Every step is idempotent, so a run that died is resumed by the next.
+  4. Asks discovery to refill the queue if it holds fewer than the plan's low-water mark of queued rows.
+  5. Fetches new candidates up to `batch`, and takes them through the same steps.
+  6. Writes its end line and exits (exit 0 done, 3 refused, 4 breaker tripped).
+- **[proposed]** **Capture.** A candidate is fetched with the existing `capture-url` or `capture-arxiv`, which store the bytes as a book in one call. The capture is given `auto_filed = true` (a new argument; it exists on `create_book` and neither capture passes it) and the runner writes an event **`crawl_found`** (`candidate`, `source`, `found_from`, `topic`, `run`, `plan_digest`). **A failed capture must leave no active book:** `capture` creates a book and an identity entry before it knows the fetch worked, so the runner sets any book from a failed capture to `weeded` with an event `crawl_rejected` and the reason. **A book is never fetched twice and the judged bytes are the filed bytes**, because the judgement is made on the text converted from the stored payload.
+- **[agreed]** **Scan flags.** A book the scan flags is **filed, but not carded or moved, and named in the report.** **[proposed]** The runner runs the scan **before** convert and index, and a book that is held is not converted, indexed, carded or moved; an event **`crawl_held`** records the kinds. The plan's `hold_kinds` names the scan findings that hold; it defaults to the findings that mean a file is hostile (the builder lists them from `scan_tool.KINDS`; the threat review suggested encrypted, javascript, launch_action, embedded_files, xfa_forms, external_actions, rich_media, scan_incomplete and malformed for PDFs, and meta_refresh and embedded_content for HTML), and **`script_elements`, `event_handlers` and `pattern_in_binary_data` never hold**, since almost every page has them. **A failed or skipped scan holds the book (fail closed).** This changes `pipeline.md`'s statement that a scan never stops filing, for books of the crawl only; the book is still filed.
+- **[agreed]** **The judgement.** A book is judged after capture, scan and convert, on its converted text. **[proposed]** The judgement has two parts and is loose, as `shelf.md` asks of relevance: the text must be a real document (at least `min_chars`, and not a menu, a login page or an error), and **its best match among all the home shelves of the schema must reach the plan's `threshold`**, using the text of the title and its first 1,500 characters embedded by the existing embedding entry against `shelf-vectors` (a text rule not yet measured, `judge-1`; its model call counts against the plan's limits). The topics are not part of the test: a page that fits a shelf the owner never named is kept.
+- **[agreed]** **A failed judgement is kept as a weeded book with its reason:** its state is `weeded`, an event **`crawl_rejected`** records the reason and the score, and its files are kept so that the owner can look. It is not searched, not carded and not placed, and it is listed in the report. **The candidate row becomes `rejected`.**
+- **[proposed]** **Cards and the proposal run over the batch, not one book at a time.** A card takes several calls on several models (`gemma4:12b` for the notes, once for each piece; `gpt-oss:20b` for the card; `phi4` for the checks; `qwen3:14b` for the extra items), and the card queue (`cards-queue`) works through the models one at a time so that each is loaded once. The runner plans the queue **with the explicit ids of the books it is finishing** (never with no ids, which plans every card-less book in the library), runs it in **bounded passes** and looks at the stop file between passes, and calls `place-propose` with explicit book ids (with no ids it covers every book on `default`). *Measured on 2026-11-16 from the dates of the 273 cards already made:* in its busiest hour the queue made 66 `card` calls (the slowest stage), 219 `card-notes`, 171 `card-check` and 61 `card-more`, so on the order of 60 cards an hour when `ned` is not busy with anything else; whether the runner keeps that rate has not been measured. The ceilings count books given a card (`cards_per_day`), because the runner does not see the queue's own calls.
+- **[proposed]** **The move is a new path, not `place-apply`** (which needs a terminal and the owner's recorded answers and has private helpers). The runner moves only a book whose `crawl_found` event carries a digest of an approved plan and which has no `reshelved` event, **and no other book**; a regression test must show that the 172 unanswered proposals and every other book on `default` are untouched. For each such book it reads the newest `placement_proposed` event and requires: the proposal is current (the same card, text, schema and prompt as `placement` and `placereview` check, which become public helpers), its answer is a shelf, the shelf is one of the five offered, a home shelf of the schema, not `default` and a name the store accepts. It takes the catalog lock **for each move** (not for the batch), reads the root file again, changes the shelf with `set_shelf`, reads it back and appends one **`reshelved`** line with `from`, `to`, `action: move`, `basis: model-pick`, `via: crawl`, `run`, `plan_digest`, `proposal` (the time of the proposal) and `schema_sha256`, and no `confirmation`. If the proposal is `none`, malformed or an error, the book stays on `default` and is named in the report.
+- **[proposed]** **The crawl's own books are marked.** Every book the runner files has `auto_filed = true` and the events above, so the report can count the books **unreviewed by the owner**; the card text of such a book is data for any later agent, never an instruction.
+
+### Safeguards
+
+- **[proposed]** **The stop file** is a file named exactly `crawl.stop` in the index root; its presence, not its content, stops the runner. It is looked at **between every network request, every model call and every move**, not only before each candidate, and the card queue is run in passes for that reason.
+- **[proposed]** **Ceilings are counters.** A unit of a ceiling is reserved in the same SQLite transaction that marks a row `fetching`, so a crash does not lose a count, and a failed fetch counts. The day is one local day in the plan's `timezone`. `filed_total` counts books with a `crawl_found` event. At a ceiling the runner fetches no new candidate and goes on with the later steps of books it already holds.
+- **[proposed]** **Disk floors** are free bytes on the bulk drive and on the drive of the index, read before every fetch, every conversion and every card pass (`statvfs`; nothing in the engine reads free space today), and each must exceed the worst case for one book. The log is one file a day, the queue database has a size limit, and an interrupted fetch's leftovers in the incoming area older than a day are swept at the start of a run.
+- **[proposed]** **The circuit breaker** trips on `consecutive_failures` failures in a row, or a `failure_share` over the last `window` fetches, or `model_down_minutes` without the model server, or a stage that hits a bound. It writes `crawl/breaker.json` with the reason and the time; the runner then refuses every run until the owner runs **`crawl-clear`** (with `--yes`). A missing or unreadable breaker file is read as tripped. **A site that answers 403, 429 or an abuse signal `domain_refusals` times is stopped for the day** (`shelf.md`: back off and record).
+- **[proposed]** **States.** `crawl-status` says *running* (the run lock is held), *idle*, *paused* (the breaker file exists) or *stopped* (the stop file exists).
+- **[proposed]** **Pacing, the type gate and the shared client.** **One shared web client** (`kb/webclient.py`) is used for every request the crawl makes, including discovery's own requests and the downloads of lists, and the existing `capture_url` fetch is changed to use its policy: the public-address check at connect, at most 5 redirects and **a mode that follows none** (for the URLhaus key), the blacklist and list check at every hop, ports 80 and 443 only, irregular gaps (`min_gap_s` with `jitter`) and one request at a time to a registrable domain and to an IP, the plan's user-agent for pages (a common browser's, as `shelf.md` agreed; the code today sends an honest `knowledge-base/…` agent, which the hardening work changes) and an honest generic one for the scholarly and search sources, an extra-headers argument, the time and size limits, and a response without a `Content-Type`, or one that disagrees with a sniff of its first bytes, is refused. A candidate over a limit is `rejected` with the reason and is not retried. **Resource limits for hostile content are chosen here, not left open.** The scan and conversion tools already run in a sandbox with no network, an empty environment, limits on CPU time and file size and a watchdog; **memory is not limited on macOS today** (`convert_run`). Before any PDF is taken, the sandbox gets a limit on **resident memory (the plan's `tool_rss_mb`, default 2,048; the watchdog kills the tool above it)**, and the crawl takes a PDF only up to the plan's **`pdf_max_mb` (default 20, not the 50 of `capture_arxiv`)**, a converted text only up to a size limit, and only with a process-count limit and a decompression-ratio limit in place. **If a limit cannot be enforced on this machine, the runner does not take PDFs at all** (they are `rejected: pdf not safe to convert`, counted in the report) and takes web pages only; it does not proceed without the limit.
+- **[proposed]** **The log** is `<index root>/crawl/log/crawl-YYYY-MM-DD.jsonl`, one JSON line per action, **one `O_APPEND` write per line** (two processes may append), with: `ts` (UTC), `run`, `step`, `outcome`, `candidate`, `book`, `host`, `reason`, `n` (bytes or count) and `seconds`. **Steps:** `run_start`, `refuse`, `list_update`, `discover`, `enqueue`, `block`, `fetch`, `capture`, `scan`, `hold`, `convert`, `index`, `judge`, `reject`, `card`, `propose`, `move`, `fail`, `breaker`, `stop`, `run_end`, `report`. **Outcomes:** `ok`, `skipped`, `rejected`, `failed`, `blocked`, `held`, `refused`, `tripped`. The log and the report never contain a key or a request header, and an address, a title or a reason shown to the owner is cleaned of control and bidirectional characters as `place-review` cleans it.
+
+### Scheduling
+
+- **[proposed]** The owner's own scheduler (a macOS launchd agent) runs `python3 -m kb crawl-run` every 15 minutes; the run lock makes an overlapping firing exit. The machine must stay awake and on the network and `ned` must stay up; the spec asks the owner to set that, and the runner says in its log when it cannot work.
+
+### Status and the report
+
+- **[proposed]** `crawl-status` (read only) prints the state, the counts by status for today and in all, the counters against the ceilings, the last run, the disk, the lists in use and their age, and the reasons for the most recent rejections, failures and holds.
+- **[proposed]** `crawl-report` writes a daily report: how many were fetched, kept, rejected and failed, **every book filed by address and host** (so that the owner can weed them), the books moved by the model's pick and the shelves, the books left on `default` for want of a shelf, the books held by the scan, the works rejected for their type, every pause of the circuit breaker and every list that could not be refreshed, the count of books unreviewed by the owner, and the failures by reason.
+
+### Shelf rules and scouts (designed, not built in the first version)
+
+- **[proposed]** The crawl plan has a global part and may later have a list of **shelf entries**. An entry names one shelf of the schema, at any level (a subfield for a scout, a topic or a custom shelf for an active shelf), and may set, for that shelf: its **state** (`scout`, `active` or `paused`; a shelf with no entry is dormant), its **seed limit**, a **fetch scope** (a sentence, which starts as the schema's scope sentence), its **allowed sources** and file types, a **size limit** per item, the **speed** per site, a **daily budget**, and a **relevance threshold**. These are the limits `shelf.md` lists for a shelf's rules, and an entry overrides the global value for books found for that shelf.
+- **[agreed]** The seed limit of an active shelf defaults to about 250 books (`shelf.md`). **[proposed]** The seed limit of a scout is a few books, about 3, anchors rich in mechanisms, such as an overview or a survey (`shelf.md`).
+- **[proposed]** **Seeding** is a bounded burst for a shelf: the chat model turns the fetch scope into queries, discovery fills the queue with candidates marked for that shelf (the table gets a `shelf` column then), and the burst stops when the seed limit is met, the candidates run out, or its time limit passes. **Steady growth** is what the runner does with the rest of its daily budget: the outlinks of books held, newly published work, new versions. A topic in the owner's list is a shorthand matched to its nearest shelves. The entries are part of the one file the owner approves by digest, and a later governed action for a shelf's own rules file takes over when the workbench declares it.
+
+## Acceptance criteria
+
+Each is a test on a temporary library with fake sources, a fake model server and an injected clock, free-space reading and probe, unless it says otherwise.
+
+1. **The whole chain.** With an approved plan, the runner takes a fixture candidate through capture, scan, convert, index, judge, card, proposal and move; the book has `auto_filed`, a `crawl_found` event, and a `reshelved` line with `via: crawl`, `basis: model-pick`, the run id and the plan digest and no `confirmation`; every step has a log line.
+2. **Refusals** (each its own test): no approved plan, a plan whose digest does not match, the stop file present, a ceiling reached, a disk floor, the model server down, a held lock, a tripped breaker, a missing or unreadable state. Each makes no request, changes no candidate row and writes one `refuse` log line and the exit code. A run stops at a ceiling for new fetches but still finishes the later steps of the books it holds.
+3. **The stop file** created in the middle of a batch prevents the next request, the next model call and the next move.
+4. **The breaker** trips on injected failures, refuses the next run, and runs again only after `crawl-clear --yes`; a missing breaker file reads as tripped.
+5. **Crash safety.** A runner killed at each step leaves no ceiling exceeded and the next run resumes; a `fetching` row older than 30 minutes returns to `queued` as a try; a page that kills the converter is parked as `failed` after `retries` tries.
+6. **Nothing is judged twice.** The filed bytes are the judged bytes; a server that answers differently the second time is not asked a second time. A failed capture, over 100 dead addresses, leaves the count of active books unchanged. A judged-out candidate is a `weeded` book with `crawl_rejected` and is not searched, carded or placed.
+7. **Scan holds.** A book with a hold kind, a failed scan or a missing scan tool is filed, not converted, indexed, carded or moved, has `crawl_held`, and is named in the report; `script_elements` does not hold.
+8. **The approval is bound to the code.** After a change of one byte in any module of `engine/kb`, of the schema file, or of the models section of the config, `crawl-run` refuses to run until the owner approves again; a change to the rest of the config does not matter; the shipped default plan has `web_search` and `urlhaus_recent` off, and the preview names each source with unresolved terms that is on.
+9. **The move touches only the crawl's books.** In a library with owner-unanswered proposals and other books on `default`, none of them is moved or gains a proposal; a chosen shelf that is not among the five offered, is `default`, is not a home shelf or is refused by the store is not moved; a proposal that is `none` or malformed leaves the book on `default` and in the report; the catalog lock is taken for each move and not for the batch.
+10. **The queue and the plan are the interface.** A contract test creates `candidates.sqlite` by the schema above, inserts rows as discovery would, and runs the runner against it; another reads the rows the runner leaves. Each side's other inputs (the plan, the log, the books) are named.
+11. **Canonical forms.** `evil.com`, `evil.com.`, `EVIL.com`, `evil.com:80` and an IDN form of a listed IDN host give one key and one match; two names that resolve to one IP count as one site; a non-default port at any hop is refused; an address over 2,048 characters is dropped.
+12. **Off limits.** A host on the owner's blacklist or on a public list in use is never requested: not as a candidate, not at a redirect, not when found. A subdomain of a blacklisted host is blocked and an unrelated host with a similar name is not. A public host entry blocks that exact host only; a URL-list entry blocks that URL and not others on its host unless the host is a bare IP; an entry for a big site (`github.com`) in a URL list does not block the site; the scholarly and search hosts are never blocked by a public list.
+13. **Lists.** A failed download leaves the last good copy in use; a required list with no copy stops the run; a list over the size limit, suddenly far smaller, or changing by more than the allowed entries is refused; lines that are not hostnames are ignored; adding to the blacklist takes effect at the next run with no approval; an allow-file change needs a new approval.
+14. **The key.** A list that needs a key is not requested without one; the key file must be mode 600 and the owner's; the key goes only in the `Auth-Key` header to `urlhaus-api.abuse.ch` over https; a fake API that answers 302 to a second host sees no key there and the key is not sent again that day; no log, report, error, prompt, environment, command line or address contains the key string, including after a forced exception.
+15. **Rate limits.** When `X-RateLimit-Remaining` reaches zero, or on any refusal, no more requests are made to URLhaus that day.
+16. **Floods.** A fixture page with 100,000 links over 10,000 subdomains of one domain stays within the per-domain and total caps on fetches and queued rows.
+17. **Hostile content.** A page whose text says to ignore its instructions and to choose a shelf leaves the placement among the five offered shelves, the stored reason cleaned and the book flagged unreviewed; a response with no `Content-Type`, or a PDF served as `text/html`, is refused; a redirect to a private, loopback, link-local or metadata address, at any hop and under a changed DNS answer between the check and the connect, is never fetched; the connected socket's peer is the address that was checked. A PDF over `pdf_max_mb` is `rejected`; a stub tool that allocates past `tool_rss_mb` is killed; where the memory limit cannot be enforced the runner takes no PDF and says so in the report.
+18. **A supervised run on the owner's library**, on a small ceiling, is run and read by the owner before the long run starts; the owner reads the report and the log and says whether to start. It is ready when every book it filed is in the report, nothing that should have been refused was fetched, and no failure is unexplained.
+19. **`crawl-status` and `crawl-report`** print the fields listed above, tested against a fixture log; the report lists every filed book by address and host.
+
+## Open questions
+
+- The `threshold` and `min_chars` of the judgement, to be set from the supervised run; the plan refuses to fetch while the threshold is empty.
+- How many books the runner can take in a day. The model work is probably not the limit (about 60 cards an hour at the queue's best); the fetch pacing, the scans and the conversion probably are. To be timed in the supervised run, with the whole chain, not the model stage alone.
+- Which languages to keep: all, until the owner says otherwise.
+- The format of each public list's file (the Phishing.Database page does not describe it) and the size limits and the allowed change, to be read from a real download before the parser is written.
+- Whether the web-search adapter is worth keeping if DuckDuckGo blocks it in the first day; the first supervised run shows.
+- Whether the owner wants a Brave key (a card and about $5 of credit a month) as a second search adapter.
+
+## Governing decisions and references
+
+- Decisions: `2026-11-14-the-shelf-schema-is-our-own-list-from-openalex-and-lcc`.
+- Specs: `shelf.md` ("The crawler", "The seen list", "Safeguards", "Candidates and filing", "States, seeding and steady growth", "Reshelving"), `pipeline.md`, `book.md`, `card.md`, `models.md`.
+- The owner's instructions of 2026-11-16 in the conversation (not a file).
+- External pages read on 2026-11-16 (a content hash of each page was not taken; the facts are an agent's reading of the pages, to be checked by the owner before a list or an engine is used): `https://github.com/Phishing-Database/Phishing.Database` and its `LICENSE`; `https://urlhaus.abuse.ch/api/` and `https://abuse.ch/terms-of-use/`; `https://github.com/StevenBlack/hosts` (its `readme.md` and `license.txt`); `https://openphish.com/phishing_feeds.html` and `https://openphish.com/terms.html`; `https://developers.google.com/safe-browsing/v4/terms`; and, from search results and not read at the source, the retirement of the Bing search API (`https://learn.microsoft.com/en-us/lifecycle/announcements/bing-search-api-retirement`), the closing of Google's Custom Search JSON API to new customers, DuckDuckGo's lack of an official results API, and Brave's search API pricing.

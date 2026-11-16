@@ -1,0 +1,85 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-16T16:55:53Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The existing capture code already connects to the address it validated and the threat review tested that, but the spec did not require it of the new shared client. I wrote it in: resolve once, check every answer, connect to that address, send the intended host and TLS name, verify the peer, never resolve again, and added the peer check to the hostile-content test."
+    },
+    {
+      "at": "2026-11-16T16:55:53Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Correct: I had left a choice open. The spec now fixes a resident-memory limit with a kill by the watchdog, a smaller PDF size than arXiv allows, a size limit on converted text, process-count and decompression limits, and says that where a limit cannot be enforced the runner takes no PDFs at all instead of proceeding. A test is added."
+    },
+    {
+      "at": "2026-11-16T16:55:53Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F3",
+      "reason": "Right about the shipped default: sources with unresolved or restrictive terms are now off in the default plan and the owner preview names each one that is on and says its terms are the owner to have read. The owner has decided to use both, so the plan the owner signs off has them on; the system never turns them on itself."
+    },
+    {
+      "at": "2026-11-16T16:55:54Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F4",
+      "reason": "Right, and it matters for two unattended weeks: a later pull, merge or model change could alter behaviour under an old sign-off. The spec now binds the sign-off to a fingerprint of the engine modules, the schema file and the models section of the config, checked at every run, with a test."
+    }
+  ],
+  "format": 1,
+  "generation": 6,
+  "kind": "spec",
+  "path": "docs/specs/population.md",
+  "rounds": [
+    {
+      "at": "2026-11-16T16:54:52Z",
+      "bridge": "ask-codex",
+      "document_sha256": "678b31248db0bb852edfc65fa9e5b87c2807dceeacde0f2705984f4adde1e30c",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F3",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F4",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-luna",
+      "n": 1,
+      "profile": "measured",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-luna",
+        "options": {}
+      },
+      "sha256": "75ae80f32babc2a63b4f72e4d326c8e79756718a62739f525979400a246704c6",
+      "usage": {
+        "input_tokens": 155507,
+        "output_tokens": 3210,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "609c5719e801ff1463b0eb6f7f603999004bab6d2ba6c76b7cdfcffa005dd4ed",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

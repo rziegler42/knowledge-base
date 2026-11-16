@@ -401,6 +401,7 @@ The schema is fixed, so shelves are not split or merged. The library may still s
 
 ### The crawler
 
+- **[agreed]** The unattended intake of books is specified in `population.md`, which the owner approved on 2026-11-16 and which **changes five things here** for that intake: the owner's rules are approved, for now, as one crawl plan and not as a rules file for each shelf; the plan carries a standing approval for moves by the model's pick of books the crawl fetched itself; a candidate that fits no listed shelf is filed under the plan's global limits; **no site is whitelisted, so the statement below that untrusted text cannot add a new source domain no longer holds for that intake**; and topic weights are whole numbers and are not a shelf's priority. Shelf rules, scouts and seeding stay designed here and are built later.
 - **[proposed]** The owner schedules the crawler with cron or launchd in small batches, and no daemon ships. It is a fixed fetcher
   with rules and not an agent, so untrusted text cannot add a new source domain, and what it can influence (work cited by held books, alternate copies) is
   bounded by the shelf's allowed sources and relevance rules. It needs a security review, rate limits and
