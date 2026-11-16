@@ -8,10 +8,12 @@ import collections
 import datetime
 import errno
 import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -19,12 +21,14 @@ import threading
 import time
 import types
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
 from engine.tests import ENGINE_DIR
+from engine.tests.test_store import StoreCase
 
-from kb import KbError, crawlstatus as cs
+from kb import KbError, crawlqueue, crawlstatus as cs
 
 REPO = Path(ENGINE_DIR).parent
 SPEC = REPO / "docs" / "specs" / "population.md"
@@ -88,10 +92,22 @@ class ReadOnlyTest(unittest.TestCase):
         for token in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC", "LOCK_EX", "os.write(", "os.unlink(", "os.remove(", "os.rename(",
                       "os.replace(", "os.mkdir(", "os.makedirs(", "os.rmdir(", "os.chmod(", "os.chown(", "os.symlink(", "os.link(", "os.utime(",
                       "os.truncate(", "os.fsync(", "shutil", ".write_text(", ".write_bytes(", ".touch(", ".mkdir(", ".unlink(", "socket", "urllib.request",
-                      "http.client", "subprocess", "os.system(", "os.popen(", "sqlite3"):
+                      "http.client", "subprocess", "os.system(", "os.popen("):
             with self.subTest(token=token):
                 self.assertNotIn(token, source)
         self.assertIsNone(re.search(r"(?<![.\w])open\(", source), "the builtin open")
+
+    def test_the_one_way_the_module_opens_a_database_is_read_only_and_its_statements_only_read(self):
+        source = (Path(ENGINE_DIR) / "kb" / "crawlstatus.py").read_text(encoding="utf-8")
+        connects = re.findall(r"sqlite3\.connect\([^\n]*", source)
+        self.assertEqual(len(connects), 1)
+        self.assertIn("mode=ro", source)
+        self.assertIn("uri=True", connects[0])
+        for word in ("INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "DROP", "ALTER", "VACUUM", "ATTACH", "journal_mode", "BEGIN", "COMMIT", "wal_checkpoint"):
+            with self.subTest(word=word):
+                self.assertNotIn(word, source)
+        for statement in re.findall(r"\.execute\(\s*f?\"([^\"]*)\"", source):
+            self.assertRegex(statement, r"^(SELECT|PRAGMA busy_timeout)\b")
 
 
 class ReadFileTest(Base):
@@ -1524,6 +1540,723 @@ class RunsTest(StateBase):
         self.put_log("2026-11-16", *[dict(ts=f"2026-11-16T05:{i:02d}:00Z", run="", step="refuse", outcome="refused", reason=f"reason {i}") for i in range(15)])
         a = cs.run_counts(self.tmp, datetime.date(2026, 11, 16), "UTC")
         self.assertEqual((a["refused"], len(a["refused_by_reason"])), (15, 10))
+
+
+class QueueBase(StateBase):
+    NOW_TS = "2026-11-16T12:00:00Z"
+
+    def make_queue(self):
+        conn = crawlqueue.connect(self.tmp)
+        self.addCleanup(self.close_quietly, conn)
+        return conn
+
+    @staticmethod
+    def close_quietly(conn):
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+    def put(self, conn, key, status="queued", updated=None, **extra):
+        conn.execute("INSERT INTO candidates (identity_key, address, source, status, domain, reason, added, updated) VALUES (?,?,?,?,?,?,?,?)",
+                     (key, f"https://example.org/{key}", "arxiv", status, extra.get("domain", "example.org"), extra.get("reason"),
+                      updated or self.NOW_TS, updated or self.NOW_TS))
+
+    def counter(self, conn, day, key, n):
+        conn.execute("INSERT INTO counters (day, key, n) VALUES (?,?,?)", (day, key, n))
+
+    def opened(self):
+        result = cs.open_queue(self.tmp)
+        if result.conn is not None:
+            self.addCleanup(self.close_quietly, result.conn)
+        return result
+
+    def listing(self):
+        return sorted((p.name, oct(p.stat().st_mode & 0o777), p.stat().st_size) for p in self.tmp.iterdir())
+
+    def main_state(self):
+        p = self.tmp / "candidates.sqlite"
+        st = p.stat()
+        return hashlib.sha256(p.read_bytes()).hexdigest(), st.st_mtime_ns, st.st_mode, st.st_size
+
+
+SIDE_FILES = {"candidates.sqlite-wal", "candidates.sqlite-shm"}
+
+
+class OpenQueueTest(QueueBase):
+    def test_a_missing_queue_is_no_queue_and_is_not_made(self):
+        r = cs.open_queue(self.tmp)
+        self.assertEqual((r.conn, r.status), (None, "missing"))
+        self.assertEqual(self.listing(), [])
+
+    def test_a_queue_is_opened_and_its_rows_are_read(self):
+        w = self.make_queue()
+        for i in range(4):
+            self.put(w, f"k{i}")
+        w.close()
+        r = self.opened()
+        self.assertEqual((r.status, r.reason), ("ok", None))
+        self.assertEqual(r.conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 4)
+
+    def test_the_connection_cannot_write(self):
+        self.make_queue().close()
+        r = self.opened()
+        for statement in ("INSERT INTO counters (day, key, n) VALUES ('d', 'k', 1)", "DELETE FROM candidates", "DROP TABLE counters",
+                          "UPDATE candidates SET status = 'kept'", "CREATE TABLE t (a)"):
+            with self.subTest(statement=statement), self.assertRaises(sqlite3.OperationalError):
+                r.conn.execute(statement)
+
+    def test_it_is_opened_read_only_by_uri_with_a_short_wait(self):
+        self.make_queue().close()
+        seen = []
+        real = sqlite3.connect
+
+        def spy(*args, **kwargs):
+            seen.append((args, kwargs))
+            return real(*args, **kwargs)
+
+        with mock.patch.object(cs.sqlite3, "connect", spy):
+            self.opened()
+        self.assertEqual(len(seen), 1)
+        args, kwargs = seen[0]
+        self.assertIn("mode=ro", args[0])
+        self.assertTrue(kwargs.get("uri"))
+        self.assertLessEqual(kwargs.get("timeout"), 2)
+
+    def test_a_path_with_odd_characters_is_opened_as_a_path(self):
+        odd = self.tmp / "a b#c?d"
+        odd.mkdir()
+        conn = crawlqueue.connect(odd)
+        self.put_into(conn)
+        conn.close()
+        r = cs.open_queue(odd)
+        self.addCleanup(self.close_quietly, r.conn)
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(r.conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 1)
+
+    def put_into(self, conn):
+        self.put(conn, "k1")
+
+    def test_a_file_that_is_not_a_plain_queue_of_the_owner_is_refused_without_a_path_in_the_reason(self):
+        path = self.tmp / "candidates.sqlite"
+        real = self.tmp / "real.sqlite"
+        crawlqueue.connect(self.tmp).close()
+        shutil.move(path, real)
+        for name, make in {
+                "a link": lambda: os.symlink(real, path), "a folder": lambda: path.mkdir(), "a pipe": lambda: os.mkfifo(path),
+                "mode 644": lambda: (shutil.copy(real, path), os.chmod(path, 0o644)),
+                "not a database": lambda: (path.write_bytes(b"not a database at all" * 100), os.chmod(path, 0o600)),
+                "empty": lambda: (path.write_bytes(b""), os.chmod(path, 0o600))}.items():
+            with self.subTest(case=name):
+                make()
+                r = self.within(lambda: cs.open_queue(self.tmp))
+                self.assertEqual((r.conn, r.status), (None, "bad"))
+                self.assertNotIn(str(self.tmp), r.reason)
+                if path.is_dir() and not path.is_symlink():
+                    path.rmdir()
+                else:
+                    path.unlink()
+
+    def test_a_queue_of_another_owner_or_version_or_shape_is_refused_and_left_as_it_was(self):
+        self.make_queue().close()
+        before = self.main_state()
+        with mock.patch.object(crawlqueue.os, "getuid", return_value=os.getuid() + 1):
+            self.assertEqual(cs.open_queue(self.tmp).status, "bad")
+        self.assertEqual(self.main_state(), before)
+        path = self.tmp / "candidates.sqlite"
+        for name, change in {"version 2": "PRAGMA user_version = 2", "an extra column": "ALTER TABLE counters ADD COLUMN x TEXT",
+                             "an extra table": "CREATE TABLE extra (a)"}.items():
+            with self.subTest(case=name):
+                shutil.copy(path, self.tmp / "keep")
+                with closing(sqlite3.connect(path)) as c:
+                    c.execute(change)
+                    c.commit()
+                for side in SIDE_FILES:
+                    (self.tmp / side).unlink(missing_ok=True)
+                changed = self.main_state()
+                r = cs.open_queue(self.tmp)
+                self.assertEqual((r.conn, r.status), (None, "bad"))
+                self.assertEqual(self.main_state(), changed)
+                for side in SIDE_FILES:
+                    (self.tmp / side).unlink(missing_ok=True)
+                shutil.copy(self.tmp / "keep", path)
+
+    def test_a_path_that_cannot_be_written_as_an_address_is_a_bad_queue_and_not_another_kind_of_error(self):
+        self.make_queue().close()
+        with mock.patch.object(cs, "quote", side_effect=UnicodeEncodeError("utf-8", chr(0xDC80), 0, 1, "surrogates not allowed")):
+            r = cs.open_queue(self.tmp)
+        self.assertEqual((r.conn, r.status), (None, "bad"))
+
+    def test_a_queue_that_is_locked_is_busy_and_any_other_failure_is_bad(self):
+        self.make_queue().close()
+        with mock.patch.object(crawlqueue, "_check_shape", side_effect=sqlite3.OperationalError("database is locked")):
+            r = cs.open_queue(self.tmp)
+        self.assertEqual((r.conn, r.status), (None, "busy"))
+        with mock.patch.object(crawlqueue, "_check_shape", side_effect=sqlite3.OperationalError("the database is busy")):
+            self.assertEqual(cs.open_queue(self.tmp).status, "busy")
+        with mock.patch.object(crawlqueue, "_check_shape", side_effect=sqlite3.OperationalError("unable to open database file")):
+            self.assertEqual(cs.open_queue(self.tmp).status, "bad")
+        with mock.patch.object(crawlqueue, "_check_shape", side_effect=sqlite3.DatabaseError("file is not a database")):
+            r = cs.open_queue(self.tmp)
+        self.assertEqual((r.conn, r.status), (None, "bad"))
+        self.assertNotIn(str(self.tmp), r.reason)
+
+    def test_the_rows_a_writer_has_committed_are_read_while_the_writer_is_open_and_nothing_uncommitted_is(self):
+        w = self.make_queue()
+        for i in range(5):
+            self.put(w, f"k{i}")
+        before_files, before_main = self.listing(), self.main_state()
+        w.execute("BEGIN IMMEDIATE")
+        self.put(w, "uncommitted")
+        r = self.opened()
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(r.conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 5)
+        self.assertEqual((self.listing(), self.main_state()), (before_files, before_main))
+        w.execute("ROLLBACK")
+
+    def test_the_only_files_a_reader_adds_are_the_wal_and_the_shared_memory_file_and_the_queue_is_as_it_was(self):
+        self.make_queue().close()
+        self.assertEqual([n for n, _, _ in self.listing()], ["candidates.sqlite"])
+        before = self.main_state()
+        r = self.opened()
+        r.conn.execute("SELECT COUNT(*) FROM candidates").fetchone()
+        r.conn.close()
+        names = {n for n, _, _ in self.listing()}
+        self.assertEqual(names - {"candidates.sqlite"}, SIDE_FILES)
+        modes = {n: m for n, m, _ in self.listing()}
+        self.assertEqual({modes[n] for n in names}, {"0o600"})
+        self.assertEqual(self.main_state(), before)
+        sizes = {n: s for n, _, s in self.listing()}
+        self.assertEqual(sizes["candidates.sqlite-wal"], 0)
+
+    def test_a_writer_that_comes_after_a_reader_opens_the_queue_and_reads_the_same_rows(self):
+        w = self.make_queue()
+        for i in range(3):
+            self.put(w, f"k{i}")
+        w.close()
+        r = self.opened()
+        r.conn.execute("SELECT COUNT(*) FROM candidates").fetchone()
+        r.conn.close()
+        again = crawlqueue.connect(self.tmp)
+        self.addCleanup(self.close_quietly, again)
+        self.assertEqual(again.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 3)
+        self.put(again, "k9")
+        self.assertEqual(again.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 4)
+
+    def test_a_queue_whose_writer_was_killed_is_read_with_the_rows_that_were_committed(self):
+        code = ("import os, sys\n" f"sys.path.insert(0, {ENGINE_DIR!r})\n" "from kb import crawlqueue\n" f"c = crawlqueue.connect({str(self.tmp)!r})\n"
+                "c.execute(\"INSERT INTO candidates (identity_key, address, source, status, added, updated) VALUES "
+                "('k','https://e.org/k','arxiv','queued','2026-11-16T05:00:00Z','2026-11-16T05:00:00Z')\")\n" "os._exit(0)\n")
+        subprocess.run([sys.executable, "-I", "-c", code], check=True, timeout=60)
+        self.assertTrue({"candidates.sqlite-wal", "candidates.sqlite-shm"} <= {n for n, _, _ in self.listing()})
+        before = self.main_state()
+        r = self.opened()
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(r.conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 1)
+        self.assertEqual(self.main_state(), before)
+
+    def test_the_rows_are_not_seen_if_the_wal_is_ignored_which_is_why_that_option_is_not_used(self):
+        w = self.make_queue()
+        for i in range(3):
+            self.put(w, f"k{i}")
+        with closing(sqlite3.connect(f"file:{self.tmp / 'candidates.sqlite'}?mode=ro&immutable=1", uri=True)) as c:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 0)
+        r = self.opened()
+        self.assertEqual(r.conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0], 3)
+
+
+class QueueCountsTest(QueueBase):
+    def bounds(self, zone="America/New_York", day=datetime.date(2026, 11, 16)):
+        return cs.day_bounds(day, zone)
+
+    def test_the_counts_by_status_in_all_and_for_the_day_with_every_status_present(self):
+        w = self.make_queue()
+        self.put(w, "a", "queued", "2026-11-16T05:00:00Z")
+        self.put(w, "b", "queued", "2026-11-17T04:59:59Z")
+        self.put(w, "c", "kept", "2026-11-16T12:00:00Z")
+        self.put(w, "d", "failed", "2026-11-16T04:59:59Z")
+        self.put(w, "e", "rejected", "2026-11-17T05:00:00Z")
+        self.put(w, "f", "blocked", "2026-11-10T00:00:00Z")
+        r = self.opened()
+        got = cs.queue_counts(r.conn, self.bounds())
+        self.assertEqual(set(got["all"]), set(crawlqueue.STATUSES))
+        self.assertEqual(got["all"], {"queued": 2, "fetching": 0, "kept": 1, "rejected": 1, "failed": 1, "blocked": 1})
+        self.assertEqual(got["today"], {"queued": 2, "fetching": 0, "kept": 1, "rejected": 0, "failed": 0, "blocked": 0})
+        self.assertEqual(got["total"], 6)
+
+    def test_a_day_of_23_and_a_day_of_25_hours_take_the_rows_that_are_theirs(self):
+        w = self.make_queue()
+        for key, ts in (("a", "2026-03-28T23:59:59Z"), ("b", "2026-03-29T00:00:00Z"), ("c", "2026-03-29T22:59:59Z"), ("d", "2026-03-29T23:00:00Z"),
+                        ("e", "2026-10-24T22:59:59Z"), ("f", "2026-10-24T23:00:00Z"), ("g", "2026-10-25T23:59:59Z"), ("h", "2026-10-26T00:00:00Z")):
+            self.put(w, key, "queued", ts)
+        r = self.opened()
+        self.assertEqual(cs.queue_counts(r.conn, self.bounds("Europe/London", datetime.date(2026, 3, 29)))["today"]["queued"], 2)
+        self.assertEqual(cs.queue_counts(r.conn, self.bounds("Europe/London", datetime.date(2026, 10, 25)))["today"]["queued"], 2)
+
+    def test_a_status_that_is_not_one_of_ours_is_counted_apart_and_never_listed(self):
+        w = self.make_queue()
+        self.put(w, "a", "queued")
+        self.put(w, "b", "Cookie: x" + chr(0x1b))
+        self.put(w, "c", "x" * 5000)
+        r = self.opened()
+        got = cs.queue_counts(r.conn, self.bounds())
+        self.assertEqual((got["all"]["queued"], got["other"], got["total"]), (1, 2, 3))
+        self.assertNotIn("Cookie", repr(got))
+
+    def test_an_empty_queue_has_zeros(self):
+        self.make_queue().close()
+        r = self.opened()
+        got = cs.queue_counts(r.conn, self.bounds())
+        self.assertEqual((sum(got["all"].values()), sum(got["today"].values()), got["total"], got["other"]), (0, 0, 0, 0))
+
+    def test_the_bounds_are_two_times(self):
+        self.make_queue().close()
+        r = self.opened()
+        for bad in (None, (1, 2), "x", (datetime.datetime(2026, 1, 1), datetime.datetime(2026, 1, 2))):
+            with self.subTest(bounds=bad), self.assertRaises(KbError):
+                cs.queue_counts(r.conn, bad)
+
+
+class TodayInZoneTest(unittest.TestCase):
+    NOW = datetime.datetime(2026, 11, 17, 3, 0, 0, tzinfo=UTC)
+
+    def test_the_day_of_a_time_in_a_zone(self):
+        self.assertEqual(cs.today_in_zone(self.NOW, "UTC"), datetime.date(2026, 11, 17))
+        self.assertEqual(cs.today_in_zone(self.NOW, "America/New_York"), datetime.date(2026, 11, 16))
+        self.assertEqual(cs.today_in_zone(self.NOW, "Pacific/Auckland"), datetime.date(2026, 11, 17))
+        self.assertEqual(cs.today_in_zone(datetime.datetime(2026, 11, 16, 23, 30, tzinfo=UTC), "Pacific/Auckland"), datetime.date(2026, 11, 17))
+
+    def test_the_local_zone_is_the_machines(self):
+        old = os.environ.get("TZ")
+        self.addCleanup(lambda: (os.environ.__setitem__("TZ", old) if old is not None else os.environ.pop("TZ", None), time.tzset()))
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        self.assertEqual(cs.today_in_zone(self.NOW, "local"), datetime.date(2026, 11, 16))
+
+    def test_a_zone_that_is_not_known_and_a_time_with_no_zone_are_refused(self):
+        for zone in ("Mars/Olympus", "../x", None, 5):
+            with self.subTest(zone=zone), self.assertRaises(KbError):
+                cs.today_in_zone(self.NOW, zone)
+        for now in (datetime.datetime(2026, 11, 17, 3, 0, 0), "2026-11-17", None):
+            with self.subTest(now=now), self.assertRaises(KbError):
+                cs.today_in_zone(now, "UTC")
+
+
+class CountersTest(QueueBase):
+    DAY, UTC_DAY = "2026-11-16", "2026-11-16"
+    VALUES = {"fetches_per_day": 5, "per_domain_per_day": 3, "cards_per_day": 30, "domain_refusals": 3}
+
+    def fill(self):
+        w = self.make_queue()
+        for key, n in (("fetch", 5), ("fetch:example.org", 2), ("fetch:other.net", 3), ("card", 4), ("refusal:example.org", 1), ("odd_key", 9)):
+            self.counter(w, "2026-11-16", key, n)
+        for key, n in (("fetch", 99), ("card", 99), ("fetch:example.org", 99)):
+            self.counter(w, "2026-11-15", key, n)
+        self.counter(w, "2026-11-16", "source_off:arxiv", 1)
+        self.counter(w, "2026-11-16", "web_search_queries", 7)
+        for i in range(3):
+            self.counter(w, "permanent", f"walked:W{i}", 1)
+        return w
+
+    def report(self, values=VALUES, plan_day=DAY, utc_day=UTC_DAY):
+        r = self.opened()
+        return cs.counters_report(r.conn, plan_day, utc_day, values)
+
+    def test_the_counters_of_the_plans_day_against_the_ceilings(self):
+        self.fill()
+        got = self.report()
+        self.assertEqual((got["day"], got["ceilings_known"]), ("2026-11-16", True))
+        self.assertEqual(got["fetch"], {"n": 5, "limit": 5, "at_or_over": True})
+        self.assertEqual(got["card"], {"n": 4, "limit": 30, "at_or_over": False})
+        by_domain = {d["domain"]: d for d in got["domains"]}
+        self.assertEqual(by_domain["example.org"], {"domain": "example.org", "fetch": 2, "limit": 3, "at_or_over": False, "refusals": 1})
+        self.assertEqual(by_domain["other.net"], {"domain": "other.net", "fetch": 3, "limit": 3, "at_or_over": True, "refusals": 0})
+        self.assertEqual((got["domains_total"], got["domain_refusals"]), (2, 3))
+        self.assertEqual(got["other"], [{"key": "odd_key", "n": 9}])
+
+    def test_another_days_counters_are_not_counted(self):
+        self.fill()
+        got = self.report(plan_day="2026-11-15")
+        self.assertEqual((got["fetch"]["n"], got["card"]["n"]), (99, 99))
+        got = self.report(plan_day="2026-11-17")
+        self.assertEqual((got["fetch"]["n"], got["card"]["n"], got["domains"], got["other"]), (0, 0, [], []))
+
+    def test_without_an_approved_plan_the_counters_are_shown_without_ceilings(self):
+        self.fill()
+        got = self.report(values=None)
+        self.assertEqual((got["ceilings_known"], got["fetch"], got["card"]), (False, {"n": 5, "limit": None, "at_or_over": None}, {"n": 4, "limit": None, "at_or_over": None}))
+        self.assertTrue(all(d["limit"] is None and d["at_or_over"] is None for d in got["domains"]))
+        self.assertIsNone(got["domain_refusals"])
+
+    def test_a_ceiling_that_is_not_a_whole_number_is_unknown(self):
+        self.fill()
+        got = self.report(values={"fetches_per_day": "5", "per_domain_per_day": True, "cards_per_day": 2.5})
+        self.assertEqual((got["fetch"]["limit"], got["card"]["limit"]), (None, None))
+        self.assertTrue(all(d["limit"] is None for d in got["domains"]))
+
+    def test_a_ceiling_is_reached_at_the_number_and_not_below_it(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "fetch", 4)
+        self.assertFalse(self.report()["fetch"]["at_or_over"])
+        w.execute("UPDATE counters SET n = 5 WHERE key = 'fetch'")
+        self.assertTrue(self.report()["fetch"]["at_or_over"])
+        w.execute("UPDATE counters SET n = 6 WHERE key = 'fetch'")
+        self.assertTrue(self.report()["fetch"]["at_or_over"])
+
+    def test_the_rows_of_discovery_are_shown_as_discoverys_and_walked_rows_are_only_counted(self):
+        self.fill()
+        got = self.report()
+        self.assertEqual(got["discovery"], {"day": "2026-11-16", "sources_off": ["arxiv"], "sources_off_total": 1, "web_search_queries": 7, "walked": 3})
+        self.assertNotIn("source_off:arxiv", [o["key"] for o in got["other"]])
+        self.assertNotIn("walked", repr(got["other"]))
+
+    def test_discoverys_day_is_the_utc_day_and_the_plans_day_may_differ(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "fetch", 2)
+        self.counter(w, "2026-11-17", "source_off:wikipedia", 1)
+        self.counter(w, "2026-11-17", "web_search_queries", 4)
+        got = self.report(plan_day="2026-11-16", utc_day="2026-11-17")
+        self.assertEqual((got["fetch"]["n"], got["discovery"]["sources_off"], got["discovery"]["web_search_queries"]), (2, ["wikipedia"], 4))
+        self.assertEqual(got["other"], [])
+
+    def test_a_discovery_key_on_a_day_that_is_not_the_utc_day_is_an_other_counter(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "web_search_queries", 4)
+        got = self.report(plan_day="2026-11-16", utc_day="2026-11-17")
+        self.assertEqual((got["discovery"]["web_search_queries"], got["other"]), (0, [{"key": "web_search_queries", "n": 4}]))
+
+    def test_the_most_fetched_domains_are_listed_up_to_fifty_and_the_total_is_said(self):
+        w = self.make_queue()
+        for i in range(60):
+            self.counter(w, "2026-11-16", f"fetch:d{i:02d}.example", i + 1)
+        got = self.report()
+        self.assertEqual((len(got["domains"]), got["domains_total"]), (50, 60))
+        self.assertEqual(got["domains"][0]["domain"], "d59.example")
+        self.assertEqual(got["domains"][-1]["domain"], "d10.example")
+
+    def test_a_row_with_a_count_that_is_not_a_whole_number_is_skipped_and_counted(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "fetch", "many")
+        self.counter(w, "2026-11-16", "card", 2.5)
+        self.counter(w, "2026-11-16", "fetch:a.example", -1)
+        self.counter(w, "2026-11-16", "fetch:b.example", 3)
+        got = self.report()
+        self.assertEqual((got["fetch"]["n"], got["card"]["n"], got["bad_rows"]), (0, 0, 3))
+        self.assertEqual([d["domain"] for d in got["domains"]], ["b.example"])
+
+    def test_text_from_a_key_is_redacted_and_cleaned(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "fetch:evil" + chr(0x1b) + "[31m" + RLO + ".example", 1)
+        self.counter(w, "2026-11-16", "refusal:Cookie: sid=1.example", 1)
+        self.counter(w, "2026-11-16", "other " + ZWSP + "key\nline", 1)
+        got = self.report()
+        text = json.dumps(got)
+        self.assertNotIn(chr(0x1b), text)
+        self.assertNotIn(RLO, text)
+        self.assertNotIn("sid=1", text)
+        self.assertIn(cs.WITHHELD, text)
+        self.assertEqual(got["other"], [{"key": "other key line", "n": 1}])
+
+    def test_the_rows_read_are_bounded_and_a_cut_is_said(self):
+        w = self.make_queue()
+        for i in range(30):
+            self.counter(w, "2026-11-16", f"k{i:02d}", 1)
+        with mock.patch.object(cs, "MAX_COUNTER_ROWS", 10):
+            got = self.report()
+        self.assertTrue(got["truncated"])
+        self.assertFalse(self.report()["truncated"])
+
+    def test_the_ceiling_counters_are_read_by_name_and_are_never_lost_to_the_bound_on_the_rows(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "fetch", 1)
+        self.counter(w, "2026-11-16", "card", 2)
+        self.counter(w, "2026-11-16", "web_search_queries", 3)
+        for i in range(12):
+            self.counter(w, "2026-11-16", f"big{i:02d}", 1000 + i)
+            self.counter(w, "2026-11-16", f"fetch:d{i:02d}.example", 500 + i)
+        with mock.patch.object(cs, "MAX_COUNTER_ROWS", 5):
+            got = self.report()
+        self.assertTrue(got["truncated"])
+        self.assertEqual((got["fetch"]["n"], got["card"]["n"], got["discovery"]["web_search_queries"]), (1, 2, 3))
+
+    def test_the_sources_discovery_turned_off_are_listed_up_to_fifty_and_the_total_is_said(self):
+        w = self.make_queue()
+        for i in range(60):
+            self.counter(w, "2026-11-16", f"source_off:source{i:02d}", 1)
+        got = self.report()["discovery"]
+        self.assertEqual((len(got["sources_off"]), got["sources_off_total"]), (50, 60))
+        self.assertEqual((got["sources_off"][0], got["sources_off"][-1]), ("source00", "source49"))
+
+    def test_a_key_that_is_not_text_is_skipped_and_counted(self):
+        w = self.make_queue()
+        w.execute("INSERT INTO counters (day, key, n) VALUES (?, ?, ?)", ("2026-11-16", b"blob key", 4))
+        w.execute("INSERT INTO counters (day, key, n) VALUES (?, ?, ?)", ("2026-11-16", None, 4))
+        self.counter(w, "2026-11-16", "fetch", 2)
+        got = self.report()
+        self.assertEqual((got["fetch"]["n"], got["bad_rows"], got["other"]), (2, 2, []))
+
+    def test_the_name_of_a_source_that_discovery_turned_off_is_cleaned(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "source_off:ar" + chr(0x1b) + "[31m" + RLO + "xiv", 1)
+        self.counter(w, "2026-11-16", "source_off:Cookie: sid=1", 1)
+        off = self.report()["discovery"]["sources_off"]
+        self.assertEqual(sorted(off), sorted(["ar[31mxiv", cs.WITHHELD]))
+
+    def test_a_ceiling_that_is_negative_is_unknown(self):
+        self.make_queue().close()
+        got = self.report(values={"fetches_per_day": -1, "per_domain_per_day": -1, "cards_per_day": -1, "domain_refusals": -1})
+        self.assertEqual((got["fetch"]["limit"], got["card"]["limit"], got["domain_refusals"]), (None, None, None))
+
+    def test_a_source_that_discovery_counted_with_zero_is_not_off(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "source_off:wikipedia", 0)
+        self.counter(w, "2026-11-16", "source_off:arxiv", 2)
+        self.assertEqual(self.report()["discovery"]["sources_off"], ["arxiv"])
+
+    def test_a_domain_that_is_empty_after_cleaning_is_named(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "fetch:", 1)
+        self.counter(w, "2026-11-16", "refusal:" + RLO, 2)
+        got = self.report()
+        self.assertEqual([(d["domain"], d["fetch"], d["refusals"]) for d in got["domains"]], [("(none)", 1, 2)])
+
+    def test_domains_with_the_same_fetches_are_ordered_by_refusals_and_then_by_name(self):
+        w = self.make_queue()
+        for key, n in (("fetch:b.example", 2), ("fetch:a.example", 2), ("fetch:c.example", 2), ("refusal:c.example", 1), ("refusal:b.example", 1)):
+            self.counter(w, "2026-11-16", key, n)
+        self.assertEqual([d["domain"] for d in self.report()["domains"]], ["b.example", "c.example", "a.example"])
+
+    def test_the_other_counters_are_the_biggest_fifty_and_the_total_is_said(self):
+        w = self.make_queue()
+        for i in range(60):
+            self.counter(w, "2026-11-16", f"other{i:02d}", i + 1)
+        got = self.report()
+        self.assertEqual((len(got["other"]), got["other_total"]), (50, 60))
+        self.assertEqual((got["other"][0], got["other"][-1]), ({"key": "other59", "n": 60}, {"key": "other10", "n": 11}))
+
+    def test_a_ceiling_of_zero_is_a_ceiling(self):
+        w = self.make_queue()
+        self.counter(w, "2026-11-16", "fetch", 0)
+        got = self.report(values={"fetches_per_day": 0, "per_domain_per_day": 0, "cards_per_day": 0})
+        self.assertEqual((got["fetch"], got["card"]), ({"n": 0, "limit": 0, "at_or_over": True}, {"n": 0, "limit": 0, "at_or_over": True}))
+
+    def test_the_walked_rows_are_those_of_the_permanent_day_with_that_name_only(self):
+        w = self.make_queue()
+        self.counter(w, "permanent", "walked:W1", 1)
+        self.counter(w, "permanent", "other:W2", 1)
+        self.counter(w, "2026-11-16", "walked:W3", 1)
+        got = self.report()
+        self.assertEqual(got["discovery"]["walked"], 1)
+        self.assertEqual(got["other"], [{"key": "walked:W3", "n": 1}])
+
+    def test_the_permanent_day_is_the_one_discovery_uses(self):
+        from kb import discover
+        self.assertEqual(cs.PERMANENT_DAY, discover.PERMANENT)
+
+    def test_exactly_the_rows_allowed_are_read(self):
+        w = self.make_queue()
+        for i in range(30):
+            self.counter(w, "2026-11-16", f"k{i:02d}", 1)
+        with mock.patch.object(cs, "MAX_COUNTER_ROWS", 10):
+            got = self.report()
+        self.assertEqual((got["other_total"], got["truncated"]), (10, True))
+        with mock.patch.object(cs, "MAX_COUNTER_ROWS", 30):
+            got = self.report()
+        self.assertEqual((got["other_total"], got["truncated"]), (30, False))
+
+    def test_the_day_must_be_a_day(self):
+        self.make_queue().close()
+        r = self.opened()
+        for bad in ("2026-11-1", "yesterday", None, 5, "2026-13-40", datetime.datetime(2026, 11, 16, 1, 0), "20261116", "2026-W46-1", "2026-11-16\n", " 2026-11-16"):
+            with self.subTest(day=bad), self.assertRaises(KbError):
+                cs.counters_report(r.conn, bad, "2026-11-16", None)
+            with self.subTest(utc_day=bad), self.assertRaises(KbError):
+                cs.counters_report(r.conn, "2026-11-16", bad, None)
+
+    def test_only_selects_are_made_and_the_database_is_as_it_was(self):
+        self.fill().close()
+        before = self.main_state()
+        r = self.opened()
+        cs.counters_report(r.conn, self.DAY, self.UTC_DAY, self.VALUES)
+        cs.queue_counts(r.conn, cs.day_bounds(datetime.date(2026, 11, 16), "UTC"))
+        r.conn.close()
+        self.assertEqual(self.main_state(), before)
+        self.assertEqual({n for n, _, _ in self.listing()} - {"candidates.sqlite"}, SIDE_FILES)
+
+
+class CrawlBooksTest(StoreCase):
+    within = Base.within
+
+    def book(self, *, auto=True, found=True, events=(), **kw):
+        book = self.store.create_book(title="A page", kind="preprint", auto_filed=auto, **kw)
+        for name, data in events:
+            self.store.append_event(book, name, **data)
+        if found:
+            self.store.append_event(book, "crawl_found", candidate="https://example.org/a", source="arxiv")
+        return book
+
+    def count(self, **kw):
+        return cs.crawl_books(self.store, **kw)
+
+    def test_the_books_filed_by_the_crawl_and_the_books_not_yet_reviewed_are_counted(self):
+        self.book()
+        self.book(events=[("note", {"text": "x"})])
+        self.book(found=False)
+        self.book(auto=False, found=False)
+        self.book(auto=False, found=False, events=[("placement_proposed", {"answer": "x"})])
+        got = self.count()
+        self.assertEqual((got["filed_total"], got["unreviewed"], got["books_scanned"], got["events_read"]), (2, 3, 5, 3))
+        self.assertEqual((got["unreadable"], got["cut"], got["problem"]), (0, False, None))
+        self.assertIn("auto_filed", got["basis"])
+
+    def test_only_a_flag_that_is_exactly_true_counts_as_unreviewed_and_a_filing_is_counted_whatever_the_flag(self):
+        for value in ("yes", 1, "true", [True], {"a": 1}, None, 0, False):
+            with self.subTest(value=value):
+                book = self.book(found=True)
+                path = Path(self.store.book_file(book))
+                root = json.loads(path.read_text())
+                root["auto_filed"] = value
+                path.write_text(json.dumps(root))
+        got = self.count()
+        self.assertEqual((got["unreviewed"], got["filed_total"], got["events_read"]), (0, 8, 8))
+
+    def test_a_book_the_owner_has_reviewed_is_still_a_filing_of_the_crawl(self):
+        self.book(auto=False, found=True)
+        self.book(auto=True, found=True)
+        got = self.count()
+        self.assertEqual((got["filed_total"], got["unreviewed"]), (2, 1))
+
+    def test_a_root_file_that_is_another_books_is_unreadable_and_is_not_counted_twice(self):
+        a, b = self.book(), self.book()
+        shutil.copy(self.store.book_file(a), self.store.book_file(b))
+        got = self.count()
+        self.assertEqual((got["unreadable"], got["filed_total"], got["unreviewed"]), (1, 1, 1))
+
+    def test_the_bytes_read_in_all_are_bounded_and_the_cut_is_said(self):
+        books = [self.book() for _ in range(5)]
+        size = os.path.getsize(self.store.events_file(books[0]))
+        got = self.count(max_total_bytes=size * 2)
+        self.assertEqual((got["books_scanned"], got["cut"], got["stopped_by"], got["filed_total"]), (2, True, "max_bytes", 2))
+        got = self.count(max_total_bytes=size * 5 + 1)
+        self.assertEqual((got["books_scanned"], got["cut"], got["stopped_by"], got["filed_total"]), (5, False, "no_more_books", 5))
+        for bad in (0, -1, 1.5, None, True):
+            with self.subTest(max_total_bytes=bad), self.assertRaises(KbError):
+                self.count(max_total_bytes=bad)
+
+    def test_a_crawl_found_that_is_only_text_in_another_event_is_not_a_filing(self):
+        self.book(found=False, events=[("note", {"text": 'it says "crawl_found" in it', "event2": "crawl_found"})])
+        self.assertEqual(self.count()["filed_total"], 0)
+
+    def test_an_event_whose_name_only_contains_the_name_is_not_a_filing(self):
+        self.book(found=False, events=[("my_crawl_found", {"text": "crawl_found"}), ("crawl_found_again", {"text": "crawl_found"})])
+        self.assertEqual(self.count()["filed_total"], 0)
+
+    def test_a_root_file_with_a_duplicate_key_is_unreadable(self):
+        book = self.book()
+        Path(self.store.book_file(book)).write_text('{"book_id": "%s", "auto_filed": true, "auto_filed": false}' % book)
+        got = self.count()
+        self.assertEqual((got["unreadable"], got["unreviewed"], got["filed_total"]), (1, 0, 0))
+
+    def test_a_line_that_is_not_json_does_not_stop_the_count_of_the_log(self):
+        book = self.book(found=False)
+        path = self.store.events_file(book)
+        with open(path, "ab") as f:
+            f.write(b'garbage "crawl_found" not json\n{"event": "crawl_found", "at": "2026-11-16T05:00:00Z"}\n')
+        self.assertEqual(self.count()["filed_total"], 1)
+
+    def test_a_book_whose_root_file_cannot_be_read_is_counted_as_unreadable_and_the_rest_go_on(self):
+        a, b, _c = self.book(), self.book(), self.book()
+        Path(self.store.book_file(a)).write_text("not json")
+        Path(self.store.book_file(b)).write_text("[]")
+        got = self.count()
+        self.assertEqual((got["unreadable"], got["filed_total"], got["books_scanned"]), (2, 1, 3))
+
+    def test_a_root_file_that_is_a_link_or_over_the_size_is_not_read(self):
+        a, b, d = (self.book() for _ in range(3))
+        real = Path(self.store.book_file(a))
+        path_b = Path(self.store.book_file(b))
+        path_b.unlink()
+        os.symlink(real, path_b)
+        Path(self.store.book_file(d)).write_text(json.dumps({"book_id": d, "auto_filed": True, "pad": "x" * (cs.MAX_ROOT_BYTES + 10)}))
+        got = self.count()
+        self.assertEqual((got["unreadable"], got["filed_total"], got["books_scanned"]), (2, 1, 3))
+
+    def test_a_root_file_that_is_a_pipe_is_not_waited_on_even_if_the_library_lists_it(self):
+        os.mkfifo(Path(self.bulk) / "pipe")
+        store = types.SimpleNamespace(list_books=lambda: ["x"], book_file=lambda book_id: str(Path(self.bulk) / "pipe"),
+                                      events_file=lambda book_id: str(Path(self.bulk) / "nope"))
+        got = self.within(lambda: cs.crawl_books(store))
+        self.assertEqual((got["unreadable"], got["filed_total"], got["books_scanned"]), (1, 0, 1))
+
+    def test_a_store_that_gives_a_bad_path_does_not_stop_the_count(self):
+        def refuse(book_id):
+            raise KbError("not an id")
+
+        store = types.SimpleNamespace(list_books=lambda: ["x", "y"], book_file=refuse, events_file=refuse)
+        got = cs.crawl_books(store)
+        self.assertEqual((got["unreadable"], got["books_scanned"]), (2, 2))
+
+    def test_an_events_log_that_is_over_the_size_or_a_link_or_a_pipe_makes_the_book_unreadable_and_not_filed(self):
+        a, b, c, d = (self.book() for _ in range(4))
+        big = Path(self.store.events_file(a))
+        big.write_bytes(b'{"event": "crawl_found"}\n' + b" " * 1000)
+        link = Path(self.store.events_file(b))
+        link.unlink()
+        os.symlink(big, link)
+        pipe = Path(self.store.events_file(c))
+        pipe.unlink()
+        os.mkfifo(pipe)
+        got = self.within(lambda: self.count(max_events_bytes=500))
+        self.assertEqual((got["unreadable"], got["filed_total"], got["unreviewed"]), (3, 1, 4))
+
+    def test_a_book_with_no_events_log_is_not_filed_and_not_unreadable(self):
+        book = self.book(found=False)
+        self.assertFalse(os.path.exists(self.store.events_file(book)))
+        got = self.count()
+        self.assertEqual((got["filed_total"], got["unreadable"], got["unreviewed"]), (0, 0, 1))
+
+    def test_the_books_scanned_are_bounded_and_a_cut_is_said(self):
+        for _ in range(5):
+            self.book()
+        got = self.count(max_books=3)
+        self.assertEqual((got["books_scanned"], got["cut"], got["stopped_by"]), (3, True, "max_books"))
+        self.assertEqual((self.count(max_books=5)["cut"], self.count(max_books=5)["stopped_by"]), (False, "no_more_books"))
+        for bad in (0, -1, 1.5, "3", None, True):
+            with self.subTest(max_books=bad), self.assertRaises(KbError):
+                self.count(max_books=bad)
+        with self.assertRaises(KbError):
+            self.count(max_events_bytes=0)
+
+    def test_a_library_that_cannot_be_listed_is_a_problem_and_zero_counts(self):
+        store = types.SimpleNamespace(list_books=mock.Mock(side_effect=OSError(errno.EACCES, "denied")))
+        got = cs.crawl_books(store)
+        self.assertEqual((got["books_scanned"], got["filed_total"], got["unreviewed"]), (0, 0, 0))
+        self.assertTrue(got["problem"])
+
+    def test_nothing_is_written_and_only_the_root_file_and_the_events_log_are_opened(self):
+        for _ in range(3):
+            self.book()
+        self.book(auto=False, found=False)
+
+        def listing():
+            return sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode, p.stat().st_size) for p in Path(self.bulk).rglob("*"))
+
+        before = listing()
+        opened = []
+        real = os.open
+
+        def spy(path, *a, **k):
+            opened.append(os.path.basename(str(path)))
+            return real(path, *a, **k)
+
+        with mock.patch.object(os, "open", spy):
+            self.count()
+        self.assertEqual(listing(), before)
+        self.assertTrue(set(opened) <= {"book.json", "events.jsonl"}, set(opened))
+
+    def test_the_text_of_an_event_is_never_in_the_result(self):
+        self.book(events=[("note", {"text": "Cookie: sid=1" + RLO})])
+        self.assertNotIn("sid=1", repr(self.count()))
 
 
 if __name__ == "__main__":

@@ -24,13 +24,14 @@ import json
 import math
 import os
 import re
+import sqlite3
 import stat
 import zoneinfo
 from collections import namedtuple
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
-from . import KbError, placereview
+from . import KbError, crawlqueue, placereview
 
 MAX_SMALL = 64 * 1024             # the default size of a small file (a record, a breaker file, a lock's line)
 MAX_LOG_BYTES = 32 * 1024 * 1024  # the most of one day's log that is read
@@ -48,6 +49,14 @@ OUTCOMES = ("ok", "skipped", "rejected", "failed", "blocked", "held", "refused",
 FIELDS = ("ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds")
 BREAKER_KINDS = ("consecutive_failures", "failure_share", "model_down", "stage_bound")  # the runner plan's contract for `crawl/breaker.json`
 MAX_LOCK_LINE = 256               # the most of the lock's line that is read
+QUEUE_WAIT_S = 2                  # the most seconds the queue is waited for (it is read while a runner may be writing to it)
+MAX_COUNTER_ROWS = 5000           # the most rows of the counters table read for a day
+MAX_LISTED = 50                   # the most domains, and the most other counters, listed
+MAX_ROOT_BYTES = 1024 * 1024      # a book's root file is a small record
+MAX_EVENTS_READ = 4 * 1024 * 1024  # the most of a book's events log that is read
+MAX_BOOKS = 200_000               # the most books whose records are read to count the books the crawl filed
+MAX_TOTAL_EVENTS = 256 * 1024 * 1024  # and the most bytes of their events logs, in all
+PERMANENT_DAY = "permanent"       # the day discovery gives the counters that are never reset (`walked:`); a test compares it with discovery's
 MAX_RUN_FILES = 60                # the most log files `last_run` looks through for a run (it stops at the newest file that has one)
 MAX_RUN_BYTES = 128 * 1024 * 1024  # and the most bytes it reads in all
 GIB = 1024 ** 3                   # a floor of the plan is in gigabytes; read here as 2**30 bytes (to be checked against the runner's guard)
@@ -363,6 +372,25 @@ def log_files(index_root, first_date=None, last_date=None, *, newest_first=False
 
 # --- a day in the plan's zone ----------------------------------------------------------------------------------------------------------------
 
+def _tzinfo(zone):
+    """The zone of the plan: None for `local` (the machine's own), else the zone of that name; anything else is a refusal."""
+    if zone == "local":
+        return None
+    if not isinstance(zone, str) or not _ZONE.fullmatch(zone):
+        raise _refuse("the time zone is local or a name of the zone database")
+    try:
+        return zoneinfo.ZoneInfo(zone)
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
+        raise _refuse("the time zone is not one the system knows") from None
+
+
+def today_in_zone(now, zone):
+    """The day, a `datetime.date`, that the time `now` (with a zone) falls in, in `zone` (`local` or an IANA name): the day of the plan's counters."""
+    if not isinstance(now, datetime.datetime) or now.tzinfo is None:
+        raise _refuse("now is a time with a zone")
+    return now.astimezone(_tzinfo(zone)).date()
+
+
 def day_bounds(day, zone):
     """`(start, end)`, two UTC times, of the day `day` (a `datetime.date`) in `zone` (`local` for the machine's own, or an IANA name): the day is
     `start <= t < end`, and is 23 or 25 hours long on a day the clock changes."""
@@ -371,14 +399,7 @@ def day_bounds(day, zone):
     utc = datetime.timezone.utc
     midnight = datetime.time.min
     following = day + datetime.timedelta(days=1)
-    if zone == "local":
-        return (datetime.datetime.combine(day, midnight).astimezone(utc), datetime.datetime.combine(following, midnight).astimezone(utc))
-    if not isinstance(zone, str) or not _ZONE.fullmatch(zone):
-        raise _refuse("the time zone is local or a name of the zone database")
-    try:
-        info = zoneinfo.ZoneInfo(zone)
-    except (zoneinfo.ZoneInfoNotFoundError, ValueError, OSError):
-        raise _refuse("the time zone is not one the system knows") from None
+    info = _tzinfo(zone)  # None is the machine's own zone: a time with no zone is read as local
     return (datetime.datetime.combine(day, midnight, tzinfo=info).astimezone(utc),
             datetime.datetime.combine(following, midnight, tzinfo=info).astimezone(utc))
 
@@ -724,3 +745,219 @@ def run_counts(index_root, day, zone):
     return {"day": found["day"], "started": started, "ended": ended, "ended_by_outcome": outcomes, "refused": refused, "refused_by_reason": top,
             "bad": found["bad"], "cut": found["cut"], "unreadable": found["unreadable"], "problem": found["problem"],
             "first": found["first"], "last": found["last"]}
+
+
+# --- the queue, the counters, the books --------------------------------------------------------------------------------------------------------
+
+QueueOpen = namedtuple("QueueOpen", "conn status reason")  # status: ok | missing | bad | busy; the caller closes `conn`
+
+
+def open_queue(index_root):
+    """The candidate queue, opened **read only** (`mode=ro`) and never created: `QueueOpen(conn, status, reason)`. A missing file is `missing`. The
+    file must be a plain file of the owner's with mode 600, at the version and the exact table that `crawlqueue` checks (its own checks, which only
+    read, are used, so that this module cannot drift from the table); a file that is not is `bad`, with a reason that holds no path and none of the
+    file's text. A queue that stays locked is `busy`; **each statement waits up to two seconds, and the shape check makes several, so the wait is
+    not two seconds in all**. A file that is swapped for a pipe between the check and the open is **not guarded against** (SQLite opens it by
+    path; there is no portable way to hand it a checked descriptor), which takes the owner's own write access to the index root. Rows that a runner
+    has committed are read while it is open, and nothing it has not committed is. **SQLite itself makes `candidates.sqlite-shm` and an empty `candidates.sqlite-wal` (mode 600) beside the
+    queue when a read-only connection opens a WAL database that has no such files (measured on SQLite 3.46.1, Linux); the queue file is not
+    changed.** The option that would avoid them (`immutable`) ignores the WAL and shows rows that are not there, so it is not used."""
+    path = Path(index_root) / crawlqueue.FILE
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return QueueOpen(None, "missing", None)
+    except OSError as e:
+        return QueueOpen(None, "bad", clean(_why(e), 200))
+    try:
+        crawlqueue._check_file(path)
+    except (KbError, OSError):
+        return QueueOpen(None, "bad", "the queue file is not a plain file of the owner's with mode 600")
+    try:
+        conn = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True, timeout=QUEUE_WAIT_S, isolation_level=None)
+    except (sqlite3.Error, UnicodeError):  # a path that cannot be written as an address is not a queue we can open
+        return QueueOpen(None, "bad", "the queue file cannot be opened")
+    try:
+        crawlqueue._check_shape(conn, str(path))
+    except sqlite3.OperationalError as e:
+        conn.close()
+        busy = "locked" in str(e).lower() or "busy" in str(e).lower()
+        return QueueOpen(None, "busy" if busy else "bad", "the queue is busy" if busy else "the queue file cannot be read")
+    except (KbError, sqlite3.Error):
+        conn.close()
+        return QueueOpen(None, "bad", "the file is not a candidate queue of this engine")
+    except BaseException:
+        conn.close()
+        raise
+    return QueueOpen(conn, "ok", None)
+
+
+def queue_counts(conn, bounds):
+    """The rows of the queue by status: `all`, and `today` for the rows whose `updated` falls in `bounds` (the two UTC times of `day_bounds`, so that
+    a day of 23 or 25 hours is right). Every status of the spec is present, with 0; a row with any other status is counted in `other` and never
+    listed. `total` is every row."""
+    if (not isinstance(bounds, tuple) or len(bounds) != 2
+            or any(not isinstance(b, datetime.datetime) or b.tzinfo is None for b in bounds)):
+        raise _refuse("the bounds of a day are two times with a zone")
+    low, high = (b.astimezone(datetime.timezone.utc).strftime(_TS_FORMAT) for b in bounds)
+    everything, today = dict.fromkeys(crawlqueue.STATUSES, 0), dict.fromkeys(crawlqueue.STATUSES, 0)
+    total = other = 0
+    for status, n in conn.execute("SELECT status, COUNT(*) FROM candidates GROUP BY status"):
+        total += n
+        if status in everything:
+            everything[status] = n
+        else:
+            other += n
+    for status, n in conn.execute("SELECT status, COUNT(*) FROM candidates WHERE updated >= ? AND updated < ? GROUP BY status", (low, high)):
+        if status in today:
+            today[status] = n
+    return {"all": everything, "today": today, "total": total, "other": other}
+
+
+def _day_text(day):
+    if type(day) is datetime.date:
+        return day.isoformat()
+    if isinstance(day, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", day):
+        try:
+            datetime.date.fromisoformat(day)
+        except ValueError:
+            raise _refuse("a day is a date written YYYY-MM-DD") from None
+        return day
+    raise _refuse("a day is a date written YYYY-MM-DD")
+
+
+def _limit(values, key):
+    value = values.get(key) if isinstance(values, dict) else None
+    return value if type(value) is int and value >= 0 else None
+
+
+def _against(n, limit):
+    return {"n": n, "limit": limit, "at_or_over": None if limit is None else n >= limit}
+
+
+def counters_report(conn, plan_day, utc_day, values):
+    """The counters of the plan's day (`plan_day`, a day in the plan's zone) against the ceilings of the approved plan (`values`, or None: shown
+    with no ceilings). The runner's keys are `fetch`, `fetch:<registrable domain>`, `card` and `refusal:<registrable domain>`; `fetch` is shown
+    against `fetches_per_day`, each domain against `per_domain_per_day`, `card` against `cards_per_day`, and the refusals as counts with the plan's
+    `domain_refusals` beside them (the runner decides when a site is stopped). Every other row of the day is listed as it is (up to 50). Discovery's
+    rows, `source_off:<name>` and `web_search_queries`, are by the **UTC** day `utc_day` and are shown as discovery's, and its `walked:` rows (day
+    `permanent`) are only counted. A row whose count is not a whole number of 0 or more is skipped and counted in `bad_rows`. `fetch`, `card` and
+    `web_search_queries` are read by name; of the other rows at most 5,000 (the biggest counts) are read and `truncated` says if there were more, and
+    at most 50 domains, 50 other counters and 50 sources are listed, each with its total."""
+    plan_day, utc_day = _day_text(plan_day), _day_text(utc_day)
+    # The three counters that a ceiling or a day's search count is judged by are read by name, so that the bound on the rows can never drop one of
+    # them and show 0 where there is a count; the bound is on the rest.
+    named = conn.execute("SELECT day, key, n FROM counters WHERE day IN (?, ?) AND key IN ('fetch', 'card', 'web_search_queries')",
+                         (plan_day, utc_day)).fetchall()
+    rows = conn.execute("SELECT day, key, n FROM counters WHERE day IN (?, ?) AND (key IS NULL OR key NOT IN ('fetch', 'card', 'web_search_queries')) "
+                        "ORDER BY n DESC, day, key LIMIT ?", (plan_day, utc_day, MAX_COUNTER_ROWS + 1)).fetchall()
+    truncated = len(rows) > MAX_COUNTER_ROWS
+    fetch = card = bad = web_search = 0
+    domains, other, sources_off = {}, [], set()
+    for day, key, n in named + rows[:MAX_COUNTER_ROWS]:
+        if not isinstance(key, str) or type(n) is not int or n < 0:
+            bad += 1
+            continue
+        if day == utc_day and (key == "web_search_queries" or key.startswith("source_off:")):
+            if key == "web_search_queries":
+                web_search += n
+            elif n > 0:
+                sources_off.add(clean(key[len("source_off:"):], 40))
+        elif day != plan_day:
+            continue
+        elif key == "fetch":
+            fetch += n
+        elif key == "card":
+            card += n
+        elif key.startswith(("fetch:", "refusal:")):
+            kind, _, name = key.partition(":")
+            entry = domains.setdefault(clean(name, 100) or "(none)", {"fetch": 0, "refusals": 0})
+            entry["fetch" if kind == "fetch" else "refusals"] += n
+        else:
+            other.append((clean(key, 100), n))
+    per_domain = _limit(values, "per_domain_per_day")
+    listed = sorted(domains.items(), key=lambda item: (-item[1]["fetch"], -item[1]["refusals"], item[0]))[:MAX_LISTED]
+    walked = conn.execute("SELECT COUNT(*) FROM counters WHERE day = ? AND key LIKE 'walked:%'", (PERMANENT_DAY,)).fetchone()[0]
+    return {
+        "day": plan_day, "ceilings_known": isinstance(values, dict),
+        "fetch": _against(fetch, _limit(values, "fetches_per_day")), "card": _against(card, _limit(values, "cards_per_day")),
+        "domains": [{"domain": name, "fetch": e["fetch"], "limit": per_domain, "at_or_over": None if per_domain is None else e["fetch"] >= per_domain,
+                     "refusals": e["refusals"]} for name, e in listed],
+        "domains_total": len(domains), "domain_refusals": _limit(values, "domain_refusals"),
+        "other": [{"key": key, "n": n} for key, n in sorted(other, key=lambda item: (-item[1], item[0]))[:MAX_LISTED]], "other_total": len(other),
+        "discovery": {"day": utc_day, "sources_off": sorted(sources_off)[:MAX_LISTED], "sources_off_total": len(sources_off),
+                      "web_search_queries": web_search, "walked": walked},
+        "bad_rows": bad, "truncated": truncated}
+
+
+def _object(data):
+    try:
+        found = json.loads(data.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant)
+    except (UnicodeDecodeError, _Duplicate, _NotFinite, ValueError, RecursionError):
+        return None
+    return found if type(found) is dict else None
+
+
+def _has_event(data, name):
+    """Whether a book's events log has a line of the event `name`: a line is parsed only if it holds the name, and the name must be its `event`."""
+    needle = b'"' + name.encode() + b'"'
+    for line in data.split(b"\n"):
+        if needle in line:
+            record = _object(line)
+            if record is not None and record.get("event") == name:
+                return True
+    return False
+
+
+def crawl_books(store, *, max_books=MAX_BOOKS, max_events_bytes=MAX_EVENTS_READ, max_total_bytes=MAX_TOTAL_EVENTS):
+    """The books the crawl has filed, from the books themselves. Each book's root file is read once (a plain file of the owner's, at most 1 MiB, that
+    says it is this book's); the book's events log is read (at most `max_events_bytes`) and the book is a filing if the log has a `crawl_found`
+    event. `filed_total` is that number: the plan's `filed_total` ceiling is a count of such books and is not a counter, **and it is counted for every
+    book whatever its `auto_filed` flag**, so that a book the owner has reviewed is still a book the crawl filed. `unreviewed` is the number of books
+    whose root file has `auto_filed` exactly true. A book whose root file or events log cannot be read is counted in `unreadable` and is not counted as
+    filed (the number is then a least number, and the answer says how many). At most `max_books` books and `max_total_bytes` bytes of events logs are
+    read in all; `cut` and `stopped_by` (`no_more_books`, `max_books` or `max_bytes`) say if the count stopped early. Nothing is written, and no
+    file but the two named is opened."""
+    for bound in (max_books, max_events_bytes, max_total_bytes):
+        if type(bound) is not int or bound < 1:
+            raise _refuse("a bound is a whole number of at least 1")
+    out = {"books_scanned": 0, "filed_total": 0, "unreviewed": 0, "events_read": 0, "events_bytes": 0, "unreadable": 0, "cut": False,
+           "stopped_by": "no_more_books", "problem": None,
+           "basis": "books whose events log has a crawl_found event, every book looked at; unreviewed: books whose root file has auto_filed true"}
+    try:
+        book_ids = store.list_books()
+    except (OSError, KbError) as e:
+        out["problem"] = clean(f"the library cannot be listed ({_why(e) if isinstance(e, OSError) else 'refused'})", 200)
+        return out
+    for book_id in book_ids:
+        if out["books_scanned"] >= max_books:
+            out.update(cut=True, stopped_by="max_books")
+            break
+        if out["events_bytes"] >= max_total_bytes:
+            out.update(cut=True, stopped_by="max_bytes")
+            break
+        out["books_scanned"] += 1
+        try:
+            root = read_small(store.book_file(book_id), MAX_ROOT_BYTES)
+            record = _object(root.data) if root.status == "ok" else None
+        except (KbError, OSError):
+            record = None
+        if record is None or record.get("book_id") != book_id:  # a root file that is another book's is not this book's
+            out["unreadable"] += 1
+            continue
+        if record.get("auto_filed") is True:
+            out["unreviewed"] += 1
+        try:
+            events = read_file(store.events_file(book_id), max_events_bytes)
+        except (KbError, OSError):
+            events = FileRead(None, "bad", None, False)
+        if events.status == "missing":
+            continue
+        if events.status != "ok" or events.cut:
+            out["unreadable"] += 1
+            continue
+        out["events_read"] += 1
+        out["events_bytes"] += len(events.data)
+        if _has_event(events.data, "crawl_found"):
+            out["filed_total"] += 1
+    return out

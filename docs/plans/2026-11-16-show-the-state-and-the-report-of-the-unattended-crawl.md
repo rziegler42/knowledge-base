@@ -220,6 +220,23 @@ Recorded, not changed:
 - **Texts in `approved_plan`'s values are returned as the plan gave them** (finding 8: `timezone` is text): Increment D passes anything it prints through `clean`.
 - **Signatures** (finding 9): `last_run(index_root, now, *, max_files, max_bytes, limit)` has no `zone` (it needs none; the day belongs to `run_counts`), and no `files` parameter.
 
+**Increment C.** The project's `reviewer` agent, read only (it ran nothing and read the test names, not their bodies), **one round, one exchange**. Recommendation: no blocking findings; eight findings, none blocking. It found no exploitable security issue: no write, create or network call is reachable from C, and untrusted text reaches the output only through `clean`.
+
+Applied (test first, each shown to fail before the change):
+
+- **The bound on the counters' rows could drop `fetch` or `card`** (finding 2): the rows were read biggest-first up to 5,000, so a ceiling counter could be cut and shown as 0, "under the ceiling". `fetch`, `card` and `web_search_queries` are now read by name; the bound is on the rest. (A `NULL` key, which the new query first dropped without a word, is kept and counted as a bad row.)
+- **`filed_total` counted a `crawl_found` event only for a book marked `auto_filed`** (findings 3 and 4): this was my plan's step 5, but **the plan's own criterion 7 and the spec say "the books with a `crawl_found` event"**, and a count that leaves out a book the owner has reviewed (if a later command clears the flag) reads as "room left" against the ceiling, the unsafe direction. **It now counts `crawl_found` in the events log of every book whatever its flag; `unreviewed` stays the count of books whose root file has `auto_filed` exactly true.** This departs from the step's wording and costs a read of each book's small events log; it is bounded by 200,000 books, 4 MiB a log and **256 MiB of logs in all** (`max_total_bytes`), and `stopped_by` says why the count stopped (`no_more_books`, `max_books`, `max_bytes`). The owner may restore the gate by one condition.
+- **The list of sources discovery turned off had no cut** (finding 1): up to 50 are listed, with `sources_off_total`.
+- **A root file was not checked to be its own book's** (finding 5), as `Store.read_book` does: a copied root file would have counted a book twice; now it is unreadable.
+- **A path that cannot be written as an address** (finding 8, a lone surrogate) raised `UnicodeEncodeError` out of `open_queue`: it is now a `bad` queue.
+- **Two of my tests had stopped testing what they said** once the book-id check was in (the oversize root file and the duplicate key), and are corrected.
+
+Recorded, not changed:
+
+- **A file swapped for a pipe between the check and the open** (finding 6): SQLite opens the path itself and there is no portable way to give it a checked descriptor; it takes the owner's own write access to the index root. **Unmitigated.** Each statement waits up to two seconds, and the shape check makes several, so the wait is not two seconds in all; the docstring says so.
+- **`queue_counts` and `counters_report` catch no SQLite error** (finding 7): a queue damaged past the shape check raises out of them. **Increment D's `status()` must catch `sqlite3.Error`** so that a fault of the queue never stops the other parts. (`today` in `queue_counts` has no `other` count; rows of another status updated today are left out, harmlessly.)
+- **A `crawl_found` line written with the name escaped differently is missed** by the text search (the store writes it plainly): not changed.
+
 ## Deferred work
 
 - A second reader for the runner's own counters, once the runner names more of them than `fetch`, `fetch:<domain>`, `card` and `refusal:<domain>`.
@@ -257,7 +274,7 @@ Recorded, not changed:
 
 **Open:** the to-do items already named, and the new one for the parameter-name list. The security review the owner asked for runs after Increment E.
 
-### Increment B — The state, the lock's holder, the approved plan, the disk and the last run (not yet committed)
+### Increment B — The state, the lock's holder, the approved plan, the disk and the last run (committed as `eb8af9c`)
 
 **Done.** On the branch `crawl-status`, from `190a3e2`. Linux, Python 3.14. The module is still read only: a test reads its source and fails on any call that writes, creates, removes, renames, takes an exclusive lock, opens a socket, starts a program or uses SQLite.
 
@@ -292,3 +309,37 @@ Recorded, not changed:
 **Not run:** anything on macOS (`flock` on a read-only descriptor, `os.pread`, `os.statvfs` and `O_NOCTTY` are standard there but untried); the real `crawlplan.read_plan`; the other tests of the repository (nothing imports the module yet). **Known limit, not fixable from here:** the lock's line can be the previous run's during the instant between a run taking the lock and writing its own line.
 
 **Open:** the to-do items already named. Increment D must print `at_or_under_floor` as what the runner would refuse on, pass the plan's text values through `clean`, and show `zone_of`'s problem.
+
+### Increment C — The queue, the counters against the ceilings, and the books filed (not yet committed)
+
+**Measured first (step 1), on this machine** (a throwaway script in the scratchpad; Linux, SQLite 3.46.1, Python 3.14.4; **macOS not measured**): a read-only connection (`file:...?mode=ro`) to a queue in WAL mode sees every committed row and none that is not committed, and cannot write ("attempt to write a readonly database"); with a writer's connection open it creates no file; **with no connection open and no side files it creates `candidates.sqlite-shm` (32,768 bytes) and an empty `candidates.sqlite-wal` (mode 600 both), which stay after it closes, and the queue file is unchanged in hash, mtime and size**; after a writer was killed without closing, the reader saw the committed row and created nothing; `immutable=1` saw 0 of 7 committed rows (it ignores the WAL), so it is not used. **The permitted side effect of criterion 4 is therefore exactly those two files**, which the tests name.
+
+**Done.** On the branch `crawl-status`, from `eb8af9c`. Linux, Python 3.14. The module is still read only; its guard test now also requires that the one `sqlite3.connect` has `mode=ro` and `uri=True`, that no statement but a `SELECT` is made, and that no SQL word that changes a database appears.
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/crawlstatus.py` (changed since B) | 963 | `a905bf97560771079da144c05d98b578146f547bb2b0de4bc14cdb14b2ce21c7` |
+| `engine/tests/test_crawlstatus.py` (changed since B) | 2263 | `c5f7b8a628e973386dc8e8b17b67f4f2ec96d3ab4ff51d15ec441c530b20eb1a` |
+
+No new fixture file: the tests make the queue with `crawlqueue.connect` in a temporary folder and the books with the real `Store` (`StoreCase`).
+
+- `open_queue(index_root)`: `QueueOpen(conn, status, reason)`; `missing` (and nothing made), `bad` (a link, a folder, a pipe, another owner, mode other than 600, not a database, another version or table shape, a path that cannot be written as an address; **the reason holds no path and none of the file**), `busy`, or `ok` with a read-only connection that the caller closes. Uses `crawlqueue._check_file` and `_check_shape` (they only read; the plan's deferred item to make them public stands).
+- `queue_counts(conn, bounds)`: every status present, `all` and `today` (the rows whose `updated` falls in the two UTC times of `day_bounds`, so a day of 23 or 25 hours is right), `total`, and `other` for a status that is not ours, which is counted and never listed.
+- `today_in_zone(now, zone)`, `_tzinfo` (shared with `day_bounds`).
+- `counters_report(conn, plan_day, utc_day, values)`: `fetch`, `card` and each domain against `fetches_per_day`, `cards_per_day` and `per_domain_per_day` (`at_or_over` when the count is the ceiling or more; `None` when there is no approved plan or the ceiling is not a whole number of 0 or more), refusals as counts with `domain_refusals` beside them, every other row of the day (up to 50), discovery's rows by their UTC day (`source_off:` sources, up to 50, with a total; `web_search_queries`), `walked:` rows only counted, `bad_rows`, `truncated`.
+- `crawl_books(store, ...)`: `filed_total` (books with a `crawl_found` event, every book's log looked at), `unreviewed`, `events_read`, `events_bytes`, `unreadable`, `cut`, `stopped_by`, `problem` and the `basis` in words; only `book.json` and `events.jsonl` are opened (a test spies on `os.open`).
+
+**Verification as run:**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlstatus`: **236 tests, OK**, three runs in a row; `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlqueue`: **68 tests, OK** (the queue module is not edited). Each new test was seen to fail first (the functions did not exist; later, the tests for the review's findings failed on the code before the change).
+- **Deliberate breaks** (each compile-checked, the bytecode cache removed, the file restored byte for byte and the hash compared), against the final text: the code of C **109 of 109 killed**; the code of B **118 of 119** and of A **123 of 126**, rerun, with the same equivalent survivors as before. In the first run of C's breaks 17 of 95 mutants survived, every one for want of a test (the compact and ISO-week forms of a date, a key that is not text, an uncleaned source name, a negative ceiling, an event whose name only contains `crawl_found`, a duplicate key in a root file, and others), and a test was added for each.
+- No control, invisible or direction character in the files. `wb run code-work check`: 55 plans, no problems. `wb plan-status`: `approved`. No helper process left, no stray file.
+- Review: one round of the `reviewer` agent (see the Review record).
+
+**Departures from the plan's wording, for the owner:** (1) **`filed_total` is counted in every book's events log, not only for books marked `auto_filed`** (the Review record gives the reason: criterion 7 and the spec); it is bounded by books, bytes a log and bytes in all, and `unreviewed` is counted separately; (2) the counters `fetch`, `card` and `web_search_queries` are read by name, and the bound is on the other rows; (3) a root file must say it is its own book's (as `Store.read_book` requires).
+
+**Fields that can only be checked against fixtures** (the runner that writes them does not exist): the counters' keys `fetch`, `fetch:<domain>`, `card` and `refusal:<domain>` and their day in the plan's zone (the runner plan's contract; no runner writes them yet), the event `crawl_found` and the book's `auto_filed` (written by `Store`, but no code on this branch writes a `crawl_found`), and discovery's `source_off:`, `web_search_queries` and `walked:` rows (written by discovery's code, read here from rows the tests insert).
+
+**Not run:** anything on macOS (the read-only URI with a quoted path, the side files that SQLite makes, `O_NOFOLLOW` on the book files); a real queue, library or runner; the other tests of the repository (nothing imports the module yet). **Known limits:** a file swapped for a pipe between the check and the open of the queue is not guarded against (SQLite opens the path itself); each statement waits up to two seconds, and the wait is not two seconds in all; a book whose root file or events log cannot be read is not counted as filed, so `filed_total` is then a least number and `unreadable` says how many.
+
+**Open:** the to-do items already named. Increment D must catch `sqlite3.Error` around `queue_counts` and `counters_report`, print `unreadable`, `cut` and `stopped_by` beside `filed_total`, and show the queue's `status` (`missing`, `bad`, `busy`) with its reason.
