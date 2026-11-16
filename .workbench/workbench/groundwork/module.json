@@ -7,7 +7,8 @@
     "specs",
     "roadmaps",
     "decisions",
-    "references"
+    "references",
+    "todo"
   ],
   "writes": [
     "docs/decisions/README.md",
@@ -18,7 +19,8 @@
   "ships": [
     "helper/doccheck",
     "helper/groundwork",
-    "helper/refcheck"
+    "helper/refcheck",
+    "helper/todo"
   ],
   "checks": [
     {
@@ -52,6 +54,17 @@
       "checkpoint_of": {
         "accept": "accept-decision"
       }
+    },
+    "todo": {
+      "helper": "helper/todo",
+      "runtime": "python",
+      "kit": 1,
+      "arguments": [
+        "add",
+        "list",
+        "show",
+        "drop"
+      ]
     }
   },
   "fills": [

@@ -1,0 +1,669 @@
+#!/usr/bin/env python3
+"""The groundwork todo helper: a personal list of things to do or fix, kept in this clone.
+
+    todo add --title T [--source S] [--step S] [--size quick|sitting|session|large] [--owner] [--body B]
+    todo list [--size quick|sitting|session|large] [--mechanical] [--older-than DAYS]
+    todo show <id>
+    todo drop <id>   removes an item, prints it in full, and appends one line to the drop log ``dropped.log`` in the list's folder
+
+It is a kit helper (kit API 1) started from the project. The list is the untracked folder ``.workbench/local/todo/``, one file
+``<id>.md`` for each item, and the helper reads and writes only there. The rules are in ``docs/specs/todo-list.md``.
+
+An item file is a header of ``key: value`` lines (``title``, ``added``, then ``source``, ``step``, ``size`` and ``owner`` when
+given), a blank line, and an optional body. Everything read from the folder is untrusted: a file is opened without following a
+link and is used only if it is a regular file with one link of at most ``MAX_ITEM`` bytes. A header value is one line of
+printable characters; a field that holds credential-shaped text refuses the whole ``add``, and the refusal names the field and
+the rule and never the text. The credential rules are a copy of those of the ``mempalace-notes`` helper, and a test pins that
+they stay equal.
+
+``add`` makes the folder when it is missing (mode 0700, one level at a time, no link followed), writes the item to a temporary
+name in the folder and makes the final name with a hard link, which fails if the name exists, so two adds never write the same
+file; it then removes the temporary name. A repeated title is refused, and a title that is close to another is added with the
+other's ID named. Known limits: two adds of the same title at the same moment may both succeed (the owner can drop one); the
+close-title test is a word overlap, not a judgement; a run killed between the link and the removal of the temporary name leaves a complete item with
+two links, which the readers pass over (they accept one link only), so a later ``list`` shows it as unreadable and the owner drops it.
+
+``drop`` opens the drop log first (a link, a file that is not plain or has two links, or a log at its bound refuses the drop and keeps the item), removes
+the file, and then appends one line; the item's text is printed whether or not the line is written, and a failed write is reported on the error output. Text that the output cannot take is
+written escaped, and an output that cannot be written at all (a closed pipe) is reported on the error output with the command still done, since the item is gone.
+Known limits: a run killed between the removal and the write leaves no log line; the size check is not atomic across drops at the same moment, so the log
+may pass its bound by a few lines; the steps read, open the log and remove are separate, so an item replaced meanwhile may be printed from its old text
+while the new file is removed (every step uses the held folder, follows no link, and cannot leave it); a log at its bound refuses every drop until the
+owner trims it by hand.
+"""
+
+import datetime
+import io
+import os
+import re
+import secrets
+import stat
+import sys
+import unicodedata
+
+from wbkit import display, project
+
+USAGE = ("usage: todo add --title <title> [--source <text>] [--step <text>] [--size quick|sitting|session|large] [--owner] [--body <text>]\n"
+         "       todo list [--size quick|sitting|session|large] [--mechanical] [--older-than <days>]\n"
+         "       todo show <id>\n"
+         "       todo drop <id>")
+MAX_TITLE, MAX_SOURCE, MAX_STEP, MAX_BODY, MAX_ITEM, MAX_ITEMS = 120, 200, 200, 4096, 5120, 1000
+LOG = "dropped.log"   # the drop log, in the list's folder; its name is reserved (an item file is ``<id>.md``)
+MAX_LOG = 262144   # bytes; a drop is refused while the log would pass this, and the owner trims the log by hand
+LIST_SHOWN = 200  # at most this many lines of a list are printed; the rest is counted
+HEADER_KEYS = ("title", "added", "source", "step", "size", "owner")
+SIZES = ("quick", "sitting", "session", "large")
+FOLDER = (".workbench", "local", "todo")
+ID_LENGTH = 60
+ID_TRIES = 99
+SIMILAR = 0.6   # the share of words two titles hold in common for the second to be called close to the first
+SIMILAR_WORDS = 3   # a title of fewer words (of three letters or more) is not compared
+SIMILAR_LISTED = 3
+FIELD_OPTIONS = ("title", "source", "step", "size", "body")
+
+
+class Usage(Exception):
+    pass
+
+
+class Refused(Exception):
+    pass
+
+
+def today():
+    return datetime.date.today()
+
+
+# -- the credential scan -------------------------------------------------------------------------------------------------------------------
+# A copy of the rules of the mempalace-notes helper; the test test_todo_add pins that the names and expressions are equal.
+CREDENTIAL_PATTERNS = (
+    ("private-key-block", re.compile(r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----")),
+    ("aws-access-key-id", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,}")),
+    ("github-fine-grained-token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}")),
+    ("gitlab-token", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}")),
+    ("npm-token", re.compile(r"\bnpm_[A-Za-z0-9]{36}")),
+    ("stripe-key", re.compile(r"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}")),
+    ("slack-token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
+    ("google-api-key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}")),
+    ("json-web-token", re.compile(r"\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]+")),
+    ("sk-key", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}")),
+    ("bearer-header", re.compile(r"\bauthorization:\s{0,10}bearer\s{1,10}[A-Za-z0-9._~+/=-]{16,}", re.I)),
+    ("basic-auth-header", re.compile(r"\bauthorization:\s{0,10}basic\s{1,10}[A-Za-z0-9+/=]{16,}", re.I)),
+    ("url-with-password", re.compile(r"[a-z][a-z0-9+.-]{0,30}://[^/\s:@]{0,200}:[^/\s@]{1,200}@", re.I)),
+    ("assigned-secret", re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_.-]{0,40}(?:password|passwd|passphrase|pass|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credentials?)"
+                                   r"[A-Za-z0-9_]{0,40}[\"']?\s{0,10}(?::=|=>|[:=])\s{0,10}[\"']?\S{6,}", re.I)),
+)
+JOINED = ("aws-access-key-id", "github-token", "github-fine-grained-token", "gitlab-token", "npm-token", "stripe-key", "slack-token", "google-api-key", "json-web-token",
+          "sk-key")   # token shapes that a wrap can split
+# A pattern runs on a line only when the line holds what it needs, and every quantifier in it is bounded, so that one long line costs time in proportion to its length.
+
+
+def credential_hits(text):
+    """``[(line number, pattern name)]`` for each line of `text` that holds credential-shaped text. The text is normalised first, so a fullwidth or other compatibility
+    form of a shape is read as the plain one. The names are fixed words: the text is never returned."""
+    hits, lines = [], unicodedata.normalize("NFKC", text).split("\n")
+    for number, line in enumerate(lines, 1):
+        for name, pattern in CREDENTIAL_PATTERNS:
+            if (name == "url-with-password" and "://" not in line) or (name == "assigned-secret" and ":" not in line and "=" not in line):
+                continue
+            if pattern.search(line):
+                hits.append((number, name))
+    # a second pass finds a token that was wrapped over two lines: the last word of a line and the first word of the next, joined; it is named at the first line.
+    # A token wrapped over three or more lines is not found (a known limit).
+    for number in range(1, len(lines)):
+        before, after = lines[number - 1].split(), lines[number].split()
+        if before and after:
+            joined = before[-1] + after[0]
+            for name, pattern in CREDENTIAL_PATTERNS:
+                if name in JOINED and pattern.search(joined) and (number, name) not in hits:
+                    hits.append((number, name))
+    return sorted(hits)
+
+
+# -- the arguments and the fields ------------------------------------------------------------------------------------------------------------
+def add_arguments(args):
+    """``(fields, owner)`` from the arguments after ``add``, or ``Usage``. An option is given at most once."""
+    fields, owner, index = {}, False, 0
+    while index < len(args):
+        flag = args[index]
+        if flag == "--owner":
+            if owner:
+                raise Usage(USAGE)
+            owner, index = True, index + 1
+        elif flag[:2] == "--" and flag[2:] in FIELD_OPTIONS:
+            if flag[2:] in fields or index + 1 >= len(args):
+                raise Usage(USAGE)
+            fields[flag[2:]] = args[index + 1]
+            index += 2
+        else:
+            raise Usage(USAGE)
+    if "title" not in fields:
+        raise Usage(USAGE)
+    return fields, owner
+
+
+def one_line(name, value, limit):
+    """Refuse a header value that is empty, is longer than `limit`, has a space at either end, or holds a character that does not print."""
+    if not value or not value.isprintable() or value != value.strip():
+        raise Refused("the %s must be one line of printable characters, not empty and with no space at either end" % name)
+    if len(value) > limit:
+        raise Refused("the %s is longer than %d characters" % (name, limit))
+
+
+def checked_fields(fields, owner):
+    """The fields as they will be written, in file order, each checked; ``Refused`` names the field that is not right."""
+    one_line("title", fields["title"], MAX_TITLE)
+    for name, limit in (("source", MAX_SOURCE), ("step", MAX_STEP)):
+        if name in fields:
+            one_line(name, fields[name], limit)
+    if "size" in fields and fields["size"] not in SIZES:
+        raise Refused("the size must be one of %s" % ", ".join(SIZES))
+    body = fields.get("body", "")
+    if len(body.encode("utf-8")) > MAX_BODY:
+        raise Refused("the body is longer than %d bytes" % MAX_BODY)
+    if any(char != "\n" and not char.isprintable() for char in body):
+        raise Refused("the body may hold newlines and printable characters only")
+    return body
+
+
+def no_credentials(fields, body):
+    for name in ("title", "source", "step"):
+        if name in fields:
+            scan(name, fields[name])
+    scan("body", body)
+
+
+def scan(name, text):
+    hits = credential_hits(text)
+    if hits:
+        raise Refused("the %s holds credential-shaped text (%s); the text is not shown. Reword it, for example \"the API key, not recorded\""
+                      % (name, ", ".join(sorted({rule for _, rule in hits}))))
+
+
+def serialize(fields, owner, body):
+    lines = ["title: " + fields["title"], "added: " + today().isoformat()]
+    for name in ("source", "step", "size"):
+        if name in fields:
+            lines.append("%s: %s" % (name, fields[name]))
+    if owner:
+        lines.append("owner: yes")
+    data = ("\n".join(lines) + "\n\n" + body).encode("utf-8")
+    if len(data) > MAX_ITEM:
+        raise Refused("the item would be longer than %d KiB" % (MAX_ITEM // 1024))
+    return data
+
+
+# -- the id and the titles already there -----------------------------------------------------------------------------------------------------
+def slug(title):
+    """The ID a title makes: ASCII letters and digits in lower case, every other run one ``-``, the ends trimmed, at most 60 characters, ``item`` if none is left."""
+    ascii_title = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+    text = re.sub(r"[^a-z0-9]+", "-", ascii_title.lower()).strip("-")[:ID_LENGTH].strip("-")
+    return text or "item"
+
+
+def normal(title):
+    return " ".join(title.lower().split())
+
+
+def words(title):
+    return {word for word in re.findall(r"[a-z0-9]+", title.lower()) if len(word) >= 3}
+
+
+def close(one, other):
+    first, second = words(one), words(other)
+    if len(first) < SIMILAR_WORDS or len(second) < SIMILAR_WORDS:
+        return False
+    return len(first & second) / len(first | second) >= SIMILAR
+
+
+def header_title(data):
+    """The ``title`` value of the header of an item file, or ``None``."""
+    for line in data.decode("utf-8", "replace").split("\n"):
+        if not line:
+            return None
+        key, sep, value = line.partition(": ")
+        if sep and key == "title":
+            return value
+    return None
+
+
+def read_item(folder, name):
+    """The bytes of the item file `name` or ``None``: a link, a file that is not regular or has more than one link, one that is too large, or one that
+    cannot be read is passed over."""
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > MAX_ITEM:
+            return None
+        return os.read(descriptor, MAX_ITEM + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
+def shown(identifier):
+    """`identifier` when it is safe to print, or ``None``: a file name made by hand may hold escape sequences or credential-shaped text, and the name of
+    an existing file is not the list's own text."""
+    if identifier != display.ascii_text(identifier) or len(identifier) > ID_LENGTH + 4 or credential_hits(identifier):
+        return None
+    return identifier
+
+
+def item_names(folder):
+    return sorted(name for name in os.listdir(folder) if name.endswith(".md") and not name.startswith("."))
+
+
+# -- reading an item -------------------------------------------------------------------------------------------------------------------------
+def parse_item(data):
+    """The fields of an item file as a dict (``title``, ``added``, the optional ones that are given, and ``body``), or ``None`` when the bytes are not an item:
+    not UTF-8, no blank line after the header, a line that is not ``key: value``, an unknown or repeated key, a missing ``title`` or ``added``, or a value or body
+    outside the bounds that ``add`` keeps."""
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    head, separator, body = text.partition("\n\n")
+    if not separator:
+        return None
+    fields = {}
+    for line in head.split("\n"):
+        key, colon, value = line.partition(": ")
+        if not colon or key not in HEADER_KEYS or key in fields:
+            return None
+        fields[key] = value
+    if "title" not in fields or "added" not in fields:
+        return None
+    try:
+        for name, limit in (("title", MAX_TITLE), ("source", MAX_SOURCE), ("step", MAX_STEP), ("added", 10), ("size", 7), ("owner", 3)):
+            if name in fields:
+                one_line(name, fields[name], limit)
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", fields["added"]):
+            return None
+        datetime.date.fromisoformat(fields["added"])
+    except (Refused, ValueError):
+        return None
+    if fields.get("size", "quick") not in SIZES or fields.get("owner", "yes") != "yes":
+        return None
+    if len(body.encode("utf-8")) > MAX_BODY or any(char != "\n" and not char.isprintable() for char in body):
+        return None
+    fields["body"] = body
+    return fields
+
+
+def read_all(folder):
+    """``(items, unreadable, beyond)``: the ``(id, fields)`` of each readable item, the file names that are not readable as items, and how many file names
+    beyond the first ``MAX_ITEMS`` were not looked at."""
+    names = item_names(folder)
+    items, unreadable = [], []
+    for name in names[:MAX_ITEMS]:
+        data = read_item(folder, name)
+        fields = parse_item(data) if data is not None and shown(name[:-3]) else None   # an ID that does not print safely is not an item
+        if fields is None:
+            unreadable.append(name)
+        else:
+            items.append((name[:-3], fields))
+    return items, unreadable, max(0, len(names) - MAX_ITEMS)
+
+
+def age_days(added):
+    return max(0, (today() - datetime.date.fromisoformat(added)).days)
+
+
+def safe_text(name, value):
+    """`value`, or a note that names the field and the rules when it holds credential-shaped text. The text itself is never printed then."""
+    hits = credential_hits(value)
+    if hits:
+        return "[%s not shown: credential-shaped text (%s)]" % (name, ", ".join(sorted({rule for _, rule in hits})))
+    return value
+
+
+def find_list(root):
+    """The descriptor of the list's folder below `root`, or ``None`` when it is not there. Nothing is made, and a link is refused."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    current = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    for name in FOLDER:
+        try:
+            following = os.open(name, flags, dir_fd=current)
+        except FileNotFoundError:
+            os.close(current)
+            return None
+        except OSError:
+            os.close(current)
+            raise Refused("%s is a link, or a file, or cannot be opened, where the list's folder belongs" % display.ascii_text(name)[:80])
+        os.close(current)
+        current = following
+    return current
+
+
+def root_of(cwd):
+    try:
+        return os.path.realpath(project.find_root(cwd))
+    except project.ProjectError as exc:
+        raise Refused(display.ascii_text(str(exc))[:200])
+
+
+def listed_name(name):
+    return shown(name[:-3]) if name.endswith(".md") else None
+
+
+# -- the folder ------------------------------------------------------------------------------------------------------------------------------
+def step_into(parent, name):
+    """The descriptor of the folder `name` in `parent`, made (mode 0700) when it is missing. A link, or a file where the folder belongs, is refused."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        try:
+            return os.open(name, flags, dir_fd=parent)
+        except FileNotFoundError:
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent)
+            except FileExistsError:
+                pass
+            return os.open(name, flags, dir_fd=parent)
+    except OSError:
+        raise Refused("%s is a link, or a file, or cannot be opened, where the list's folder belongs" % display.ascii_text(name)[:80])
+
+
+def open_list(root):
+    """The descriptor of ``.workbench/local/todo`` below `root`, made when it is missing."""
+    current = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for name in FOLDER:
+            following = step_into(current, name)
+            os.close(current)
+            current = following
+    except BaseException:
+        os.close(current)
+        raise
+    return current
+
+
+def create(folder, name, data):
+    """Make the file `name` from `data` only if the name is free. It is written to a temporary name in the folder and linked, so a killed run leaves no half
+    item and a name that appears meanwhile is not overwritten. Returns ``True`` when it was made, ``False`` when the name was taken."""
+    temporary = ".tmp-" + secrets.token_hex(6)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=folder)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
+        except FileExistsError:
+            return False
+        try:
+            os.fsync(folder)
+        except OSError:
+            pass
+        return True
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=folder)
+        except OSError:
+            pass
+
+
+# -- the commands ----------------------------------------------------------------------------------------------------------------------------
+def add(args, out, cwd):
+    fields, owner = add_arguments(args)
+    body = checked_fields(fields, owner)
+    no_credentials(fields, body)
+    data = serialize(fields, owner, body)
+    folder = open_list(root_of(cwd))
+    try:
+        names = item_names(folder)
+        if len(names) >= MAX_ITEMS:
+            raise Refused("the list holds %d items; drop some before adding more" % MAX_ITEMS)
+        title, near = normal(fields["title"]), []
+        for name in names:
+            found = read_item(folder, name)
+            other = header_title(found) if found is not None else None
+            if other is None:
+                continue
+            if normal(other) == title:
+                named = shown(name[:-3])
+                raise Refused("an item with that title is on the list" + (": " + named if named else ""))
+            if close(fields["title"], other) and shown(name[:-3]):
+                near.append(name[:-3])
+        base = slug(fields["title"])
+        for number in range(1, ID_TRIES + 1):
+            identifier = base if number == 1 else "%s-%d" % (base[:ID_LENGTH - len(str(number)) - 1].strip("-"), number)
+            if identifier + ".md" in names:
+                continue
+            if create(folder, identifier + ".md", data):
+                break
+        else:
+            raise Refused("the ID %s is taken %d times over; give the item a different title" % (base, ID_TRIES))
+    finally:
+        os.close(folder)
+    out.write("added: %s\n" % identifier)
+    for other in near[:SIMILAR_LISTED]:
+        out.write("similar: %s\n" % other)
+    return 0
+
+
+def list_arguments(args):
+    """``(size, mechanical, older)`` from the arguments after ``list``; an option is given at most once."""
+    size, mechanical, older, index = None, False, None, 0
+    while index < len(args):
+        flag = args[index]
+        if flag == "--mechanical" and not mechanical:
+            mechanical, index = True, index + 1
+        elif flag in ("--size", "--older-than") and index + 1 < len(args) and (size is None if flag == "--size" else older is None):
+            value = args[index + 1]
+            if flag == "--size":
+                if value not in SIZES:
+                    raise Refused("the size must be one of %s" % ", ".join(SIZES))
+                size = value
+            else:
+                if not re.fullmatch(r"[0-9]{1,6}", value):
+                    raise Refused("--older-than takes a whole number of days")
+                older = int(value)
+            index += 2
+        else:
+            raise Usage(USAGE)
+    return size, mechanical, older
+
+
+def list_items(args, out, cwd):
+    size, mechanical, older = list_arguments(args)
+    folder = find_list(root_of(cwd))
+    items, unreadable, beyond = ([], [], 0)
+    if folder is not None:
+        try:
+            items, unreadable, beyond = read_all(folder)
+        finally:
+            os.close(folder)
+    filtered = size is not None or mechanical or older is not None
+    rows = []
+    for identifier, fields in items:
+        age = age_days(fields["added"])
+        if (size is not None and fields.get("size") != size) or (mechanical and fields.get("owner") == "yes") or (older is not None and age <= older):
+            continue
+        rows.append((fields["added"], identifier, age, fields))
+    rows.sort(key=lambda row: (row[0], row[1]))
+    for _, identifier, age, fields in rows[:LIST_SHOWN]:
+        out.write("%5s  %-7s  %s  [%s]%s\n" % ("%dd" % age, fields.get("size", "-"), safe_text("title", fields["title"]),
+                                              identifier, " (owner)" if "owner" in fields else ""))
+    if len(rows) > LIST_SHOWN:
+        out.write("... %d more are not shown; narrow the list with --size, --mechanical or --older-than\n" % (len(rows) - LIST_SHOWN))
+    if not rows and not unreadable:
+        out.write("no item matches\n" if filtered and items else "the list is empty\n")
+    for name in unreadable[:LIST_SHOWN]:
+        out.write("unreadable: %s\n" % (listed_name(name) and name or "(a file whose name is not shown)"))
+    if len(unreadable) > LIST_SHOWN:
+        out.write("... %d more files are unreadable\n" % (len(unreadable) - LIST_SHOWN))
+    if beyond:
+        out.write("... %d more files in the folder were not read\n" % beyond)
+    return 0
+
+
+def show(args, out, cwd):
+    if len(args) != 1:
+        raise Usage(USAGE)
+    identifier = args[0]
+    named = argument_name(identifier)
+    if not identifier or "/" in identifier or "\0" in identifier or identifier.startswith(".") or not shown(identifier):
+        raise Refused("there is no item %s" % named)
+    folder = find_list(root_of(cwd))
+    if folder is None:
+        raise Refused("there is no item %s" % named)
+    try:
+        name = identifier + ".md"
+        try:
+            os.lstat(name, dir_fd=folder)
+        except FileNotFoundError:
+            raise Refused("there is no item %s" % named)
+        data = read_item(folder, name)
+        fields = parse_item(data) if data is not None else None
+    finally:
+        os.close(folder)
+    if fields is None:
+        raise Refused("the file %s cannot be read as an item; it is not shown" % named)
+    out.write("id: %s\n" % identifier)
+    write_item(out, fields)
+    return 0
+
+
+def write_item(out, fields):
+    """The text of one item as `show` and `drop` print it; a field with credential-shaped text is named, not printed."""
+    out.write("title: %s\n" % safe_text("title", fields["title"]))
+    out.write("added: %s (%d days ago)\n" % (fields["added"], age_days(fields["added"])))
+    for key in ("source", "step", "size", "owner"):
+        if key in fields:
+            out.write("%s: %s\n" % (key, safe_text(key, fields[key])))
+    if fields["body"]:
+        out.write("\n%s\n" % safe_text("body", fields["body"]).rstrip("\n"))
+
+
+def drop_name(argument):
+    """``(file name, printable form of the argument)``. The argument is an ID, or the file name of an unreadable file (it ends in ``.md``); it holds no
+    ``/``, no NUL and no leading dot, so it names a file in the folder and never the log, a temporary file or anything outside."""
+    named = argument_name(argument)
+    if not argument or "/" in argument or "\0" in argument or argument.startswith(".") or len(argument.encode("utf-8", "surrogateescape")) > 200:
+        raise Refused("there is no item %s" % named)
+    return (argument if argument.endswith(".md") else argument + ".md"), named
+
+
+def open_log(folder):
+    """``(descriptor, size)`` of the drop log, opened for appending and made (mode 0600) when it is missing. A link, a file that is not a regular file and a
+    file with more than one link are refused."""
+    try:
+        descriptor = os.open(LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=folder)
+    except OSError:
+        raise Refused("the drop log cannot be opened (it may be a link or not a file); nothing was dropped")
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise Refused("the drop log is not a plain file with one link; nothing was dropped")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor, info.st_size
+
+
+def emit(out, err, text):
+    """Write `text` to `out` after a removal. A terminal that cannot show a character gets the escaped form; an output that cannot be written (a closed pipe)
+    is reported on the error output, since the item is already gone and the command has not failed."""
+    for attempt in (text, "\n".join(display.ascii_text(line) for line in text.split("\n"))):
+        try:
+            out.write(attempt)
+            return
+        except UnicodeError:
+            continue
+        except (OSError, ValueError):
+            break
+    try:
+        err.write("note: the item is removed, but its text could not be written to the output\n")
+    except (OSError, ValueError):
+        pass
+
+
+def argument_name(argument):
+    """`argument` as it may be printed in a refusal: escaped, cut to 80 characters, and not shown at all when it holds credential-shaped text."""
+    text = display.ascii_text(argument)[:80]
+    return "(name not shown)" if credential_hits(argument) or credential_hits(text) else text
+
+
+def drop(args, out, err, cwd):
+    if len(args) != 1:
+        raise Usage(USAGE)
+    name, named = drop_name(args[0])
+    folder = find_list(root_of(cwd))
+    if folder is None:
+        raise Refused("there is no item %s" % named)
+    log = None
+    try:
+        try:
+            info = os.lstat(name, dir_fd=folder)
+        except FileNotFoundError:
+            raise Refused("there is no item %s" % named)
+        if stat.S_ISDIR(info.st_mode):
+            raise Refused("%s is a directory, not an item; remove it by hand" % named)
+        identifier = shown(name[:-3])
+        data = read_item(folder, name)
+        fields = parse_item(data) if data is not None and identifier else None
+        title = safe_text("title", fields["title"]) if fields else "(not an item)"
+        line = ("%s\t%s\t%s\n" % (today().isoformat(), identifier or "(name not shown)", title)).encode("utf-8")
+        log, size = open_log(folder)
+        if size + len(line) > MAX_LOG:
+            raise Refused("the drop log holds %d KiB; trim it by hand before dropping more" % (MAX_LOG // 1024))
+        try:
+            os.unlink(name, dir_fd=folder)
+        except OSError:
+            raise Refused("the file %s cannot be removed" % named)
+        try:
+            problem = None if os.write(log, line) == len(line) else "a short write"
+        except OSError as exc:
+            problem = display.ascii_text(exc.strerror or "error")[:80]
+    finally:
+        if log is not None:
+            os.close(log)
+        os.close(folder)
+    text = io.StringIO()
+    if fields is None:
+        text.write("dropped: %s (not an item; its text is not shown)\n" % (identifier or "(name not shown)"))
+    else:
+        text.write("dropped: %s\n" % identifier)
+        write_item(text, fields)
+    emit(out, err, text.getvalue())
+    if problem:
+        err.write("note: the item is removed and printed above, but the drop log could not be written (%s)\n" % problem)
+    return 0
+
+
+def main(argv, stdin, out, err, cwd, terminal=False):
+    """Run one command from `cwd`. Returns the exit code: 0 done, 1 refused with nothing written, 2 usage."""
+    try:
+        if not argv:
+            raise Usage(USAGE)
+        if argv[0] == "add":
+            return add(argv[1:], out, cwd)
+        if argv[0] == "list":
+            return list_items(argv[1:], out, cwd)
+        if argv[0] == "show":
+            return show(argv[1:], out, cwd)
+        if argv[0] == "drop":
+            return drop(argv[1:], out, err, cwd)
+        raise Usage(USAGE)
+    except Usage as exc:
+        err.write("%s\n" % exc)
+        return 2
+    except Refused as exc:
+        err.write("refused: %s\n" % exc)
+        return 1
+    except UnicodeError:
+        err.write("refused: the output cannot be written in the encoding of this terminal\n")
+        return 1
+    except OSError as exc:
+        err.write("refused: the command could not be completed (%s)\n" % display.ascii_text(exc.strerror or "error")[:80])
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:], sys.stdin, sys.stdout, sys.stderr, os.getcwd()))
