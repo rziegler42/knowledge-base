@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "Completion criterion 6; Increment D, step 2; Interfaces — breaker.json",
+      "problem": "The plan makes domain_refusals trip the global breaker until the owner clears it. The governing spec instead stops only the refusing site for the day. One site's refusals would therefore halt all unattended crawling indefinitely.",
+      "severity": "major",
+      "suggestion": "Keep domain-refusal handling separate from the global breaker. Skip that site's candidates for the remainder of the plan's timezone day, and test that other sites continue and the restriction expires the next day."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "One remaining spec drift: site refusals incorrectly trigger a permanent global pause.",
+  "verdict": "changes_needed"
+}

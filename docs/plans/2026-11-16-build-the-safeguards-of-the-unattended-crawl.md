@@ -1,0 +1,178 @@
+# Build the safeguards of the unattended crawl: the approved plan, the stop file, the breaker, the ceilings and the log
+
+Status: Proposed
+Created: 2026-11-16
+Candidate: none (no roadmap holds a candidate for it: the crawl is specified in `docs/specs/population.md`, which the owner approved as the design to build; adding a candidate is the owner's own change of direction)
+Specs: docs/specs/population.md
+
+## Goal
+
+The unattended crawl (`docs/specs/population.md`) needs a runner. This plan builds the **runner's guard rails and its skeleton**, and nothing that touches the network or a model for the crawl's own work: the crawl plan file and its reader, the owner's approval of it (`crawl-approve`, with the behaviour fingerprint), the log, the checks that every run makes in the spec's order, the stop file, the circuit breaker and `crawl-clear`, the disk floors, the run lock, the ceilings as counters, the queue's state changes, and `crawl-run --dry-run`. The steps that fetch, scan, convert, index, judge, make cards, propose a shelf and move a book are the next plan (R2), which builds on this one.
+
+When it is done:
+
+- the owner can write a plan, read a plain summary of it that names what the approval grants, and approve it at a terminal; a run refuses to start under any plan that is not the approved one, or when the engine's code, the schema or the model entries have changed since;
+- `crawl-run` makes the spec's checks in order, writes one log line for each refusal with an exit code, and, with `--dry-run`, shows what a run would do and does nothing; a real run in this plan fetches nothing yet, so the guards can be read and trusted before any step is attached to them;
+- a ceiling is a counter that is reserved in the same SQLite transaction that marks a row `fetching`, so a crash loses no count;
+- the files the other plans read (`crawl.lock`, `crawl.stop`, `crawl/breaker.json`, the counters, the log) have the exact forms given under "Interfaces".
+
+## Scope
+
+**Files owned by this plan:**
+
+- New: `engine/kb/crawlplan.py` (the plan file and its reader), `engine/kb/crawlapprove.py` (the preview, the digest, the fingerprint, the approved copies), `engine/kb/crawllog.py` (the log writer), `engine/kb/crawlguard.py` (the stop file, the breaker, the disk floors, the model probe, the run lock), `engine/kb/crawlstate.py` (the ceilings and every change of a candidate row), `engine/kb/crawlrun.py` (the order of checks and the skeleton of a run), and a test file for each (`engine/tests/test_crawlplan.py`, `test_crawlapprove.py`, `test_crawllog.py`, `test_crawlguard.py`, `test_crawlstate.py`, `test_crawlrun.py`) with hand-made fixtures under `engine/tests/fixtures/crawl/`.
+- Changed, narrowly: `engine/kb/__main__.py` (the registration of `crawl-approve`, `crawl-clear` and `crawl-run`, kept together in one block: the plan that builds `crawl-status` and `crawl-report` on another machine registers its commands in the same file, and the merge will touch it); `docs/specs/population.md` (one line of "States" and one of acceptance criterion 4, to the reading the owner chose for the breaker file, below).
+
+**Not changed:** `engine/kb/crawlqueue.py` is discovery's and its tests require that it contains no `UPDATE` and no `DELETE`; every change of a row's state is made in `crawlstate.py`, through `crawlqueue.connect`.
+
+## Non-goals
+
+- The steps of a run: capture, scan, hold, convert, index, judge, card, proposal, move; the refresh of the public lists and the refill of the queue by discovery as calls of a run (plan R2). This plan's run reaches the point where it would start them, logs that it does, and stops.
+- `crawl-status` and `crawl-report` (another plan, built on another machine); the limits on the sandboxed tools (their own plan, which must be done before the runner takes a PDF); the judgement as a module (another plan).
+- The scheduler: a launchd file is part of R2.
+- Anything that sends a request to the network. The one outside call a run makes in this plan is the probe of the model server, and it is a function that is passed in; no test makes a real one.
+- A change to what `docs/specs/population.md` says about direction.
+
+## Assumptions and constraints
+
+- The spec's text on the plan file (`The crawl plan`), `Safeguards`, `Filing and placement` (the order of one run), `Scheduling` and the acceptance criteria 2 to 5, 8 and 10 is the specification; where this plan is silent, the spec governs. The preview, the digest and the terminal interlock follow `place-apply` (`placeapply.py`: `digest_of`, `preview`, `apply` with `is_tty`), which is the pattern the spec names.
+- The index root is the folder the engine's config calls `index_root`. Under it: `crawl.lock`, `crawl.stop`, `candidates.sqlite`, and a folder `crawl/` holding `breaker.json`, `approved/`, `log/`.
+- **The breaker file (settled by the owner on 2026-11-16).** The spec said both that *paused* is shown when "the breaker file exists" and that "a missing or unreadable breaker file is read as tripped". The owner chose the second: **`crawl/breaker.json` always exists once a plan has been approved and says whether the breaker is tripped.** A missing file, a file that cannot be examined, a file that cannot be read in the form under "Interfaces", and a file that says `"tripped": true` all mean tripped. `crawl-approve` creates the file as not tripped if there is none; `crawl-clear --yes` rewrites it as not tripped. `docs/specs/population.md` is corrected to this (the "States" line); this plan's first commit holds that correction.
+- The ceilings and floors of the plan file are small by default (the spec's values); the real ones are the owner's after the supervised run. The `threshold` of the judgement has no default: a run that would fetch refuses while it is empty (that check is made here, the judgement itself later).
+- A time is UTC in every file; the day of a ceiling is a day in the plan's `timezone` (`local` or an IANA name; the standard library's `zoneinfo` is enough).
+- Tests use a temporary library and index root, an injected clock, injected free-space readings and an injected model probe. No test starts the real runner against the owner's library, reads the owner's config or plan, or makes a request.
+- **The behaviour fingerprint, exactly.** It is `sha256` of one byte string, built as follows, and a test holds a second, independent implementation of the same recipe and compares the two:
+  1. The first line is `kb-fingerprint-1` and a line feed.
+  2. **The code and the schemas.** Every regular file under `engine/kb/` (recursively; a link or any other kind of entry is an error and not skipped), except the folder `__pycache__` and any file ending `.pyc`, in the order of their repository-relative paths written with `/` and compared as bytes. (That is every module, the card-schema files in `schemas/`, and the shelf schema and the custom shelves in `data/`.) Each file is written as `<decimal length of the path>:<path>:<decimal length of the file>:<the file's bytes>`.
+  3. **The model settings.** Then `config:` and a netstring (`<length>:<text>`) of the canonical JSON (keys sorted, separators `,` and `:`, ASCII only) of the object `{"models_on": <the config's models_on>, "tasks": {task: entry name}, "entries": {entry name: {the fields of that entry that the engine reads: bridge, server, model, max_output, thinking, timeout, kind, dimension, query_prefix, document_prefix}}}`, where `tasks` holds only the tasks `card-notes`, `card`, `card-check`, `card-more`, `place`, `card-embed`, `place-embed` and `crawl-query`, and `entries` holds only the entries those tasks name. Nothing else of the config is in it (the library paths, the approved tools and the rest hold the owner's own settings, and a change there does not matter).
+  The preview prints the first 12 characters of it and the date of the newest modification time among the files of step 2.
+- Method: tests first (see them fail), deliberate breaks of each new module (each compile-checked, the file restored byte for byte, equivalent breaks dropped with the reason), the `reviewer` agent's reading of each increment, the Result recorded before the commit, a commit on the owner's word. **A `security-reviewer` run with experiments on a copy is asked of the owner for Increments B and D** (the approval is a standing grant of action, and the guards are what stop a run), and a second look at any fixes.
+
+## Interfaces the other plans build against
+
+These are contracts; a change needs the owner.
+
+- **`<index root>/crawl.lock`:** held with an exclusive non-blocking `flock` by a run for its whole time. While it holds the lock the runner writes one line to it: the process id, a space, the start time as `YYYY-MM-DDTHH:MM:SSZ`. A reader that wants to know whether a run is going tries a non-blocking shared `flock` and lets go at once; the line says who.
+- **`<index root>/crawl.stop`:** a file; its presence, not its content, stops a run. (`crawl-clear` does not remove it: the owner does.)
+- **`<index root>/crawl/breaker.json`:** always present once a plan has been approved: `{"tripped": <true or false>, "reason": <cleaned text, at most 300 characters, or "">, "kind": <one of consecutive_failures, failure_share, model_down, stage_bound, or "">, "at": <UTC time>, "run": <run id or "">}`. **Missing, unexaminable, unreadable in this form, or `"tripped": true` all mean tripped** (state *paused*).
+- **`<index root>/crawl/approved/`:** `current` (the digest, one line), and `<digest>/` holding, each at mode 0400 and under exactly these names, `plan.txt`, `topics.txt` and `allow.txt` (the approved copies of the three files), `fingerprint` (the full fingerprint as 64 hex characters and a line feed) and `summary.txt` (the text of the preview). The plan's keys are read from `plan.txt` by `crawlplan.read_plan(path)`, which Increment A builds first so that the status plan can use it.
+- **`candidates.sqlite`:** the table and its columns as the spec gives them; this plan adds only rows in `counters(day TEXT, key TEXT, n INTEGER)`: the keys are `fetch` (candidate fetches started that day), `fetch:<registrable domain>` (the same, per site), `card` (books given a card that day), `refusal:<registrable domain>` (answers of 403, 429 or an abuse signal that day). The unit of `filed_total` is a book with a `crawl_found` event, and is not a counter.
+- **The log:** `<index root>/crawl/log/crawl-YYYY-MM-DD.jsonl` (the day is the UTC day of the line), one JSON line per action, one `O_APPEND` write per line, with the fields and the step and outcome names the spec lists. A clear of the breaker is logged as step `breaker`, outcome `ok`, reason `cleared by the owner`. Strings are cleaned of control and bidirectional characters, and no line contains a key or a request header.
+- **Exit codes of `crawl-run`:** 0 done, or the run lock held by another run (nothing is printed and the scheduler sees no error, but **one `refuse` line is logged**, reason `a run is in progress`, as the spec's acceptance criterion 2 says; the spec's "quietly" is read as "without an error"); 3 refused; 4 breaker tripped.
+
+## Completion criteria
+
+1. **The plan file.** A file with every key at its default, a file with the keys of the spec, and the owner's real discovery file (a copy in a fixture) are read; an unknown section or key, a value of the wrong kind or out of range, a key in the wrong section, a duplicated key and a file that is a link, not regular or over 64 KiB are refused with the line number and never the text; `web_search` and `urlhaus_recent` are off in the default; the `threshold` has no default; the same file is read by this reader and by discovery's `read_plan` without a disagreement on a key both read.
+2. **The approval.** Without an argument `crawl-approve` prints a plain summary (the ceilings, the disk floors, the topic count and weights, the sources, the lists, the scan kinds that hold, whether moves by the model's pick are on, the grant in words, each source with unresolved terms that is on, the fingerprint's first 12 characters and the date the code last changed) and a digest; with `--digest HEX` and a terminal it stores the approval and creates the breaker file as not tripped if there is none; without a terminal, or with another digest, it stores nothing. The digest is the first 32 hex characters of the SHA-256 of the exact bytes of the plan, topics and allow files. The approved copies are mode 0400. An agent cannot approve (the command refuses without a terminal).
+3. **The run is bound to what was approved.** `crawl-run` takes no argument that names a plan; it reads `current`, recomputes the digest of the stored copies and the behaviour fingerprint (the recipe above), and refuses if either does not match or is missing. After a change of one byte in any file under `engine/kb/` that the recipe names, or in the model settings it names, it refuses; after a change in the rest of the config it does not; a change to the blacklist needs no approval and a change to the allow file does.
+4. **The checks, in the spec's order** (the run lock, the approved plan and its digest, the stop file, the breaker, the disk floors, the ceilings, the model server): each failure makes no request, changes no candidate row and writes one `refuse` log line and the exit code; a held lock exits 0, prints nothing, and writes its `refuse` line with the reason `a run is in progress`; a missing or unreadable plan, state or free-space reading refuses; a plan whose `threshold` is empty refuses before any fetch; an exhausted ceiling stops new fetches only.
+5. **The stop file** is looked at before every request, model call and move point that the run reaches, which in this plan are the points where a later plan attaches its steps (each is a call of one function, tested).
+6. **The breaker** trips on injected failures (consecutive failures, a failure share over the window, the model server down longer than `model_down_minutes`, a stage that hits a bound), writes `"tripped": true`, and the next run refuses with exit 4. **A site that answers 403, 429 or an abuse signal `domain_refusals` times in a day does not trip the breaker: that site alone is stopped for the rest of the plan's `timezone` day** (its candidates are skipped, other sites go on, and the stop ends with the day), as the spec says; it runs again only after `crawl-clear --yes` **run at a terminal**; a missing, unexaminable or unreadable file reads as tripped; `crawl-clear` without `--yes`, and `crawl-clear --yes` without a terminal (as a scheduler, a script or an agent runs it), change nothing and say why; with both it logs the clear and rewrites the file as not tripped. (The terminal check is the same interlock as `crawl-approve`'s: it keeps an unattended process from clearing the safety stop, and it is not proof that a person typed.)
+7. **The ceilings** are counters reserved in the same transaction that marks a row `fetching`; a failed fetch counts; the day is the plan's `timezone` day (tests at midnight and at a change of clock); a process killed between the reservation and the mark leaves no count lost and none doubled; a `fetching` row older than 30 minutes returns to `queued` as a try, and a row at `retries` tries becomes `failed`.
+8. **The log:** every line has the spec's fields; two processes appending at once leave only whole lines; a string with control or bidirectional characters, a key-like canary or a request header is cleaned or refused; a log that cannot be written stops the run.
+9. **`--dry-run`** shows the checks it would make, their results and the order of the steps, writes no candidate row and no counter, and makes no request; without it, a run that passes the checks logs `run_start`, the point where the steps will attach, and `run_end`, and exits 0.
+10. The new modules' tests and breaks and `wb run code-work check` pass; the existing tests of `crawlqueue`, `discover` and `placeapply` pass unchanged; nothing else in the repository changes but the files named under "Scope".
+11. The owner has read the result.
+
+## Increments
+
+### Increment A — The plan file and its reader, and the breaker line of the spec
+
+**Outcome:** `crawlplan.read_plan(path)` gives every key of the plan with the spec's defaults, strictly; the spec's two lines about the breaker file agree.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/crawlplan.py`, `engine/tests/test_crawlplan.py`, a fixture of the owner's discovery file and one with every key; `docs/specs/population.md` (the "States" line and acceptance criterion 4, to the reading above).
+**Steps:**
+1. Read `docs/specs/population.md` ("The crawl plan") and `engine/kb/discover.py` (`PLAN`, `read_plan`, `normalize_plan`) and write down in the Result which keys discovery reads and that this reader must agree with it on each.
+2. Tests first for: every key and its default, kind and range; the sections `[limits]`, `[pacing]`, `[disk]`, `[breaker]`, `[sources]`, `[lists]`, `[scan]`, `[judge]`, `[moves]`, `[files]`; unknown sections and keys, wrong kinds, out-of-range values, a key in another section, a duplicated key, a line that is neither a section nor a key, a file that is a link or not regular or too large, bytes that are not UTF-8; a refusal names the line and never quotes it; `~` in a path of `[files]` is expanded and a path is not otherwise changed; `timezone` is `local` or a name `zoneinfo` knows; `threshold` has no default and is read as a number when present; a file with only the keys discovery reads is a valid plan; the same file read by `discover.read_plan` gives the same value for every key both read.
+3. Write `crawlplan.py`; correct the spec's "States" bullet to *paused* when the breaker file says tripped or is missing or unreadable, and the wording of criterion 4; deliberate breaks; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlplan engine.tests.test_discover`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-16-build-the-safeguards-of-the-unattended-crawl#A`.
+
+### Increment B — The approval, the digest and the behaviour fingerprint
+
+**Outcome:** `crawl-approve` stores an approval that a run can check, and a run can tell that it is not the approved one.
+**Dependencies:** A.
+**Affected areas:** `engine/kb/crawlapprove.py`, `engine/tests/test_crawlapprove.py`, the `crawl-approve` registration in `engine/kb/__main__.py`.
+**Steps:**
+1. Read `placeapply.py` (`digest_of`, `preview`, `apply`, the terminal check) and `engine/kb/config.py` and `models.py` (`_KEYS`, the tasks) and write down in the Result the exact list of files and fields the fingerprint covers on this library, and what it leaves out.
+2. Tests first (each in a temporary library): the digest is the first 32 hex characters of the SHA-256 of the exact bytes of the plan, topics and allow files in that order with a framing that cannot occur in a file, and any one byte of any of the three changes it; the blacklist and the key file are not in it; **the fingerprint equals the output of a second implementation of the recipe in the test**, changes with one byte of any file under `engine/kb/` (a module, a card schema, the shelf schema, a custom shelf file), with a file added or removed, with the model settings named, and not with another key of the config, with a `.pyc` or a file in `__pycache__`, or with the order in which files are listed by the filesystem; a link or an unreadable file under `engine/kb/` is an error; the preview text names the grant in words (long unattended action, the moves by the model's pick, the ceilings), each source with unresolved terms that is on, the topic count and weights, the sources, the lists, the scan kinds that hold, the fingerprint's first 12 characters and the date; `--digest` without a terminal, with a different digest or with the plan changed since the preview stores nothing; the stored copies are mode 0400 in a folder the runner owns; `current` is written last and atomically; the breaker file is created as not tripped when there is none and left alone when there is one; a link, a folder or a loose mode in `approved/` is refused; `load_approved()` recomputes the digest of the stored copies and the fingerprint and returns the plan only when both match.
+3. Write the module and the command; deliberate breaks; the `reviewer`'s reading; **ask the owner once whether to run a security review** (the approval is a standing grant); the Result.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlapprove engine.tests.test_crawlplan`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#B`.
+
+### Increment C — The log
+
+**Outcome:** `crawllog` writes the crawl's log in the form the spec gives, and the other increments log through it.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/crawllog.py`, `engine/tests/test_crawllog.py`.
+**Steps:**
+1. Tests first: one line per action with `ts`, `run`, `step`, `outcome`, `candidate`, `book`, `host`, `reason`, `n` and `seconds` and only the steps and outcomes of the spec; one `O_APPEND` write per line, and two processes writing at once leave whole lines only (a test with two writers); the file is one a day by the UTC day of the line, created mode 600 in a folder of mode 700; a string is cleaned of control and bidirectional characters and cut; a field that looks like a key or a header is refused; a log that cannot be written raises; a line over 8 KiB is cut and says so; the folder or the file being a link, a folder or a pipe is refused.
+2. Write the module; deliberate breaks; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawllog`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#C`.
+
+### Increment D — The stop file, the breaker, the disk floors, the model probe and the run lock
+
+**Outcome:** the guards that stop a run, each a small function that a run calls and a test can drive.
+**Dependencies:** A, C.
+**Affected areas:** `engine/kb/crawlguard.py`, `engine/tests/test_crawlguard.py`, the `crawl-clear` registration in `engine/kb/__main__.py`.
+**Steps:**
+1. Read `catalog.lock` (how the engine takes its lock) and write down in the Result how this lock differs (its own file, a line written while it is held).
+2. Tests first: the run lock (`crawl.lock`) is taken non-blocking and exclusive, the pid-and-start line is written while it is held, a second taker gets "held" and no line is overwritten, a lock file that is a link, a folder or a pipe is refused, a crash leaves no stale lock (a lock is the kernel's); the stop file's presence, not its content, stops, and a name that is a link, a folder or a pipe still stops; the breaker file is written atomically in the interface's form and read back; **a missing file, a file that cannot be examined, a file that cannot be read in that form, and `"tripped": true` all read as tripped; `"tripped": false` reads as not tripped**; `trip()` records the kind and reason cleaned; the four trip rules (consecutive failures, failure share over the window, the model server down longer than `model_down_minutes`, a stage that hits a bound) are tested with injected events and clock, including the boundary of each; **`site_stopped(refusals, site, plan)` is separate from the breaker: a site whose `refusal:<site>` counter for the day has reached `domain_refusals` is stopped, no other site is, nothing is written to the breaker file, and the stop is gone the next day (tested at the day's edge in a zone with a change of clock)**; the time the model server was first seen down is kept in a small state file of this module (`crawl/guard.json`, mode 600, written atomically, a file that cannot be read means the clock restarts and says so) so that a run that starts fresh does not forget it; `crawl-clear` without `--yes` changes nothing, **`crawl-clear --yes` without a terminal (stdin and stdout not both a terminal) changes nothing and says so (tested with a non-terminal stdin, a pipe, a closed stdin and a redirected stdout)**, and with `--yes` at a terminal it rewrites the file as not tripped and logs step `breaker`, outcome `ok`, reason `cleared by the owner`; the disk floors read free bytes of the bulk drive and the index drive through an injected `statvfs`, refuse when either is at or under its floor, and refuse when a reading fails; the model probe is an injected function (the real one is one call of the existing `embed` on one short text): a failure is a refusal and counts toward `model_down_minutes`.
+3. Write the module and the command; deliberate breaks; the `reviewer`'s reading; **ask the owner once whether to run a security review** (these are the guards); the Result.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlguard engine.tests.test_crawllog engine.tests.test_crawlplan`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#D`.
+
+### Increment E — The ceilings, the counters and the changes of a candidate row
+
+**Outcome:** `crawlstate.py` is the only module that changes a candidate row's state, and a ceiling is a counter that cannot be lost or doubled.
+**Dependencies:** A.
+**Affected areas:** `engine/kb/crawlstate.py`, `engine/tests/test_crawlstate.py`.
+**Steps:**
+1. Read `engine/kb/crawlqueue.py` (`connect`, the table, the counters table, `counts`) and `docs/specs/population.md` ("The queue and the seen list") and write down in the Result the exact statuses and the transitions this module makes: `queued` to `fetching` (a unit of every ceiling reserved in the same transaction, `tries` plus one), `fetching` to `kept`, `rejected`, `failed` or back to `queued`, and `queued` to `blocked`.
+2. Tests first, each against a temporary `candidates.sqlite` made by `crawlqueue.connect`: `reserve(conn, plan, now)` picks the next queued row (order: higher weight first, then oldest, then lower depth; a row at its own site's cap for the day is skipped, not blocked; **a row of a site that `site_stopped` says is stopped for the day is skipped too, and other sites' rows are still taken**), checks `fetches_per_day`, `per_domain_per_day` and the batch, marks it `fetching` and adds one to `fetch` and to `fetch:<site>` in one transaction; a crash at every point inside it (an injected failure before each statement) leaves either all of it or none of it; two connections racing for one row get it once; a failed fetch keeps its count; the day is the plan's timezone day (tests at midnight in a zone with a change of clock, and with the clock set back); `requeue_stale(conn, now)` returns a `fetching` row older than 30 minutes to `queued` as a try (the count of its day stays) and makes a row that has reached `retries` tries `failed` with a reason; `finish(conn, id, status, reason, book_id)` accepts only a row that is `fetching` and only the statuses `kept`, `rejected`, `failed`; `block(conn, id, reason)` only from `queued`; the `card` counter and the `refusal:<site>` counter; `filed_total` read from the books' `crawl_found` events by a function that is passed the books' events (no store read here); a status or a reason that is not text, or a reason over 300 characters or with control characters, is cleaned; **no function deletes a row**, shown by a test of this module's source as `test_crawlqueue` does for the queue's.
+3. Write the module; deliberate breaks; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlstate engine.tests.test_crawlqueue`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#E`.
+
+### Increment F — The skeleton of a run
+
+**Outcome:** `crawl-run` makes the checks in order, logs, exits with the right code, and does nothing else yet; `--dry-run` shows what a run would do.
+**Dependencies:** A, B, C, D, E.
+**Affected areas:** `engine/kb/crawlrun.py`, `engine/tests/test_crawlrun.py`, the `crawl-run` registration in `engine/kb/__main__.py`.
+**Steps:**
+1. Tests first: the order of the spec's checks (lock, approved plan and digest and fingerprint, stop file, breaker, disk floors, ceilings, model server) with a test for each refusal that shows the checks after it were not made, that no request was made, that no row changed and that one `refuse` line and the exit code (3, or 4 for the breaker, or 0 with nothing printed for a held lock, whose `refuse` line says `a run is in progress`) came out; an exhausted ceiling is not a refusal of the run (it limits new fetches); a plan with an empty `threshold` refuses; a run that passes everything logs `run_start`, the stop-file check at the point a step will attach, `run_end` and exits 0; the stop file created between two attach points ends the run at the next; a log that cannot be written ends it; `--dry-run` takes no lock, writes no row, counter or log line, prints each check and what it would do next, and the real run's exit code in words; `crawl-run` takes no argument but `--dry-run`; a run on a temporary library with an approved fixture plan is the contract test of the interface (a second test reads the files the run leaves in the forms under "Interfaces").
+2. Write the module and the command; deliberate breaks; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlrun engine.tests.test_crawlguard engine.tests.test_crawlstate engine.tests.test_crawlapprove engine.tests.test_crawllog engine.tests.test_crawlplan`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#F`.
+
+## Verification for the plan as a whole
+
+Each increment's recorded verification stands unless a later one changed its inputs. At the end: the tests of every new module and the existing tests of `crawlqueue`, `discover`, `placeapply` and `catalog` are rerun together; a read-only check shows that no file outside "Scope" changed; `wb run code-work check` is run; **the engine's whole test suite is run once**, because `__main__.py` changes and the fingerprint reads the bytes of every file under `engine/kb/`, and its result is recorded (the known skips are tests that need a service this machine does not run). A `crawl-run --dry-run` against a **temporary** library is shown to the owner; against the owner's real library it is the owner's act.
+
+## Risks and sensitive actions
+
+- **A standing approval of action over a long unattended period.** The preview must say so in words, the approval is bound to the plan's bytes and the code's bytes, and the interlock is a terminal check and not proof that a person typed it (as `shelf.md` says). A defect in the digest or the fingerprint is a defect in what the owner agreed to; the approval's tests and a security review are asked for.
+- **Guards that fail open.** Every guard reads a missing or unreadable state as a refusal, the breaker file included (the owner's choice above). Each such case has its own test.
+- **The fingerprint stops every run after any change under `engine/kb/`**, including a harmless one; the owner approves again. That is the design, and the preview says it.
+- **Two writers.** The run lock stops two runs; the owner running a writing command during a run can still lose a write (`placeapply.py` says so); the spec says the owner does not.
+- **A spec edit.** The two lines of `docs/specs/population.md` that this plan changes are the owner's decision of 2026-11-16 and nothing else in the spec changes.
+
+## Review record
+
+Plan review: three rounds of the review engine (`ask-codex`; the bound of 3 is used), 2026-11-16, seven findings, none left pending. The files of the review are in `.workbench/workbench/review-engine/plan-2c0241c9205776f0/`.
+
+- **Round 1 (four findings).** **Applied:** the breaker contradiction of the spec was left open (R1-F2: the owner chose that a missing, unreadable or tripped file means tripped, and the plan and, in Increment A, the spec's "States" line follow); the behaviour fingerprint's inputs were not exact (R1-F3: the plan now gives the recipe, with a second implementation held by a test); the guards needed the log and the counters before they were built (R1-F4: the log is its own increment ahead of the guards, the guards keep their own small state file, and a clear of the breaker is logged as step `breaker` with outcome `ok`). **Rejected:** that the plan needs a roadmap candidate (R1-F1): the owner decided on 2026-11-16 that a plan with no candidate stands and that adding a candidate is the owner's own change of direction.
+- **Round 2 (two findings), both applied:** a held run lock now exits 0 with nothing printed and writes one `refuse` line, reading the spec's "quietly" as "without an error" (R2-F1); `crawl-clear --yes` needs a terminal, as the approval does (R2-F2).
+- **Round 3 (one finding), applied:** a site that refuses `domain_refusals` times is stopped for the rest of its day alone, as the spec says, and no longer trips the global breaker (R3-F1; the plan had it wrong).
+- **Left for the owner:** the third round's fix was not shown to a fourth round, because the bound is 3; an extension needs the owner's word. The plan's wording of that one rule is short and follows the spec's sentence.
+
+## Deferred work
+
+- Plan R2: the steps of a run (capture, scan, hold, convert, index, judge, card, proposal, move), the list refresh and the discovery refill as calls of a run, the launchd file, and the supervised run.
+- The limits on the sandboxed tools (memory, PDF size, processes, decompression), which must be done before the runner takes a PDF.
+- `crawl-status` and `crawl-report`, and the judgement module (other plans).
+
+## Result
+
+Empty until work starts.

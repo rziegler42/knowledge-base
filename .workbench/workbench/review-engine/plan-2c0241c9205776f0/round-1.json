@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Candidate line; Scope and Increments",
+      "problem": "The plan declares no roadmap candidate despite covering five high-risk implementation increments for an unattended crawler. Project policy permits bypassing roadmap direction only for work too small to need it; this plan is plainly not that exception.",
+      "severity": "blocker",
+      "suggestion": "Have the owner direct the appropriate roadmap change, add the resulting candidate, and cite it on the Candidate line before seeking plan approval."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Assumptions and constraints — “A contradiction in the spec, and the reading this plan builds”; Completion criteria 6",
+      "problem": "The plan intentionally implements the opposite of the governing spec's explicit rule: the spec says a missing breaker file is tripped, while the plan makes a missing file mean untripped. Recording that the owner is to be asked does not resolve the drift before implementation.",
+      "severity": "blocker",
+      "suggestion": "Obtain and record the owner's direction to amend the spec first, then update the plan to the amended contract; otherwise implement the current spec behavior."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Assumptions and constraints / Interfaces / Increment B — behaviour fingerprint",
+      "problem": "The fingerprint is security-critical but its input set and serialization are not reproducibly specified. “Every module,” “the schemas folder,” and “the schema file” do not identify exact paths, recursion rules, ordering, or unambiguous filename/byte framing. Separate implementations could approve and validate different behavior under the same stated contract.",
+      "severity": "major",
+      "suggestion": "Specify the exact repository-relative files (including the shelf schema), sorted traversal rule, and a length-prefixed or otherwise unambiguous manifest encoding that is hashed; test that exact algorithm."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Increment C, step 2; Increment D dependencies; Increment E dependencies",
+      "problem": "Increment C requires `crawl-clear --yes` to log its action and requires persistent per-day domain-refusal/model-down state, but the log writer is not introduced until E and the counters/state implementation is not introduced until D. C depends only on A, so its stated tests and outcome cannot be completed within its owned files and dependencies. The spec's log vocabulary also has no `clear` step, while the plan requires one to be logged.",
+      "severity": "major",
+      "suggestion": "Reorder or split the increments so logging and persistent counter/state support exist before C, and define the spec-conforming step/outcome used for a clear action."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has unresolved governance and specification drift, plus two implementation contracts that are not yet executable as sequenced.",
+  "verdict": "changes_needed"
+}

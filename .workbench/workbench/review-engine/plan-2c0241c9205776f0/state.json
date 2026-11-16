@@ -1,0 +1,168 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-16T21:27:48Z",
+      "choice": "rejected",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The owner decided on 2026-11-16 that a plan with no roadmap candidate stands and that adding a candidate is the owner own change of direction; the same finding was rejected on the same ground for the plan that hardens the fetch."
+    },
+    {
+      "at": "2026-11-16T21:27:48Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Correct: the plan built a reading the spec did not state. The owner has now chosen that a missing, unreadable or tripped breaker file means tripped; the plan builds exactly that and corrects the one spec line that said otherwise, in its first increment."
+    },
+    {
+      "at": "2026-11-16T21:27:48Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F3",
+      "reason": "Correct: the fingerprint left its inputs open. The plan now gives the exact recipe: every regular file under engine/kb in byte order of path with length framing, then the named model settings as canonical text, a test holds a second implementation of the recipe, and links are an error."
+    },
+    {
+      "at": "2026-11-16T21:27:49Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F4",
+      "reason": "Correct: the guards needed the log and the counters before they existed. The log is now its own increment before the guards, the guards keep their own small state file for the model-down clock, the counters stay with the state module, and a clear of the breaker is logged as step breaker with outcome ok."
+    },
+    {
+      "at": "2026-11-16T21:29:36Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "Correct: the spec says both quietly and one refuse line for a held lock. The plan now reads quietly as without an error: exit 0, nothing printed, one refuse line with the reason a run is in progress, tested."
+    },
+    {
+      "at": "2026-11-16T21:29:37Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F2",
+      "reason": "Correct: anything that can run a command could clear the breaker. Clearing now needs the flag and a terminal, the same interlock as the approval, with tests for a pipe, a closed stdin and a redirected output."
+    },
+    {
+      "at": "2026-11-16T21:30:26Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R3-F1",
+      "reason": "Correct: the spec stops only the refusing site for the rest of its day, and the plan had made it a global pause. Site refusals are now their own rule, separate from the breaker file, with tests that other sites go on and that the stop ends with the day."
+    }
+  ],
+  "format": 1,
+  "generation": 11,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-16-build-the-safeguards-of-the-unattended-crawl.md",
+  "rounds": [
+    {
+      "at": "2026-11-16T21:25:19Z",
+      "bridge": "ask-codex",
+      "document_sha256": "bfc0976c83f09bbcf82bddf5714dc42ef65d32b9a780721772cee0d71b5d81b6",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "blocker"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "blocker"
+        },
+        {
+          "id": "R1-F3",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F4",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "88b2bd225b2ebc14d5a7ea6f7509c47d573cc5991aad2c14b3b3165ecf7445f4",
+      "usage": {
+        "input_tokens": 325661,
+        "output_tokens": 3480,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-16T21:29:12Z",
+      "bridge": "ask-codex",
+      "document_sha256": "c679f58d370f0f8afa2108ddf6da0ddb74c68975211ae239bd1e33c66fb7ef17",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "8aa0f40b97e0cb582f862be70b10d8ed44c1525f6e5bc6f59e007e1f89d71e32",
+      "usage": {
+        "input_tokens": 335981,
+        "output_tokens": 2727,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-16T21:30:03Z",
+      "bridge": "ask-codex",
+      "document_sha256": "4b28ec50f0e40588bde4418678449ca630fa013e6b8685b46f6acc1f6820f14e",
+      "file": "round-3.json",
+      "findings": [
+        {
+          "id": "R3-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 3,
+      "profile": "second-opinion",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "283e2587a02490c0d89029befd6534e85c5cb0bcb87b20546182283706caec2a",
+      "usage": {
+        "input_tokens": 178089,
+        "output_tokens": 415,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "7bf9f91db63c1415dede67981e71a055ddffe3241e69ef1aa0f9ef3f9815f5e2",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
