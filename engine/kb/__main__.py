@@ -10,7 +10,7 @@ from . import cardmarks, cardqueue
 from . import placeapply, placement, placereview, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import discover
-from . import crawlapprove, crawlguard
+from . import crawlapprove, crawlguard, crawlrun
 from . import problem
 from . import problemtrial
 from . import vectors
@@ -206,6 +206,8 @@ def main(argv=None):
     ca.add_argument("--digest", metavar="DIGEST", help="the digest on the last line of the summary you read; it stores the approval and needs a terminal")
     cc = sub.add_parser("crawl-clear", help="clear the circuit breaker of the unattended crawl; it changes nothing without --yes and without a terminal, and it does not remove the stop file")
     cc.add_argument("--yes", action="store_true", help="clear it (in your own terminal)")
+    cr = sub.add_parser("crawl-run", help="one run of the unattended crawl: the checks in the spec's order, then the steps that attach (none yet); exit 0 done or another run is going, 3 refused, 4 the breaker is tripped")
+    cr.add_argument("--dry-run", action="store_true", help="show each check and what a run would do; it takes no lock, writes nothing and makes no request")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -426,6 +428,8 @@ def main(argv=None):
             out = crawlapprove.approve(cfg["index_root"], cfg, plan_path, digest=args.digest)
             print(out[0] if args.digest is None else json.dumps(out))
             return 0
+        if args.command == "crawl-run":
+            return crawlrun.run(config.load(), dry_run=args.dry_run)
         if args.command == "crawl-clear":
             crawlguard.clear(config.load()["index_root"], yes=args.yes)
             print("the circuit breaker is cleared; the stop file and any site stopped for the day are as they were")
