@@ -1,8 +1,8 @@
 """The refill of the candidate queue of the unattended crawl, and the command that shows what a refill would do
 (`docs/specs/population.md`, "Discovery" and "The queue and the seen list").
 
-`fill` is the one function the runner calls to refill the queue. It asks the sources the plan switches on (OpenAlex, arXiv and Wikipedia;
-the web search engine is added by Increment F) for candidates, by the owner's topics and by the citation links of the works already kept,
+`fill` is the one function the runner calls to refill the queue. It asks the sources the plan switches on (OpenAlex, arXiv, Wikipedia and,
+only if the owner's plan switches it on, a web search engine) for candidates, by the owner's topics and by the citation links of the works already kept,
 and puts what they return in the queue through `crawlqueue`: within the plan's caps, in the shares the plan gives, at the pace of each
 source. It holds no state of its own beyond what it writes in the queue's `counters` table:
 
@@ -21,7 +21,7 @@ import re
 import time
 from collections.abc import MutableMapping
 
-from . import KbError, config, crawlqueries, crawlqueue, crawltopics, models, srcarxiv, srcopenalex, srcwikipedia, textutil
+from . import KbError, config, crawlqueries, crawlqueue, crawltopics, models, srcarxiv, srcopenalex, srcwebsearch, srcwikipedia, textutil
 
 SOURCES = ("openalex", "arxiv", "wikipedia", "web_search")  # the order in which a pick asks them
 PAGE = 10  # works asked for in one request
@@ -244,7 +244,7 @@ def fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cac
         raise _refuse("the cache is a dictionary that can be written")
     if arxiv_pacer is not None and not callable(getattr(arxiv_pacer, "wait", None)):
         raise _refuse("the pacer of arXiv has a wait")
-    registry = {"openalex": srcopenalex, "arxiv": srcarxiv, "wikipedia": srcwikipedia}
+    registry = {"openalex": srcopenalex, "arxiv": srcarxiv, "wikipedia": srcwikipedia, "web_search": srcwebsearch}
     if sources is not None:
         if not isinstance(sources, dict) or not set(sources) <= set(SOURCES):
             raise _refuse("sources is a dictionary of source names to the objects that ask them")
@@ -269,8 +269,6 @@ def fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cac
     for name in SOURCES:
         if plan[name] and name in off:
             note("discover", "skipped", source=name, reason="the source is off for the day")
-        elif plan[name] and name not in registry:
-            note("discover", "skipped", source=name, reason=f"{name} is not built")
     gaps = {name: _Gap(plan[f"gap_{name}_s"], clock, sleep) for name in ("openalex", "wikipedia", "web_search")}
     paced = {name: _paced(get, gap) for name, gap in gaps.items()}
     state = {"topic": 0, "pacer": arxiv_pacer}
@@ -442,11 +440,10 @@ def check(plan_path, topics_path, *, now=None, load_config=config.load):
             uses[index] = uses.get(index, 0) + 1
     shown = {}
     for name in SOURCES:
-        built = name != "web_search"
-        asked = len(order) if plan[name] and built else 0
+        asked = len(order) if plan[name] else 0
         if name == "web_search":
-            asked = min(asked, plan["web_search_per_day"])
-        shown[name] = {"on": plan[name], "built": built, "requests": asked, "gap_s": plan[f"gap_{name}_s"],
+            asked = min(asked, plan["web_search_per_day"])  # a day's queries to a search engine are at most the plan's number
+        shown[name] = {"on": plan[name], "requests": asked, "gap_s": plan[f"gap_{name}_s"],
                        "queries": queries[:asked] if queries is not None and asked else ([] if queries is not None else None)}
     works = max(1, wander_part // plan["wander_per_work"]) if wander_part and plan["openalex"] else 0
     return {"check": True, "day": day.isoformat(), "plan": plan, "topics": len(topics), "picks": len(order), "model": model, "sources": shown,

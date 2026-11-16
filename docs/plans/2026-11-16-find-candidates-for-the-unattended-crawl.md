@@ -262,6 +262,23 @@ Recorded, not changed:
 
 Left for the owner: nothing from the review. A security review of this increment was not asked for: the plan asks once, at Increment C, which the owner has answered; the command reads three files that the caller names (read as the topics file is, which refuses a link, a pipe and a large file) and sends nothing, and every row from a source goes through the checks of `crawlqueue`.
 
+**Increment F.** Reviewer: the project's `reviewer` agent (read-only; it ran nothing), **one round, one exchange**. Recommendation: no blocking findings; five findings.
+
+Applied:
+
+- **A link inside an advertisement was kept out only because of where it pointed** (the engine's own `y.js`): a direct link to an advertiser would have become a candidate. Now a link inside a container with a class that starts `result--ad` is not taken, whatever it links to; a page of nothing but advertisements is still a page of results, with none to take; an advertisement inside an advertisement, and a link after an inner block of one has closed, are still inside it. (Fail-closed: an advertisement that is never closed costs the results after it and not a wrong one.)
+- A link inside a `noscript` or a `template` is not taken (Python's parser reads them as markup; it reads a script, a style, a title and a text area as text), also when one is nested in another.
+- A redirect that has no host (`/l/?uddg=...`) is read as the engine's redirect too, and any other link with no host is not a link; before, a change in that form would have silently stopped the source without turning it off.
+- The test of garbage input claimed more than it checked: it now asserts that the page is refused or that every address it gives is a web address that is literally in the input.
+
+Recorded, not changed:
+
+- **The plan's step 2 asks for `search(query, get, limit, now)`, a strict parser and canonical addresses.** There is no `now` (as in the other sources: nothing needs a time, and the gap is `discover.fill`'s); the parser is the standard library's lenient `HTMLParser`, and the strictness is in what must be there (a page of results or of no results, and no challenge), in the size, the tags, the content type and the UTF-8; the addresses are not made canonical here, since `crawlqueue` does that through `canon_address`.
+- **The markup is not documented and the fixtures are made by hand**; the module could refuse every real page, or take one that is not a page of results. Both fail in the safe direction (the source is off for the day), and the first supervised run is what shows.
+- The owner's topics, or the queries a model makes from them, go to a search engine whose terms are unresolved (see the Result): the source is off unless the plan switches it on, at most `web_search_per_day` a day, `gap_web_search_s` apart.
+
+Left for the owner: whether to switch web search on, which is a decision about terms that the spec leaves to the owner. A security review was not asked for: the page is parsed by the standard library after size, tag and encoding checks, nothing in it but an address is used, and the plan's one question was answered at Increment C.
+
 ## Deferred work
 
 - Following HTML links from fetched pages to other sites, and Wikipedia's own links (`population.md`, "designed, built later").
@@ -455,3 +472,52 @@ Left for the owner: nothing from the review. A security review of this increment
 **For the plans that follow:** the runner gives `fill` the shared client as `get`, `webaddr`'s two functions, `is_blocked` (the blacklist and the public lists), one `arxiv_pacer` shared with `capture-arxiv` (the to-do item), a `cache` file kept in the index root with mode 600, and a `log` that writes the lines of the spec's log; it reads the counters that discovery writes (see the record); Increment F registers `web_search` in `sources` and builds it, after which `crawl-discover --check` says `built`.
 
 **Open:** the to-do items already named, and the new one for the counters of discovery in the spec.
+
+### Increment F — The web search adapter (not yet committed)
+
+**Documentation read first (step 1), retrieved 2026-11-16 by plain GET requests with a generic agent and kept apart as data. No search was made and no page of results was fetched:**
+
+| address | sha256 |
+|---|---|
+| `https://duckduckgo.com/terms` | `507618af2716dc15e803267fc3bc12e0fae38b279a721cc049ef44cb8c6c1aee` |
+| `https://duckduckgo.com/acceptable-use` | `9547e97765fd20f9c975e0430f7b6852c63491cb1bcd19768972b16874960b75` |
+| `https://duckduckgo.com/robots.txt` | `02fc159e8e3fefe13845427b27022341b6dc9e62a96e5605f59c2c0d03ee0baf` |
+| `https://html.duckduckgo.com/robots.txt` | `10b7e57b7b9c00d68f28721ada0912cc9b828877a60302dcb5423775ea57814d` |
+| `https://html.duckduckgo.com/html/` (the form page) | `a1fd45de41e25b69513653ccb2c1f1095c8cc5b2503927417edd6ea5f80c9a46` |
+
+- **The terms of service** bind the user to the Acceptable Use Policy and say nothing else about automated use. **The Acceptable Use Policy** has no clause for or against automated queries; it forbids interfering with or disrupting the integrity or performance of the services, selling or reselling any portion of them, and framing or displaying any portion of them within another service, and says the list "is not exhaustive" and that access may be ended "in violation of the spirit" of it. There is no search API that gives results, and the markup of the page is documented nowhere.
+- **The two `robots.txt` files disagree.** `duckduckgo.com/robots.txt` says `Disallow: /html` and `Disallow: /lite` for every agent; `html.duckduckgo.com/robots.txt`, the host that the module asks, says `Allow: /`. The project does not read `robots.txt` (the spec records that as not built), and the module does not either.
+- **These terms are unresolved, as the spec says, and weighing them is the owner's** (a judgement of terms of service is a non-goal of the spec). What the module does about it: it is off unless the plan switches it on (`web_search = off` is the default), it asks at most `web_search_per_day` times a day (20) and `gap_web_search_s` apart (30 seconds), it sends only plain words of the query, an honest generic agent and no cookie or referrer, and **a refusal of any kind turns it off for the rest of the day and is never retried or worked round.**
+
+**Done.** On the branch `crawl-discovery` from `c579ea7`:
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/srcwebsearch.py` (new) | 203 | `8d27e1d4be9d0b5323cc3d122067f8eb4ec3d393cc7780cf3052527b2498f72f` |
+| `engine/tests/test_srcwebsearch.py` (new) | 392 | `f372c9fceb9ba17a1270367cfac32c597bbbd4ea620fcc92b36f24d5bcd74bc6` |
+| `engine/tests/fixtures/crawl/ddg_results.html` | | `355e3c99527f01223ed2321d199cbaf6b74a2ed92ef8a4fc0372f5391dda7e99` |
+| `engine/tests/fixtures/crawl/ddg_no_results.html` | | `049aacf4e531d1efa370ac0a4ac71ab935ccbc5e998f6c2389a82b4283d228ed` |
+| `engine/tests/fixtures/crawl/ddg_challenge.html` | | `38e459899fc22f4e4cd53fad73680fd4784eecf8365e3c0c72949a0891a15be0` |
+| `engine/tests/fixtures/crawl/ddg_changed.html` | | `c6a642a3e331f718f20651910703302f54889be0e24bd674f82577faad874f2d` |
+| `engine/kb/discover.py` (changed since Increment E: the module is in the default sources, the "not built" log and the `built` key of `--check` are gone) | 453 | `3b2187c2e0849a5e5d68b5cbf24f39271f7038398f6e620db0db92b3ccd9e52a` |
+| `engine/tests/test_discover.py` (changed since Increment E) | | `bf7b497c14286986d12c05d15cc82f18248418182319ffaa38b7b5a12daf5032` |
+
+The hashes of `discover.py` and `test_discover.py` that the Result of Increment E cites are those of its commit `c579ea7`; the two files are the ones above now.
+
+- `srcwebsearch.search(query, get, limit)` makes one request, `GET https://html.duckduckgo.com/html/?q=<the words of the query>` (letters and digits only, at most 12, so that a bang such as `!g`, an operator such as `site:`, or a quotation cannot reach the engine), and returns `{"candidates": [...], "rejected": []}`: up to `limit` (1 to 30) pages that the first page of results links to, in its order, each a row for `crawlqueue.enqueue` with `source` `web-search`.
+- What is read of the page is the `href` of each anchor with the class `result__a`; a link in an advertisement (a container with a class that starts `result--ad`), in a `noscript` or a `template`, in a script or a style, or in a comment is not taken; the engine's redirect `/l/?uddg=<address>` (with its host or without one) is read once, and any other link is taken as it stands; an address is kept only if it is a plain public web address (`srcopenalex`'s check) that is not an address of the engine (`duckduckgo.com`, `duck.com`, `duck.co` and what is under them), once each.
+- Refused (`SourceRefused`, named `DuckDuckGo: ...`, a fixed reason and none of the page's words): a status other than 200 (the challenge page comes with 202), a page with the challenge's markup, a page that is neither a page of results nor of no results (so a changed page turns the source off), a content type that is not HTML, over 1,000,000 bytes or 50,000 tags, not UTF-8 or with a NUL, a request that the client refused.
+- `discover.fill` has `srcwebsearch` among its sources, asked last in a pick and only when the plan switches it on (a day's number and gap as before); `crawl-discover --check` shows how many requests of a day it would make.
+
+**Verification as run (Linux, Python 3.14.4):**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_srcwebsearch engine.tests.test_discover`: 183 tests, OK (`test_srcwebsearch`: 48), repeated; with the tests of the other new modules and `test_models`: 479 more, OK; the files hold no control, invisible or direction character (checked).
+- Deliberate breaks, each compile-checked, each file restored byte for byte and its hash compared, the bytecode cache removed before each: `srcwebsearch.py` **116 of 124 killed**, the lines of `discover.py` that register it 5 of 5. The 8 survivors are equivalent: an empty or value-less `href` (refused later by the address check); the case of a host name (`urlsplit` makes it lower case); a redirect with no `uddg` taken as the link (the address check refuses it); `safe` marks in the quoted query (the query is letters and digits, and `quote` encodes the others whatever `safe` says); the parse faults `AssertionError` and `RecursionError` that Python 3.14's parser does not raise on any input tried (kept for older Pythons); `close()` of the parser (it only flushes); a link with no host and no scheme and another path (it fails the `/l/` test either way); and the attributes that have no value.
+- `wb run code-work check`: checked 51 plans, no problems.
+- Review: one round (see the record).
+
+**Not run:** any real request: no web client exists, and every test uses a fake `get`; **the four fixtures are made by hand from what is known of the page, no results page was fetched, and nothing shows that a live page has the markup that the module reads** (the class `result__a`, the redirect `/l/?uddg=`, `result--ad`, `no-results`, the challenge's `anomaly-modal` and `challenge-form`, and a status 202 for the challenge): if it has not, the module refuses every page and the source is off for the day, which is the safe way to fail; the first supervised run shows; anything on macOS.
+
+**For the plans that follow:** the runner (and `crawl-approve`) must name web search in its preview as a source whose terms are for the owner to have read, and keep it off in the shipped plan; the shared web client must refuse a redirect that the engine sends and must not send a cookie or a referrer.
+
+**Open:** the to-do items already named.

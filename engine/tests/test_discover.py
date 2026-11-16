@@ -799,9 +799,10 @@ class RefusalTest(Case):
         self.fill({"discover_target": 5, "wander_share": 0.0, "queue_low": 10**5, "arxiv": False})
         self.assertNotIn("arxiv", [f.get("source") for f in self.log.of("discover", "skipped")])
 
-    def test_the_log_of_a_source_not_built_names_it_and_says_nothing_of_a_source_switched_off(self):
-        self.fill({"discover_target": 5, "wander_share": 0.0, "web_search": True})
-        self.assertEqual([(f["source"], f["reason"]) for f in self.log.of("discover", "skipped")], [("web_search", "web_search is not built")])
+    def test_a_source_that_the_plan_leaves_off_says_nothing_and_the_web_search_engine_is_left_off_by_default(self):
+        self.fill({"discover_target": 5, "wander_share": 0.0}, sources=self.sources())
+        self.assertEqual(self.log.of("discover", "skipped"), [])
+        self.assertNotIn("web_search", [f.get("source") for _, _, f in self.log.lines])
 
     def test_it_stays_off_in_a_later_refill_of_the_same_day_and_is_asked_again_the_next_day(self):
         self.fill({"discover_target": 5, "wander_share": 0.0, "queue_low": 10**5}, sources=self.sources(arxiv=Source("arxiv", refuse="status 429")))
@@ -1200,10 +1201,55 @@ class WebSearchTest(Case):
         self.fill({"discover_target": 20, "wander_share": 0.0}, sources=dict(self.sources(), web_search=web))
         self.assertEqual(web.searches, [])
 
-    def test_web_search_on_with_no_module_is_said_in_the_log_and_the_rest_goes_on(self):
-        got = self.fill({"discover_target": 20, "wander_share": 0.0, "web_search": True})
+    def engine_page(self, name="ddg_results.html", status=200, urls=None):
+        def get(url, headers=None, timeout=None):
+            if urls is not None:
+                urls.append(url)
+            return status, {"content-type": "text/html; charset=utf-8"}, (FIXTURES / name).read_bytes()
+
+        return get
+
+    def test_the_real_module_is_the_default_and_its_pages_are_queued_as_web_search_rows(self):
+        urls = []
+        got = self.fill({"discover_target": 20, "wander_share": 0.0, "web_search": True, "openalex": False, "arxiv": False, "wikipedia": False},
+                        sources={}, get=self.engine_page(urls=urls))
+        self.assertTrue(urls and all(u.startswith("https://html.duckduckgo.com/html/?q=") for u in urls))
+        rows = self.rows()
+        self.assertEqual({r[1] for r in rows}, {"web-search"})
+        self.assertIn("https://example.org/control/theory", [r[0] for r in rows])
         self.assertGreater(got["added"], 0)
-        self.assertEqual(self.log.of("discover", "skipped")[0]["reason"], "web_search is not built")
+        self.assertEqual(self.counters()[("2026-11-16", "web_search_queries")], len(urls))
+
+    def test_a_page_that_asks_for_a_challenge_turns_the_engine_off_for_the_day_and_is_not_asked_again(self):
+        urls = []
+        plan = {"discover_target": 20, "wander_share": 0.0, "web_search": True, "openalex": False, "arxiv": False, "wikipedia": False, "queue_low": 10**5}
+        got = self.fill(plan, sources={}, get=self.engine_page("ddg_challenge.html", urls=urls))
+        self.assertEqual(len(urls), 1)
+        self.assertEqual(list(got["refused"]), ["web_search"])
+        self.assertEqual(self.counters()[("2026-11-16", "source_off:web_search")], 1)
+        self.fill(plan, sources={}, get=self.engine_page("ddg_results.html", urls=urls))
+        self.assertEqual(len(urls), 1)  # off for the rest of the day
+        self.fill(plan, sources={}, get=self.engine_page("ddg_results.html", urls=urls), now=LATER)
+        self.assertGreater(len(urls), 1)  # asked again the next day
+
+    def test_with_the_plan_leaving_web_search_off_the_engine_is_never_asked(self):
+        urls = []
+        self.fill({"discover_target": 20, "wander_share": 0.0}, sources={"openalex": Source("openalex"), "arxiv": Source("arxiv"), "wikipedia": Source("wikipedia")},
+                  get=self.engine_page(urls=urls))
+        self.assertEqual(urls, [])
+
+    def test_the_engine_is_asked_last_after_the_other_sources_of_a_pick(self):
+        order = []
+
+        class Ordered(Source):
+            def search(self, query, get, limit, *more):
+                order.append(self.name)
+                return super().search(query, get, limit, *more)
+
+        sources = {n: Ordered(n, rows_for(n, 1)) for n in ("openalex", "arxiv", "wikipedia", "web_search")}
+        sources["web_search"].rows = rows_for("web", 1)
+        self.fill({"discover_target": 4, "wander_share": 0.0, "queries_per_topic": 1, "web_search": True}, sources=sources)
+        self.assertEqual(order[:4], ["openalex", "arxiv", "wikipedia", "web_search"])
 
     def test_a_per_day_number_of_nothing_asks_nothing(self):
         web = Source("web_search", rows_for("web"))
@@ -1444,13 +1490,20 @@ class CommandTest(unittest.TestCase):
         self.put_config(models_on=True, models={"local": {"bridge": "ask-ollama", "server": "srv", "model": "m1:latest"}}, tasks={"crawl-query": "local"})
         self.assertEqual(json.loads(self.run_command(self.plan, self.topics, "--check")[1])["model"]["calls"], 1)
 
-    def test_check_says_web_search_is_not_built_whatever_the_plan_says_and_gives_each_gap(self):
+    def test_check_says_the_search_engine_is_off_unless_the_plan_switches_it_on_and_then_asks_it_up_to_its_daily_number(self):
+        off = json.loads(self.run_command(self.plan, self.topics, "--check")[1])["sources"]
+        self.assertEqual((off["web_search"]["on"], off["web_search"]["requests"], off["web_search"]["queries"]), (False, 0, []))
         with open(self.plan, "w", encoding="utf-8") as f:
-            f.write("[sources]\nweb_search = duckduckgo\n")
+            f.write("[sources]\nweb_search = duckduckgo\nweb_search_per_day = 2\n")
         got = json.loads(self.run_command(self.plan, self.topics, "--check")[1])["sources"]
-        self.assertEqual((got["web_search"]["on"], got["web_search"]["built"], got["web_search"]["requests"]), (True, False, 0))
+        self.assertEqual((got["web_search"]["on"], got["web_search"]["requests"]), (True, 2))
+        self.assertEqual(got["web_search"]["queries"], got["openalex"]["queries"][:2])
+        self.assertGreater(got["openalex"]["requests"], 2)
+        self.assertNotIn("built", got["web_search"])
+
+    def test_check_gives_each_sources_gap_from_the_plan_or_the_default(self):
+        got = json.loads(self.run_command(self.plan, self.topics, "--check")[1])["sources"]
         self.assertEqual({n: v["gap_s"] for n, v in got.items()}, {"openalex": 1, "arxiv": 3, "wikipedia": 1, "web_search": 30})
-        self.assertEqual({n: v["built"] for n, v in got.items()}, {"openalex": True, "arxiv": True, "wikipedia": True, "web_search": False})
 
     def test_check_gives_the_wander_figures_of_the_plan(self):
         cases = (("[limits]\ndiscover_target = 40\n[sources]\nwander_share = 0.25\n", (True, 10, 2)),
