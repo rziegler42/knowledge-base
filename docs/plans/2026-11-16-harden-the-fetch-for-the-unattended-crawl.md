@@ -1,6 +1,6 @@
 # Harden the fetch and keep known-bad sites out of the unattended crawl
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-16
 Candidate: none (no roadmap holds a candidate for it: the crawl is specified in `docs/specs/population.md`, which the owner approved as the design to build; adding a roadmap candidate is the owner's change of direction and is not asked for here)
 Specs: docs/specs/population.md, docs/specs/shelf.md
@@ -155,4 +155,10 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — Canonical addresses, hosts and sites (verified, not committed)
+
+- Built `engine/kb/webaddr.py` and `engine/tests/test_webaddr.py` (56 tests). `python3 -W error::ResourceWarning -m unittest engine.tests.test_webaddr`: Ran 56 tests, OK. The tests were written first and failed before the module existed.
+- Deviation from the spec text, corrected in `docs/specs/population.md`: hosts convert by the standard library's IDNA 2003, not UTS 46 (which needs a package this project does not install); the four characters on which they differ are refused. A space, control or bidirectional character is refused, not stripped. The module docstring says so.
+- Deliberate breaks: 77 single-line breaks of the module; every one caught except 16 equivalent ones, each a guard that another check repeats (DEL against the Unicode category, label length against the label pattern, bracket and credential checks that `urlsplit` and `canon_host` also make, the port range against the default-port test, the file-size check against the read loop, and so on). A second run covered the code added for the review: 12 caught, 2 equivalent (the size total in the read loop, the read chunk size). The file was restored byte for byte each time.
+- Review (`reviewer` agent, one exchange): no blocking finding. Applied: an escaped tracking name and escaped unreserved characters are now decoded before the comparison (a dot, a slash and an equals sign keep their escapes); a literal `xn--` label must decode to a name in canonical form; an unbracketed IPv6 host is refused; `load_suffixes` raises only `AddressError` and reads in a loop; the length is checked before the text is examined. Not applied, with reasons: an arXiv address with a trailing slash or an escaped slash stays a page (a duplicate costs one more fetch, and the capture function reads only the forms arXiv itself uses); the IPv4-mapped IPv6 address `::ffff:127.0.0.1` stays its own key here, and its private-address check belongs to Increment B (carried there).
+- Not run: the rest of the engine's tests (the module is new and imported by nothing).
