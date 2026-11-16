@@ -222,6 +222,22 @@ Not applied, noted:
 
 Left for the owner: whether to run a security review of this increment (the plan asks once, since it parses untrusted network data): see the report. Requirements that this module leaves to the shared web client, for the plan that builds it: stop the read at a limit (the size here is checked after the body has come); check the address that a name leads to as the connection is made; and canonical forms of `localhost` and of a host written as a number.
 
+**Increment D.** Reviewer: the project's `reviewer` agent (read-only; it ran nothing), **one round, one exchange**. Recommendation: no blocking findings; five findings.
+
+Applied:
+
+- A Wikipedia title with a `.` or `..` part between slashes (`../w/api.php`) is left out: the address `https://en.wikipedia.org/wiki/../w/api.php` is another path on the same host. A real title cannot have one, and the tests cover the parts that are dot parts and the titles with dots that are not (`...`, `a..b`, `.NET`, `Version 1.2`).
+- The test that claimed to try a feed nested very deep was refused by the size limit and not by what its name said: its nesting was cut below the size limit, so that the limit on tags refuses it, and it was renamed.
+
+Recorded, not changed:
+
+- **The signatures differ from the plan's steps 3 and 4** (`search(query, get, limit, now)`): `srcarxiv.search(query, get, limit, pacer)` takes a `Pacer`, which holds arXiv's pause with a clock and a sleep that a test can replace and keeps its three seconds as a floor, and `srcwikipedia.search(query, get, limit)` takes no time at all; neither module needs a time. **The plan is approved and is not edited; `discover.fill` of Increment E is built to these signatures.**
+- **The Atom checks are written again in `srcarxiv` and not imported** (the plan's step 3 says "imported, not copied"): `capture_arxiv.parse_atom` reads one paper and has the checks inline, so to share them `capture_arxiv.py` would have to change, and that file belongs to other plans and this plan may not edit it. The module's text says so; a test sends the same hostile bodies to `parse_atom` and shows that it refuses them too (a DOCTYPE, an ENTITY, a bare DOCTYPE, a NUL, UTF-16 with and without a byte-order mark, text that is not UTF-8). The reading here is stricter in five ways: a size limit, a content-type check, a limit of 20,000 tags, the exceptions of the parser caught and a root that must be an Atom feed; and an error entry anywhere in the feed is a refusal, where `parse_atom` looks at the first. When `capture_arxiv.py` is free, the checks can move to one place.
+- **Wikipedia's pause is not in `srcwikipedia`**: the documentation says there is no hard speed limit on reads, only that requests are made in series; the pause is the plan's `gap_wikipedia_s`, kept by `discover.fill`, and it is tested in Increment E and not here. Criterion 6 is met for arXiv in this increment and for Wikipedia's pause in the next.
+- **The arXiv pause holds only if one real `Pacer` is shared** by `discover.fill` and the runner's `capture-arxiv`, which asks the same API; a caller can give `search` a pacer that does not wait. It is on the list of the owner's to-do items.
+
+Left for the owner: nothing from the review. A security review of this increment was not asked for: it parses untrusted XML and JSON, but the reading is stricter than the capture's, every address that leaves is rebuilt from a fixed host and an id or a title, and the plan asks about a security review once, at Increment C, which the owner has answered.
+
 ## Deferred work
 
 - Following HTML links from fetched pages to other sites, and Wikipedia's own links (`population.md`, "designed, built later").
@@ -334,3 +350,52 @@ Left for the owner: whether to run a security review of this increment (the plan
 **Security review:** recommended to the owner (this module parses untrusted network data, builds request addresses from the owner's topics and a model's text, and returns addresses that a later step fetches), who said "commit c, start d" without asking for one: **not run**, the risk accepted. The reviewer's two readings and the tests of hostile answers and addresses are what stands.
 
 **Open:** the to-do items already named.
+
+### Increment D — arXiv and Wikipedia (not yet committed)
+
+**Documentation read first (step 1), retrieved 2026-11-16 by plain GET requests with a generic agent and kept apart as data (the HTML of each page):**
+
+| address | sha256 |
+|---|---|
+| `https://info.arxiv.org/help/api/user-manual.html` | `a60b302031cfeabe4538d804a6487b9f6ef71f1fcc7aeed38412ee182feff3a7` |
+| `https://info.arxiv.org/help/api/tou.html` | `2fe6f8d90802452678a0cd97d9416b9f04fa21faace271773a5aa170ba72e6fd` |
+| `https://info.arxiv.org/help/api/index.html` | `42fd07726aa02b50afdb3406e480ef9d2193c2d41fbe3f7140c017860d48c49c` |
+| `https://www.mediawiki.org/wiki/API:Etiquette` | `0898d3ca02ed731d0831df2730b9e33c3f03b43b45daf6c254375d089e7a4e0e` |
+| `https://www.mediawiki.org/wiki/API:Search` | `9ca63be10d04117fc9a2631225d831ba1eb7171c1fb11c6861499eda894cd298` |
+| `https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy` | `497d73bc21a94a2250f5f03551a807d180c9dc0db12fa79fb0f2fd1ab63e5923` |
+| `https://wikitech.wikimedia.org/wiki/Robot_policy` | `4ab55ea02690168fa7184d340c8144d80952337db7bb96b9c9327ff76560b1c2` |
+
+- **arXiv's rule on the pause** (terms of use): "no more than one request every three seconds, and limit requests to a single connection at a time", for all the machines under one control as a whole, and an attempt to circumvent rate limits is on the list of what not to do. The user manual asks for "a 3 second delay" between calls. **No key and no registration is needed and no user-agent is asked for.** The metadata is CC0. The runner's `capture-arxiv` asks the same API, so the pause is shared with it.
+- **Wikipedia's rules**: "there is no hard speed limit on read requests, but be considerate"; make requests in series; on a 429 respect `Retry-After`; **send an informative User-Agent with contact information** or be blocked "without notice", and an empty or generic one may get a 403; do not copy a browser's agent. **There is no contact address to give (none of the owner's details leaves the machine), so the agent is the honest generic `knowledge-base-discovery/0.1` and the question stays open: a 403 or 429 turns Wikipedia off for the day and is not worked round.** The owner may put an address in the plan later.
+
+**Done.** On the branch `crawl-discovery` from `2992f25`:
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/srcarxiv.py` | 181 | `3a3212c5119651135780e8427dcfa2eb32e51b8fbf5d493fbf6c6a617cd42b18` |
+| `engine/kb/srcwikipedia.py` | 108 | `82672dc1e6858cdbeb4b04fbb6710b41ce723db7518fe16c276a6bb3e7e27207` |
+| `engine/tests/test_srcarxiv.py` | 432 | `256461e1a765146505d2aa0f22a26677811b202b55e5ed403d2436f57116d829` |
+| `engine/tests/test_srcwikipedia.py` | 273 | `d10807275fbf310f87ab163ce6aaf4040666d8a4fcb214976238be496f7a8bc4` |
+| `engine/tests/fixtures/crawl/arxiv_search.xml` | | `195a79ff4896ea2a4a07ce06551a94f0df5ff7aa0bba46f8988e3886abbab7bf` |
+| `engine/tests/fixtures/crawl/arxiv_empty.xml` | | `b5fb8af3cacb11bea660df60e21c9489dcd6d086db560576cb8db48cf1488748` |
+| `engine/tests/fixtures/crawl/arxiv_error.xml` | | `f9fc8f524a415a69901b7738519ed39372d7ff88fe20517bdf42ecb4398541a6` |
+| `engine/tests/fixtures/crawl/wikipedia_search.json` | | `c8cc85356b1560915f07d3b7180181fd2f31e16da5f8c7c543d00bb07e221c49` |
+| `engine/tests/fixtures/crawl/wikipedia_empty.json` | | `54ad0af3e17c470ed6afb96eb1a9ef19ff0bf64104241944c224634236bc535e` |
+
+- `srcarxiv.search(query, get, limit, pacer)` makes one request to `https://export.arxiv.org/api/query` (`search_query` of up to 8 words as `all:<word>` joined with AND, `start=0`, `max_results` 1 to 50, `sortBy=relevance`) after `pacer.wait()`, and returns `{"candidates": [...], "rejected": []}`: each candidate `arxiv:<id without version>` at `https://arxiv.org/abs/<id>`, found from the query. `Pacer(gap=3.0, clock, sleep)` keeps at least `gap` seconds (never under 3, never over 3,600) from the start of one request to the start of the next, never sleeps longer than `gap`, and takes the time of a request after the sleep.
+- `srcwikipedia.search(query, get, limit)` makes one request to `https://en.wikipedia.org/w/api.php` (`list=search`, the main namespace only, no snippet and no metadata asked for, `formatversion=2`) and returns the pages as candidates at `https://en.wikipedia.org/wiki/<title>` (spaces as underscores; `?`, `#`, `%`, brackets and the like written out), found from the query; a disambiguation page or a list is kept. Skipped: a page of another namespace, with no id or a bad one, a title that is not clean (a hidden or control character, spaces at the ends or doubled), over 255 characters, or with a `.` or `..` part.
+- **Only plain words reach the search**: the query is cut into its letters and digits; arXiv gets each as a term of its own, so an `AND`, an `ANDNOT` or a `ti:` in a query is only a word to look for; Wikipedia gets up to 12 words with AND, OR and NOT written in lower case, so `intitle:`, `-word`, quotation marks and wildcards are not syntax.
+- Both raise a refusal named for the source (`arXiv: ...`, `Wikipedia: ...`) that is a subclass of `srcopenalex.SourceRefused`, so that `discover.fill` catches one type for every source; the reason is fixed text and never the server's.
+
+**Verification as run (Linux, Python 3.14.4):**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_srcarxiv engine.tests.test_srcwikipedia`: 74 tests, OK, repeated; the files hold no control, invisible or direction character (checked).
+- Deliberate breaks, each compile-checked, each file restored byte for byte and its hash compared, the bytecode cache removed before each: `srcarxiv.py` **82 of 89 killed**, `srcwikipedia.py` **81 of 83**. The 9 survivors are equivalent: the spaces in an id (`parse_id` refuses them); `True` as a pause and a pause that is not finite (the bounds refuse both); an empty query (the check for no word refuses it); only DOCTYPE in the declaration check, and its case and spaces (an ENTITY is always inside a DOCTYPE in XML that is well formed, and the parser refuses a lower-case or spaced one itself); and the partial result of a refusal that the client raises (it is always empty here).
+- `wb run code-work check`: checked 51 plans, no problems.
+- Review: one round (see the record).
+
+**Not run:** any real request: no web client exists yet and every test uses a fake `get` and a fake clock and sleep (nothing sleeps); the fixtures are made by hand from the user manual and the Action API pages and have not been compared with a live answer; Wikipedia's reply to an agent with no contact address (403 or not) is not known; the engine's other tests; anything on macOS.
+
+**For the plans that follow:** `discover.fill` (E) must keep one real `Pacer` for arXiv and share it with the runner's `capture-arxiv`, pace Wikipedia by `gap_wikipedia_s` (this increment does not test Wikipedia's pause), turn each source off for the day on `srcopenalex.SourceRefused`, keep `error.partial`, and call `search(query, get, limit, pacer)` for arXiv and `search(query, get, limit)` for Wikipedia. The shared web client must stop a read at a limit, as for OpenAlex.
+
+**Open:** the to-do items already named, and the new one for the shared pacer.
