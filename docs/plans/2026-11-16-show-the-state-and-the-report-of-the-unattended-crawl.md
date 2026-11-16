@@ -1,6 +1,6 @@
 # Show the state and the report of the unattended crawl: `crawl-status` and `crawl-report`
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-16
 Candidate: none (the crawl is specified in `docs/specs/population.md`, which the owner approved as the design to build; the two commands are its "Status and the report" section and its acceptance criterion 19, and are too small to need roadmap direction)
 Specs: docs/specs/population.md
@@ -181,7 +181,27 @@ Each increment's recorded verification stands unless a later increment changed i
 
 ## Review record
 
-Empty until a review is asked for.
+**The plan (before approval).** Codex through the review engine, `gpt-5.6-terra`, **two rounds of three**: round 1 gave three major findings (a contradiction on printing credentials; URLhaus recent mode missing from the lists; the read-only promise against SQLite's side files), round 2 gave one (the order of redaction and cleaning let a header split by a hidden character through). All four were applied and decided in the engine (`record-paths` lists its files; they are in the plan's commit). The owner then approved the plan with the digest `34b52c00…`.
+
+**Increment A.** The project's `reviewer` agent, read only, **one round, one exchange**. Recommendation: no blocking findings; ten findings, none blocking.
+
+Applied (test first, each shown to fail before the change):
+
+- **A cut by the first step could split a credential** (finding 1): `placereview.safe` cut the text at 2,000 characters before the rule saw it, so a bearer word with fewer than eight characters left, or an address cut before its `@`, was printed in part. The plan's sentence "a cut can never leave half of a key" held only for the last cut. **Now, when the first step cut the text (it reached 2,000 characters, or the raw text was longer than the slice `safe` takes first), the last bearer word and the last address of what is left are dropped before the rule looks.** Tests: a bearer cut at 2 and at 7 characters, an address cut before its `@`, a flood of hidden characters that moves the cut, a text that was not cut keeping its last word and address, and an earlier address in a cut text staying.
+- **The address rule stopped at a quote, a backtick or a bracket** (finding 2): `https://user:pa'ss@host/` was printed from `ss@host/`. The address now runs to white space, and **any scheme** is taken (`ftp://`, `ssh://`, `git+https://`), not only `http` and `https`. Scheme-relative `//u:p@h` is not covered.
+- **A header name closed by a quote before the colon** (finding 3), as in `{'Cookie': 'sid=abc'}` or `"Set-Cookie": "x"` (the form a message that prints a headers dictionary has), is now withheld.
+- The second assertion of the cut test could not tell its mutants apart, and the timing bound used the wall clock (findings 7, 8): the first now looks for the placeholder, the second uses CPU time.
+- `O_NOCTTY` is passed (finding 9), with a test of the exact flags of the one `os.open` (read only; no create, write, truncate or append; no follow; no wait; no terminal).
+- The reviewer noted that `lines_of_day` had no test on a day of 23 or 25 hours; one is added, with the lines on both sides of each edge.
+
+Not applied:
+
+- **Parameter names outside the plan's list** (finding 4: `api-key`, `client_secret`, `refresh_token`, `id_token`, `session`, `jwt`): the list is the approved plan's text, so a longer one needs the owner's approval. Recorded as a to-do item for the owner; the module hides the eleven names the plan lists.
+
+Recorded:
+
+- **Names and shapes differ from the plan's step wording** (findings 5, 6): the module has `read_file(path, limit, tail=False)` and `read_small(path, limit)`, each returning a `FileRead(data, status, reason, cut)` tuple (status `ok`, `missing` or `bad`), and no `read_text_file`; `read_log` also returns `status` and `reason`. The lines of bad kinds are built in the tests and are not a fixture file. Later increments use these names.
+- **For later increments** (finding 10): `read_file` guards the last component of a path only (`O_NOFOLLOW`) and the owner of the file; a caller that reads from another folder must check its parent folders as `log_files` does. A log file that is being appended to can show a half-written last line as one `not_json`; the runner's single `O_APPEND` write per line makes that unlikely.
 
 ## Deferred work
 
@@ -191,4 +211,31 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The bounded reading of the crawl's files, and the log reader (not yet committed)
+
+**Done.** On the branch `crawl-status`, from the plan's commit `f03d119`. Linux, Python 3.14. **Nothing in the module writes, creates, locks, deletes or sends:** the one `os.open` is read only with no create, follows no link, waits on no pipe and takes no terminal; the folders of the log are checked with `lstat` and listed with `scandir`.
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/crawlstatus.py` (new) | 394 | `4263b409b43cafc0222b3dcd3cbd9abc60fc7b235d51e852f42984eb602d4639` |
+| `engine/tests/test_crawlstatus.py` (new) | 689 | `dda70e4836cf40f5959e4ed6ccef7a0273bdf5e3f713ce8e5786d9857afedfc0` |
+| `engine/tests/fixtures/crawlstatus/log/crawl-2026-11-16.jsonl` (new) | 6 | `234fc5cfee25b44e5fcfcfe537a126b92e39aedc86823f643d45a2813e852532` |
+| `engine/tests/fixtures/crawlstatus/log/crawl-2026-11-17.jsonl` (new) | 3 | `1ece8b564fbcdf4b2f0da998c9d021a41852c6f8c3bf33b35df7749dcd4ad801` |
+
+- `read_file`, `read_small`: a plain file of the owner's, read through one open file, at most a limit (from the start, or the end with `tail`); a link, a pipe, a folder, a file of another owner and an over-size file (for `read_small`) are `bad`, a missing one is `missing`.
+- `redact`, `clean`: **normalise, redact, cut** (assumptions), with the guard for a credential that the first step's cut splits; the header names, a bearer token, the user and password of an address of any scheme, and the value of the eleven parameter names; **it cannot know a bare key** (`sk-live-…` with no name around it is printed as text), and it does not hide parameter names outside the plan's list (a to-do item).
+- `parse_line`, `read_log`: strict (a line over 16 KiB, a NUL, bytes that are not UTF-8, JSON that is not an object, a duplicate key, a number that is not finite, an unknown step or outcome, a bad `ts`, a wrong type, a text over 4,096 characters or with a lone surrogate); the ten fields of the spec are copied by name and every other key is dropped; a bad line is counted by kind and skipped; a file over the limit is read from its start (or end) and the line the cut splits is dropped, not counted.
+- `log_files`, `day_bounds`, `lines_of_day`: the plain files `crawl-YYYY-MM-DD.jsonl` of a folder that is not a link and is the owner's; the day of a line is its `ts` in the plan's zone (`local` or an IANA name), the files read are those from the UTC date of the day's start to that of its end, and a day of 23 or 25 hours is right.
+
+**Verification as run:**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlstatus`: **82 tests, OK**, three runs in a row. Each new test was seen to fail first (the module did not exist; later, the tests for the review's findings failed on the old code, 15 failures, before the change).
+- **Deliberate breaks**, each compile-checked, the bytecode cache removed before each run, the file restored byte for byte (hash compared): **123 of 126 killed**. The three survivors are equivalent: dropping `proxy-authorization` or `set-cookie` from the header pattern (the plain `authorization` and `cookie` names match after the hyphen, so the longer ones are redundant), and the one-byte bound of the read loop (one `pread` of the wanted size returns the whole of it; a short read is the only case it would change, and `pread` on a regular file does not give one).
+- No control, invisible or direction character in the four files (a script check). `wb run code-work check`: 55 plans, no problems. `wb plan-status`: `approved`.
+- Review: one round of the `reviewer` agent (see the Review record).
+
+**Fields that can only be checked against fixtures** (the runner that writes them does not exist): every field of a log line (`ts`, `run`, `step`, `outcome`, `candidate`, `book`, `host`, `reason`, `n`, `seconds`) is read from hand-made lines in the spec's form; the way the runner's writer cuts a line over 8 KiB (and marks it) is not known, and no test uses such a line; whether the runner leaves `crawl/` and `crawl/log/` as folders of the owner's that are not links.
+
+**Not run:** anything on macOS (`O_NOFOLLOW`, `os.pread` and the `local` zone through `astimezone` are standard there but untried); the other tests of the repository (nothing imports the module yet).
+
+**Open:** the to-do items already named, and the new one for the parameter-name list. The security review the owner asked for runs after Increment E.
