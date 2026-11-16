@@ -200,6 +200,12 @@ rules, which this spec depends on.
   shelves (`kb.placement`, `python3 -m kb place-propose`). Like `card-more` it may be left unset, and the command then says so and does nothing. It
   must name the measured chat model (`gemma4:12b`) with thinking off; another entry is refused, as is a model the bridge reports as another, and the
   reason is the same as for `place-embed`: another model needs a new measurement. The book texts are sent to the `place-embed` entry as documents.
+- **[proposed]** Built in the engine: the kind of work `crawl-query` names the chat entry that turns one of the owner's topics into a few web
+  search queries for the unattended crawl (`kb.crawlqueries`; `population.md`, "Discovery"). Like `place` it may be left unset, and the crawl then
+  makes its queries without a model: the topic and one or two plain variants of it. The entry is not measured and any chat entry may be named. The
+  model is given one fixed text that holds the topic and a number and nothing else (the text of a fetched page is never sent), and what it answers
+  is untrusted: only a line that is a short plain query is kept, and a reply with none, or a model that does not answer, gives the same queries
+  made without a model. The topic leaves the machine for that entry's server and the queries then leave it for the search sources.
 - **[proposed]** Built in the engine: an embedding entry may carry a `query_prefix` and a `document_prefix`, each text of 1 to 400
   printable characters (a line break is allowed; no control, format or private-use character, which does not make the text sure to be
   what it looks like), and `kb.models.embed` puts the one for the kind of text (a query,

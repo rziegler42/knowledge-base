@@ -947,8 +947,25 @@ class TaskTest(Base):
         self.assertEqual(models.choose(cfg, "card")[0], "other")
 
     def test_the_kinds_of_work_are_named_in_the_engine_with_no_model(self):
-        self.assertEqual(set(models.TASKS), {"card-notes", "card", "card-check", "card-more", "theme", "theme-check", "place"})
+        self.assertEqual(set(models.TASKS), {"card-notes", "card", "card-check", "card-more", "theme", "theme-check", "place",
+                                             "crawl-query"})
         self.assertEqual(set(models.REQUIRED_TASKS), {"card-notes", "card", "card-check"})
+
+    def test_crawl_query_is_an_optional_chat_task_that_the_crawl_may_leave_unset(self):
+        self.assertIn("crawl-query", models.OPTIONAL_TASKS)
+        self.assertNotIn("crawl-query", models.REQUIRED_TASKS)
+        self.assertNotIn("crawl-query", models.EMBED_TASKS)
+        self.assertIsNone(models.optional(with_tasks({"card-notes": "local"}, local=entry()), "crawl-query"))
+        self.assertIsNone(models.optional(config(), "crawl-query"))
+        cfg = with_tasks({"crawl-query": "other"}, local=entry(), other=entry())
+        self.assertEqual(models.optional(cfg, "crawl-query"), "other")
+        self.assertEqual(models.listing(cfg)["tasks"], {"crawl-query": "other"})
+        with self.assertRaises(KbError):  # model work off is a refusal, as for the other optional kinds of work
+            models.optional(dict(cfg, models_on=False), "crawl-query")
+        with self.assertRaises(KbError):  # a name that is not listed
+            models.optional(with_tasks({"crawl-query": "nowhere"}, local=entry()), "crawl-query")
+        with self.assertRaises(KbError):  # it names a chat entry, not an embedding one
+            models.registry(with_tasks({"crawl-query": "emb"}, local=entry(), emb=embedding()))
 
     def test_the_second_round_is_the_one_kind_of_work_that_may_be_left_unset(self):
         self.assertIsNone(models.optional(with_tasks({"card-notes": "local"}, local=entry()), "card-more"))

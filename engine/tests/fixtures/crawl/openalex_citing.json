@@ -1,0 +1,37 @@
+{
+  "meta": {"count": 4, "db_response_time_ms": 15, "page": 1, "per_page": 5},
+  "results": [
+    {
+      "id": "https://openalex.org/W3000002",
+      "type": "article",
+      "cited_by_count": 30,
+      "open_access": {"is_oa": true, "oa_status": "gold", "oa_url": "https://journal.example.org/articles/c2", "any_repository_has_fulltext": false},
+      "best_oa_location": {"id": "doi:10.2/c2", "is_oa": true, "landing_page_url": "https://journal.example.org/articles/c2", "pdf_url": null, "version": "publishedVersion"},
+      "locations": [{"id": "doi:10.2/c2", "is_oa": true, "landing_page_url": "https://journal.example.org/articles/c2", "pdf_url": null, "version": "publishedVersion"}]
+    },
+    {
+      "id": "https://openalex.org/W3000001",
+      "type": "preprint",
+      "cited_by_count": 30,
+      "open_access": {"is_oa": true, "oa_status": "green", "oa_url": "https://arxiv.org/pdf/2403.00003", "any_repository_has_fulltext": true},
+      "best_oa_location": {"id": "pmh:oai:arXiv.org:2403.00003", "is_oa": true, "landing_page_url": "https://arxiv.org/abs/2403.00003", "pdf_url": "https://arxiv.org/pdf/2403.00003", "version": "submittedVersion"},
+      "locations": [{"id": "pmh:oai:arXiv.org:2403.00003", "is_oa": true, "landing_page_url": "https://arxiv.org/abs/2403.00003", "pdf_url": "https://arxiv.org/pdf/2403.00003", "version": "submittedVersion"}]
+    },
+    {
+      "id": "https://openalex.org/W3000003",
+      "type": "article",
+      "cited_by_count": 4,
+      "open_access": {"is_oa": true, "oa_status": "green", "oa_url": "https://repo.example.edu/files/c3.pdf", "any_repository_has_fulltext": true},
+      "best_oa_location": {"id": "pmh:oai:repo.example.edu:c3", "is_oa": true, "landing_page_url": "https://repo.example.edu/files/c3.pdf", "pdf_url": "https://repo.example.edu/files/c3.pdf", "version": "acceptedVersion"},
+      "locations": [{"id": "pmh:oai:repo.example.edu:c3", "is_oa": true, "landing_page_url": "https://repo.example.edu/files/c3.pdf", "pdf_url": "https://repo.example.edu/files/c3.pdf", "version": "acceptedVersion"}]
+    },
+    {
+      "id": "https://openalex.org/W1000001",
+      "type": "preprint",
+      "cited_by_count": 12,
+      "open_access": {"is_oa": true, "oa_status": "green", "oa_url": "https://arxiv.org/pdf/2401.00001v2", "any_repository_has_fulltext": true},
+      "best_oa_location": {"id": "pmh:oai:arXiv.org:2401.00001", "is_oa": true, "landing_page_url": "https://arxiv.org/abs/2401.00001v2", "pdf_url": "https://arxiv.org/pdf/2401.00001v2", "version": "submittedVersion"},
+      "locations": [{"id": "pmh:oai:arXiv.org:2401.00001", "is_oa": true, "landing_page_url": "https://arxiv.org/abs/2401.00001v2", "pdf_url": "https://arxiv.org/pdf/2401.00001v2", "version": "submittedVersion"}]
+    }
+  ]
+}

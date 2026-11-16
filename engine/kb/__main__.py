@@ -8,6 +8,7 @@ from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card
 from . import cardmarks, cardqueue
 from . import placeapply, placement, placereview, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
+from . import discover
 from . import problem
 from . import problemtrial
 from . import vectors
@@ -190,6 +191,12 @@ def main(argv=None):
     sb.add_argument("--lcc", required=True, metavar="DIR", help="the folder of the saved Library of Congress read (its report, pages and extract)")
     sb.add_argument("--custom", required=True, metavar="FILE", help="the tracked file of custom shelves")
     sb.add_argument("--out", required=True, metavar="FILE", help="the schema file to write; it must not exist")
+    cdi = sub.add_parser("crawl-discover", help="show what a refill of the candidate queue of the unattended crawl would send: the sources that are on, the "
+                         "topics, the requests and queries each source would get and whether a model would be called; reads the two files and the config, "
+                         "sends nothing and writes nothing; a real refill is the runner's and needs the owner's word, so --check is required")
+    cdi.add_argument("plan", help="the crawl plan file (its discovery keys are read; the rest are the runner's)")
+    cdi.add_argument("topics", help="the topics file")
+    cdi.add_argument("--check", action="store_true", help="show what a refill would do; required")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -398,6 +405,11 @@ def main(argv=None):
                 found = catalog.search(config.load()["index_root"], args.query, limit=args.limit, book_id=args.book,
                                        within=args.within or "all")
             print(json.dumps(found, indent=1))
+            return 0
+        if args.command == "crawl-discover":
+            if not args.check:
+                raise KbError("a real refill of the queue is the runner's and needs the owner's word: run with --check to see what it would send")
+            print(json.dumps(discover.check(args.plan, args.topics), indent=1))
             return 0
         if args.command == "trial-problems":
             print(json.dumps(problemtrial.run(Store.open(write=False), config.load(), args.corpus, args.report, replace=args.replace,

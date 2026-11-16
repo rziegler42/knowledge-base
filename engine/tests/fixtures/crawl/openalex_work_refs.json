@@ -1,0 +1,13 @@
+{
+  "id": "https://openalex.org/W1000001",
+  "referenced_works": [
+    "https://openalex.org/W2000001",
+    "https://openalex.org/W2000002",
+    "https://openalex.org/W2000003",
+    "https://openalex.org/W2000004",
+    "https://openalex.org/W2000005",
+    "https://openalex.org/W2000006",
+    "not an id",
+    "https://openalex.org/W1000001"
+  ]
+}
