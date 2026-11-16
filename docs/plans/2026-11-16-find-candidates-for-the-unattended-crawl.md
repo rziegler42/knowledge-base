@@ -238,6 +238,30 @@ Recorded, not changed:
 
 Left for the owner: nothing from the review. A security review of this increment was not asked for: it parses untrusted XML and JSON, but the reading is stricter than the capture's, every address that leaves is rebuilt from a fixed host and an id or a title, and the plan asks about a security review once, at Increment C, which the owner has answered.
 
+**Increment E.** Reviewer: the project's `reviewer` agent (read-only; it ran nothing), **two rounds, two exchanges** of the caps (3 rounds, 6 exchanges). Round 1: no blocking findings; seven findings. Round 2, on what changed: no blocking findings; three notes.
+
+Applied (round 1):
+
+- **A work walked from was marked walked for good even when rows it gave were lost, and the walk's rows could pass the target.** The walk now takes its own share of the target and no more, and a kept work is marked walked (a `permanent` counter) only if none of its rows was left over; a work with rows left over is walked again by a later refill, where the rows already taken are found again and skipped. A row that hits the full queue is counted as left over too (a test found this in the first fix).
+- **Any capped row ended the whole refill.** Each of arXiv and Wikipedia is one registrable domain, so after about 50 rows of one of them were queued every refill would have stopped at the next. Now a registrable domain at its cap leaves that row (`skipped`, reason `domain cap`) and the refill goes on, and only a full queue (queued rows at `queued_total`) ends it.
+- A number of a plan file is bounded (a whole number of up to 9 digits, a fraction of up to 15), because a run of thousands of digits made `int()` raise an error that is not a refusal.
+- A test traces every statement a refill makes and shows that the only change it makes to any table is `UPDATE counters SET n = n + 1`, and that no row of `candidates` is ever updated, replaced or deleted.
+- A kept work listed twice is walked from once; a refusal of the walk is recorded before the rows found before it are stored; a `queue_low` of nothing means the queue is never refilled (said in the docstring and tested).
+
+Applied (round 2):
+
+- A row refused because the queue is full is counted in `skipped` as well as logged, so `skipped` is the number of `skipped` lines.
+- A row rejected for its type takes no room in the queue, so it is recorded whatever the target (and does not keep a work from being marked walked).
+- The walk is bounded by its own share, `wander_share` of the target, and not by the whole target: with no topics the walk can no longer take the topics' part.
+
+Recorded, not changed:
+
+- **Three kinds of key are written to the `counters` table** (`source_off:<name>` and `web_search_queries` by UTC day, `walked:<work>` under the day `permanent`); the spec describes that table as fetch counts by local day and domain. The keys cannot collide with the runner's, and the UTC day is the day of OpenAlex's budget and of the quota of the topics. It is on the owner's list to say in the spec; the spec is not edited here.
+- `fill` takes the plan's arguments and also the keywords `cache`, `is_blocked`, `canon_address`, `site_of`, `arxiv_pacer`, `clock` and `sleep` (the plan lists `fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None)`); `now` is a UTC time and the day is its UTC date.
+- The first version of the topics file reader took a weight up to 9,999,999, which `crawlqueue` (up to 1,000,000) would have refused at the first row of such a topic: the reader now takes up to 999,999 (the Result of Increment B says 9,999,999; this is the correction).
+
+Left for the owner: nothing from the review. A security review of this increment was not asked for: the plan asks once, at Increment C, which the owner has answered; the command reads three files that the caller names (read as the topics file is, which refuses a link, a pipe and a large file) and sends nothing, and every row from a source goes through the checks of `crawlqueue`.
+
 ## Deferred work
 
 - Following HTML links from fetched pages to other sites, and Wikipedia's own links (`population.md`, "designed, built later").
@@ -399,3 +423,35 @@ Left for the owner: nothing from the review. A security review of this increment
 **For the plans that follow:** `discover.fill` (E) must keep one real `Pacer` for arXiv and share it with the runner's `capture-arxiv`, pace Wikipedia by `gap_wikipedia_s` (this increment does not test Wikipedia's pause), turn each source off for the day on `srcopenalex.SourceRefused`, keep `error.partial`, and call `search(query, get, limit, pacer)` for arXiv and `search(query, get, limit)` for Wikipedia. The shared web client must stop a read at a limit, as for OpenAlex.
 
 **Open:** the to-do items already named, and the new one for the shared pacer.
+
+### Increment E — `discover.fill` and the command (not yet committed)
+
+**Done.** On the branch `crawl-discovery` from `daafae7`:
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/discover.py` (new) | 456 | `432917fb0c61a8a436aea43575a764e8044d33ddaa386a371ba8503451acfb79` |
+| `engine/tests/test_discover.py` (new) | 1,477 | `989db4417a023578861a335d421a5bb98c6a2603bf0bdb55a60fa75e5f9581b9` |
+| `engine/kb/crawltopics.py` (`read_text`; the weight limit) | | `e836e9f607ac82c05af11cea7f07eb52da1df0dc27c7181734b404e263c27814` |
+| `engine/tests/test_crawltopics.py` (the boundary of a weight) | | `e10930d0770a88bd09ca5475f9b0d9e7c1412c746c909aa55ae9a942139878e5` |
+| `engine/kb/__main__.py` (the import, a parser block and a dispatch block) | | `3177c3ec8138972a689a517f4ee23c40eef848e2b738bfd73ac510bb649e02ff` |
+
+- `discover.fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cache=None, is_blocked=None, canon_address=None, site_of=None, arxiv_pacer=None, clock, sleep)` is the one function the runner calls. It returns early when the queue holds `queue_low` queued rows or more; otherwise it adds at most `discover_target` rows and never past the queue's total cap: `1 - wander_share` of the target from the topics (the day's picks by `crawltopics.quota`, at most 50, one query each, taken one topic at a time in turn, each asked of OpenAlex, arXiv and Wikipedia in that order, with the plan's queries per topic and the model of `crawlqueries` if there is one), and `wander_share` from the citation links of kept works (at most `wander_part // wander_per_work` works, at least one, each walked once). It paces each source by the plan's gap (arXiv by a `Pacer` that the runner can give it so that it is shared with `capture-arxiv`, and never under three seconds), turns a source off for the rest of the UTC day on a refusal and asks the others, records a row of an address that `is_blocked` names as `blocked` and a work whose only full text is a PDF as `rejected: type`, and calls `log(step, outcome, **fields)` with the steps `discover`, `enqueue` and `block`, naming the row by its address and never holding a query. A source of web search is accepted in the plan and said to be not built (Increment F).
+- `normalize_plan`, `read_plan(path)` (the spec's `[section]` and `key = value` form, read as the topics file is, with the keys this refill does not use left alone and a key of the plan in another section refused) and `date_of`.
+- `python3 -m kb crawl-discover PLAN TOPICS --check` prints the sources that are on, the topics, the picks, the requests and (when no model makes them) the queries of each source, the gap, whether and how many times a model would be called (from the config's `tasks.crawl-query`, without naming its entry or server), and the wander figures; it makes no request, calls no model, opens no queue, keeps no cache and writes nothing; without `--check` the command is refused with the reason (a real refill is the runner's and needs the owner's word).
+- `crawltopics.read_text(path, what)` is the one reading of the owner's small files; `read_topics` and `read_plan` use it. The weight of a topic is at most 999,999.
+
+**Verification as run (Linux, Python 3.14.4):**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_discover engine.tests.test_crawlqueue engine.tests.test_crawltopics engine.tests.test_crawlqueries engine.tests.test_srcopenalex engine.tests.test_srcarxiv engine.tests.test_srcwikipedia engine.tests.test_models`: 610 tests, OK (`test_discover` alone: 131, repeated); the files hold no control, invisible or direction character (checked).
+- Deliberate breaks, each compile-checked, each file restored byte for byte and its hash compared, the bytecode cache removed before each: `discover.py` **261 of 272 killed**, `crawltopics.py` 2 of 2, `__main__.py` 3 of 3. The 11 survivors are equivalent: a finiteness test that the range test repeats; a full match where the pattern ends in `.*`; `max(1, ...)` where the ceiling is at least 1; a check of the cache's type that `make_queries` repeats; the queue's count in the budget (the queue's cap enforces the same); every row counted as a topic row (the walk is after the topics); a topic part that is nothing (there are then no picks); queries made again for a topic (the cache serves them); a refused source's rows (none); and, until Increment F builds web search, the daily number and the slice of its queries in `--check`.
+- `wb run code-work check`: checked 51 plans, no problems.
+- Review: two rounds (see the record).
+
+**Not run:** any real request: no web client exists, and every test uses fake sources, or the real source modules with a fake `get`, and a fake clock and sleep (nothing sleeps and no socket is opened); a real `webaddr` (without `canon_address` and `site_of` the queue refuses with a message that says so); the runner; the first real send, which waits for the owner's "run it" after `--check` (see below); anything on macOS.
+
+**The first real send is the owner's.** `--check` shows what a refill would send. A refill sends the queries that the owner's topics make (or the model makes from them) to OpenAlex, arXiv and Wikipedia, and, if the owner has a `crawl-query` entry, the topics to that entry's server. Nothing here calls `fill` for real.
+
+**For the plans that follow:** the runner gives `fill` the shared client as `get`, `webaddr`'s two functions, `is_blocked` (the blacklist and the public lists), one `arxiv_pacer` shared with `capture-arxiv` (the to-do item), a `cache` file kept in the index root with mode 600, and a `log` that writes the lines of the spec's log; it reads the counters that discovery writes (see the record); Increment F registers `web_search` in `sources` and builds it, after which `crawl-discover --check` says `built`.
+
+**Open:** the to-do items already named, and the new one for the counters of discovery in the spec.

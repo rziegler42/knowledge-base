@@ -85,7 +85,8 @@ class ReadTest(FileCase):
         self.refused("A topic\n[core weight=1]\nB\n", "line 1")
 
     def test_a_weight_that_is_not_a_positive_whole_number_is_refused(self):
-        for weight in ("0", "-1", "1.5", "abc", "", "01", "1_000", "٣", "10000000", "+5", " 5", "5 "):
+        self.assertEqual(self.read("[core weight=999999]\nA\n"), [("A", 999999, "core")])  # the largest weight the queue takes
+        for weight in ("0", "-1", "1.5", "abc", "", "01", "1_000", "٣", "1000000", "10000000", "+5", " 5", "5 "):
             with self.subTest(weight=weight):
                 self.refused(f"[core weight={weight}]\nA\n")
 

@@ -20,7 +20,7 @@ from . import KbError, textutil
 MAX_BYTES = 256 * 1024
 MAX_TOPICS = 5000
 MAX_TOPIC = 300
-_SECTION = re.compile(r"\[([A-Za-z][A-Za-z0-9_-]{0,39}) weight=([1-9][0-9]{0,6})\]")
+_SECTION = re.compile(r"\[([A-Za-z][A-Za-z0-9_-]{0,39}) weight=([1-9][0-9]{0,5})\]")  # up to 999999: what `crawlqueue` takes as a weight
 _GOLDEN = 0x9E3779B97F4A7C15  # 2**64 over the golden ratio: a step that spreads points evenly however many are taken
 _WORD = (1 << 64) - 1
 
@@ -29,27 +29,25 @@ def _refuse(message):
     return KbError(f"the topics file: {message}")
 
 
-def read_topics(path):
-    """`[(topic, weight, section), ...]` in the order of the file. It is read without following a link or waiting on a pipe, as a
-    plain file of at most 256 KB of UTF-8, and anything that does not fit the form above is a refusal that names the line and does
-    not repeat its text. A topic has control, invisible and direction characters removed and its white space made single; one that
-    is empty then, over 300 characters, or the same as an earlier one (in any case) is refused; so is a topic before any section, a
-    file with no topic, and one with over 5,000."""
+def read_text(path, what="the topics file"):
+    """The text of a small file of the owner's (the topics, the crawl plan), read without following a link or waiting on a pipe, as a
+    plain file of at most 256 KB of UTF-8 with no NUL; anything else is a refusal that names `what` and the path."""
+    refuse = lambda message: KbError(f"{what}: {message}")  # noqa: E731
     if not isinstance(path, (str, os.PathLike)) or not os.fspath(path):
-        raise _refuse("the path is not a path")
+        raise refuse("the path is not a path")
     shown = textutil.literal(os.fspath(path))
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError as e:
-        raise _refuse(f"it cannot be opened ({e.strerror}); a link is not followed: {shown}") from None
+        raise refuse(f"it cannot be opened ({e.strerror}); a link is not followed: {shown}") from None
     except ValueError:  # a NUL character in the path
-        raise _refuse(f"the path cannot be opened: {shown}") from None
+        raise refuse(f"the path cannot be opened: {shown}") from None
     try:
         info = os.fstat(fd)  # of the file that was opened, before anything is read from it
         if not stat.S_ISREG(info.st_mode):
-            raise _refuse(f"it is not a plain file: {shown}")
+            raise refuse(f"it is not a plain file: {shown}")
         if info.st_size > MAX_BYTES:
-            raise _refuse(f"it is over {MAX_BYTES // 1024} KB: {shown}")
+            raise refuse(f"it is over {MAX_BYTES // 1024} KB: {shown}")
         f = os.fdopen(fd, "rb")
     except BaseException:
         os.close(fd)
@@ -57,13 +55,23 @@ def read_topics(path):
     with closing(f):
         data = f.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
-        raise _refuse(f"it is over {MAX_BYTES // 1024} KB: {shown}")
+        raise refuse(f"it is over {MAX_BYTES // 1024} KB: {shown}")
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
-        raise _refuse(f"it is not UTF-8 text: {shown}") from None
+        raise refuse(f"it is not UTF-8 text: {shown}") from None
     if "\x00" in text:
-        raise _refuse(f"it holds a NUL character: {shown}")
+        raise refuse(f"it holds a NUL character: {shown}")
+    return text
+
+
+def read_topics(path):
+    """`[(topic, weight, section), ...]` in the order of the file. It is read as `read_text` reads a file, and anything that does not
+    fit the form above is a refusal that names the line and does not repeat its text. A topic has control, invisible and direction
+    characters removed and its white space made single; one that is empty then, over 300 characters, or the same as an earlier one (in
+    any case) is refused; so is a topic before any section, a file with no topic, and one with over 5,000."""
+    text = read_text(path)
+    shown = textutil.literal(os.fspath(path))
     topics, seen, section, weight = [], set(), None, None
     for number, raw in enumerate(text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
         line = raw.strip()
@@ -73,7 +81,7 @@ def read_topics(path):
             found = _SECTION.fullmatch(line)
             if not found:
                 raise _refuse(f"line {number}: a section line is [name weight=N], a name of up to 40 letters, digits, - or _, "
-                              "and a whole number from 1 to 9999999")
+                              "and a whole number from 1 to 999999")
             section, weight = found.group(1), int(found.group(2))
             continue
         if section is None:
