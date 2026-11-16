@@ -100,6 +100,8 @@ python3 -m kb problem-search -- 'first sub-problem' 'second sub-problem'
 python3 -m kb shelf-vectors --check  # the vectors of the shelves of the schema: what would go to your embedding model (nothing is sent by --check)
 python3 -m kb place-propose --check  # propose a home shelf for each book still on `default`: what would go to your models (nothing is sent by --check)
 python3 -m kb place-review           # go through the proposals one book at a time and answer each; needs a terminal; moves no book
+python3 -m kb place-apply            # print the list of books your answers would move onto their shelves, with a digest of it; read only
+python3 -m kb place-apply --digest HEX   # make exactly those moves, in your own terminal, if the list still has that digest (the last line of the list you read)
 ```
 
 The model commands need a model registry in the config (`python3 -m kb models` lists it and makes no call); the section "Calling a

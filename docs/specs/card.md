@@ -76,6 +76,9 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
 
 - **[proposed]** Mechanical fields come from the manifest and are never model-written: book id, title, shelf, current version, kind
   and type of the primary, source identity, retrieval date and scan status.
+- **[proposed]** A card's `shelf` is the shelf the book was on when the card was made, and a card is never edited, so moving a book onto a shelf (`place-apply`, `shelf.md`) does not change its cards: the 20 books
+  moved so far still have cards that say `default`. The book's own root file holds its shelf now. Anything that decides by shelf (a guest's view of a card, a search by shelf) must read the root file or make
+  the cards again; nothing decides by a card's shelf today (`card-show` prints it, so it shows the old shelf for those books).
 - **[proposed]** Model-written fields: a short summary, "useful for" (the situations and questions where the book would help),
   topics, adjacent topics, key ideas likely to surprise (up to seven are asked for, and a card may hold fewer), and caveats. Topics
   carry other names for an idea, so that "fitness function" also finds "evaluation function". A generation record names the model,

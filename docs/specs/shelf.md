@@ -333,13 +333,22 @@ The schema is fixed, so shelves are not split or merged. The library may still s
   is still on `default`, one proposal into the book's own event log (the five nearest shelves, the chat model's choice or `none` with a one-line reason, and what made it); and
   `python3 -m kb place-review` shows the proposals to the owner one book at a time, in the owner's terminal, and records each answer as one more line of that log. **A proposal and an answer
   are records. They change no book's shelf and no file of the book but its event log, to which each adds one line.** The matcher is fixed to what was measured (the embedding model `qwen3-embedding:4b` with no prefix, the chat model `gemma4:12b`,
-  the prompt `place-1`, five candidates), and another model is a new measurement. Not built: moving a book onto a shelf, placement at capture, placement by an OpenAlex primary topic, the sampling and audit of choices, counts
-  per shelf, the holding shelf and the tie margin.
+  the prompt `place-1`, five candidates), and another model is a new measurement.
+- **[proposed]** Built in the engine (the plan `2026-11-16-move-confirmed-books-onto-their-shelves`; `engine/README.md`, "Moving the books"): the move. `python3 -m kb place-apply` prints, read only, the list of
+  the books that the owner's answers would move (active, on `default`, with a current proposal and an answer that names a shelf the proposal offered; and, to finish a move whose line was not written, a book that is
+  already on its answered shelf with no `reshelved` line, shown as `record only`), each with the shelf it leaves and the one it joins, and a digest
+  of that exact text; `python3 -m kb place-apply --digest HEX` makes exactly those moves, only in the owner's terminal and only if the list, made again under the catalog lock, still has that digest, and appends one
+  `reshelved` line to each moved book's event log (the event `docs/specs/book.md` already lists). A move changes the book's `shelf` field and no other field of the root file (the store writes the file again in its own form, which for the 20 books moved so far differed from the old one in the shelf and nothing else, byte for byte), and changes no card, version or id.
+  **It is the `block` level of the governed action `reshelve-approve` only** (the owner at a terminal, with a preview and a digest); the levels `ask`, `delegated` and `none` and the host's ceiling need the workbench to
+  declare the action and are not built, so the statement above that every governed action offers all four levels is not yet met for this one. The moves so far are the 20 books the owner had answered
+  (the plan's Result). Not built: moving books the owner has not answered, an undo, placement at capture, placement by an OpenAlex primary topic, the sampling and audit of choices, counts per shelf, the holding shelf
+  and the tie margin.
 - **[proposed]** What an owner's answer is, and what it is not: the confirmation command refuses unless its input is a terminal, which stops a pipe, a file and an argument, but it is an interlock of the
   command line and **not proof that a person typed** (a program that holds a pseudo-terminal passes it, and anything that can write the library as the owner can append the same line). **A
-  recorded answer is therefore a record and not an approval.** The step that moves books onto shelves (the governed `reshelve-approve` and `schema-adopt` above) must not take such a line as the
-  owner's approval: it uses its own governed action, with a preview that shows what it will do and a digest of it, at the level the owner has set for it. That a record is not an approval is implied by the permission
-  levels above; it is recorded here so that the step is planned with it.
+  recorded answer is therefore a record and not an approval.** The step that moves books onto shelves does not take such a line as the owner's approval: the owner's approval is their own run of
+  `place-apply --digest`, in a terminal, with the digest of the list they read (a preview that shows what it will do, as the governed actions above require). How a later action that takes the levels
+  `ask`, `delegated` or `none` shows and binds what it will do is for the plan that builds it. That a record is not an approval is implied by the permission levels above; it is recorded here so that the step is planned with it.
+  The digest proves that the list is unchanged, not that the owner read it, and the terminal check is an interlock and not proof that a person typed.
 
 ### Changing a shelf's scope
 
