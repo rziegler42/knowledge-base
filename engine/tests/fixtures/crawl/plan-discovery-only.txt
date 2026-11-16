@@ -1,0 +1,30 @@
+# The crawl plan: written by the owner, kept outside the repository.
+# Form: [section] lines and key = value lines; a # starts a comment. Every key has a default, so a key left out takes the spec's value.
+# This first version holds the keys the discovery side reads and the file paths. The runner's own keys (ceilings, pacing, disk floors, the breaker,
+# the scan and the judge) are added when the runner is built.
+
+[limits]
+queue_low = 100             # discovery refills the queue when fewer rows than this are queued
+discover_target = 200       # rows one refill adds, at most
+queries_per_topic = 3       # queries made from a topic
+queued_total = 20000        # rows with status queued
+queued_per_domain = 50
+
+[sources]
+openalex = on
+arxiv = on
+wikipedia = on
+web_search = off            # on, or duckduckgo, to use it; its terms are unresolved, so it stays off until the owner turns it on
+wander_share = 0.2          # share of a batch taken from citation links, not from topic queries
+wander_depth = 2            # citation steps from a topic's own results
+wander_per_work = 5         # works taken from one kept work
+gap_openalex_s = 1          # seconds between requests to a source
+gap_arxiv_s = 3
+gap_wikipedia_s = 1
+gap_web_search_s = 30
+web_search_per_day = 20
+
+[files]
+topics = ~/.config/knowledge-base/crawl-topics.txt
+blacklist = ~/.config/knowledge-base/crawl-blacklist.txt
+allow = ~/.config/knowledge-base/crawl-allow.txt
