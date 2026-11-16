@@ -106,6 +106,15 @@ web_search_per_day = 20     # queries a day to the search engine
 [lists]
 phishing_domains = on       # required: the run stops if there is no copy of it at all
 urlhaus_recent = off        # on to use it; needs the key file and the owner's reading of abuse.ch's terms; built last
+phishing_domains_url = https://phish.co.za/latest/phishing-domains-ACTIVE.txt   # as read on 2026-11-16; confirmed by a real download before the parser is written
+phishing_domains_format = domains     # one hostname to a line
+public_suffix_url = https://publicsuffix.org/list/public_suffix_list.dat
+refresh_hours = 12          # a list is downloaded at most once in this many hours
+list_max_mb = 50            # a list over this size is refused
+list_min_share = 0.5        # a list smaller than this share of its last good copy is refused
+list_max_change = 0.3       # a refresh that changes more than this share of the entries is refused
+urlhaus_keep_days = 30      # how long a URL from the recent list is kept
+pinned_hosts = openalex.org, arxiv.org, wikipedia.org   # never blocked by a public list; a host and every host below it
 [scan]
 hold_kinds =                # the scan findings that hold a book (see "Filing and placement")
 [judge]

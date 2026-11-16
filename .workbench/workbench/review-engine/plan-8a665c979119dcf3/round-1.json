@@ -1,0 +1,36 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Candidate line",
+      "problem": "The plan declares no roadmap candidate, although this is a five-increment, cross-cutting change and therefore is not work small enough to bypass roadmap direction under the project policy.",
+      "severity": "major",
+      "suggestion": "Add an owner-directed roadmap candidate with this plan's finish line, then name it on the Candidate line before seeking plan approval."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment A, step 2; Completion criteria 1",
+      "problem": "The plan removes only `mc_cid` and `mc_eid`, but `population.md` specifies removal of all `mc_*` tracking parameters. This would leave canonical identity and list matching inconsistent with the spec for other `mc_` parameters.",
+      "severity": "major",
+      "suggestion": "Require tests and implementation to remove every query parameter whose name matches `mc_*`, alongside the listed exact-name parameters."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Increment B, step 4 and the `webclient.get` interface",
+      "problem": "The plan requires an Auth-Key-like header to name its sole permitted host, but neither `Policy` nor `get` defines a field or argument for that host. Increment E consequently has no specified way to establish and test the restriction.",
+      "severity": "major",
+      "suggestion": "Add an explicit credential-header/allowed-host policy field (or a separate credential request API), define its validation behavior, and have Increment E construct and exercise it."
+    },
+    {
+      "id": "R1-F4",
+      "location": "Increment D, steps 1 and 4; Increment E, steps 3–4",
+      "problem": "`lists_plan` is undefined and the plan does not specify the list addresses, formats, refresh periods, size/change thresholds, or URLhaus retention period it needs. `population.md` requires the crawl plan to name list addresses and formats and to set those bounds, so the proposed implementation cannot be configured or verified against the spec.",
+      "severity": "major",
+      "suggestion": "Define the list-plan schema and defaults/required fields, including each source's URL, parser format, refresh interval, validation thresholds, required status, and URLhaus retention; assign parsing/validation to an in-scope module or explicitly contract it with the runner plan."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has roadmap-policy, specification-drift, and interface/configuration gaps that prevent reliable implementation.",
+  "verdict": "changes_needed"
+}
