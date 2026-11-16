@@ -22,7 +22,7 @@ Nobody is at the keyboard to add a piece while a run is unattended, so the first
 
 | First version (built before the first unattended run) | Designed, built later |
 |---|---|
-| Sources: OpenAlex search and **its citation links** (the works a work cites and is cited by) as the way to leave the topics, arXiv search, Wikipedia search, and **a web search engine, best effort** | Following HTML links from any fetched page to any site; Wikipedia's links to other Wikipedia pages |
+| Sources: OpenAlex search and **its citation links** (the works a work cites and is cited by) as the way to leave the topics, arXiv search, Wikipedia search, and **a web search engine, best effort (built last; off if it is not finished by the supervised run)** | Following HTML links from any fetched page to any site; Wikipedia's links to other Wikipedia pages |
 | Files: web pages (HTML) and arXiv papers | PDFs on other hosts; plain text |
 | The crawl plan (global limits) with weighted topics | **Shelf entries and scouts**: per-shelf rules, seed limits, states, seeding and steady growth (`shelf.md`); the owner's request is that they are not ruled out |
 | Phishing.Database list; URLhaus recent mode (built last, off if not finished by the supervised run) | URLhaus lookups; other public lists |
@@ -69,6 +69,9 @@ filed_total = 200           # books the crawl may file in all
 per_domain_per_day = 3      # fetches per registrable domain per day
 batch = 8                   # candidates fetched per run
 cards_per_day = 30          # books given a card per day
+queue_low = 100             # discovery refills the queue when fewer rows than this are queued
+discover_target = 200       # rows one refill adds, at most
+queries_per_topic = 3       # queries made from a topic (cached by prompt version)
 queued_total = 20000        # rows with status queued
 queued_per_domain = 50
 retries = 3
@@ -93,6 +96,13 @@ arxiv = on
 wikipedia = on
 web_search = off            # duckduckgo to use it; its terms are unresolved, so it is off until the owner turns it on
 wander_share = 0.2          # share of a batch taken from citation links, not from topic queries
+wander_depth = 2            # citation steps from a topic's own results
+wander_per_work = 5         # works taken from one kept work
+gap_openalex_s = 1          # seconds between requests to a source
+gap_arxiv_s = 3
+gap_wikipedia_s = 1
+gap_web_search_s = 30
+web_search_per_day = 20     # queries a day to the search engine
 [lists]
 phishing_domains = on       # required: the run stops if there is no copy of it at all
 urlhaus_recent = off        # on to use it; needs the key file and the owner's reading of abuse.ch's terms; built last
@@ -145,7 +155,8 @@ allow = ~/.config/knowledge-base/crawl-allow.txt
 candidates(
   id INTEGER PRIMARY KEY, identity_key TEXT UNIQUE NOT NULL, address TEXT NOT NULL,
   source TEXT NOT NULL,        -- openalex | arxiv | wikipedia | web-search
-  found_from TEXT,             -- openalex:<work id>, the query, or a topic
+  source_id TEXT,              -- the source's own id for the work (openalex:W123), or NULL; wandering starts from it
+  found_from TEXT,             -- openalex:<id of the work it was cited by or cites>, the query, or a topic
   topic TEXT, weight INTEGER,  -- the topic and its weight, or NULL for a wandered candidate
   depth INTEGER NOT NULL DEFAULT 0, domain TEXT, ip TEXT,
   status TEXT NOT NULL,        -- queued | fetching | kept | rejected | failed | blocked
@@ -155,7 +166,7 @@ candidates(
 counters(day TEXT, key TEXT, n INTEGER, PRIMARY KEY(day, key))   -- fetches started, by day and by domain
 ```
 
-- **[proposed]** **Who writes what.** Discovery inserts `queued` rows, and `blocked` rows for an address it finds on the blacklist or a list. The runner changes the status of the rest. **Status transitions:** `queued` → `fetching` (the runner, in the same transaction that reserves one unit of the ceilings in `counters`) → `kept` (a book exists; its `book_id` is set; the later steps are followed from the book, not from this row), `rejected` (final: the judgement said no, or a type, size or duplicate rule said no) or `failed` (a network or capture error; back to `queued` at `next_try` after 1 hour, then 6, then 24, and `rejected: failed 3 times` when `tries` reaches the plan's `retries`). A `fetching` row older than 30 minutes returns to `queued` and **counts as a try**, so that a page that kills the converter does not loop. A refusal (403, 429) is a `failed` with a long delay and also counts toward the domain's refusals; **no alternate copy is searched for (not built)**. A candidate that the capture reports as already held or a duplicate becomes `rejected: already held` with the book's id.
+- **[proposed]** **Who writes what.** Discovery inserts `queued` rows, `blocked` rows for an address it finds on the blacklist or a list, and `rejected` rows with the reason `type` for a work whose only full text it already knows to be a type the first version does not take (a PDF on another host). The runner changes the status of every other row. **Status transitions:** `queued` → `fetching` (the runner, in the same transaction that reserves one unit of the ceilings in `counters`) → `kept` (a book exists; its `book_id` is set; the later steps are followed from the book, not from this row), `rejected` (final: the judgement said no, or a type, size or duplicate rule said no) or `failed` (a network or capture error; back to `queued` at `next_try` after 1 hour, then 6, then 24, and `rejected: failed 3 times` when `tries` reaches the plan's `retries`). A `fetching` row older than 30 minutes returns to `queued` and **counts as a try**, so that a page that kills the converter does not loop. A refusal (403, 429) is a `failed` with a long delay and also counts toward the domain's refusals; **no alternate copy is searched for (not built)**. A candidate that the capture reports as already held or a duplicate becomes `rejected: already held` with the book's id.
 - **[proposed]** **The order of work.** For each run the batch is filled by round-robin over the topics in proportion to their weights, oldest `added` first within a topic, with `wander_share` of the batch taken from wandered candidates.
 
 ### Filing and placement
