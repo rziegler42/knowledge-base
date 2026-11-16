@@ -186,6 +186,24 @@ Rejected:
 
 Left for the owner: nothing from the review. The plan asks about a security review at Increment C, not here.
 
+**Increment B.** Reviewer: the project's `reviewer` agent (read-only; it ran nothing), **one exchange, one round** of the caps. Recommendation: no blocking findings; nine findings, none blocking.
+
+Applied:
+
+- The topics file reader took a topic of one or two characters (`AI`, `Go`, `R`), and `make_queries` refused anything under three, so such a topic would have aborted a fill: `make_queries` now takes 1 to 300 characters, and a test reads a file and passes every topic it gives to `make_queries`.
+- A word that a search source reads as syntax drops the line: a word that starts with `-` or `+` (a lone ` - ` stays), or that holds a colon that is not its last character (`site:`, `filetype:`, `au:`, `ti:`). The marks that stay are still free text.
+- The fallback cuts a long topic at a word, not in the middle of one; the fallback keeps the owner's words as written (`C#` stays), by design, and the docstring says a source must put every query in its address as free text.
+- A path with a NUL character is a refusal of ours, not a `ValueError`.
+- The `quota` docstring says that day `d` takes picks `d*n+1` to `d*n+n` of one endless sequence, so a changed `n` still follows on and takes no pick twice, and that a small topic is reached about once in `1/(share*n)` days (the weight-1 topic of the owner's list, 1 in 956, about once in 48 days at 20 a day); a test now shows that the days of any `n` are slices of the one sequence.
+- Test names that claimed more than they showed were renamed or made to show it (the cache is never longer than `n`; the cache key; the day test); the file test's obscure expected value was made plain.
+
+Rejected:
+
+- A well-formed but off-topic entry in the cache is served as it stands (finding 4): a cache cannot be tied to the topic it answers, the entry is at most `n` plain queries, and the cache is the owner's own file. **For Increment E (and the runner):** keep the cache file in the index root with mode 600.
+- A proof of reach for any list (finding 6): not given; the docstring now says how often a topic of a given share is reached.
+
+Left for the owner: the todo list holds an item that the behaviour fingerprint of the crawl spec (`population.md`) names the models section "for the card, placement and embedding tasks" and not the entry set for `crawl-query`, which decides what an unattended run sends; it is a change to a spec's direction and so the owner's. The sources of Increments C and D must put each query in the address as free text (the reader drops syntax words, but the fallback sends the owner's topic as written).
+
 ## Deferred work
 
 - Following HTML links from fetched pages to other sites, and Wikipedia's own links (`population.md`, "designed, built later").
@@ -212,3 +230,34 @@ Left for the owner: nothing from the review. The plan asks about a security revi
 **Not run:** the engine's other tests (nothing else in the engine changed); any test with two processes (the plan forbids a process in a test); anything on macOS; the contract test against `webaddr` (not built).
 
 **Open:** the default `canon_address` and `site_of` stay a refusal until `kb/webaddr.py` exists (another plan); the contract test reads `docs/specs/population.md` by two text anchors and will fail loudly if they move.
+
+### Increment B — The topics and the queries (not yet committed)
+
+**Done.** Four new files and three changed, on the branch `crawl-discovery` from `9167a16`:
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/crawltopics.py` | 138 | `b1f7adf9b8b07ec5fc0a8e3b2887ba4309e1ec4bd8a511507ea86c9e7ce0c895` |
+| `engine/kb/crawlqueries.py` | 142 | `c59e81e8b0ddd546e62cb9a38ec00a8ee95b1a09e1e7a97a3a603129bb387f58` |
+| `engine/tests/test_crawltopics.py` | 279 | `3319da5571181e2d45ef00e83bf4b6e6b9366ec7c1df262a666426a1eca3bdfe` |
+| `engine/tests/test_crawlqueries.py` | 323 | `403993146097cfc5821206fa7609e1b415991c169e2f19fe4e5c5a9964316eca` |
+| `engine/kb/models.py` (one name and a comment) | | `14451817395d8e93a9a1d50137477bfb00f8c352c4b59dfaec5a3076af60a625` |
+| `engine/tests/test_models.py` (the `TASKS` assertion and one new test) | | `f69d2c9720c968292f81d9a6567184ca9368b6a1fce1c924e71c28d409868ed5` |
+| `docs/specs/models.md` (one paragraph for `crawl-query`) | | `fae41f2d212c484c875964a77c4d17f24f1916ef3484e743817a335174b26a52` |
+
+- `read_topics(path)` reads the owner's file strictly (a plain file of at most 256 KB, UTF-8, no NUL; sections `[name weight=N]` with N from 1 to 9,999,999; a topic of up to 300 characters under a section, cleaned of control, invisible and direction characters, none repeated in any case; at most 5,000 topics; a refusal names the line and never quotes the text). **A hash starts a comment only at the start of a line**, so `C#` and `F#` are topics; the spec says only "`#` starts a comment", and this is the reading chosen.
+- `shares(topics)` gives each weight over the sum. `quota(topics, n, day_index)` gives each topic its count of `n` picks for the day, from one endless golden-ratio sequence over the cumulative weights (integers only; deterministic; the counts add up to `n`).
+- `make_queries(topic, n, chat, cache, prompt_version)` sends the model one fixed text with the topic and `n` and nothing else, reads the reply strictly (one query to a line, numbering and quotation marks off, 3 to 120 characters, at most 12 words, letters, digits, spaces and ` -+/&.,:'()`, no web address, no syntax word, no heading), caches a good answer by version, number and topic and reads it again before trusting it, and falls back to the topic and two plain variants when there is no model, the model does not answer (`KbError`), or its reply holds no line it can read.
+- `crawl-query` is an optional task of `models.py` (a chat entry; it may be left unset), with its paragraph in `docs/specs/models.md`.
+
+**Verification as run (Linux, Python 3.14.4):**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawltopics engine.tests.test_crawlqueries engine.tests.test_models`: 263 tests, OK, repeated; the files hold no control, invisible or direction character (a first version did: the tool wrote escapes as raw characters, and the files were converted back to escapes and checked).
+- Deliberate breaks, each compile-checked, each file restored byte for byte and its hash compared, the bytecode cache removed before each: `crawltopics.py` 43 of 46 killed, `crawlqueries.py` 75 of 79, `models.py` 1 of 1: **119 of 126**. The 7 survivors are equivalent: the size check before the read and the one after it (each covers the other); the golden-ratio constant changed in its last bit (no pick below 2^60 moves); a quote strip for a one-character line (such a line is under 3 characters and dropped anyway); the spacing in the key for repeats and an empty list in the cache (both are already ruled out by the cleaned text and by `if hit:`); the `rstrip` after a cut (the text has single spaces).
+- `wb run code-work check`: checked 51 plans, no problems.
+
+**Not run:** the engine's other tests; any call to a model server (the model is a fake function in the tests; no test opens a socket or reads the owner's file); anything on macOS. The owner's real topics file was not read.
+
+**Decisions to know:** a topic of the owner's file goes out as a query as written when no model is set or it fails (so `C#` stays), while a line of a model's reply must be a plain query; the cache is held by the caller and must be kept in the index root with mode 600 (Increment E); `quota` reaches the weight-1 topic of a list shaped like the owner's about once in 48 days at 20 a day.
+
+**Open:** the todo items named in the review record (the fingerprint of the crawl spec, and the invisible characters in the committed test of Increment A).
