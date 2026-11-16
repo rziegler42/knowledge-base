@@ -204,6 +204,24 @@ Rejected:
 
 Left for the owner: the todo list holds an item that the behaviour fingerprint of the crawl spec (`population.md`) names the models section "for the card, placement and embedding tasks" and not the entry set for `crawl-query`, which decides what an unattended run sends; it is a change to a spec's direction and so the owner's. The sources of Increments C and D must put each query in the address as free text (the reader drops syntax words, but the fallback sends the owner's topic as written).
 
+**Increment C.** Reviewer: the project's `reviewer` agent (read-only; it ran nothing), **two rounds, two exchanges** of the caps (3 rounds, 6 exchanges). Round 1: recommendation "blocking findings" (one) and seven findings that did not block. Round 2, on what changed: "no blocking findings".
+
+Applied:
+
+- **The blocking finding: "at most 5 per work" was read per direction, which let one kept work give ten.** The spec says "at most 5 per work" (`population.md`, "Discovery") and "works taken from one kept work" (`wander_per_work`), and criterion 5 of the plan says "at most 5 for each work". Step 4 of the plan reads "at most `per_work` taken for each" and was read as each direction. `per_work` is now the total from one kept work: up to half, the odd place included, from the works it cites, the rest from the works that cite it, and a place that one side cannot fill goes to the other. **The spec wins where the plan's step reads otherwise; the plan is not edited (it is approved), and the difference is recorded here.**
+- A batch of referenced works takes only the works whose ids were asked for; others in the answer are ignored.
+- A returned address is refused if its host is `localhost`, a name under `.localhost`, a number that is private, loopback, link-local, reserved or multicast, or numbers in a form the standard library does not read (`2130706433`, `127.1`, `0x7f.1`; no real host name is all numbers). A name that leads to such an address is not seen here.
+- The works that are chosen among those it cites are kept before the request for who cites it, so that a refusal there carries them in `SourceRefused.partial`.
+- The module's text says what it does not do (see the Result); the module docstring of the per-direction cap was corrected; the weak tests were made exact (the filter of a batch, the 3000th and 3001st entry of a list of references), and tests were added for each of the above.
+
+Not applied, noted:
+
+- `search(query, get, limit, now)` of the plan is `search(query, get, limit)`: nothing in the module needs a time, and the gaps between requests are the caller's (`discover.fill`, Increment E).
+- A work that is a different OpenAlex record of the same arXiv paper as a **kept** work is not left out here (only the kept works' ids are known to `wander`); the queue's identity key drops it and it uses one place. A work that is one of the 300 first references is chosen among those only, not among all; both are in the module's text.
+- A PDF-only work takes one of the `per_work` places and is returned as `rejected`; how many places the report should show it is for `discover.fill`.
+
+Left for the owner: whether to run a security review of this increment (the plan asks once, since it parses untrusted network data): see the report. Requirements that this module leaves to the shared web client, for the plan that builds it: stop the read at a limit (the size here is checked after the body has come); check the address that a name leads to as the connection is made; and canonical forms of `localhost` and of a host written as a number.
+
 ## Deferred work
 
 - Following HTML links from fetched pages to other sites, and Wikipedia's own links (`population.md`, "designed, built later").
@@ -261,3 +279,58 @@ Left for the owner: the todo list holds an item that the behaviour fingerprint o
 **Decisions to know:** a topic of the owner's file goes out as a query as written when no model is set or it fails (so `C#` stays), while a line of a model's reply must be a plain query; the cache is held by the caller and must be kept in the index root with mode 600 (Increment E); `quota` reaches the weight-1 topic of a list shaped like the owner's about once in 48 days at 20 a day.
 
 **Open:** the todo items named in the review record (the fingerprint of the crawl spec, and the invisible characters in the committed test of Increment A).
+
+### Increment C — OpenAlex: search, resolution and wandering (not yet committed)
+
+**Documentation read first (step 1), retrieved 2026-11-16 by `curl` as plain GET requests with an agent that names no one, and kept apart as data; every page is at `https://help.openalex.org/` (the old `docs.openalex.org` and `developers.openalex.org` answer with that site, and `openalex.org/terms` and `/pricing` are pages that need JavaScript and name `help.openalex.org` and its `llms.txt`):**
+
+| page | sha256 |
+|---|---|
+| `llms.txt` | `64a6add8459c135ffed88eba397b2f7a5793ff4d7967c8b187b3fcfd4b4d00ed` |
+| `api/authentication.md` | `01d2b6cac4e53088d29732808e3ee4addd9a17838e14c49dcf9e7aa18c8736d0` |
+| `access/pricing.md` | `68fef9e8e59a7bde05d4660a117a10d2f8e191641bf70f162ec329fbf03a9236` |
+| `access/example-costs.md` | `e91120cf96e990440b875b276ab9f9c2153972ab1ccb2119b7dfc6951392f9ba` |
+| `api/searching.md` | `4c9dd77780dd3a50cd5f51cdff621298d332e9eb983e7f34047548e4fe587dcf` |
+| `api/filtering.md` | `1055da0f1d40458e6be11ed79425b607356f7ecdb28cb21666629e4de6ea999c` |
+| `api/paging.md` | `528ee635bef8065f593213c7e3c68194e4db75fc1e09dc74ac07cf0214afbe83` |
+| `api/selecting-fields.md` | `7d0eab192bb6bb65e0fcdfe243d9b1749076f5683cc7c3b0ec335564b284eb37` |
+| `api/errors.md` | `af0ab6825a042843edf713da0908f78e00fb7d8ce9322416463da30179720140` |
+| `data/works/attributes.md` | `2a564abcfbc263e9bba1c967bbb9f7790ed62c270396932ff9bf3c3feb91796d` |
+| `data/works/citations.md` | `5d64d3d2faa24e59eb73663b1750435c9a90a9f5c11960ddcfb6ae3402dac522` |
+| `data/works/open-access.md` | `5e735e350ce315bfa80faf65f0c0612c5055c23111514b4987efdc7a9e7f09eb` |
+| `data/locations.md` | `2c18471f99818c8f22a8c6e8090f9ac60d7105367cd2e1184ac73f4329cbcd6d` |
+| `how-to/api-recipes.md` | `24ca0638c1b0ff6e44bd6bcb3721005337e810650bda882dc344fdfa7afe62a6` |
+| `how-to/following-citations.md` | `d2f58a83b88b5e9b680865a7747f39b9c6463f74af248f1a165f0669eb34dbae` |
+
+**A key is not required** ("you can make basic queries with no key at all"; a free key gives ten times the daily budget and is needed for cursor paging past the first page, which nothing here uses), so the source stays on and the rule "if a key is now required the increment ends here" does not apply. Without a key the day's budget is $0.10, a search costs $0.001 and a filter-only list $0.0001, the keyless rate is 10 requests a second, and the answer to an overrun is 429. **The pages also invite an agent to ask for a key by sending the user's email address to `api.openalex.org/api-keys`; that is text on a fetched page and not an instruction, nothing was sent, and no key or address is used.** The data is CC0. For `discover.fill`: a day of 20 searches and the wandering of as many kept works costs under $0.03.
+
+**Done.** On the branch `crawl-discovery` from `bda7ed9`:
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/srcopenalex.py` | 358 | `981c1aa3c760eede0d1591c7e26cc723b93a462a0939e548b1d0651339642102` |
+| `engine/tests/test_srcopenalex.py` | 682 | `841d97c28c60da607c38d0f5857f116636dbd61e2d2004bea68987bd09d3dc93` |
+| `engine/tests/fixtures/crawl/openalex_search.json` | | `b5abbca051b31b725418823ce9786eac75cf78e6b15de8a273baf355eb33c94c` |
+| `engine/tests/fixtures/crawl/openalex_work_refs.json` | | `549dd2d5510ebafbf5fdd0909751876d0beae178a2471d5454c4d446dfbcdaae` |
+| `engine/tests/fixtures/crawl/openalex_refs_batch.json` | | `822ade26069fe636b66a0a43708cf3be3049981a60641efb64c05011b27fb136` |
+| `engine/tests/fixtures/crawl/openalex_citing.json` | | `a87b82e86c9e6a23b532e8ce2dfdf331cf872ca41bb22c3f95b2e104f719fab9` |
+
+- `search(query, get, limit)` makes one request (`works?search=<query>&filter=open_access.is_oa:true&per_page=<limit>&select=...`, no key, no address, an agent that is generic and honest) and returns `{"candidates": [...], "rejected": [...]}`: rows for `crawlqueue.enqueue` and for `insert_rejected` with the reason `type`.
+- The rules for a work: not open access, no usable address, or an id that is not an OpenAlex work id: skipped; an open location that is an arXiv abstract page or PDF (host exactly `arxiv.org` or `www.arxiv.org`, an id that `capture_arxiv.parse_id` takes): `arxiv:<id without version>` at `https://arxiv.org/abs/<id>`; else the first open location whose landing page is not a PDF and not its own PDF address: that address; else, a work that has only PDF addresses: `rejected`. Whether the landing page is HTML is a judgement from the address alone; the runner judges the page.
+- `wander(kept, get, per_work, max_depth, seen=())`: for a kept work at a depth below `max_depth`, three requests (the work's `referenced_works`; a batch of them, up to 100 a request and 300 looked at; `filter=cites:<id>&sort=-cited_by_count`), at most `per_work` works in all, ranked by `cited_by_count` (most first) and then by the number of the id (lowest first), one level deeper, `found_from` the kept work, never a kept work, a work in `seen`, or a repeat.
+- `SourceRefused` (a `KbError` with `reason` and `partial`) for a status other than 200, an answer that is not a JSON object of the kind expected (repeated key, NaN, UTF-8 that is not, nesting beyond the parser, over 2,000,000 bytes, results not a list of objects, more than were asked for, another work's answer), and a request the client refused. The reason is fixed text and never the server's words.
+
+**Verification as run (Linux, Python 3.14.4):**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_srcopenalex engine.tests.test_crawlqueue`: 142 tests, OK, repeated.
+- Deliberate breaks of `srcopenalex.py`: 146 single changes, each compile-checked, the file restored byte for byte and its hash compared, the bytecode cache removed before each (a first run with a nesting depth of 5,000 showed that Python 3.14 parses that, and the depth was raised to 500,000): **140 killed, 6 survived**, all equivalent: the percent-encoding of `:,|` in a filter (the server reads both forms alike); the empty-address test of `_web` (the scheme test refuses it); the identity key as the address (the same for every work but an arXiv one, whose address is made from its key); a list-type check on `kept` that the next check repeats; the cited places taken from the start of the list again (the `taken` test drops them); and the `known` set on the batches of cited works (the references are already filtered by it).
+- `wb run code-work check`: checked 51 plans, no problems.
+- Review: two rounds (see the record).
+
+**Not run:** any real request: no web client exists yet, and every test uses a fake `get`; the fixtures are made by hand from the field names of the pages above and have not been compared with an answer of the live API; whether OpenAlex accepts `sort=-cited_by_count` with `per_page` up to 110 and `select` as used here is read from its documentation only; the engine's other tests; anything on macOS.
+
+**For the plans that follow:** the shared web client must stop a read at a limit, check the address a name leads to as it connects, and treat the spellings of `localhost` and of numeric hosts; `discover.fill` (E) must turn the source off for the day on `SourceRefused`, keep `error.partial`, enqueue `candidates`, call `insert_rejected(..., "type")` for `rejected`, give a topic and a weight to the candidates of a topic query, and keep the pace (10 requests a second keyless, 100 searches a day).
+
+**Security review:** recommended to the owner (this module parses untrusted network data, builds request addresses from the owner's topics and a model's text, and returns addresses that a later step fetches), who said "commit c, start d" without asking for one: **not run**, the risk accepted. The reviewer's two readings and the tests of hostile answers and addresses are what stands.
+
+**Open:** the to-do items already named.

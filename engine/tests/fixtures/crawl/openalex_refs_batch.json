@@ -1,0 +1,53 @@
+{
+  "meta": {"count": 6, "db_response_time_ms": 9, "page": 1, "per_page": 100},
+  "results": [
+    {
+      "id": "https://openalex.org/W2000001",
+      "type": "article",
+      "cited_by_count": 50,
+      "open_access": {"is_oa": true, "oa_status": "gold", "oa_url": "https://journal.example.org/articles/r1", "any_repository_has_fulltext": false},
+      "best_oa_location": {"id": "doi:10.1/r1", "is_oa": true, "landing_page_url": "https://journal.example.org/articles/r1", "pdf_url": null, "version": "publishedVersion"},
+      "locations": [{"id": "doi:10.1/r1", "is_oa": true, "landing_page_url": "https://journal.example.org/articles/r1", "pdf_url": null, "version": "publishedVersion"}]
+    },
+    {
+      "id": "https://openalex.org/W2000002",
+      "type": "preprint",
+      "cited_by_count": 10,
+      "open_access": {"is_oa": true, "oa_status": "green", "oa_url": "https://arxiv.org/pdf/2402.00002", "any_repository_has_fulltext": true},
+      "best_oa_location": {"id": "pmh:oai:arXiv.org:2402.00002", "is_oa": true, "landing_page_url": "https://arxiv.org/abs/2402.00002", "pdf_url": "https://arxiv.org/pdf/2402.00002", "version": "submittedVersion"},
+      "locations": [{"id": "pmh:oai:arXiv.org:2402.00002", "is_oa": true, "landing_page_url": "https://arxiv.org/abs/2402.00002", "pdf_url": "https://arxiv.org/pdf/2402.00002", "version": "submittedVersion"}]
+    },
+    {
+      "id": "https://openalex.org/W2000003",
+      "type": "article",
+      "cited_by_count": 50,
+      "open_access": {"is_oa": true, "oa_status": "gold", "oa_url": "https://journal.example.org/articles/r3", "any_repository_has_fulltext": false},
+      "best_oa_location": {"id": "doi:10.1/r3", "is_oa": true, "landing_page_url": "https://journal.example.org/articles/r3", "pdf_url": null, "version": "publishedVersion"},
+      "locations": [{"id": "doi:10.1/r3", "is_oa": true, "landing_page_url": "https://journal.example.org/articles/r3", "pdf_url": null, "version": "publishedVersion"}]
+    },
+    {
+      "id": "https://openalex.org/W2000004",
+      "type": "article",
+      "cited_by_count": 5,
+      "open_access": {"is_oa": true, "oa_status": "green", "oa_url": "https://repo.example.edu/files/r4.pdf", "any_repository_has_fulltext": true},
+      "best_oa_location": {"id": "pmh:oai:repo.example.edu:4", "is_oa": true, "landing_page_url": "https://repo.example.edu/files/r4.pdf", "pdf_url": "https://repo.example.edu/files/r4.pdf", "version": "acceptedVersion"},
+      "locations": [{"id": "pmh:oai:repo.example.edu:4", "is_oa": true, "landing_page_url": "https://repo.example.edu/files/r4.pdf", "pdf_url": "https://repo.example.edu/files/r4.pdf", "version": "acceptedVersion"}]
+    },
+    {
+      "id": "https://openalex.org/W2000005",
+      "type": "article",
+      "cited_by_count": 1,
+      "open_access": {"is_oa": false, "oa_status": "closed", "oa_url": null, "any_repository_has_fulltext": false},
+      "best_oa_location": null,
+      "locations": []
+    },
+    {
+      "id": "https://openalex.org/W2000006",
+      "type": "article",
+      "cited_by_count": 7,
+      "open_access": {"is_oa": true, "oa_status": "hybrid", "oa_url": "https://journal.example.org/articles/r6", "any_repository_has_fulltext": false},
+      "best_oa_location": {"id": "doi:10.1/r6", "is_oa": true, "landing_page_url": "https://journal.example.org/articles/r6", "pdf_url": "https://journal.example.org/articles/r6/pdf", "version": "publishedVersion"},
+      "locations": [{"id": "doi:10.1/r6", "is_oa": true, "landing_page_url": "https://journal.example.org/articles/r6", "pdf_url": "https://journal.example.org/articles/r6/pdf", "version": "publishedVersion"}]
+    }
+  ]
+}
