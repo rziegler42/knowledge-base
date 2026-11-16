@@ -202,13 +202,20 @@ def _held_or_resumed(store, ident, book_id, label):
     return _resume(store, ident, book_id, version_id)
 
 
-def _record_failure(store, ident, book_id, base_id, label, meta, error):
+def _get(policy, address, allow_private, max_bytes, timeout, total_timeout, types, what, accept):
+    """One request: the old bounded fetch, or the shared client under a policy."""
+    if policy is None:
+        return capture_url.fetch(address, allow_private, max_bytes, timeout, total_timeout, types=types, what=what, accept=accept)
+    return capture_url.policy_fetch(policy, address, max_bytes, timeout, total_timeout, types, accept)
+
+
+def _record_failure(store, ident, book_id, base_id, label, meta, error, auto_filed=False):
     """A fetch that failed: keep the failure in the stage state of a version, so a later call can retry into it."""
     if not book_id:
         book_id = ids.new_book_id()
         ident.reassign("arxiv", base_id, book_id)  # recorded first, so a stop after the book is made still finds it
         store.create_book(title=(meta or {}).get("title", ""), kind="preprint", authors=(meta or {}).get("authors"),
-                          year=(meta or {}).get("year"), identity_keys={"arxiv": base_id}, book_id=book_id)
+                          year=(meta or {}).get("year"), identity_keys={"arxiv": base_id}, book_id=book_id, auto_filed=auto_filed)
         store.append_event(book_id, "found", arxiv_id=base_id)
     version_id = _version_for(store, book_id, label) if label else _version_for(store, book_id, None)
     if version_id is None:
@@ -221,15 +228,20 @@ def _record_failure(store, ident, book_id, base_id, label, meta, error):
 
 def capture(store, ident, arxiv_id, allow_private=False, api_base=API_BASE, pdf_base=PDF_BASE,
             max_bytes=PDF_MAX_BYTES, metadata_max_bytes=METADATA_MAX_BYTES, timeout=capture_url.TIMEOUT,
-            total_timeout=capture_url.TOTAL_TIMEOUT):
+            total_timeout=capture_url.TOTAL_TIMEOUT, policy=None, auto_filed=False):
     """Capture one version of an arXiv paper. With no version in the id, the latest is captured. Returns a dict whose
     status is filed, held (that version is already stored, and nothing was downloaded) or failed (the reason is
-    recorded in the stage state, and a later call retries it). A bad id or address raises KbError and records nothing."""
+    recorded in the stage state, and a later call retries it). A bad id or address raises KbError and records nothing.
+
+    With a `policy` (a `webclient.Policy`) the metadata and file requests are made by the shared client under it, with the types of arXiv's own answers; a refusal by the policy raises `webclient.Refused` and
+    records nothing. `auto_filed` marks a book made by this call as filed by the unattended crawl. Under a policy `allow_private` is not used (the policy's own `allow_private` decides), and a version
+    that is already held is returned without any request or hook."""
     base_id, wanted = parse_id(arxiv_id)
     api, pdf = _check_base(api_base), _check_base(pdf_base)
     store._guard()
-    capture_url.require_allowed(api, allow_private, total_timeout)
-    capture_url.require_allowed(pdf, allow_private, total_timeout)
+    if policy is None:
+        capture_url.require_allowed(api, allow_private, total_timeout)
+        capture_url.require_allowed(pdf, allow_private, total_timeout)
 
     book_id = capture_url._live(store, ident, "arxiv", base_id)
     if book_id and wanted:  # a version that is already stored needs no request at all
@@ -238,12 +250,14 @@ def capture(store, ident, arxiv_id, allow_private=False, api_base=API_BASE, pdf_
             return held
 
     try:
-        page = capture_url.fetch(f"{api}?id_list={base_id}" + (f"v{wanted}" if wanted else ""), allow_private,
-                                 metadata_max_bytes, timeout, total_timeout, types=METADATA_TYPES,
-                                 what="metadata answer", accept="application/atom+xml, application/xml;q=0.9")
+        page = _get(policy, f"{api}?id_list={base_id}" + (f"v{wanted}" if wanted else ""), allow_private,
+                    metadata_max_bytes, timeout, total_timeout, METADATA_TYPES,
+                    "metadata answer", "application/atom+xml, application/xml;q=0.9")
         meta = parse_atom(page.body, base_id, wanted)
     except FetchError as e:
-        return _record_failure(store, ident, book_id, base_id, f"v{wanted}" if wanted else None, None, e)
+        if policy is not None and capture_url.is_refusal(e):
+            raise
+        return _record_failure(store, ident, book_id, base_id, f"v{wanted}" if wanted else None, None, e, auto_filed)
     label = meta["label"]
     if book_id and not wanted:  # the latest was asked for, and only now is its label known
         held = _held_or_resumed(store, ident, book_id, label)
@@ -252,12 +266,14 @@ def capture(store, ident, arxiv_id, allow_private=False, api_base=API_BASE, pdf_
 
     pdf_address = f"{pdf}/{base_id}{label}"
     try:
-        page = capture_url.fetch(pdf_address, allow_private, max_bytes, timeout, total_timeout,
-                                 types=("application/pdf",), what="PDF", accept="application/pdf")
+        page = _get(policy, pdf_address, allow_private, max_bytes, timeout, total_timeout,
+                    ("application/pdf",), "PDF", "application/pdf")
         if not page.body.startswith(b"%PDF-"):
             raise FetchError("not a PDF: the file does not start like one")
     except FetchError as e:
-        return _record_failure(store, ident, book_id, base_id, label, meta, e)
+        if policy is not None and capture_url.is_refusal(e):
+            raise
+        return _record_failure(store, ident, book_id, base_id, label, meta, e, auto_filed)
 
     digest = hashlib.sha256(page.body).hexdigest()
     source = {**{k: meta[k] for k in ("arxiv_id", "label", "title", "authors", "year", "abstract", "categories",
@@ -268,7 +284,7 @@ def capture(store, ident, arxiv_id, allow_private=False, api_base=API_BASE, pdf_
         book_id = ids.new_book_id()
         ident.reassign("arxiv", base_id, book_id)  # recorded first, so a stop after the book is made still finds it
         store.create_book(title=meta["title"], kind="preprint", authors=meta["authors"], year=meta["year"],
-                          identity_keys={"arxiv": base_id}, book_id=book_id)  # the DOI is added once it is claimed
+                          identity_keys={"arxiv": base_id}, book_id=book_id, auto_filed=auto_filed)  # the DOI is added once it is claimed
     version_id = _version_for(store, book_id, label)
     if version_id is None:
         version_id = store.add_version(book_id, label=label, source=source)

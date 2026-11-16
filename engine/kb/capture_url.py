@@ -8,6 +8,7 @@ parsed here: the page is stored whole and left for the conversion stage.
 A page is looked up by identity before any download and by content hash after it. A page the library already holds is
 not stored again: a different address with the same bytes, or a redirect to a held address, is a sighting on the
 existing book. A capture that stopped half way is resumed by the next call for the same address."""
+import copy
 import hashlib
 import http.client
 import ipaddress
@@ -19,7 +20,7 @@ import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
-from . import KbError, __version__, identity, ids, stages, textutil
+from . import KbError, __version__, identity, ids, stages, textutil, webaddr
 from .store import now
 
 USER_AGENT = f"knowledge-base/{__version__} (single GET; personal research library)"
@@ -283,6 +284,29 @@ def fetch(address, allow_private=False, max_bytes=MAX_BYTES, timeout=TIMEOUT, to
                                          types, what, accept, live), total_timeout + 0.3, on_timeout=cut)
 
 
+def policy_fetch(policy, address, max_bytes, timeout, total_timeout, types=None, accept=None):
+    """One GET of a canonical address through the shared client (`webclient.get`) under a policy, as a Page. `types` and `accept`, when given, replace those of the policy for this request. A refusal by the
+    policy is `webclient.Refused` (a FetchError); a status other than 200 is a FetchError. The client is imported here and not at the top, because `webclient` imports this module."""
+    from . import webclient
+    own = copy.copy(policy)
+    if types is not None:
+        own.types = tuple(types)
+    if accept is not None:
+        own.accept = accept
+    result = webclient.get(address, policy=own, max_bytes=max_bytes, timeout=timeout, total_timeout=total_timeout)
+    status, headers, body = result
+    if status != 200:
+        raise FetchError(f"HTTP {status}")
+    kept = {k: textutil.clean(headers[k], 300) for k in KEPT_HEADERS if k in headers}
+    return Page(result.final, status, kept, body)
+
+
+def is_refusal(error):
+    """Whether a FetchError is a refusal by the shared client's policy (which makes no book), not a failed fetch."""
+    from . import webclient
+    return isinstance(error, webclient.Refused)
+
+
 def _live(store, ident, kind, value):
     """The book an index entry names, if that book exists. An entry for a book that was never made is stale."""
     book_id = ident.lookup(kind, value)
@@ -345,7 +369,7 @@ def require_allowed(address, allow_private, total_timeout=TOTAL_TIMEOUT):
 
 
 def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, timeout=TIMEOUT,
-            total_timeout=TOTAL_TIMEOUT):
+            total_timeout=TOTAL_TIMEOUT, policy=None, types=None, auto_filed=False):
     """Capture one web page into the library. Returns a dict whose status is:
 
     filed      the page was fetched and stored as a new book (or into a book whose earlier fetch had failed or stopped);
@@ -353,10 +377,16 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
     duplicate  it was fetched but the library already holds it (same final address or same bytes): a sighting;
     failed     the fetch failed; the reason is recorded in the book's stage state, and a later call retries it.
 
-    A refused address (bad scheme, credentials, a private address without permission) raises KbError and records nothing."""
-    asked = identity.normalize_address(address)
+    A refused address (bad scheme, credentials, a private address without permission) raises KbError and records nothing.
+
+    With a `policy` (a `webclient.Policy`) the request is made by the shared client under it: the address is made canonical by `webaddr`, and a refusal by the policy (a blocked address at any hop, a private
+    address, a type or content that the policy will not take) raises `webclient.Refused` and records nothing, no book and no index entry. `types` replaces the content types that are taken. `auto_filed` marks a
+    book made by this call as filed by the unattended crawl. Under a policy `allow_private` is not used (the policy's own `allow_private` decides), and a book that is already held is returned without the
+    policy's hook being asked, since nothing is fetched."""
+    asked = identity.normalize_address(address) if policy is None else webaddr.canon_address(address)
     store._guard()
-    require_allowed(asked, allow_private, total_timeout)
+    if policy is None:
+        require_allowed(asked, allow_private, total_timeout)
 
     book_id = _live(store, ident, "url", asked)
     version_id = None
@@ -369,20 +399,25 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
             return resumed
 
     try:
-        page = fetch(asked, allow_private, max_bytes, timeout, total_timeout)
+        if policy is None:
+            page = fetch(asked, allow_private, max_bytes, timeout, total_timeout, **({} if types is None else {"types": tuple(types)}))
+        else:
+            page = policy_fetch(policy, asked, max_bytes, timeout, total_timeout, types)
         if page.body[:2] == b"\x1f\x8b" or b"\x00" in page.body[:8192]:
             # a web page is text; compressed or binary data under a page's name would be stored as page.html
             raise FetchError("the response looks like binary or compressed data, not a web page")
         try:
-            final = identity.normalize_address(page.final)
+            final = identity.normalize_address(page.final) if policy is None else page.final   # the client's final address is canonical already
         except KbError as e:
             raise FetchError(f"the final address is not usable: {e}") from None
     except FetchError as e:
+        if policy is not None and is_refusal(e):
+            raise   # the policy said no: nothing is recorded
         reason = textutil.clean(str(e), 300)  # the reason can carry text a server chose, such as a content type
         if not book_id:
             book_id = ids.new_book_id()
             ident.reassign("url", asked, book_id)  # recorded first, so a stop after the book is made still finds it
-            store.create_book(title="", kind="web page", identity_keys={"url": asked}, book_id=book_id)
+            store.create_book(title="", kind="web page", identity_keys={"url": asked}, book_id=book_id, auto_filed=auto_filed)
             version_id = store.add_version(book_id, source={"address_asked": asked})
             store.append_event(book_id, "found", address_asked=asked)
         stages.mark(store, book_id, version_id, "fetched", "failed", reason=reason, tool=TOOL)
@@ -412,7 +447,7 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
         for value in [final] + aliases:
             ident.reassign("url", value, book_id)  # recorded first, so a stop after the book is made still finds it
         keys = {"url": final, **({"url_alias": aliases} if aliases else {})}
-        store.create_book(title="", kind="web page", identity_keys=keys, book_id=book_id)
+        store.create_book(title="", kind="web page", identity_keys=keys, book_id=book_id, auto_filed=auto_filed)
         version_id = store.add_version(book_id, source=source)
     store.file_payload(book_id, version_id, "original", {"page.html": page.body}, primary="page.html", tool=TOOL)
     _register_from_source(store, ident, book_id, version_id)
