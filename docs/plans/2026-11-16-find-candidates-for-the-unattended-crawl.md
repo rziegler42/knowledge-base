@@ -1,6 +1,6 @@
 # Find candidates for the unattended crawl: the queue, the topics and the sources
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-16
 Candidate: none (no roadmap holds a candidate for it: the crawl is specified in `docs/specs/population.md`, which the owner approved as the design to build; adding a roadmap candidate is the owner's change of direction and is not asked for here)
 Specs: docs/specs/population.md, docs/specs/shelf.md
@@ -167,7 +167,24 @@ Each increment's recorded verification stands unless a later one changed its inp
 
 ## Review record
 
-Empty until a review is asked for.
+**Increment A.** Reviewer: the project's `reviewer` agent (read-only; it ran nothing), **one exchange, one round** of the caps (3 rounds, 6 exchanges). Recommendation: no blocking findings; nine findings, none blocking, one extra remark on the exactness of the shape check.
+
+Applied:
+
+- `INSERT OR IGNORE` on the identity key, as the spec and Criterion 2 say (the duplicate check before it stays, so the two are equivalent under the lock; `rowcount` decides `duplicate`).
+- A canonicaliser's answer is checked as data: a non-string, a `ValueError` from `urlsplit`, a control or invisible character, a host with no registrable domain are all `refused`.
+- Upper bounds on `weight` (1,000,000) and `depth` (1,000), so a huge number is a `KbError` of ours and not an `OverflowError` of SQLite; `ip` must be an IP address.
+- The shape check also compares the text of each table with the spec's, white space apart, so a `CHECK`, `STRICT`, `WITHOUT ROWID` or a generated column is seen (the reviewer's remark that `table_info` cannot show them).
+- Tests: a changed type, NOT NULL, default and extra constraint each are refused (the old test's name claimed more than it did and was renamed); a test runs every public function against a table of all six statuses and compares every original row; the text guard now also names `ON CONFLICT`, `DO UPDATE`, `ALTER`, `executescript`, `writable_schema` and `VACUUM`; the second connect's `busy_timeout` and WAL, and the mode of the `-wal` and `-shm` files, are checked.
+- The docstring says that a lock held over 30 seconds, or a transaction a caller left open, is SQLite's `OperationalError` and not a refusal of ours.
+
+Rejected:
+
+- Tests with two processes instead of threads: the plan says no test starts a process. The threads each hold their own connection, so SQLite's file locking is what they exercise; behaviour across processes and on macOS is not shown here.
+- The gap between the checks on the file and `sqlite3.connect` (finding 9): the folder is the owner's index root and the file is mode 600; no one else can swap it. Recorded as a residual, not acted on.
+- Wrapping `OperationalError` in `KbError` (finding 7): a held lock or a caller's open transaction is a fault of the environment or the caller, and hiding the type would hide the cause; documented instead.
+
+Left for the owner: nothing from the review. The plan asks about a security review at Increment C, not here.
 
 ## Deferred work
 
@@ -178,4 +195,20 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+### Increment A — The candidate queue (not yet committed)
+
+**Done.** `engine/kb/crawlqueue.py` (311 lines, sha256 `f4c2065e9a44916db5504f376974e7f2ce91fe66351a5c90c2bf5632faaf92c4`) and `engine/tests/test_crawlqueue.py` (712 lines, sha256 `73c0dc51259900c37fd776ad04b838d0592c8701a716d344ee9bcaab9953d16d`), made on the branch `crawl-discovery` from `f26d812`. No other file changed but this plan's status, review record and result.
+
+- `connect(folder)` makes `candidates.sqlite` with mode 600, `user_version` 1, WAL and a 30,000 ms `busy_timeout`, by the first of two openers (`BEGIN IMMEDIATE` decides who makes the table); it refuses a link, a folder, a pipe, a file of another owner or one that others can read, another version, another table, an extra table, index, view or trigger, and a table whose text is not the spec's.
+- `enqueue`, `insert_blocked`, `insert_rejected` return `queued` / `blocked` / `rejected`, `duplicate`, `too_long`, `refused` or `capped`; discovery's only reasons are `owner`, `list:<name>` and `type`; only rows with status `queued` count against the caps; nothing in the module deletes or changes an existing row. `kept_sources` and `counts` read only.
+- `webaddr` is not built; `canon_address` and `site_of` are arguments, and the default (import `webaddr`) is a refusal that says so until it exists.
+
+**Verification as run (Linux, Python 3.14.4, at `f26d812` plus the two new files):**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlqueue`: 68 tests, OK, three runs in a row; with `engine.tests.test_models` added (not named by the increment, run once for the check that nothing else moved): 243 tests, OK.
+- Deliberate breaks (`crawlqueue.py`, 61 single changes, each compile-checked, the file restored byte for byte and its hash compared; the bytecode cache removed before each run, because a first pass showed that a same-size change made in the same second ran from the old cache and gave false survivors): **52 killed, 9 survived**, all judged equivalent: no `O_NOFOLLOW` on create (`O_EXCL` already fails on a link and the `lstat` check refuses it); the plain-file check (a link, a folder and a pipe are refused by the mode check, and SQLite refuses a pipe or folder of mode 600 itself; a test covers the pipe); the owner check (cannot be tested without a second user); `timeout=30` of `sqlite3.connect` (the explicit `PRAGMA busy_timeout` overrides it); the unique, table-name and column checks (the comparison of the table's text with the spec's covers each, and a test per kind of change is in the suite); plain `INSERT` for `INSERT OR IGNORE` and the `rowcount` test (the duplicate check before them makes them equivalent under the lock).
+- `wb run code-work check`: checked 51 plans, no problems, run after the review fixes and the plan's own edits; `wb plan-status` still says `approved`.
+
+**Not run:** the engine's other tests (nothing else in the engine changed); any test with two processes (the plan forbids a process in a test); anything on macOS; the contract test against `webaddr` (not built).
+
+**Open:** the default `canon_address` and `site_of` stay a refusal until `kb/webaddr.py` exists (another plan); the contract test reads `docs/specs/population.md` by two text anchors and will fail loudly if they move.
