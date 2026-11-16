@@ -18,6 +18,8 @@ a key by its look: a bare key with no name around it is printed as text. The spe
 key stays the runner's first line."""
 
 import datetime
+import errno
+import fcntl
 import json
 import math
 import os
@@ -44,11 +46,21 @@ STEPS = ("run_start", "refuse", "list_update", "discover", "enqueue", "block", "
          "reject", "card", "propose", "move", "fail", "breaker", "stop", "run_end", "report")
 OUTCOMES = ("ok", "skipped", "rejected", "failed", "blocked", "held", "refused", "tripped")
 FIELDS = ("ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds")
+BREAKER_KINDS = ("consecutive_failures", "failure_share", "model_down", "stage_bound")  # the runner plan's contract for `crawl/breaker.json`
+MAX_LOCK_LINE = 256               # the most of the lock's line that is read
+MAX_RUN_FILES = 60                # the most log files `last_run` looks through for a run (it stops at the newest file that has one)
+MAX_RUN_BYTES = 128 * 1024 * 1024  # and the most bytes it reads in all
+GIB = 1024 ** 3                   # a floor of the plan is in gigabytes; read here as 2**30 bytes (to be checked against the runner's guard)
+# the values of the approved plan that the status uses, and no others
+PLAN_VALUES = ("fetches_per_day", "per_domain_per_day", "cards_per_day", "filed_total", "timezone", "bulk_floor_gb", "index_floor_gb",
+               "domain_refusals", "phishing_domains", "urlhaus_recent")
 
 _TEXT_FIELDS = ("candidate", "book", "host", "reason")
 _TS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _LOG_NAME = re.compile(r"crawl-([0-9]{4}-[0-9]{2}-[0-9]{2})\.jsonl")
+_DIGEST = re.compile(r"[0-9a-f]{32}\n?")
+_LOCK_LINE = re.compile(r"([0-9]{1,10}) ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\n?")
 _ZONE = re.compile(r"[A-Za-z][A-Za-z0-9_+\-/]{0,63}")
 _HEADER = re.compile(r"(?<![A-Za-z0-9])(?:auth-key|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)[\"']?\s*[:=]", re.I)
 _BEARER = re.compile(r"(?<![A-Za-z0-9])bearer\s+[A-Za-z0-9._~+/=-]{8,}", re.I)
@@ -270,10 +282,11 @@ def read_log(path, *, limit=MAX_LOG_BYTES, tail=False):
     "ok"|"missing"|"bad", "reason": text or None}`. A bad line is skipped and counted by its kind; a blank line is skipped and not counted. A file
     over `limit` is read from its start (or, with `tail`, from its end) and the line that the cut splits is dropped, not counted."""
     result = read_file(path, limit, tail=tail)
-    out = {"lines": [], "bad": {}, "cut": False, "first": None, "last": None, "status": result.status, "reason": result.reason}
+    out = {"lines": [], "bad": {}, "cut": False, "first": None, "last": None, "status": result.status, "reason": result.reason, "bytes": 0}
     if result.status != "ok":
         return out
     data = result.data
+    out["bytes"] = len(data)
     if result.cut:
         out["cut"] = True
         if tail:
@@ -392,3 +405,322 @@ def lines_of_day(index_root, day, zone, *, limit=MAX_LOG_BYTES):
     if out["lines"]:
         out["first"], out["last"] = out["lines"][0]["ts"], out["lines"][-1]["ts"]
     return out
+
+
+# --- the state: the breaker, the lock, the stop file -------------------------------------------------------------------------------------------
+
+def _str_ok(value, limit):
+    if not isinstance(value, str) or len(value) > limit:
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _breaker(state, detail=None, fields=None):
+    out = {"state": state, "paused": state != "not_tripped", "detail": detail, "reason": None, "kind": None, "at": None, "run": None}
+    if fields:
+        out.update(reason=clean(fields["reason"], 300), kind=clean(fields["kind"], 40), at=clean(fields["at"], 20), run=clean(fields["run"], 200))
+    return out
+
+
+def breaker_state(index_root):
+    """`crawl/breaker.json` read as the runner plan's contract has it: `{"tripped": <bool>, "reason": <text, at most 300 characters>, "kind":
+    <one of BREAKER_KINDS or "">, "at": <a UTC time or "">, "run": <text, as long as a log field>}`. **The crawl is paused unless the file says
+    `"tripped": false`:** the state is `missing`, `cannot_examine` (it cannot even be looked for), `cannot_read` (not a plain file, over the size,
+    not UTF-8, not JSON, not an object, a key missing, a wrong type or form), `tripped`, or `not_tripped` (the one that is not paused). The file is
+    read once through one open file; its texts are shown cleaned; any other key is ignored and not shown."""
+    crawl = Path(index_root) / "crawl"
+    folder = _folder_state(crawl)
+    if folder == "missing":
+        return _breaker("missing")
+    if folder == "bad":  # a link, a file or a folder of another owner is not a folder to trust the file in
+        return _breaker("cannot_examine", "the crawl folder is not a plain folder of the owner's")
+    path = crawl / "breaker.json"
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return _breaker("missing")
+    except OSError as e:
+        return _breaker("cannot_examine", clean(_why(e), 200))
+    read = read_small(path)
+    if read.status == "missing":
+        return _breaker("missing")
+    if read.status == "bad":
+        return _breaker("cannot_read", clean(read.reason, 200))
+    unreadable = _breaker("cannot_read", "the file is not in the form of the contract")
+    try:
+        obj = json.loads(read.data.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant)
+    except (UnicodeDecodeError, _Duplicate, _NotFinite, ValueError, RecursionError):
+        return unreadable
+    if type(obj) is not dict or type(obj.get("tripped")) is not bool:
+        return unreadable
+    reason, kind, at, run = (obj.get(k) for k in ("reason", "kind", "at", "run"))
+    if not (_str_ok(reason, 300) and _str_ok(run, MAX_FIELD) and _str_ok(kind, 40) and kind in ("",) + BREAKER_KINDS and _str_ok(at, 20)):
+        return unreadable
+    if at:
+        try:
+            if not _TS.fullmatch(at):
+                raise ValueError
+            datetime.datetime.strptime(at, _TS_FORMAT)
+        except ValueError:
+            return unreadable
+    return _breaker("tripped" if obj["tripped"] else "not_tripped", None, {"reason": reason, "kind": kind, "at": at, "run": run})
+
+
+def _holder(fd):
+    """The holder named by the lock's line, `<pid> <YYYY-MM-DDTHH:MM:SSZ>`, or `unknown` when the line is missing or is not exactly that."""
+    try:
+        data = os.pread(fd, MAX_LOCK_LINE + 1, 0)
+        match = _LOCK_LINE.fullmatch(data.decode("utf-8")) if len(data) <= MAX_LOCK_LINE else None
+        if match and int(match.group(1)) >= 1:
+            datetime.datetime.strptime(match.group(2), _TS_FORMAT)
+            return {"pid": int(match.group(1)), "since": match.group(2)}
+    except (OSError, UnicodeDecodeError, ValueError):
+        pass
+    return "unknown"
+
+
+def lock_state(index_root):
+    """Whether a run holds `crawl.lock`: `{"held": True|False|None, "holder": {"pid", "since"} | "unknown" | None, "fault": text or None}`. The
+    file is opened for reading, never created and never followed if it is a link; **one non-blocking shared `flock` is tried and let go at once**
+    (it is never held while anything else is read). If another process holds the lock, `held` is True and the line it wrote is read (at most 256
+    bytes, only now: a line left in a free lock is stale and is not read); a line that is missing or wrong makes the holder `unknown`, not the
+    lock free. A lock file that is a link, a folder, a pipe or not the owner's is a fault and is not claimed to be held; `held` is None when the
+    system cannot say."""
+    path = Path(index_root) / "crawl.lock"
+    out = {"held": False, "holder": None, "fault": None}
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return out
+    except OSError as e:
+        return {**out, "held": None, "fault": f"the lock file cannot be looked for ({_why(e)})"}
+    if not stat.S_ISREG(info.st_mode):
+        return {**out, "fault": "the lock file is not a plain file, so it is not opened"}
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY | getattr(os, "O_CLOEXEC", 0))
+    except FileNotFoundError:
+        return out
+    except OSError as e:
+        return {**out, "held": None, "fault": f"the lock file cannot be opened ({_why(e)})"}
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != _me():
+            return {**out, "fault": "the lock file is not a plain file of the owner's, so it is not tried"}
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError as e:
+            if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                return {**out, "held": True, "holder": _holder(fd)}
+            return {**out, "held": None, "fault": f"the lock cannot be tried ({_why(e)})"}
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return out
+    finally:
+        os.close(fd)
+
+
+def stop_file(index_root):
+    """`{"present": True|False|None, "fault": ...}`: `crawl.stop` counts by its presence, whatever it is (a file, a link, a folder, a pipe)."""
+    try:
+        os.lstat(Path(index_root) / "crawl.stop")
+    except FileNotFoundError:
+        return {"present": False, "fault": None}
+    except OSError as e:
+        return {"present": None, "fault": f"the stop file cannot be looked for ({_why(e)})"}
+    return {"present": True, "fault": None}
+
+
+def state(index_root):
+    """The state of the crawl: `stopped` if the stop file is there, else `paused` if the breaker says so (see `breaker_state`: also when its file is
+    missing or unreadable), else `running` if another process holds the lock, else `idle`; the facts are given as well, so a run that is finishing
+    its step while the stop file exists is shown as both. A fault of a file is listed and never turned into a claim."""
+    stop, breaker, lock = stop_file(index_root), breaker_state(index_root), lock_state(index_root)
+    running = lock["held"] is True
+    name = "stopped" if stop["present"] else "paused" if breaker["paused"] else "running" if running else "idle"
+    return {"state": name, "running": running, "stop": stop, "breaker": breaker, "lock": lock,
+            "faults": [f for f in (stop["fault"], lock["fault"]) if f]}
+
+
+# --- the approved plan, the disk, the runs --------------------------------------------------------------------------------------------------
+
+def approved_plan(index_root, read_plan):
+    """The approved plan's values. `crawl/approved/current` holds one line, a digest of 32 hexadecimal characters; the copy is
+    `crawl/approved/<digest>/plan.txt`, read through `read_plan(path)` (the runner plan's `crawlplan.read_plan`, given by the caller: this module
+    has no reader of its own). `{"status": "approved"|"none"|"unreadable", "digest", "values", "reason"}`: `none` when there is no approved plan
+    (every case: no folder, no `current`, a line that is not one digest, no folder or no `plan.txt` of that digest, a link where a plain file or
+    folder is expected), `unreadable` when the reader fails (its message is cleaned). `values` has only the keys of `PLAN_VALUES` that the plan
+    gives, and only plain values (a number, a text or a yes/no); a key the plan lacks is absent and never guessed."""
+    def none(why):
+        return {"status": "none", "digest": None, "values": None, "reason": why}
+
+    folder = Path(index_root) / "crawl" / "approved"
+    if _folder_state(Path(index_root) / "crawl") != "ok" or _folder_state(folder) != "ok":
+        return none("there is no approved folder of the owner's")
+    current = read_small(folder / "current", MAX_LOCK_LINE)
+    if current.status != "ok":
+        return none("there is no current approval")
+    try:
+        text = current.data.decode("utf-8")
+    except UnicodeDecodeError:
+        return none("the current approval is not one digest")
+    if not _DIGEST.fullmatch(text):
+        return none("the current approval is not one digest")
+    digest = text[:32]
+    copy = folder / digest
+    if _folder_state(copy) != "ok":
+        return none("the folder of the approved copy is missing or is not a plain folder of the owner's")
+    plan_file = copy / "plan.txt"
+    try:
+        info = os.lstat(plan_file)
+    except OSError:
+        return none("the approved copy has no plan file")
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != _me():
+        return none("the plan file of the approved copy is not a plain file of the owner's")
+    try:
+        plan = read_plan(str(plan_file))
+    except Exception as e:  # the reader is the caller's, and what it raises is shown cleaned and not trusted
+        return {"status": "unreadable", "digest": digest, "values": None, "reason": clean(str(e) or type(e).__name__, 200)}
+    if type(plan) is not dict:
+        return {"status": "unreadable", "digest": digest, "values": None, "reason": "the reader gave no plan"}
+    values = {key: plan[key] for key in PLAN_VALUES if key in plan and type(plan[key]) in (int, float, str, bool)}
+    return {"status": "approved", "digest": digest, "values": values, "reason": None}
+
+
+def zone_of(plan):
+    """`(zone, problem)`: the time zone of an approved plan as `approved_plan` gave it, and `local` (the spec's default) without one. A plan
+    that cannot be read, or that names a zone that is not text or that the system does not know, gives `local` **and a problem**, so that a
+    day counted in the machine's zone is never counted silently."""
+    if isinstance(plan, dict):
+        status = plan.get("status")
+        if status == "unreadable":
+            return "local", "the approved plan cannot be read, so the machine's time zone is used"
+        if status == "approved":
+            zone = (plan.get("values") or {}).get("timezone")
+            if zone is None:
+                return "local", None
+            if not isinstance(zone, str):
+                return "local", "the time zone of the plan is not text"
+            if zone != "local":
+                try:
+                    day_bounds(datetime.date(2000, 1, 3), zone)
+                except KbError:
+                    return "local", "the time zone of the plan is not one the system knows, so the machine's is used"
+            return zone, None
+    return "local", None
+
+
+def _free(path, statvfs):
+    try:
+        info = statvfs(path)
+        return int(info.f_bavail) * int(info.f_frsize), None
+    except OSError as e:
+        return None, clean(_why(e), 200)
+    except (AttributeError, TypeError, ValueError) as e:
+        return None, clean(type(e).__name__, 200)
+
+
+def _floor(gb):
+    if type(gb) not in (int, float) or not math.isfinite(gb) or gb < 0:
+        return None
+    return int(gb * GIB)
+
+
+def disk(bulk_root, index_root, floors, statvfs=os.statvfs):
+    """The free space of the two drives against their floors. `free_bytes` is what a user may use (`f_bavail` times the block size); `floor_bytes`
+    is the plan's floor in gigabytes (2**30 bytes) or None if it is not known; `below_floor` is `free < floor` and `at_or_under_floor` is `free <=
+    floor`, **the runner's refusal rule**; a reading that fails is None with the reason. `same_device` says the two roots are on one drive."""
+    floors = floors if isinstance(floors, dict) else {}
+    out = {}
+    for side, root, key in (("bulk", bulk_root, "bulk_floor_gb"), ("index", index_root, "index_floor_gb")):
+        free, reason = _free(root, statvfs)
+        floor = _floor(floors.get(key))
+        known = free is not None and floor is not None
+        out[side] = {"free_bytes": free, "floor_bytes": floor, "below_floor": free < floor if known else None,
+                     "at_or_under_floor": free <= floor if known else None, "reason": reason}
+    try:
+        out["same_device"] = os.stat(bulk_root).st_dev == os.stat(index_root).st_dev
+    except (OSError, TypeError, ValueError):
+        out["same_device"] = None
+    return out
+
+
+def last_run(index_root, now, *, max_files=MAX_RUN_FILES, max_bytes=MAX_RUN_BYTES, limit=MAX_LOG_BYTES):
+    """The last run, from `run_start` and `run_end` lines only. **The log files are searched from the newest back, and the search stops at the
+    first file that has a `run_start`**, so any number of newer files that hold only refused firings (a `refuse` line each) do not hide a run in an older file; it
+    is bounded by `max_files` files and `max_bytes` bytes in all (the end of a file over `limit` is the part read), and `stopped_by` says why it
+    stopped: `found`, `no_more_files` (every file was searched), `max_files` or `max_bytes` (a run may be older: the answer is "not in what was
+    searched", not "none"). The last run is the run whose `run_start` has the newest `ts` (the later line if two are equal), with the `run_end`
+    of the same `run` that is not older than its start; none: `status` is `no end line`. A `refuse` line is not a run. `now` is an aware time, for
+    `age_s`."""
+    if not isinstance(now, datetime.datetime) or now.tzinfo is None:
+        raise _refuse("now is a time with a zone")
+    for bound in (max_files, max_bytes, limit):
+        if type(bound) is not int or bound < 1:
+            raise _refuse("a search bound is a whole number of at least 1")
+    found, problem = log_files(index_root, newest_first=True)
+    out = {"found": False, "searched_files": 0, "files_read": 0, "bytes_read": 0, "stopped_by": "no_more_files", "bad": {}, "cut": False,
+           "problem": problem}
+    chunks = []  # the lines of each file read, the newest file's first
+    for _date, path in found:
+        if out["searched_files"] >= max_files:
+            out["stopped_by"] = "max_files"
+            break
+        if out["bytes_read"] >= max_bytes:
+            out["stopped_by"] = "max_bytes"
+            break
+        out["searched_files"] += 1
+        read = read_log(path, limit=limit, tail=True)
+        if read["status"] != "ok":
+            continue
+        out["files_read"] += 1
+        out["bytes_read"] += read["bytes"]
+        out["cut"] = out["cut"] or read["cut"]
+        for kind, count in read["bad"].items():
+            out["bad"][kind] = out["bad"].get(kind, 0) + count
+        chunks.append([r for r in read["lines"] if r["step"] in ("run_start", "run_end")])
+        if any(r["step"] == "run_start" for r in chunks[-1]):
+            out["stopped_by"] = "found"
+            break
+    lines = [r for chunk in reversed(chunks) for r in chunk]  # in time order, so that the later line wins a tie
+    start = None
+    for record in lines:
+        if record["step"] == "run_start" and (start is None or record["ts"] >= start["ts"]):
+            start = record
+    if start is None:
+        return out
+    end = None
+    for record in lines:
+        if record["step"] == "run_end" and record["run"] == start["run"] and record["ts"] >= start["ts"] and (end is None or record["ts"] >= end["ts"]):
+            end = record
+    began = datetime.datetime.strptime(start["ts"], _TS_FORMAT).replace(tzinfo=datetime.timezone.utc)
+    age = int((now - began).total_seconds())
+    out.update(found=True, run=clean(start["run"], 200), start=start["ts"], end=end["ts"] if end else None, age_s=age if age >= 0 else None,
+               status="ended" if end else "no end line", end_outcome=end["outcome"] if end else None,
+               end_reason=clean(end["reason"], 300) if end and end["reason"] is not None else None,
+               end_n=end["n"] if end else None, end_seconds=end["seconds"] if end else None)
+    return out
+
+
+def run_counts(index_root, day, zone):
+    """The runs of a day of `zone`, by the `ts` of their lines: how many started and ended (`run_start` and `run_end` only, the ends by outcome),
+    and apart from them how many firings were refused (`refuse` lines, by cleaned reason, the ten commonest). A refused firing is not a run."""
+    found = lines_of_day(index_root, day, zone)
+    started = ended = refused = 0
+    outcomes, reasons = {}, {}
+    for record in found["lines"]:
+        if record["step"] == "run_start":
+            started += 1
+        elif record["step"] == "run_end":
+            ended += 1
+            outcomes[record["outcome"]] = outcomes.get(record["outcome"], 0) + 1
+        elif record["step"] == "refuse":
+            refused += 1
+            why = clean(record["reason"], 100) or "(no reason)"
+            reasons[why] = reasons.get(why, 0) + 1
+    top = dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0]))[:10])
+    return {"day": found["day"], "started": started, "ended": ended, "ended_by_outcome": outcomes, "refused": refused, "refused_by_reason": top,
+            "bad": found["bad"], "cut": found["cut"], "unreadable": found["unreadable"], "problem": found["problem"],
+            "first": found["first"], "last": found["last"]}

@@ -4,14 +4,20 @@
 Every test runs on a temporary index root and on hand-made fixture files in the spec's log format. No test opens a socket, reads the owner's
 library, config, plan or keys, or writes outside its temporary folder. Hostile characters are made with `chr()` here, never typed."""
 
+import collections
 import datetime
+import errno
+import fcntl
 import json
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -72,6 +78,20 @@ class Base(unittest.TestCase):
         for name in names:
             shutil.copy(FIX / "log" / name, log / name)
         return self.tmp
+
+
+class ReadOnlyTest(unittest.TestCase):
+    """The module is read only: its text holds no call that writes, creates, removes, renames, locks for writing, sends or starts a program."""
+
+    def test_the_source_has_no_call_that_changes_anything_or_reaches_out(self):
+        source = (Path(ENGINE_DIR) / "kb" / "crawlstatus.py").read_text(encoding="utf-8")
+        for token in ("O_WRONLY", "O_RDWR", "O_CREAT", "O_APPEND", "O_TRUNC", "LOCK_EX", "os.write(", "os.unlink(", "os.remove(", "os.rename(",
+                      "os.replace(", "os.mkdir(", "os.makedirs(", "os.rmdir(", "os.chmod(", "os.chown(", "os.symlink(", "os.link(", "os.utime(",
+                      "os.truncate(", "os.fsync(", "shutil", ".write_text(", ".write_bytes(", ".touch(", ".mkdir(", ".unlink(", "socket", "urllib.request",
+                      "http.client", "subprocess", "os.system(", "os.popen(", "sqlite3"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, source)
+        self.assertIsNone(re.search(r"(?<![.\w])open\(", source), "the builtin open")
 
 
 class ReadFileTest(Base):
@@ -683,6 +703,827 @@ class DayTest(Base):
         before = sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode) for p in root.rglob("*"))
         cs.lines_of_day(root, self.D(2026, 11, 16), "America/New_York")
         self.assertEqual(sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode) for p in root.rglob("*")), before)
+
+
+UTC = datetime.timezone.utc
+DIGEST = "0123456789abcdef0123456789abcdef"
+HOLDER = """
+import fcntl, os, sys
+path, content, mode = sys.argv[1], bytes.fromhex(sys.argv[2]), sys.argv[3]
+fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, (fcntl.LOCK_EX if mode == "ex" else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+if content:
+    os.write(fd, content)
+print("ready", flush=True)
+sys.stdin.read()
+"""
+GOOD_BREAKER = {"tripped": True, "reason": "r", "kind": "stage_bound", "at": "2026-11-16T05:30:00Z", "run": "r2"}
+
+
+def breaker_with(**over):
+    d = dict(GOOD_BREAKER)
+    d.update(over)
+    return d
+
+
+def breaker_without(key):
+    d = dict(GOOD_BREAKER)
+    del d[key]
+    return d
+
+
+class StateBase(Base):
+    def crawl(self):
+        folder = self.tmp / "crawl"
+        folder.mkdir(exist_ok=True)
+        return folder
+
+    def put_breaker(self, data):
+        (self.crawl() / "breaker.json").write_bytes(data if isinstance(data, bytes) else json.dumps(data).encode())
+
+    def good_breaker(self):
+        shutil.copy(FIX / "state" / "breaker-not-tripped.json", self.crawl() / "breaker.json")
+
+    def no_root_powers(self):
+        if os.getuid() == 0:
+            self.skipTest("the superuser is not stopped by a folder's permissions")
+
+    def hold(self, content=b"", mode="ex"):
+        """A real second process that holds `crawl.lock` (exclusively, or shared) and writes `content` into it."""
+        proc = subprocess.Popen([sys.executable, "-I", "-c", HOLDER, str(self.tmp / "crawl.lock"), content.hex(), mode],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        def stop():
+            proc.stdin.close()
+            proc.wait(10)
+            proc.stdout.close()
+            proc.stderr.close()
+
+        self.addCleanup(stop)
+        line = self.within(proc.stdout.readline)
+        if line.strip() != "ready":
+            self.fail("the second process did not take the lock")
+        return proc
+
+
+class BreakerTest(StateBase):
+    def test_a_missing_file_is_paused_as_missing_and_so_is_a_missing_crawl_folder(self):
+        for make in (lambda: None, lambda: self.crawl()):
+            make()
+            r = cs.breaker_state(self.tmp)
+            self.assertEqual((r["state"], r["paused"]), ("missing", True))
+            self.assertEqual([r[k] for k in ("reason", "kind", "at", "run")], [None] * 4)
+
+    def test_a_file_that_vanishes_between_the_look_and_the_read_is_missing(self):
+        self.good_breaker()
+        with mock.patch.object(cs, "read_small", return_value=cs.FileRead(None, "missing", None, False)):
+            r = cs.breaker_state(self.tmp)
+        self.assertEqual((r["state"], r["paused"]), ("missing", True))
+
+    def test_a_run_id_as_long_as_a_log_field_is_taken(self):
+        self.put_breaker(breaker_with(run="r" * cs.MAX_FIELD))
+        r = cs.breaker_state(self.tmp)
+        self.assertEqual(r["state"], "tripped")
+        self.assertEqual(len(r["run"]), 200)  # shown cut, as every text is
+
+    def test_a_crawl_folder_that_is_a_link_or_not_the_owners_is_not_trusted(self):
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        shutil.copy(FIX / "state" / "breaker-not-tripped.json", elsewhere / "breaker.json")
+        os.symlink(elsewhere, self.tmp / "crawl")
+        r = cs.breaker_state(self.tmp)
+        self.assertEqual((r["state"], r["paused"]), ("cannot_examine", True))
+        os.unlink(self.tmp / "crawl")
+        self.good_breaker()
+        with mock.patch.object(cs, "_me", return_value=os.getuid() + 1):
+            r = cs.breaker_state(self.tmp)
+        self.assertEqual((r["state"], r["paused"]), ("cannot_examine", True))
+
+    def test_a_file_that_cannot_be_examined_is_paused(self):
+        self.no_root_powers()
+        self.good_breaker()
+        folder = self.tmp / "crawl"
+        os.chmod(folder, 0)
+        self.addCleanup(os.chmod, folder, 0o700)
+        r = cs.breaker_state(self.tmp)
+        self.assertEqual((r["state"], r["paused"]), ("cannot_examine", True))
+
+    def test_a_crawl_that_is_a_file_cannot_be_examined_either(self):
+        (self.tmp / "crawl").write_text("x")
+        r = cs.breaker_state(self.tmp)
+        self.assertEqual((r["state"], r["paused"]), ("cannot_examine", True))
+
+    def test_a_file_that_cannot_be_read_in_the_form_is_paused(self):
+        cases = [b"", b"   \n", b"not json", b"[]", b"5", b'"text"', b"null", b"{", b"SECRET not json",
+                 json.dumps({"reason": "x"}).encode()]
+        cases += [json.dumps(breaker_with(tripped=v)).encode() for v in ("true", "false", 0, 1, None, [], {})]
+        cases += [json.dumps(breaker_without(k)).encode() for k in ("tripped", "reason", "kind", "at", "run")]
+        cases += [json.dumps(breaker_with(**{k: v})).encode() for k in ("reason", "kind", "at", "run") for v in (None, 5, True, [], {})]
+        cases += [json.dumps(breaker_with(reason="x" * 301)).encode(), json.dumps(breaker_with(kind="other")).encode(),
+                  json.dumps(breaker_with(kind="CONSECUTIVE_FAILURES")).encode(), json.dumps(breaker_with(at="2026-11-16")).encode(),
+                  json.dumps(breaker_with(at="yesterday")).encode(), json.dumps(breaker_with(at="2026-11-16T05:30:00.5Z")).encode(),
+                  json.dumps(breaker_with(run="r" * (cs.MAX_FIELD + 1))).encode(),
+                  b'{"tripped": false, "reason": "", "kind": "", "at": "", "run": "", "extra": NaN}',
+                  b'{"tripped": false, "reason": "", "kind": "", "at": "", "run": "", "extra": 1, "extra": 2}',
+                  json.dumps(breaker_with(at="2026-1-6T5:0:0Z")).encode(),
+                  json.dumps(breaker_with(at=chr(0xFF12) + "026-11-16T05:30:00Z")).encode(),
+                  json.dumps(breaker_with(at="2026-13-45T05:30:00Z")).encode(),
+                  json.dumps(GOOD_BREAKER).encode() + b" " * cs.MAX_SMALL,
+                  b'{"tripped": true, "tripped": false, "reason": "", "kind": "", "at": "", "run": ""}',
+                  b'{"tripped": NaN, "reason": "", "kind": "", "at": "", "run": ""}',
+                  b'{"tripped": false, "reason": "\\ud800", "kind": "", "at": "", "run": ""}',
+                  b"\xff\xfe" + json.dumps(GOOD_BREAKER).encode(), json.dumps(GOOD_BREAKER).encode().replace(b"r2", b"r\x002"),
+                  b" " * (cs.MAX_SMALL + 1)]
+        for data in cases:
+            with self.subTest(data=data[:60]):
+                self.put_breaker(data)
+                r = cs.breaker_state(self.tmp)
+                self.assertEqual((r["state"], r["paused"]), ("cannot_read", True))
+                self.assertNotIn("SECRET", repr(r))
+
+    def test_a_link_a_folder_and_a_pipe_cannot_be_read(self):
+        crawl = self.crawl()
+        (self.tmp / "real.json").write_text(json.dumps(GOOD_BREAKER))
+        for make in (lambda p: os.symlink(self.tmp / "real.json", p), lambda p: os.symlink(self.tmp / "nowhere", p),
+                     lambda p: p.mkdir(), lambda p: os.mkfifo(p)):
+            path = crawl / "breaker.json"
+            make(path)
+            r = self.within(lambda: cs.breaker_state(self.tmp))
+            self.assertEqual((r["state"], r["paused"]), ("cannot_read", True))
+            if path.is_dir() and not path.is_symlink():
+                path.rmdir()
+            else:
+                path.unlink()
+
+    def test_a_file_that_says_tripped_true_is_paused_with_its_fields_for_each_kind(self):
+        for kind in ("consecutive_failures", "failure_share", "model_down", "stage_bound", ""):
+            with self.subTest(kind=kind):
+                self.put_breaker(breaker_with(kind=kind))
+                r = cs.breaker_state(self.tmp)
+                self.assertEqual((r["state"], r["paused"], r["kind"]), ("tripped", True, kind))
+                self.assertEqual((r["reason"], r["at"], r["run"]), ("r", "2026-11-16T05:30:00Z", "r2"))
+
+    def test_the_fixture_that_says_tripped_true(self):
+        self.crawl()
+        shutil.copy(FIX / "state" / "breaker-tripped.json", self.tmp / "crawl" / "breaker.json")
+        r = cs.breaker_state(self.tmp)
+        self.assertEqual((r["state"], r["paused"], r["reason"], r["kind"], r["run"]), ("tripped", True, "8 failures in a row", "consecutive_failures", "r2"))
+
+    def test_only_a_file_that_says_tripped_false_is_not_paused(self):
+        for name in ("breaker-not-tripped.json", "breaker-cleared.json"):
+            with self.subTest(name=name):
+                self.crawl()
+                shutil.copy(FIX / "state" / name, self.tmp / "crawl" / "breaker.json")
+                r = cs.breaker_state(self.tmp)
+                self.assertEqual((r["state"], r["paused"]), ("not_tripped", False))
+        self.assertEqual(r["reason"], "cleared by the owner")
+
+    def test_the_old_wording_is_wrong_a_file_that_exists_is_not_paused_and_a_missing_one_is(self):
+        self.good_breaker()
+        self.assertFalse(cs.breaker_state(self.tmp)["paused"])
+        (self.tmp / "crawl" / "breaker.json").unlink()
+        self.assertTrue(cs.breaker_state(self.tmp)["paused"])
+
+    def test_the_fields_of_a_tripped_file_are_redacted_and_cleaned_and_other_keys_are_not_shown(self):
+        self.put_breaker({**breaker_with(reason="a" + RLO + "b\nc" + ZWSP, run="r" + chr(0x1b) + "2"), "extra": "SECRET"})
+        r = cs.breaker_state(self.tmp)
+        self.assertEqual((r["reason"], r["run"]), ("ab c", "r2"))
+        self.assertNotIn("SECRET", repr(r))
+        self.put_breaker(breaker_with(reason="Cookie: sid=abc"))
+        self.assertEqual(cs.breaker_state(self.tmp)["reason"], cs.WITHHELD)
+
+    def test_the_file_is_opened_once_and_nothing_is_written(self):
+        self.put_breaker(GOOD_BREAKER)
+        before = sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode) for p in self.tmp.rglob("*"))
+        opened = []
+        real = os.open
+
+        def spy(path, *a, **k):
+            opened.append(str(path))
+            return real(path, *a, **k)
+
+        with mock.patch.object(os, "open", spy):
+            cs.breaker_state(self.tmp)
+        self.assertEqual([x for x in opened if x.endswith("breaker.json")], [str(self.tmp / "crawl" / "breaker.json")])
+        self.assertEqual(sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode) for p in self.tmp.rglob("*")), before)
+
+
+class LockTest(StateBase):
+    LINE = b"4242 2026-11-16T05:00:00Z\n"
+
+    def test_a_lock_held_by_another_process_is_running_and_its_line_names_the_holder(self):
+        self.hold(self.LINE)
+        r = cs.lock_state(self.tmp)
+        self.assertEqual((r["held"], r["fault"]), (True, None))
+        self.assertEqual(r["holder"], {"pid": 4242, "since": "2026-11-16T05:00:00Z"})
+
+    def test_a_line_without_a_final_line_feed_is_taken(self):
+        self.hold(b"4242 2026-11-16T05:00:00Z")
+        self.assertEqual(cs.lock_state(self.tmp)["holder"], {"pid": 4242, "since": "2026-11-16T05:00:00Z"})
+
+    def test_a_line_that_is_missing_or_wrong_still_means_held_and_the_holder_is_unknown(self):
+        cases = [b"", b"\n", b"garbage\n", b"4242\n", b"4242 2026-11-16T05:00:00Z extra\n", b"abc 2026-11-16T05:00:00Z\n",
+                 b"0 2026-11-16T05:00:00Z\n", b"-5 2026-11-16T05:00:00Z\n", b"4242 2026-13-45T05:00:00Z\n", b"4242 2026-11-16T05:00:00\n",
+                 b"4242 2026-11-16T05:00:00Z\n4243 2026-11-16T06:00:00Z\n", b"x" * 1000, b"\xff\xfe\n", b"99999999999 2026-11-16T05:00:00Z\n",
+                 b"4242 2026-11-16T05:00:00Z\r\n", b" 4242 2026-11-16T05:00:00Z\n", b"4242  2026-11-16T05:00:00Z\n",
+                 b"4242 2026-11-16T05:00:00Z\n\n", b"4242 2026-11-16T05:00:00Z\nx",
+                 b"4242 2026-11-16T05:00:00Z" + b" " * 300, b"\x004242 2026-11-16T05:00:00Z\n"]
+        for content in cases:
+            with self.subTest(content=content[:40]):
+                proc = self.hold(content)
+                r = cs.lock_state(self.tmp)
+                self.assertEqual((r["held"], r["holder"], r["fault"]), (True, "unknown", None))
+                proc.stdin.close()
+                proc.wait(10)
+                (self.tmp / "crawl.lock").unlink()
+
+    def test_at_most_256_bytes_of_the_line_are_read(self):
+        self.hold(b"4" * 10_000)
+        sizes = []
+        real = os.pread
+
+        def spy(fd, n, offset):
+            sizes.append(n)
+            return real(fd, n, offset)
+
+        with mock.patch.object(os, "pread", spy):
+            r = cs.lock_state(self.tmp)
+        self.assertEqual(r["holder"], "unknown")
+        self.assertTrue(sizes and max(sizes) <= 257, sizes)
+
+    def test_a_free_lock_is_not_held_and_a_line_left_in_it_is_not_read(self):
+        (self.tmp / "crawl.lock").write_bytes(self.LINE)
+        r = cs.lock_state(self.tmp)
+        self.assertEqual((r["held"], r["holder"], r["fault"]), (False, None, None))
+
+    def test_no_lock_file_is_not_held_and_is_not_made(self):
+        r = cs.lock_state(self.tmp)
+        self.assertEqual((r["held"], r["holder"], r["fault"]), (False, None, None))
+        self.assertFalse((self.tmp / "crawl.lock").exists())
+
+    def test_the_shared_attempt_is_let_go_at_once(self):
+        (self.tmp / "crawl.lock").write_bytes(b"")
+        cs.lock_state(self.tmp)
+        fd = os.open(self.tmp / "crawl.lock", os.O_RDONLY)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if the status still holds its shared lock
+
+    def test_a_process_that_only_reads_the_lock_does_not_make_it_look_held(self):
+        self.hold(b"", mode="sh")
+        self.assertEqual(cs.lock_state(self.tmp)["held"], False)
+
+    def test_a_link_a_folder_and_a_pipe_are_not_opened_and_are_a_fault_and_not_running(self):
+        (self.tmp / "real").write_bytes(self.LINE)
+        for make in (lambda p: os.symlink(self.tmp / "real", p), lambda p: p.mkdir(), lambda p: os.mkfifo(p)):
+            path = self.tmp / "crawl.lock"
+            make(path)
+            r = self.within(lambda: cs.lock_state(self.tmp))
+            self.assertEqual((r["held"], r["holder"]), (False, None))
+            self.assertTrue(r["fault"])
+            if path.is_dir() and not path.is_symlink():
+                path.rmdir()
+            else:
+                path.unlink()
+
+    def test_a_lock_of_another_owner_is_a_fault(self):
+        (self.tmp / "crawl.lock").write_bytes(b"")
+        with mock.patch.object(cs, "_me", return_value=os.getuid() + 1):
+            r = cs.lock_state(self.tmp)
+        self.assertEqual((r["held"], r["holder"]), (False, None))
+        self.assertTrue(r["fault"])
+
+    def test_a_lock_the_system_cannot_try_is_unknown_and_not_running(self):
+        (self.tmp / "crawl.lock").write_bytes(b"")
+        with mock.patch.object(fcntl, "flock", side_effect=OSError(errno.ENOLCK, "no locks")):
+            r = cs.lock_state(self.tmp)
+        self.assertEqual((r["held"], r["holder"]), (None, None))
+        self.assertTrue(r["fault"])
+
+    def test_the_file_is_opened_read_only_and_never_created(self):
+        (self.tmp / "crawl.lock").write_bytes(b"")
+        seen = []
+        real = os.open
+
+        def spy(path, flags, *a, **k):
+            seen.append(flags)
+            return real(path, flags, *a, **k)
+
+        with mock.patch.object(os, "open", spy):
+            cs.lock_state(self.tmp)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0] & os.O_ACCMODE, os.O_RDONLY)
+        for forbidden in (os.O_CREAT, os.O_TRUNC, os.O_APPEND, os.O_WRONLY, os.O_RDWR):
+            self.assertFalse(seen[0] & forbidden)
+        self.assertTrue(seen[0] & os.O_NOFOLLOW and seen[0] & os.O_NONBLOCK)
+
+
+class StateTest(StateBase):
+    def test_idle_needs_a_breaker_file_that_says_not_tripped(self):
+        r = cs.state(self.tmp)
+        self.assertEqual((r["state"], r["running"]), ("paused", False))  # no breaker file reads as tripped
+        self.good_breaker()
+        r = cs.state(self.tmp)
+        self.assertEqual((r["state"], r["running"], r["stop"]["present"]), ("idle", False, False))
+        self.assertEqual(r["breaker"]["state"], "not_tripped")
+
+    def test_running_when_another_process_holds_the_lock(self):
+        self.good_breaker()
+        self.hold(b"4242 2026-11-16T05:00:00Z\n")
+        r = cs.state(self.tmp)
+        self.assertEqual((r["state"], r["running"]), ("running", True))
+        self.assertEqual(r["lock"]["holder"], {"pid": 4242, "since": "2026-11-16T05:00:00Z"})
+
+    def test_running_with_an_unknown_holder_is_still_running(self):
+        self.good_breaker()
+        self.hold(b"")
+        r = cs.state(self.tmp)
+        self.assertEqual((r["state"], r["lock"]["holder"]), ("running", "unknown"))
+
+    def test_a_tripped_breaker_is_paused_even_while_a_run_holds_the_lock(self):
+        self.put_breaker(GOOD_BREAKER)
+        self.hold(b"4242 2026-11-16T05:00:00Z\n")
+        r = cs.state(self.tmp)
+        self.assertEqual((r["state"], r["running"], r["breaker"]["state"]), ("paused", True, "tripped"))
+
+    def test_the_stop_file_is_stopped_before_everything_else_and_the_other_facts_stay(self):
+        self.put_breaker(GOOD_BREAKER)
+        self.hold(b"4242 2026-11-16T05:00:00Z\n")
+        (self.tmp / "crawl.stop").write_text("")
+        r = cs.state(self.tmp)
+        self.assertEqual((r["state"], r["running"], r["stop"]["present"], r["breaker"]["paused"]), ("stopped", True, True, True))
+
+    def test_the_stop_file_counts_by_its_presence_whatever_it_is(self):
+        self.good_breaker()
+        for make in (lambda p: p.write_text("text"), lambda p: p.write_text(""), lambda p: os.symlink(self.tmp / "nowhere", p),
+                     lambda p: p.mkdir(), lambda p: os.mkfifo(p)):
+            path = self.tmp / "crawl.stop"
+            make(path)
+            r = self.within(lambda: cs.state(self.tmp))
+            self.assertEqual((r["state"], r["stop"]["present"]), ("stopped", True))
+            if path.is_dir() and not path.is_symlink():
+                path.rmdir()
+            else:
+                path.unlink()
+
+    def test_a_stop_file_that_cannot_be_looked_for_is_a_fault_and_is_not_claimed(self):
+        self.no_root_powers()
+        self.good_breaker()
+        os.chmod(self.tmp, 0)
+        self.addCleanup(os.chmod, self.tmp, 0o700)
+        r = cs.state(self.tmp)
+        self.assertIsNone(r["stop"]["present"])
+        self.assertNotEqual(r["state"], "stopped")
+        self.assertTrue(r["faults"])
+
+    def test_a_lock_the_system_cannot_tell_about_is_not_called_running(self):
+        self.good_breaker()
+        with mock.patch.object(cs, "lock_state", return_value={"held": None, "holder": None, "fault": "the lock cannot be tried"}):
+            r = cs.state(self.tmp)
+        self.assertEqual((r["state"], r["running"]), ("idle", False))
+        self.assertIn("the lock cannot be tried", r["faults"])
+
+    def test_a_lock_that_is_a_fault_is_not_running_and_is_listed(self):
+        self.good_breaker()
+        (self.tmp / "crawl.lock").mkdir()
+        r = cs.state(self.tmp)
+        self.assertEqual((r["state"], r["running"]), ("idle", False))
+        self.assertTrue(any("lock" in f for f in r["faults"]))
+
+    def test_nothing_is_written(self):
+        self.good_breaker()
+        (self.tmp / "crawl.lock").write_bytes(b"")
+        before = sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode, p.stat().st_size) for p in self.tmp.rglob("*"))
+        cs.state(self.tmp)
+        self.assertEqual(sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode, p.stat().st_size) for p in self.tmp.rglob("*")), before)
+
+
+class ApprovedPlanTest(StateBase):
+    VALUES = {"fetches_per_day": 20, "per_domain_per_day": 3, "cards_per_day": 30, "filed_total": 200, "timezone": "Europe/London",
+              "bulk_floor_gb": 50, "index_floor_gb": 10.5, "domain_refusals": 3, "phishing_domains": True, "urlhaus_recent": False,
+              "threshold": 0.4, "secret_key": "SECRET", "pinned_hosts": ["a.org"]}
+
+    def reader(self):
+        calls = []
+
+        def read_plan(path):
+            calls.append(path)
+            return dict(self.VALUES)
+
+        read_plan.calls = calls
+        return read_plan
+
+    def approve(self):
+        shutil.copytree(FIX / "approved", self.tmp / "crawl" / "approved")
+
+    def test_an_approved_plan_is_read_through_the_injected_reader(self):
+        self.approve()
+        read_plan = self.reader()
+        r = cs.approved_plan(self.tmp, read_plan)
+        self.assertEqual((r["status"], r["digest"], r["reason"]), ("approved", DIGEST, None))
+        self.assertEqual(read_plan.calls, [str(self.tmp / "crawl" / "approved" / DIGEST / "plan.txt")])
+
+    def test_only_the_values_the_status_uses_are_kept_and_only_plain_ones(self):
+        self.approve()
+        r = cs.approved_plan(self.tmp, self.reader())
+        self.assertEqual(set(r["values"]), set(cs.PLAN_VALUES) & set(self.VALUES))
+        self.assertEqual(r["values"]["timezone"], "Europe/London")
+        self.assertNotIn("SECRET", repr(r))
+        self.assertNotIn("threshold", r["values"])
+        self.assertNotIn("pinned_hosts", r["values"])
+
+    def test_a_value_the_plan_lacks_is_absent_and_not_guessed(self):
+        self.approve()
+        r = cs.approved_plan(self.tmp, lambda path: {"fetches_per_day": 5})
+        self.assertEqual(r["values"], {"fetches_per_day": 5})
+
+    def test_a_value_of_another_kind_is_dropped(self):
+        self.approve()
+        r = cs.approved_plan(self.tmp, lambda path: {"fetches_per_day": [5], "timezone": {"a": 1}, "filed_total": None, "cards_per_day": 7})
+        self.assertEqual(r["values"], {"cards_per_day": 7})
+
+    def test_no_approved_plan_in_each_case_and_the_reader_is_not_called(self):
+        def fresh():
+            shutil.rmtree(self.tmp / "crawl", ignore_errors=True)
+            self.approve()
+            return self.tmp / "crawl" / "approved"
+
+        cases = {
+            "no folder": lambda a: shutil.rmtree(a),
+            "no current": lambda a: (a / "current").unlink(),
+            "empty current": lambda a: (a / "current").write_text(""),
+            "blank current": lambda a: (a / "current").write_text("\n"),
+            "two lines": lambda a: (a / "current").write_text(DIGEST + "\n" + DIGEST + "\n"),
+            "a blank second line": lambda a: (a / "current").write_text(DIGEST + "\n\n"),
+            "the approved folder is a link": lambda a: (shutil.move(str(a), str(self.tmp / "real-approved")), os.symlink(self.tmp / "real-approved", a)),
+            "an upper case folder and digest": lambda a: (shutil.move(str(a / DIGEST), str(a / DIGEST.upper())), (a / "current").write_text(DIGEST.upper() + "\n")),
+            "a digest of 31 characters with a folder": lambda a: (shutil.move(str(a / DIGEST), str(a / DIGEST[:31])), (a / "current").write_text(DIGEST[:31])),
+            "upper case": lambda a: (a / "current").write_text(DIGEST.upper() + "\n"),
+            "31 characters": lambda a: (a / "current").write_text(DIGEST[:31] + "\n"),
+            "33 characters": lambda a: (a / "current").write_text(DIGEST + "0\n"),
+            "spaces": lambda a: (a / "current").write_text(DIGEST + " \n"),
+            "a path": lambda a: (a / "current").write_text("../" * 8 + "etc\n"),
+            "not utf-8": lambda a: (a / "current").write_bytes(b"\xff\xfe" + DIGEST.encode()),
+            "a folder that is not there": lambda a: (a / "current").write_text("f" * 32 + "\n"),
+            "no plan file": lambda a: (a / DIGEST / "plan.txt").unlink(),
+            "plan file is a folder": lambda a: ((a / DIGEST / "plan.txt").unlink(), (a / DIGEST / "plan.txt").mkdir()),
+            "plan file is a link": lambda a: ((a / DIGEST / "plan.txt").unlink(), os.symlink(self.tmp / "elsewhere", a / DIGEST / "plan.txt")),
+            "digest folder is a link": lambda a: (shutil.move(str(a / DIGEST), str(self.tmp / "moved")), os.symlink(self.tmp / "moved", a / DIGEST)),
+            "current is a link": lambda a: ((a / "current").unlink(), os.symlink(self.tmp / "elsewhere", a / "current")),
+            "current is a folder": lambda a: ((a / "current").unlink(), (a / "current").mkdir()),
+        }
+        (self.tmp / "elsewhere").write_text(DIGEST + "\n")
+        for name, damage in cases.items():
+            with self.subTest(case=name):
+                read_plan = self.reader()
+                damage(fresh())
+                r = cs.approved_plan(self.tmp, read_plan)
+                self.assertEqual((r["status"], r["digest"], r["values"]), ("none", None, None))
+                self.assertTrue(r["reason"])
+                self.assertEqual(read_plan.calls, [])
+
+    def test_a_reader_that_fails_is_an_unreadable_plan_with_its_message_cleaned(self):
+        self.approve()
+        r = cs.approved_plan(self.tmp, mock.Mock(side_effect=KbError("the crawl plan: line 3: bad value")))
+        self.assertEqual((r["status"], r["digest"], r["values"]), ("unreadable", DIGEST, None))
+        self.assertIn("line 3", r["reason"])
+        r = cs.approved_plan(self.tmp, mock.Mock(side_effect=RuntimeError("Cookie: abc" + RLO)))
+        self.assertEqual((r["status"], r["reason"]), ("unreadable", cs.WITHHELD))
+        for bad in (None, [], "text", 5):
+            with self.subTest(result=bad):
+                r = cs.approved_plan(self.tmp, lambda path, b=bad: b)
+                self.assertEqual((r["status"], r["values"]), ("unreadable", None))
+
+    def test_nothing_is_written(self):
+        self.approve()
+        before = sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode) for p in self.tmp.rglob("*"))
+        cs.approved_plan(self.tmp, self.reader())
+        self.assertEqual(sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode) for p in self.tmp.rglob("*")), before)
+
+    def test_a_crawl_folder_that_is_a_link_leads_to_no_approved_plan(self):
+        (self.tmp / "elsewhere").mkdir()
+        shutil.copytree(FIX / "approved", self.tmp / "elsewhere" / "approved")
+        os.symlink(self.tmp / "elsewhere", self.tmp / "crawl")
+        read_plan = self.reader()
+        r = cs.approved_plan(self.tmp, read_plan)
+        self.assertEqual((r["status"], r["values"]), ("none", None))
+        self.assertEqual(read_plan.calls, [])
+
+    def test_the_zone_of_a_plan_that_cannot_be_read_or_names_a_zone_the_system_lacks_is_local_with_a_problem(self):
+        self.approve()
+        zone, problem = cs.zone_of(cs.approved_plan(self.tmp, mock.Mock(side_effect=KbError("bad line"))))
+        self.assertEqual(zone, "local")
+        self.assertTrue(problem)
+        zone, problem = cs.zone_of(cs.approved_plan(self.tmp, lambda p: {"timezone": "Mars/Olympus"}))
+        self.assertEqual(zone, "local")
+        self.assertTrue(problem)
+        self.assertEqual(cs.zone_of(cs.approved_plan(self.tmp, lambda p: {"timezone": "local"})), ("local", None))
+        self.assertEqual(cs.zone_of(cs.approved_plan(self.tmp, lambda p: {"timezone": "UTC"})), ("UTC", None))
+
+    def test_the_zone_is_the_plans_and_local_without_one(self):
+        self.approve()
+        self.assertEqual(cs.zone_of(cs.approved_plan(self.tmp, self.reader())), ("Europe/London", None))
+        self.assertEqual(cs.zone_of(cs.approved_plan(self.tmp, lambda p: {"fetches_per_day": 5})), ("local", None))
+        self.assertEqual(cs.zone_of({"status": "none", "values": None}), ("local", None))
+        zone, problem = cs.zone_of(cs.approved_plan(self.tmp, lambda p: {"timezone": 5}))
+        self.assertEqual(zone, "local")
+        self.assertIn("not text", problem)
+        self.assertEqual(cs.zone_of({"status": "unreadable", "values": None})[0], "local")
+        self.assertTrue(cs.zone_of({"status": "unreadable", "values": None})[1])
+
+
+class DiskTest(Base):
+    GIB = 1024 ** 3
+
+    def vfs(self, free_bytes, frsize=4096):
+        return types.SimpleNamespace(f_bavail=free_bytes // frsize, f_bfree=free_bytes * 2 // frsize, f_frsize=frsize)
+
+    def test_the_free_bytes_are_what_a_user_can_use_times_the_block_size(self):
+        r = cs.disk(self.tmp, self.tmp, {"bulk_floor_gb": 1, "index_floor_gb": 1},
+                    statvfs=lambda path: types.SimpleNamespace(f_bavail=5, f_bfree=99, f_frsize=1024))
+        self.assertEqual((r["bulk"]["free_bytes"], r["index"]["free_bytes"]), (5120, 5120))
+
+    def test_the_edge_of_a_floor(self):
+        floors = {"bulk_floor_gb": 1, "index_floor_gb": 1}
+        for free, below, at_or_under in ((self.GIB + 4096, False, False), (self.GIB, False, True), (self.GIB - 4096, True, True)):
+            with self.subTest(free=free):
+                r = cs.disk(self.tmp, self.tmp, floors, statvfs=lambda path, f=free: self.vfs(f))
+                for side in ("bulk", "index"):
+                    self.assertEqual((r[side]["floor_bytes"], r[side]["below_floor"], r[side]["at_or_under_floor"]), (self.GIB, below, at_or_under))
+
+    def test_each_root_has_its_own_floor(self):
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, other, True)
+        free = {str(self.tmp): 60 * self.GIB, str(other): 5 * self.GIB}
+        r = cs.disk(self.tmp, other, {"bulk_floor_gb": 50, "index_floor_gb": 10}, statvfs=lambda path: self.vfs(free[str(path)]))
+        self.assertEqual((r["bulk"]["below_floor"], r["index"]["below_floor"]), (False, True))
+        self.assertEqual((r["bulk"]["floor_bytes"], r["index"]["floor_bytes"]), (50 * self.GIB, 10 * self.GIB))
+
+    def test_a_fraction_of_a_gigabyte_is_a_floor(self):
+        r = cs.disk(self.tmp, self.tmp, {"bulk_floor_gb": 0.5, "index_floor_gb": 0}, statvfs=lambda path: self.vfs(self.GIB))
+        self.assertEqual((r["bulk"]["floor_bytes"], r["index"]["floor_bytes"]), (self.GIB // 2, 0))
+        self.assertEqual((r["index"]["below_floor"], r["index"]["at_or_under_floor"]), (False, False))
+
+    def test_a_reading_that_fails_is_unknown_and_says_why(self):
+        def broken(path):
+            raise OSError(errno.ENOENT, "No such file" + RLO)
+
+        r = cs.disk(self.tmp, self.tmp, {"bulk_floor_gb": 1, "index_floor_gb": 1}, statvfs=broken)
+        for side in ("bulk", "index"):
+            self.assertEqual((r[side]["free_bytes"], r[side]["below_floor"], r[side]["at_or_under_floor"]), (None, None, None))
+            self.assertIn("No such file", r[side]["reason"])
+            self.assertNotIn(RLO, r[side]["reason"])
+
+    def test_a_floor_that_is_not_known_is_none_and_the_free_bytes_are_still_given(self):
+        r = cs.disk(self.tmp, self.tmp, {}, statvfs=lambda path: self.vfs(self.GIB))
+        self.assertEqual((r["bulk"]["free_bytes"], r["bulk"]["floor_bytes"], r["bulk"]["below_floor"]), (self.GIB, None, None))
+        r = cs.disk(self.tmp, self.tmp, {"bulk_floor_gb": "50", "index_floor_gb": True}, statvfs=lambda path: self.vfs(self.GIB))
+        self.assertEqual((r["bulk"]["floor_bytes"], r["index"]["floor_bytes"]), (None, None))
+
+    def test_a_floor_that_is_negative_or_not_a_number_is_not_a_floor(self):
+        for bad in (-1, -0.5, float("inf"), float("nan")):
+            with self.subTest(floor=bad):
+                r = cs.disk(self.tmp, self.tmp, {"bulk_floor_gb": bad, "index_floor_gb": bad}, statvfs=lambda path: self.vfs(self.GIB))
+                self.assertEqual((r["bulk"]["floor_bytes"], r["bulk"]["below_floor"]), (None, None))
+
+    def test_two_roots_on_one_device_are_said_to_be_one(self):
+        other = self.tmp / "sub"
+        other.mkdir()
+        self.assertTrue(cs.disk(self.tmp, other, {}, statvfs=lambda path: self.vfs(1))["same_device"])
+        with mock.patch.object(cs.os, "stat", side_effect=[types.SimpleNamespace(st_dev=1), types.SimpleNamespace(st_dev=2)]):
+            self.assertFalse(cs.disk(self.tmp, other, {}, statvfs=lambda path: self.vfs(1))["same_device"])
+
+    def test_the_real_reading_is_used_by_default_and_gives_numbers(self):
+        r = cs.disk(self.tmp, self.tmp, {"bulk_floor_gb": 0, "index_floor_gb": 0})
+        self.assertIsInstance(r["bulk"]["free_bytes"], int)
+        self.assertGreater(r["bulk"]["free_bytes"], 0)
+
+
+class RunsTest(StateBase):
+    NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
+
+    def put_log(self, date, *records):
+        folder = self.tmp / "crawl" / "log"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"crawl-{date}.jsonl").write_bytes(b"".join(raw(**r) + b"\n" for r in records))
+
+    def run_lines(self, with_refusals):
+        lines = [dict(ts="2026-11-16T05:00:00Z", run="r1", step="run_start"), dict(ts="2026-11-16T05:10:00Z", run="r1", step="run_end", n=3),
+                 dict(ts="2026-11-16T06:00:00Z", run="r2", step="run_start"),
+                 dict(ts="2026-11-16T06:20:00Z", run="r2", step="run_end", outcome="failed", reason="the breaker tripped", n=1, seconds=1200.5)]
+        if with_refusals:
+            lines += [dict(ts="2026-11-16T04:00:00Z", run="", step="refuse", outcome="refused", reason="a run is in progress"),
+                      dict(ts="2026-11-16T05:05:00Z", run="", step="refuse", outcome="refused", reason="a run is in progress"),
+                      dict(ts="2026-11-16T05:30:00Z", run="", step="refuse", outcome="refused", reason="the stop file exists"),
+                      dict(ts="2026-11-16T07:00:00Z", run="", step="refuse", outcome="refused", reason="a run is in progress"),
+                      dict(ts="2026-11-16T08:00:00Z", run="", step="refuse", outcome="refused", reason="a run is in progress" + ZWSP)]
+        return sorted(lines, key=lambda r: r["ts"])
+
+    def test_the_last_run_is_the_newest_run_start_with_its_end_line(self):
+        self.put_log("2026-11-16", *self.run_lines(False))
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["found"], r["run"], r["start"], r["status"]), (True, "r2", "2026-11-16T06:00:00Z", "ended"))
+        self.assertEqual((r["end"], r["end_outcome"], r["end_reason"], r["end_n"]), ("2026-11-16T06:20:00Z", "failed", "the breaker tripped", 1))
+        self.assertEqual(r["age_s"], 6 * 3600)
+
+    def test_a_run_with_no_end_line_says_so(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T06:00:00Z", run="r2", step="run_start"))
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["run"], r["status"], r["end"]), ("r2", "no end line", None))
+
+    def test_refused_firings_are_not_runs_they_change_neither_the_last_run_nor_the_counts(self):
+        plain, with_refusals = self.tmp, Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, with_refusals, True)
+        self.put_log("2026-11-16", *self.run_lines(False))
+        folder = with_refusals / "crawl" / "log"
+        folder.mkdir(parents=True)
+        (folder / "crawl-2026-11-16.jsonl").write_bytes(b"".join(raw(**r) + b"\n" for r in self.run_lines(True)))
+        run_fields = ("found", "run", "start", "end", "status", "end_outcome", "end_reason", "end_n", "end_seconds", "age_s", "stopped_by")
+        a, b = cs.last_run(plain, self.NOW), cs.last_run(with_refusals, self.NOW)
+        self.assertEqual({k: a[k] for k in run_fields}, {k: b[k] for k in run_fields})
+        self.assertEqual(a["run"], "r2")
+        a = cs.run_counts(plain, datetime.date(2026, 11, 16), "UTC")
+        b = cs.run_counts(with_refusals, datetime.date(2026, 11, 16), "UTC")
+        self.assertEqual((a["started"], a["ended"]), (2, 2))
+        self.assertEqual((b["started"], b["ended"], b["ended_by_outcome"]), (2, 2, {"ok": 1, "failed": 1}))
+        self.assertEqual(a["refused"], 0)
+        self.assertEqual((b["refused"], b["refused_by_reason"]), (5, {"a run is in progress": 4, "the stop file exists": 1}))
+
+    def test_a_refusal_newer_than_the_last_run_does_not_become_the_last_run(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T06:00:00Z", run="r2", step="run_start"),
+                     dict(ts="2026-11-16T11:00:00Z", run="", step="refuse", outcome="refused", reason="a run is in progress"))
+        self.assertEqual(cs.last_run(self.tmp, self.NOW)["run"], "r2")
+
+    def test_an_end_line_with_no_start_in_the_files_read_is_ignored(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T06:20:00Z", run="r0", step="run_end"))
+        self.assertEqual(cs.last_run(self.tmp, self.NOW), {**cs.last_run(self.tmp, self.NOW), "found": False})
+        self.assertFalse(cs.last_run(self.tmp, self.NOW)["found"])
+
+    def test_a_run_with_two_end_lines_has_the_newest_as_its_end(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T06:00:00Z", run="r2", step="run_start"),
+                     dict(ts="2026-11-16T06:20:00Z", run="r2", step="run_end", reason="first"),
+                     dict(ts="2026-11-16T06:25:00Z", run="r2", step="run_end", reason="second"))
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["end"], r["end_reason"]), ("2026-11-16T06:25:00Z", "second"))
+
+    def test_a_log_file_that_cannot_be_read_is_not_counted_among_the_files_read(self):
+        self.no_root_powers()
+        self.put_log("2026-11-14", dict(ts="2026-11-14T06:00:00Z", run="r1", step="run_start"))
+        self.put_log("2026-11-15", dict(ts="2026-11-15T06:00:00Z", run="r2", step="run_start"))
+        path = self.tmp / "crawl" / "log" / "crawl-2026-11-15.jsonl"
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o600)
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["files_read"], r["run"]), (1, "r1"))
+
+    def test_an_end_line_of_another_run_is_not_the_end_of_this_one(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T05:00:00Z", run="r1", step="run_start"),
+                     dict(ts="2026-11-16T06:00:00Z", run="r2", step="run_start"), dict(ts="2026-11-16T06:30:00Z", run="r1", step="run_end"))
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["run"], r["status"]), ("r2", "no end line"))
+
+    def test_an_end_line_older_than_its_start_is_not_its_end(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T05:00:00Z", run="r1", step="run_end"), dict(ts="2026-11-16T06:00:00Z", run="r1", step="run_start"))
+        self.assertEqual(cs.last_run(self.tmp, self.NOW)["status"], "no end line")
+
+    def test_two_starts_at_the_same_second_the_later_line_wins(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T06:00:00Z", run="first", step="run_start"), dict(ts="2026-11-16T06:00:00Z", run="second", step="run_start"))
+        self.assertEqual(cs.last_run(self.tmp, self.NOW)["run"], "second")
+
+    def test_the_newest_run_may_be_in_the_older_file_when_the_newer_has_none(self):
+        self.put_log("2026-11-15", dict(ts="2026-11-15T23:00:00Z", run="r9", step="run_start"))
+        self.put_log("2026-11-16", dict(ts="2026-11-16T06:00:00Z", run="", step="refuse", outcome="refused", reason="a run is in progress"))
+        self.assertEqual(cs.last_run(self.tmp, self.NOW)["run"], "r9")
+
+    def refusals_only(self, first_day, last_day):
+        for day in range(first_day, last_day + 1):
+            self.put_log(f"2026-11-{day:02d}", dict(ts=f"2026-11-{day:02d}T06:00:00Z", run="", step="refuse", outcome="refused", reason="the stop file exists"))
+
+    def test_newer_files_that_hold_only_refused_firings_do_not_hide_an_older_run(self):
+        self.put_log("2026-11-05", dict(ts="2026-11-05T06:00:00Z", run="r9", step="run_start"), dict(ts="2026-11-05T06:10:00Z", run="r9", step="run_end"))
+        self.refusals_only(6, 15)
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["found"], r["run"], r["status"], r["stopped_by"], r["searched_files"]), (True, "r9", "ended", "found", 11))
+
+    def test_the_search_stops_at_the_newest_file_that_has_a_run_and_reads_no_older_one(self):
+        self.put_log("2026-11-01", dict(ts="2026-11-01T06:00:00Z", run="old", step="run_start"))
+        self.put_log("2026-11-14", dict(ts="2026-11-14T06:00:00Z", run="mid", step="run_start"))
+        self.put_log("2026-11-15", dict(ts="2026-11-15T06:00:00Z", run="new", step="run_start"))
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["run"], r["stopped_by"], r["searched_files"], r["files_read"]), ("new", "found", 1, 1))
+
+    def test_the_search_is_bounded_by_the_number_of_files_and_says_so(self):
+        self.put_log("2026-11-05", dict(ts="2026-11-05T06:00:00Z", run="r9", step="run_start"))
+        self.refusals_only(6, 15)
+        r = cs.last_run(self.tmp, self.NOW, max_files=3)
+        self.assertEqual((r["found"], r["stopped_by"], r["searched_files"]), (False, "max_files", 3))
+        r = cs.last_run(self.tmp, self.NOW, max_files=11)
+        self.assertEqual((r["found"], r["stopped_by"]), (True, "found"))
+
+    def test_the_search_is_bounded_by_the_bytes_read_and_says_so(self):
+        self.put_log("2026-11-05", dict(ts="2026-11-05T06:00:00Z", run="r9", step="run_start"))
+        self.refusals_only(6, 15)
+        size = (self.tmp / "crawl" / "log" / "crawl-2026-11-15.jsonl").stat().st_size
+        r = cs.last_run(self.tmp, self.NOW, max_bytes=size * 3)
+        self.assertEqual((r["found"], r["stopped_by"], r["searched_files"]), (False, "max_bytes", 3))
+
+    def test_refused_firings_only_is_no_run_and_says_all_the_files_were_searched(self):
+        self.refusals_only(13, 15)
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["found"], r["stopped_by"], r["searched_files"], r["files_read"]), (False, "no_more_files", 3, 3))
+
+    def test_the_bounds_are_whole_numbers_of_at_least_one(self):
+        for name in ("max_files", "max_bytes", "limit"):
+            for bad in (0, -1, 1.5, "3", None, True):
+                with self.subTest(name=name, value=bad), self.assertRaises(KbError):
+                    cs.last_run(self.tmp, self.NOW, **{name: bad})
+
+    def test_no_log_is_no_run(self):
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["found"], r["files_read"], r["searched_files"], r["stopped_by"], r["problem"]), (False, 0, 0, "no_more_files", None))
+
+    def test_now_must_be_a_time_with_a_zone(self):
+        for bad in (datetime.datetime(2026, 11, 16, 12, 0, 0), "2026-11-16T12:00:00Z", None, 5):
+            with self.subTest(now=bad), self.assertRaises(KbError):
+                cs.last_run(self.tmp, bad)
+
+    def test_the_commonest_reasons_are_the_ones_listed_and_a_missing_reason_is_said(self):
+        lines = [dict(ts=f"2026-11-16T05:{i:02d}:00Z", run="", step="refuse", outcome="refused", reason=f"rare {i}") for i in range(11)]
+        lines += [dict(ts=f"2026-11-16T06:{i:02d}:00Z", run="", step="refuse", outcome="refused", reason="common") for i in range(5)]
+        lines += [dict(ts="2026-11-16T07:00:00Z", run="", step="refuse", outcome="refused", reason=None),
+                  dict(ts="2026-11-16T07:01:00Z", run="", step="refuse", outcome="refused", reason="")]
+        self.put_log("2026-11-16", *lines)
+        a = cs.run_counts(self.tmp, datetime.date(2026, 11, 16), "UTC")
+        self.assertEqual(a["refused"], 18)
+        self.assertEqual(len(a["refused_by_reason"]), 10)
+        self.assertEqual(a["refused_by_reason"]["common"], 5)
+        self.assertEqual(a["refused_by_reason"]["(no reason)"], 2)
+        self.assertEqual(list(a["refused_by_reason"])[:2], ["common", "(no reason)"])
+
+    def test_a_start_in_the_future_has_no_age(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T13:00:00Z", run="r2", step="run_start"))
+        self.assertIsNone(cs.last_run(self.tmp, self.NOW)["age_s"])
+
+    def test_bad_lines_and_a_cut_are_passed_on_and_the_end_of_a_big_file_is_read(self):
+        folder = self.tmp / "crawl" / "log"
+        folder.mkdir(parents=True)
+        many = [raw(ts="2026-11-16T05:00:00Z", run=f"r{i}", step="fetch") for i in range(300)]
+        tail = [raw(ts="2026-11-16T06:00:00Z", run="rz", step="run_start"), b"junk"]
+        (folder / "crawl-2026-11-16.jsonl").write_bytes(b"\n".join(many + tail) + b"\n")
+        r = cs.last_run(self.tmp, self.NOW, limit=3000)
+        self.assertEqual((r["run"], r["cut"], r["bad"]), ("rz", True, {"not_json": 1}))
+
+    def test_bad_lines_are_counted_over_all_the_files_read_and_one_cut_file_is_said(self):
+        folder = self.tmp / "crawl" / "log"
+        folder.mkdir(parents=True)
+        big = (b"".join(raw(ts="2026-11-14T05:00:00Z", run=f"r{i}", step="fetch") + b"\n" for i in range(40))
+               + raw(ts="2026-11-14T06:00:00Z", run="r1", step="run_start") + b"\njunk\n")
+        small = raw(ts="2026-11-15T06:00:00Z", run="", step="refuse", outcome="refused", reason="x") + b"\njunk\n"
+        (folder / "crawl-2026-11-14.jsonl").write_bytes(big)
+        (folder / "crawl-2026-11-15.jsonl").write_bytes(small)
+        r = cs.last_run(self.tmp, self.NOW, limit=len(small) + 20)
+        self.assertEqual((r["run"], r["bad"], r["cut"], r["files_read"]), ("r1", {"not_json": 2}, True, 2))
+
+    def test_a_cut_in_the_newest_file_is_said_even_when_an_older_file_that_is_whole_is_read_last(self):
+        folder = self.tmp / "crawl" / "log"
+        folder.mkdir(parents=True)
+        big = b"".join(raw(ts="2026-11-15T05:00:00Z", run="", step="refuse", outcome="refused", reason="x" * 20) + b"\n" for i in range(60))
+        small = raw(ts="2026-11-14T06:00:00Z", run="r1", step="run_start") + b"\n"
+        (folder / "crawl-2026-11-15.jsonl").write_bytes(big)
+        (folder / "crawl-2026-11-14.jsonl").write_bytes(small)
+        r = cs.last_run(self.tmp, self.NOW, limit=len(small) + 100)
+        self.assertEqual((r["run"], r["cut"], r["files_read"]), ("r1", True, 2))
+
+    def test_the_end_of_a_run_in_a_newer_file_than_its_start_is_its_end_and_the_search_goes_on_past_it(self):
+        self.put_log("2026-11-14", dict(ts="2026-11-14T23:50:00Z", run="r1", step="run_start"))
+        self.put_log("2026-11-15", dict(ts="2026-11-15T00:10:00Z", run="r1", step="run_end", outcome="ok", n=7))
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["found"], r["run"], r["status"], r["end"], r["end_n"], r["searched_files"]), (True, "r1", "ended", "2026-11-15T00:10:00Z", 7, 2))
+
+    def test_the_text_of_a_reason_and_a_run_is_redacted_and_cleaned(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T06:00:00Z", run="r" + RLO + "2", step="run_start"),
+                     dict(ts="2026-11-16T06:10:00Z", run="r" + RLO + "2", step="run_end", reason="Cookie: sid=1"))
+        r = cs.last_run(self.tmp, self.NOW)
+        self.assertEqual((r["run"], r["end_reason"]), ("r2", cs.WITHHELD))
+
+    def test_the_counts_are_of_the_plans_day_by_ts_and_not_by_the_file(self):
+        shutil.copytree(FIX / "log", self.tmp / "crawl" / "log")
+        a = cs.run_counts(self.tmp, datetime.date(2026, 11, 16), "America/New_York")
+        self.assertEqual((a["started"], a["ended"], a["refused"], a["refused_by_reason"]), (1, 1, 1, {"a run is in progress": 1}))
+        b = cs.run_counts(self.tmp, datetime.date(2026, 11, 17), "America/New_York")
+        self.assertEqual((b["started"], b["ended"], b["refused"]), (1, 0, 0))
+
+    def test_the_counts_say_what_was_cut_or_bad_or_wrong(self):
+        shutil.copytree(FIX / "log", self.tmp / "crawl" / "log")
+        (self.tmp / "crawl" / "log" / "crawl-2026-11-16.jsonl").write_bytes(b"junk\n" + (FIX / "log" / "crawl-2026-11-16.jsonl").read_bytes())
+        a = cs.run_counts(self.tmp, datetime.date(2026, 11, 16), "America/New_York")
+        self.assertEqual(a["bad"], {"not_json": 1})
+        self.assertIsNone(a["problem"])
+        self.assertIn("cut", a)
+
+    def test_only_the_top_ten_reasons_are_listed(self):
+        self.put_log("2026-11-16", *[dict(ts=f"2026-11-16T05:{i:02d}:00Z", run="", step="refuse", outcome="refused", reason=f"reason {i}") for i in range(15)])
+        a = cs.run_counts(self.tmp, datetime.date(2026, 11, 16), "UTC")
+        self.assertEqual((a["refused"], len(a["refused_by_reason"])), (15, 10))
 
 
 if __name__ == "__main__":

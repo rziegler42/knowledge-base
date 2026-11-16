@@ -203,6 +203,23 @@ Recorded:
 - **Names and shapes differ from the plan's step wording** (findings 5, 6): the module has `read_file(path, limit, tail=False)` and `read_small(path, limit)`, each returning a `FileRead(data, status, reason, cut)` tuple (status `ok`, `missing` or `bad`), and no `read_text_file`; `read_log` also returns `status` and `reason`. The lines of bad kinds are built in the tests and are not a fixture file. Later increments use these names.
 - **For later increments** (finding 10): `read_file` guards the last component of a path only (`O_NOFOLLOW`) and the owner of the file; a caller that reads from another folder must check its parent folders as `log_files` does. A log file that is being appended to can show a half-written last line as one `not_json`; the runner's single `O_APPEND` write per line makes that unlikely.
 
+**Increment B.** The project's `reviewer` agent, read only (it ran nothing), **one round, one exchange**. Recommendation: one blocking finding, eight not blocking. It found no exploitable security issue and said the lock handling, `breaker_state` and `approved_plan` agree with the contracts.
+
+Applied (test first, each shown to fail before the change):
+
+- **Blocking: `last_run` looked in the three newest log files only** (finding 1). Every refused firing writes a `refuse` line, so three newer files that hold only refusals hid a real run in an older file, and the answer was "no run": the plan's completion criterion 6 says refusals before, between and after runs leave the last run unchanged. **The search now goes from the newest file back and stops at the first file that has a `run_start`, bounded by 60 files and 128 MiB read in all (parameters `max_files` and `max_bytes`), and says why it stopped (`stopped_by`: `found`, `no_more_files`, `max_files` or `max_bytes`) so that "not in what was searched" is never shown as "none".** This **departs from the plan's step 5 wording "(up to 3 files and the size limit)"**, in favour of criterion 6, which the step contradicted; the bound is still fixed and the owner may set it otherwise. The end line of a run in a newer file than its start is paired with it, and the search goes on past a newer file that has only end lines.
+- **A plan that cannot be read, or that names a time zone the system does not know, gave the machine's zone with no word of it** (finding 2; I had called the surviving mutant equivalent, which it was not): `zone_of` now gives `local` **and a problem** in both cases, so that a day is never counted in the wrong zone silently, and Increment D has the problem to show.
+- **The `run` of `breaker.json` was limited to 200 characters**, which no contract says (finding 3): it is now as long as a log field (4,096), the same as the plan's other texts, and is shown cut to 200.
+- **`breaker_state` and `approved_plan` trusted a `crawl` folder that was a link or not the owner's** (finding 4), where `log_files` did not: both now check the folder first (the breaker is `cannot_examine`, the plan is "none").
+- **A NaN in an ignored extra key of `breaker.json`** (finding 7) was accepted by a mutant and no test noticed: a test for it, and for a duplicate extra key, is added. (I had called this survivor equivalent; it was not.)
+
+Recorded, not changed:
+
+- **The unit of a floor** (finding 5): no contract fixes `bulk_floor_gb`; the module reads 2**30 bytes and `f_bavail` times the block size, and `at_or_under_floor` (`free <= floor`) is the runner's refusal rule that Increment D must show, `below_floor` (`free < floor`) the plan's own wording. To be checked against the runner's guard, when it exists, in Increment G.
+- **The lock's line can be the previous run's** (finding 6), for the instant between a run taking the lock and writing its own line: the contract says only that the runner writes the line while it holds the lock; the reader cannot tell. Said in the Result.
+- **Texts in `approved_plan`'s values are returned as the plan gave them** (finding 8: `timezone` is text): Increment D passes anything it prints through `clean`.
+- **Signatures** (finding 9): `last_run(index_root, now, *, max_files, max_bytes, limit)` has no `zone` (it needs none; the day belongs to `run_counts`), and no `files` parameter.
+
 ## Deferred work
 
 - A second reader for the runner's own counters, once the runner names more of them than `fetch`, `fetch:<domain>`, `card` and `refusal:<domain>`.
@@ -211,7 +228,7 @@ Recorded:
 
 ## Result
 
-### Increment A — The bounded reading of the crawl's files, and the log reader (not yet committed)
+### Increment A — The bounded reading of the crawl's files, and the log reader (committed as `190a3e2`)
 
 **Done.** On the branch `crawl-status`, from the plan's commit `f03d119`. Linux, Python 3.14. **Nothing in the module writes, creates, locks, deletes or sends:** the one `os.open` is read only with no create, follows no link, waits on no pipe and takes no terminal; the folders of the log are checked with `lstat` and listed with `scandir`.
 
@@ -239,3 +256,39 @@ Recorded:
 **Not run:** anything on macOS (`O_NOFOLLOW`, `os.pread` and the `local` zone through `astimezone` are standard there but untried); the other tests of the repository (nothing imports the module yet).
 
 **Open:** the to-do items already named, and the new one for the parameter-name list. The security review the owner asked for runs after Increment E.
+
+### Increment B — The state, the lock's holder, the approved plan, the disk and the last run (not yet committed)
+
+**Done.** On the branch `crawl-status`, from `190a3e2`. Linux, Python 3.14. The module is still read only: a test reads its source and fails on any call that writes, creates, removes, renames, takes an exclusive lock, opens a socket, starts a program or uses SQLite.
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/crawlstatus.py` (changed since A) | 726 | `cd365751499428ab5d5e5f7f4980bceca330d82565b27965a4354b08cf2874e2` |
+| `engine/tests/test_crawlstatus.py` (changed since A) | 1530 | `3758d05ca033a90742dac5c851c7842861dd0acf4afd85ccb18177f6d4359d98` |
+| `engine/tests/fixtures/crawlstatus/approved/current` (new) | 1 | `6ed6653dba3d6aee8110c6e23de37f15c609b8a6e29aa164d1acace604e5cb7e` |
+| `engine/tests/fixtures/crawlstatus/approved/0123456789abcdef0123456789abcdef/plan.txt` (new) | 1 | `7ac42995e628ae4e414e493644253669eb961557f177dcfbc7fd16a4000770d6` |
+| `engine/tests/fixtures/crawlstatus/state/breaker-tripped.json` (new) | 1 | `2b17bc8e7b87982d8882bb7ee5046a6b37ab4186388a1d27f5a11707fced71b8` |
+| `engine/tests/fixtures/crawlstatus/state/breaker-not-tripped.json` (new) | 1 | `0eb1a17ae4ea1eb7ca1dfe4fcea3b875351e04307e338c9027bd644866953f7a` |
+| `engine/tests/fixtures/crawlstatus/state/breaker-cleared.json` (new) | 1 | `3f9975f5ccfff1987c94119eef110c4e2590a6d0b59d532e879ab5fbe97b1e33` |
+
+- `breaker_state(index_root)`: **paused unless a readable file says `"tripped": false`**: `missing`, `cannot_examine` (it cannot be looked for, or the `crawl` folder is a link or not the owner's), `cannot_read` (not a plain file, over the size, not UTF-8, not JSON, not an object, a duplicate key, a number that is not finite, a key of the five missing, a wrong type including `null`, a `reason` over 300, a `kind` outside the four, an `at` that is not a UTC time, a `run` over 4,096), `tripped` (with its `reason`, `kind`, `at` and `run` redacted and cleaned) and `not_tripped`. Read once through one open file. The four cases of the owner's correction are each their own test, and a test shows the old wording wrong (a file that exists and says `false` is not paused; a missing one is).
+- `lock_state(index_root)`: opens `crawl.lock` read only and never creates it; one non-blocking shared `flock`, let go at once; held by another process means *running*, with `{"pid", "since"}` from the line `<pid> <YYYY-MM-DDTHH:MM:SSZ>` (at most 256 bytes, only while held) or `unknown` when the line is missing or anything else; a lock that is a link, a folder, a pipe or not the owner's is a fault and is not called held; a system that cannot try the lock gives `held: None`. Tested with a real second process (exclusive, and shared in one test), none left behind.
+- `stop_file`, `state`: stopped, then paused, then running, then idle; the facts (`running`, `stop`, `breaker`, `lock`) and the `faults` are given as well; a stop file that cannot be looked for is a fault and is not claimed.
+- `approved_plan(index_root, read_plan)` takes the reader as an argument (tested with a fixture dict); `none` in each case of the plan's list (and a `crawl` or `approved` folder that is a link), `unreadable` when the reader fails; only the named keys with plain values are kept. `zone_of` gives the plan's zone, or `local` (with a problem when the plan cannot be read or the zone is not text or not known).
+- `disk(bulk_root, index_root, floors, statvfs)`: free bytes (`f_bavail` times `f_frsize`), the floor in gigabytes, `below_floor` and `at_or_under_floor`, `same_device`, a failed reading as `None` with its reason.
+- `last_run`, `run_counts`: the last run from `run_start` and `run_end` lines only, the search described in the Review record; the runs of a day by `ts` in the plan's zone; a `refuse` line is never a run, and is counted apart by cleaned reason (the ten commonest, "(no reason)" when none).
+
+**Verification as run:**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlstatus`: **167 tests, OK**, repeated three times (the second-process tests are not flaky; no helper process is left). Each new test was seen to fail first (the functions did not exist; later, the tests for the review's findings failed on the old code before the change: the run printed its first 30 failures and was cut there, so no exact count is claimed).
+- **Deliberate breaks** (each compile-checked, the bytecode cache removed, the file restored byte for byte and the hash compared), against the final text: the code of B **118 of 119 killed**; the code of A rerun **123 of 126 killed**. The four survivors are equivalent: dropping `proxy-authorization` or `set-cookie` from the header pattern, the one-byte bound of the read loop (all three as in A's Result), and `a refusal is a start` (a `refuse` line never reaches the loop in `last_run` that it changes, because the line before it keeps only `run_start` and `run_end`). Two mutants I first called equivalent were not (the NaN in an extra key, a zone name that is not text), and tests were added for them.
+- No control, invisible or direction character in the files. `wb run code-work check`: 55 plans, no problems. `wb plan-status`: `approved`.
+- Review: one round of the `reviewer` agent (see the Review record).
+
+**Departures from the plan's wording, for the owner:** (1) `last_run` searches back to a run, bounded by 60 files and 128 MiB, and not "up to 3 files" (the Review record gives the reason); (2) `disk` gives `below_floor` as the plan says **and** `at_or_under_floor`, which is the runner plan's refusal rule; (3) `last_run` has no `zone` argument; (4) `read_log` also returns the bytes it read; (5) the plan's step 1 of the breaker has the file's `run` as text of up to 4,096 characters, which the contract does not limit.
+
+**Fields that can only be checked against fixtures** (the runner that writes them does not exist): the form of `crawl/breaker.json` (the owner's correction and the runner plan's contract; no runner writes it yet), the line of `crawl.lock`, the names `crawl/approved/current` and `<digest>/plan.txt`, the shape of the dict that `crawlplan.read_plan` returns (a flat dict of the plan's keys, assumed from `discover.read_plan`; it is on `origin/main` and not yet merged here), and whether the runner reads a floor in gigabytes as 2**30 or 10**9 bytes.
+
+**Not run:** anything on macOS (`flock` on a read-only descriptor, `os.pread`, `os.statvfs` and `O_NOCTTY` are standard there but untried); the real `crawlplan.read_plan`; the other tests of the repository (nothing imports the module yet). **Known limit, not fixable from here:** the lock's line can be the previous run's during the instant between a run taking the lock and writing its own line.
+
+**Open:** the to-do items already named. Increment D must print `at_or_under_floor` as what the runner would refuse on, pass the plan's text values through `clean`, and show `zone_of`'s problem.
