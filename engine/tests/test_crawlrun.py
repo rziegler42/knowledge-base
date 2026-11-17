@@ -1026,6 +1026,179 @@ class DryRun(Case):
         self.assertIn("would exit 3 (refused)", text)
 
 
+PARTS = ("stale", "lists", "reconcile", "scan", "convert", "judge", "cards", "move", "refill", "fetch")
+ONE_CHAIN = ["scan", "convert", "judge", "cards", "move"]
+
+
+class Assembly(Case):
+    """The order of one run when the steps are assembled (`crawlrun.default_steps`): each part is replaced here by a function that notes that it was called; the steps themselves are tested in their own files and
+    together in `test_crawlchain`."""
+
+    def parts(self, order, **over):
+        out = {name: (lambda ctx, name=name: order.append(name)) for name in PARTS}
+        out.update(over)
+        return out
+
+    def run_assembled(self, order, **over):
+        return self.do_run(steps=crawlrun.default_steps(self.parts(order, **over)))
+
+    def test_the_registry_names_the_points_and_every_part_is_a_step(self):
+        steps = crawlrun.default_steps(self.parts([]))
+        self.assertEqual(set(steps), set(POINTS))
+        self.assertTrue(all(callable(step) for step in steps.values()))
+        real = crawlrun.default_steps()                                   # with no parts the real steps are made, and none is called
+        self.assertEqual(set(real), set(POINTS))
+        self.assertTrue(all(callable(step) for step in real.values()))
+
+    def test_one_run_takes_the_stale_rows_the_lists_the_earlier_work_the_refill_and_the_fetch_and_then_the_new_books_through_the_chain_again(self):
+        order = []
+        self.assertEqual(self.run_assembled(order), 0)
+        self.assertEqual(order, ["stale", "lists", "reconcile"] + ONE_CHAIN + ["refill", "fetch"] + ONE_CHAIN)
+
+    def test_the_scan_comes_before_the_convert_in_every_pass_of_the_chain(self):
+        order = []
+        self.run_assembled(order)
+        for start in (order.index("scan"), len(order) - len(ONE_CHAIN)):
+            self.assertEqual(order[start:start + len(ONE_CHAIN)], ONE_CHAIN)
+
+    def test_the_stop_file_made_between_two_steps_of_the_chain_prevents_the_next_step_and_the_run_ends_at_the_next_point(self):
+        order = []
+
+        def cards(ctx):
+            order.append("cards")
+            open(os.path.join(self.index, "crawl.stop"), "w").close()
+
+        self.assertEqual(self.run_assembled(order, cards=cards), 0)
+        self.assertEqual(order, ["stale", "lists", "reconcile", "scan", "convert", "judge", "cards"])
+        lines = self.log_lines()
+        self.assertEqual([l["outcome"] for l in lines if l["step"] == "stop"][-1], "refused")
+        self.assertEqual([(l["outcome"], l["reason"]) for l in lines if l["step"] == "run_end"], [("ok", "stopped by the stop file at refill")])
+
+    def test_a_time_budget_that_is_spent_between_two_steps_of_the_chain_prevents_the_next_step_and_ends_the_run_with_a_line_that_says_so(self):
+        order = []
+
+        def convert(ctx):
+            order.append("convert")
+            ctx.deadline = ctx.clock()
+
+        self.assertEqual(self.run_assembled(order, convert=convert), 0)
+        self.assertEqual(order, ["stale", "lists", "reconcile", "scan", "convert"])
+        spent = [l for l in self.log_lines() if l["step"] == "stop" and l["outcome"] == "refused"]
+        self.assertEqual([l["reason"] for l in spent], ["the time budget of the run is spent at refill"])
+        self.assertEqual([l["reason"] for l in self.log_lines() if l["step"] == "run_end"], ["stopped by the time budget at refill"])
+
+    def test_a_run_whose_budget_is_spent_before_it_begins_does_nothing_and_ends_at_the_first_point(self):
+        order = []
+        with mock.patch.object(crawlrun, "RUN_SECONDS", 0):
+            self.assertEqual(self.run_assembled(order), 0)
+        self.assertEqual(order, [])
+        self.assertIn("the time budget of the run is spent at lists", [l["reason"] for l in self.log_lines() if l["step"] == "stop"])
+
+    def test_the_budget_is_an_hour_and_each_run_has_its_own(self):
+        self.assertEqual(crawlrun.RUN_SECONDS, 3600)
+        seen = []
+        self.do_run(steps={"lists": lambda ctx: seen.append(ctx.deadline - ctx.clock())})
+        self.assertEqual(seen, [datetime.timedelta(seconds=3600)])
+
+    def test_a_step_that_trips_the_breaker_ends_the_run_with_exit_4_and_no_later_step_runs(self):
+        order = []
+
+        def convert(ctx):
+            order.append("convert")
+            ctx.trip("stage_bound", "a bound")
+            raise crawlrun.BreakerTripped()
+
+        self.assertEqual(self.run_assembled(order, convert=convert), 4)
+        self.assertEqual(order, ["stale", "lists", "reconcile", "scan", "convert"])
+        self.assertEqual(self.do_run(), 4)                                 # the next run is refused until `crawl-clear --yes`
+
+    def test_a_step_that_refuses_the_run_ends_it_with_exit_3_and_no_later_step_runs(self):
+        order = []
+
+        def judge(ctx):
+            order.append("judge")
+            raise crawlrun.StepRefused("the shelf vectors are not there")
+
+        self.assertEqual(self.run_assembled(order, judge=judge), 3)
+        self.assertEqual(order, ["stale", "lists", "reconcile", "scan", "convert", "judge"])
+
+    def test_the_stalled_rows_are_queued_again_before_the_lists_and_the_line_says_how_many(self):
+        conn = crawlqueue.connect(self.index)
+        conn.execute("INSERT INTO candidates(identity_key, address, source, domain, status, tries, run_id, added, updated) VALUES ('k1', 'http://a.test/1', 'openalex', 'a.test', 'fetching', 1, 'old', ?, ?)",
+                     ("2026-11-16T08:00:00Z", "2026-11-16T08:00:00Z"))
+        conn.commit()
+        conn.close()
+        order = []
+        parts = self.parts(order)
+        del parts["stale"]                                                 # the real sweep
+        parts["lists"] = lambda ctx: order.append(("lists", [r[0] for r in ctx.conn.execute("SELECT status FROM candidates")]))
+        self.do_run(steps=crawlrun.default_steps(parts))
+        self.assertEqual(order[0], ("lists", ["queued"]))
+        line = [l for l in self.log_lines() if l["step"] == "fail"]
+        self.assertEqual([(l["outcome"], l["n"]) for l in line], [("ok", 1)])
+
+    def test_a_stalled_row_that_has_used_its_tries_is_given_up_and_counted_in_the_line(self):
+        conn = crawlqueue.connect(self.index)
+        conn.execute("INSERT INTO candidates(identity_key, address, source, domain, status, tries, run_id, added, updated) VALUES ('k1', 'http://a.test/1', 'openalex', 'a.test', 'fetching', 3, 'old', ?, ?)",
+                     ("2026-11-16T08:00:00Z", "2026-11-16T08:00:00Z"))
+        conn.commit()
+        conn.close()
+        parts = self.parts([])
+        del parts["stale"]
+        self.do_run(steps=crawlrun.default_steps(parts))
+        line = [l for l in self.log_lines() if l["step"] == "fail"]
+        self.assertEqual([(l["reason"], l["n"]) for l in line], [("0 stalled rows queued again, 1 given up", 1)])
+
+    def test_the_books_of_a_plan_that_is_not_approved_are_named_with_the_library_and_the_approved_digests_of_the_run(self):
+        parts = self.parts([])
+        del parts["reconcile"]
+        mine = crawlapprove.load_approved(self.index, self.cfg, kb_root=self.kb)["digest"]
+        with mock.patch("kb.store.Store.open", return_value="the library"), mock.patch("kb.crawlbooks.approved_digests", return_value={"d" * 32, mine}), \
+                mock.patch("kb.crawlbooks.reconcile_unapproved") as reconcile:
+            self.do_run(steps=crawlrun.default_steps(parts))
+        args = reconcile.call_args.args
+        self.assertEqual((reconcile.call_count, args[0], args[1]), (1, "the library", {"d" * 32, mine}))
+
+    def test_approvals_that_cannot_be_read_or_lack_the_runs_own_digest_refuse_the_run_and_no_book_is_named(self):
+        parts = self.parts([])
+        del parts["reconcile"]
+        for approved in (set(), {"e" * 32}):
+            with self.subTest(sorted(approved)), mock.patch("kb.store.Store.open", return_value="the library"), mock.patch("kb.crawlbooks.approved_digests", return_value=approved), \
+                    mock.patch("kb.crawlbooks.reconcile_unapproved") as reconcile:
+                self.assertEqual(self.do_run(steps=crawlrun.default_steps(parts)), 3)
+            self.assertEqual(reconcile.call_count, 0)
+
+    def test_a_part_that_is_not_a_step_of_the_assembly_is_refused(self):
+        with self.assertRaises(KbError):
+            crawlrun.default_steps({"lists": lambda ctx: None, "scann": lambda ctx: None})
+
+    def test_a_run_with_no_stalled_row_writes_no_line_for_the_sweep(self):
+        parts = self.parts([])
+        del parts["stale"]
+        self.do_run(steps=crawlrun.default_steps(parts))
+        self.assertEqual([l for l in self.log_lines() if l["step"] == "fail"], [])
+
+
+class AssemblyOfTheCommand(Case):
+    def test_the_command_runs_the_assembled_steps_and_a_dry_run_runs_none(self):
+        sentinel = {"lists": lambda ctx: None}
+        with mock.patch.object(crawlrun, "default_steps", return_value=sentinel), mock.patch.object(crawlrun, "run", return_value=0) as run:
+            self.assertEqual(crawlrun.run_unattended(self.cfg, dry_run=False), 0)
+            self.assertEqual(run.call_args.kwargs["steps"], sentinel)
+            run.reset_mock()
+            self.assertEqual(crawlrun.run_unattended(self.cfg, dry_run=True), 0)
+            self.assertEqual((run.call_args.kwargs["steps"], run.call_args.kwargs["dry_run"]), (None, True))
+
+    def test_the_dry_run_names_the_steps_a_real_run_takes_and_still_writes_nothing(self):
+        before = DryRun.snapshot(self)
+        self.assertEqual(self.do_run(dry_run=True), 0)
+        text = "\n".join(self.out)
+        for words in ("requeue the stalled rows", "refresh the lists", "reconcile", "scan and hold", "convert and index", "judge", "cards", "proposal and move", "refill", "fetch"):
+            self.assertIn(words, text)
+        self.assertNotIn("not built yet", text)
+        self.assertEqual(DryRun.snapshot(self), before)
+
+
 class Command(Case):
     def test_crawl_run_takes_no_argument_but_dry_run(self):
         from kb import __main__ as cli

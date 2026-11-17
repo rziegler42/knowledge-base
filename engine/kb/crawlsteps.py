@@ -21,6 +21,7 @@ from . import store as library_store
 
 NEVER_HOLD = frozenset({"script_elements", "event_handlers", "pattern_in_binary_data"})
 STOPPED = "the stop file is present"
+SPENT = "the time budget of the run is spent"
 FINISHED = "all the books are scanned"
 
 
@@ -44,6 +45,8 @@ def _refusal(ctx, statvfs, what="a scan"):
     """Why `what` may not be done now (the stop file, a disk floor), or `None`."""
     if crawlguard.stop_requested(ctx.index_root):
         return STOPPED
+    if crawlrun.spent(ctx):
+        return SPENT
     try:
         crawlguard.check_disk(ctx.cfg["bulk_root"], ctx.index_root, ctx.plan, statvfs=statvfs)
     except KbError as e:

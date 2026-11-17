@@ -206,7 +206,7 @@ def main(argv=None):
     ca.add_argument("--digest", metavar="DIGEST", help="the digest on the last line of the summary you read; it stores the approval and needs a terminal")
     cc = sub.add_parser("crawl-clear", help="clear the circuit breaker of the unattended crawl; it changes nothing without --yes and without a terminal, and it does not remove the stop file")
     cc.add_argument("--yes", action="store_true", help="clear it (in your own terminal)")
-    cr = sub.add_parser("crawl-run", help="one run of the unattended crawl: the checks in the spec's order, then the steps that attach (none yet); exit 0 done or another run is going, 3 refused, 4 the breaker is tripped")
+    cr = sub.add_parser("crawl-run", help="one run of the unattended crawl: the checks in the spec's order, then the steps (the stalled rows, the lists, the earlier work, the refill and the fetch, each new book through scan, convert, judge, cards and move); exit 0 done or another run is going, 3 refused, 4 the breaker is tripped")
     cr.add_argument("--dry-run", action="store_true", help="show each check and what a run would do; it takes no lock, writes nothing and makes no request")
     cs_ = sub.add_parser("crawl-status", help="show the state of the unattended crawl as one JSON object: whether it runs, is stopped or paused, the approved plan, the counters against their ceilings, "
                                               "the queue, the books it filed, the last run, the disk, the lists and the holds; it only reads (no request, no model, no write)")
@@ -438,7 +438,7 @@ def main(argv=None):
             print(out[0] if args.digest is None else json.dumps(out))
             return 0
         if args.command == "crawl-run":
-            return crawlrun.run(config.load(), dry_run=args.dry_run)
+            return crawlrun.run_unattended(config.load(), dry_run=args.dry_run)
         if args.command == "crawl-clear":
             crawlguard.clear(config.load()["index_root"], yes=args.yes)
             print("the circuit breaker is cleared; the stop file and any site stopped for the day are as they were")

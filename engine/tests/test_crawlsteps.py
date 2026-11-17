@@ -311,6 +311,37 @@ class UnreadableBooks(Case):
         self.assertEqual(self.held(book), ["scan_failed"])
 
 
+class TheTimeBudget(Case):
+    def spent(self, ctx):
+        ctx.deadline = self.now                                           # the clock is fixed: the budget is spent exactly now
+        return ctx
+
+    def test_the_scan_step_begins_no_scan_when_the_budget_of_the_run_is_spent_and_says_so_once(self):
+        book = self.filed()
+        ctx = self.run_step(ctx=self.spent(self.ctx()))
+        self.assertEqual((self.fake.calls, self.held(book)), ([], None))
+        self.assertEqual([x["reason"] for x in self.lines() if x["outcome"] == "skipped"], ["the time budget of the run is spent"])
+        self.assertEqual(ctx.scan_report["ended"], "the time budget of the run is spent")
+
+    def test_when_the_stop_file_is_there_too_the_stop_file_is_the_reason_given(self):
+        self.filed()
+        open(os.path.join(self.index, "crawl.stop"), "w").close()
+        ctx = self.run_step(ctx=self.spent(self.ctx()))
+        self.assertEqual(ctx.scan_report["ended"], "the stop file is present")
+
+    def test_the_budget_is_looked_at_before_each_scan_and_not_only_at_the_start(self):
+        first, second = self.filed(), self.filed()
+        ctx = self.ctx()
+
+        def spending(store, book, version):
+            out = self.fake(store, book, version)
+            ctx.deadline = self.now
+            return out
+
+        self.run_step(spending, ctx=ctx)
+        self.assertEqual(self.fake.calls, [first])
+
+
 class Idempotent(Case):
     def test_a_scanned_book_is_not_scanned_again_and_a_second_run_writes_nothing(self):
         book = self.filed()
@@ -973,6 +1004,21 @@ class JudgingEligibility(JudgeCase):
         with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
             self.run_judge()
         self.assertEqual((self.row(book)[0], self.store.read_book(book)["state"], forget.call_count, self.judge.calls), ("rejected", "weeded", 1, []))
+
+
+class TheBudgetInTheLaterSteps(JudgeCase):
+    def test_the_convert_step_and_the_judge_step_begin_no_work_when_the_budget_of_the_run_is_spent(self):
+        book = self.ready()
+        done = self.scanned_book()
+        for name, run, calls in (("convert", lambda ctx: self.run_convert(ctx=ctx), self.convert.calls), ("judge", lambda ctx: self.run_judge(ctx=ctx), self.judge.calls)):
+            with self.subTest(name):
+                ctx = self.ctx()
+                ctx.deadline = self.now
+                run(ctx)
+                self.assertEqual(calls, [])
+                self.assertEqual(self.names(book).count("crawl_step_failed"), 0)
+                self.assertEqual(self.lines()[-1]["reason"], "the time budget of the run is spent")
+        self.assertEqual(self.stage(done, "converted"), "pending")
 
 
 class JudgingRefusals(JudgeCase):

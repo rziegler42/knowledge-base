@@ -26,6 +26,7 @@ from . import KbError, crawlapprove, crawlguard, crawllog, crawlqueue, crawlstat
 
 CHECKS = ("lock", "approved", "stop", "breaker", "disk", "ceilings", "model")
 POINTS = ("lists", "earlier_work", "refill", "fetch")
+RUN_SECONDS = 3600                     # the time budget of one run: when it is spent, no step is begun and no book is begun in the scan, the convert, the judge and the fetch (a book that is going is finished), and the run ends at the next point; the card queue's pass and the move are not cut (see their steps)
 EXIT_DONE, EXIT_REFUSED, EXIT_BREAKER = 0, 3, 4
 WORDS = {EXIT_DONE: "0 (done)", EXIT_REFUSED: "3 (refused)", EXIT_BREAKER: "4 (the circuit breaker is tripped)"}
 LABELS = {"lock": "the run lock", "approved": "the approved plan", "stop": "the stop file", "breaker": "the circuit breaker", "disk": "the disk floors",
@@ -79,10 +80,21 @@ def _utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def spent(ctx):
+    """True when the run's time budget is spent (`ctx.deadline`, set when the steps begin; a context with none has no budget)."""
+    deadline = getattr(ctx, "deadline", None)
+    return deadline is not None and ctx.clock() >= deadline
+
+
 def attach_point(ctx, name):
-    """The point where a step attaches: look at the stop file, then call the step registered for `name`. Returns false when the stop file ended the run here."""
+    """The point where a step attaches: look at the stop file and at the time budget, then call the step registered for `name`. Returns false when the stop file or the budget ended the run here (`ctx.ended_by` says which)."""
     if crawlguard.stop_requested(ctx.index_root):
+        ctx.ended_by = "the stop file"
         ctx.log.write("stop", "refused", reason=f"the stop file is present at {name}", now=ctx.clock())
+        return False
+    if spent(ctx):
+        ctx.ended_by = "the time budget"
+        ctx.log.write("stop", "refused", reason=f"the time budget of the run is spent at {name}", now=ctx.clock())
         return False
     ctx.log.write("stop", "skipped", reason=f"no stop file at {name}", now=ctx.clock())
     step = ctx.steps.get(name)
@@ -223,7 +235,8 @@ def _model(cfg, index_root, plan, state, log, clock, probe):
 
 
 def _steps(cfg, index_root, plan, conn, log, clock, steps, secrets=(), warn=None, digest=None):
-    ctx = SimpleNamespace(cfg=cfg, index_root=index_root, plan=plan, conn=conn, log=log, run=log.run, clock=clock, steps=steps, secrets=tuple(secrets), tripped=False, matcher=None, suffixes=None, plan_digest=digest)
+    ctx = SimpleNamespace(cfg=cfg, index_root=index_root, plan=plan, conn=conn, log=log, run=log.run, clock=clock, steps=steps, secrets=tuple(secrets), tripped=False, matcher=None, suffixes=None, plan_digest=digest,
+                          deadline=clock() + datetime.timedelta(seconds=RUN_SECONDS), ended_by=None)
 
     def trip(kind, reason):
         """Trip the breaker for this run (the only way a step does): the run remembers it, whatever happens to the file afterwards."""
@@ -235,7 +248,7 @@ def _steps(cfg, index_root, plan, conn, log, clock, steps, secrets=(), warn=None
     try:
         for name in POINTS:
             if not attach_point(ctx, name):
-                reason = f"stopped by the stop file at {name}"
+                reason = f"stopped by {ctx.ended_by} at {name}"
                 break
     except BreakerTripped:
         code, reason = EXIT_BREAKER, "the circuit breaker was tripped"
@@ -254,6 +267,70 @@ def _steps(cfg, index_root, plan, conn, log, clock, steps, secrets=(), warn=None
         raise
     log.write("run_end", "tripped" if code == EXIT_BREAKER else "ok", reason=reason, now=clock())
     return code
+
+
+# ---- the assembly of the steps
+
+def _requeue_stale(ctx):
+    """The first of a run: the rows that have been `fetching` for over 30 minutes (a run that died) go back to the queue as a try, or are `failed` at `retries`. One line says how many, if any."""
+    out = crawlstate.requeue_stale(ctx.conn, ctx.plan, ctx.clock())
+    if out["requeued"] or out["failed"]:
+        ctx.log.write("fail", "ok", reason=f"{out['requeued']} stalled rows queued again, {out['failed']} given up", n=out["requeued"] + out["failed"], now=ctx.clock())
+
+
+def _reconcile(ctx):
+    """The first of the earlier work: the books of a plan that is not approved are named (`crawl_unplaced`, once) and nothing else is done for them."""
+    from . import crawlbooks, store
+    digests = crawlbooks.approved_digests(ctx.index_root)
+    if ctx.plan_digest not in digests:                   # an approved set that could not be read (it is empty then) must not make every crawl book terminal for good
+        raise StepRefused("the approved plans cannot be read, or the plan of this run is not among them")
+    crawlbooks.reconcile_unapproved(store.Store.open(), digests, ctx.log)
+
+
+def default_steps(parts=None):
+    """The registry of a real run, for `run(steps=...)`. In the spec's order: at `lists`, the stalled rows and then the lists (which make the matcher the later steps need); at `earlier_work`, the books of a plan that is
+    not approved are named and then every unfinished crawl book is taken through the steps it has not finished: scan and hold, convert and index, judge, cards, proposal and move (each step takes the books oldest
+    first, each looks at the stop file and the disk floors itself); at `refill`, discovery; at `fetch`, up to `batch` new candidates and then **the same chain again**, so that each new book goes through the steps in the
+    same run. Between two steps of the chain the stop file and the time budget are looked at, and a step does not begin after either. The scan comes before the conversion in every pass. `parts` replaces a
+    step by name (`stale`, `lists`, `reconcile`, `scan`, `convert`, `judge`, `cards`, `move`, `refill`, `fetch`: tests, with the steps given their own fakes); the steps are made when this is called and none is run."""
+    from . import crawlcards, crawlfetch, crawllists, crawlmove, crawlrefill, crawlsteps
+    given = dict(parts or {})
+    unknown = sorted(set(given) - {"stale", "lists", "reconcile", "scan", "convert", "judge", "cards", "move", "refill", "fetch"})
+    if unknown:
+        raise KbError("a part of the assembly is one of: stale, lists, reconcile, scan, convert, judge, cards, move, refill, fetch")
+
+    def part(name, real):
+        return given[name] if name in given else real
+
+    chain = [("scan", part("scan", crawlsteps.step)), ("convert", part("convert", crawlsteps.convert_step)), ("judge", part("judge", crawlsteps.judge_step)),
+             ("cards", part("cards", crawlcards.step)), ("move", part("move", crawlmove.step))]
+    stale, lists, reconcile = part("stale", _requeue_stale), part("lists", crawllists.step), part("reconcile", _reconcile)
+    refill, fetch = part("refill", crawlrefill.step), part("fetch", crawlfetch.step)
+
+    def run_chain(ctx):
+        for _name, step in chain:
+            if crawlguard.stop_requested(ctx.index_root) or spent(ctx):
+                return
+            step(ctx)
+
+    def first(ctx):
+        stale(ctx)
+        lists(ctx)
+
+    def earlier_work(ctx):
+        reconcile(ctx)
+        run_chain(ctx)
+
+    def new_books(ctx):
+        fetch(ctx)
+        run_chain(ctx)
+
+    return {"lists": first, "earlier_work": earlier_work, "refill": refill, "fetch": new_books}
+
+
+def run_unattended(cfg, dry_run=False):
+    """`crawl-run`: one run with the assembled steps (a dry run takes none: it makes no request and writes nothing)."""
+    return run(cfg, dry_run=dry_run, steps=None if dry_run else default_steps())
 
 
 # ---- --dry-run
@@ -305,7 +382,8 @@ def _dry_run(cfg, now, say, kb_root, statvfs, prefix):
             if not r.shown:
                 show(check, f"would refuse: {r.reason}")
     if outcome is None:
-        say("then a real run would: " + "; ".join(name.replace("_", " ") for name in POINTS) + f" (the steps that attach there are not built yet), at each looking at the stop file, with up to {plan['batch']} new candidates")
+        say("then a real run would: requeue the stalled rows; refresh the lists; finish the earlier work (reconcile the books of a plan that is not approved; scan and hold; convert and index; judge; cards; proposal and move); "
+            f"refill the queue; fetch up to {plan['batch']} new candidates and take each new book through the same steps, at each point looking at the stop file and at the time budget")
     code, reason = outcome if outcome is not None else (EXIT_DONE, "")
     say(f"a real run would exit {WORDS[code]}" + (f": {reason}" if reason else "") + ("" if outcome is not None else ", if the checks a dry run cannot make (the lock, the model server, the state files) also pass"))
     return EXIT_DONE

@@ -348,6 +348,8 @@ def _loop(ctx, run, statvfs):
     while True:
         if crawlguard.stop_requested(ctx.index_root):
             return STOPPED
+        if crawlrun.spent(ctx):
+            return "the time budget of the run is spent"
         try:
             crawlguard.check_disk(ctx.cfg["bulk_root"], ctx.index_root, ctx.plan, statvfs=statvfs)
         except KbError as e:

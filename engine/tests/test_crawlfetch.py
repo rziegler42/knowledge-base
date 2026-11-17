@@ -1123,6 +1123,33 @@ class Bounds(StepCase):
         self.assertEqual((self.row(again)["status"], self.row(again)["reason"]), ("rejected", "already held"))
 
 
+class TheTimeBudget(StepCase):
+    def test_no_candidate_is_taken_when_the_budget_of_the_run_is_spent_and_the_line_says_so(self):
+        self.doc("/p")
+        ident = self.add("/p")
+        ctx = self.ctx()
+        ctx.deadline = self.now
+        self.run_step(ctx=ctx)
+        self.assertEqual((self.row(ident)["tries"], self.counters(), self.srv.hits), (0, {}, []))
+        self.assertEqual(ctx.fetch_report["ended"], "the time budget of the run is spent")
+
+    def test_the_budget_is_looked_at_before_each_candidate(self):
+        for i in range(3):
+            self.doc(f"/p{i}")
+            self.add(f"/p{i}", host=f"h{i}.test")
+        ctx = self.ctx()
+        real = capture_url.capture
+
+        def spending(*a, **k):
+            out = real(*a, **k)
+            ctx.deadline = self.now
+            return out
+
+        with mock.patch.object(capture_url, "capture", spending):
+            self.run_step(ctx=ctx)
+        self.assertEqual([p for p, _ in self.srv.hits], ["/p0"])
+
+
 class StopFile(StepCase):
     def test_a_stop_file_at_the_start_takes_no_row_and_makes_no_request(self):
         self.doc("/p")
