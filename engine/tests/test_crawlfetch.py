@@ -12,6 +12,7 @@ import tempfile
 import threading
 import types
 import unittest
+from urllib.parse import urlsplit
 from unittest import mock
 
 from engine.tests import ENGINE_DIR  # noqa: F401  (puts the engine folder on the import path)
@@ -1372,6 +1373,85 @@ class Redirects(StepCase):
         self.assertEqual(self.row(own)["status"], "kept")                                 # and the site's own candidate still had its units
         counters = self.counters()
         self.assertEqual((counters[("2026-11-16", "hop:victim.test")], counters[("2026-11-16", "fetch:victim.test")]), (2, 1))
+
+    def chain(self, *steps, first="r0.test", limit=None):
+        """A candidate at `first` whose address redirects through `steps` (full addresses, the last the page) and the row of it."""
+        if limit is not None:
+            self.plan.update(per_domain_per_day=limit)
+        hosts = {urlsplit(s).hostname for s in steps}
+        for host in hosts:
+            self.dns.setdefault(host, [ALL_PUBLIC])
+        self.srv.routes["/r0"] = redirect(steps[0])
+        for here, there in zip(steps, steps[1:]):
+            self.srv.routes[urlsplit(here).path] = redirect(there)
+        self.doc(urlsplit(steps[-1]).path, "the page at the end of the chain with its own words")
+        return self.add("/r0", host=first)
+
+    def hops(self):
+        return {k[4:]: n for (_d, k), n in self.counters().items() if k.startswith("hop:")}
+
+    def test_two_requests_to_one_other_site_take_one_unit_and_the_candidate_is_kept_where_it_was_deferred_before(self):
+        ident = self.chain("http://victim.test/m1", "http://www.victim.test/m2", "http://victim.test/page", limit=1)
+        self.run_step()
+        self.assertEqual(self.row(ident)["status"], "kept")
+        self.assertEqual(self.hops(), {"victim.test": 1})
+
+    def test_a_chain_through_two_other_sites_takes_one_unit_for_each(self):
+        ident = self.chain("http://victim.test/m1", "http://other.test/m2", "http://third.test/page", limit=1)
+        self.run_step()
+        self.assertEqual(self.row(ident)["status"], "kept")
+        self.assertEqual(self.hops(), {"victim.test": 1, "other.test": 1, "third.test": 1})
+
+    def test_a_chain_that_returns_to_a_site_it_left_takes_one_unit_for_it_and_the_first_site_is_never_charged(self):
+        ident = self.chain("http://victim.test/m1", "http://other.test/m2", "http://victim.test/m3", "http://r0.test/m4", "http://other.test/page", limit=1)
+        self.run_step()
+        self.assertEqual(self.row(ident)["status"], "kept")
+        self.assertEqual(self.hops(), {"victim.test": 1, "other.test": 1})
+
+    def test_a_site_already_at_its_hop_limit_is_still_refused_at_the_first_visit_of_the_next_candidate(self):
+        first = self.chain("http://victim.test/m1", "http://victim.test/page", limit=1)
+        self.run_step()
+        self.assertEqual(self.row(first)["status"], "kept")
+        self.srv.routes["/r1"] = redirect("http://victim.test/m1")
+        second = self.add("/r1", host="r1.test")
+        self.run_step()
+        self.assertEqual((self.row(second)["status"], self.row(second)["reason"]), ("queued", "the site it leads to is at its limit for the day"))
+        self.assertEqual(self.hops(), {"victim.test": 1})
+
+    def test_a_refusal_after_two_requests_to_a_site_is_one_hop_and_one_refusal_of_that_site(self):
+        self.plan.update(per_domain_per_day=3, domain_refusals=3)
+        self.dns.setdefault("victim.test", [ALL_PUBLIC])
+        self.dns.setdefault("www.victim.test", [ALL_PUBLIC])
+        self.srv.routes["/r0"] = redirect("http://victim.test/m1")
+        self.srv.routes["/m1"] = redirect("http://www.victim.test/p")
+        self.srv.routes["/p"] = reply(403, body=b"no")
+        ident = self.add("/r0", host="r0.test")
+        self.run_step()
+        counters = self.counters()
+        self.assertEqual((counters[("2026-11-16", "hop:victim.test")], counters[("2026-11-16", "refusal:victim.test")]), (1, 1))
+        self.assertEqual(self.row(ident)["status"], "queued")
+
+    def test_a_hostile_chain_between_two_sites_makes_at_most_the_redirect_limit_of_requests_and_charges_each_site_once(self):
+        self.dns.setdefault("victim.test", [ALL_PUBLIC])
+        self.dns.setdefault("other.test", [ALL_PUBLIC])
+        self.srv.routes["/r0"] = redirect("http://victim.test/a")
+        self.srv.routes["/a"] = redirect("http://other.test/b")
+        self.srv.routes["/b"] = redirect("http://victim.test/a")
+        ident = self.add("/r0", host="r0.test")
+        before = len(self.srv.hits)
+        self.run_step()
+        self.assertLessEqual(len(self.srv.hits) - before, capture_url.MAX_REDIRECTS + 1)
+        self.assertEqual(self.hops(), {"victim.test": 1, "other.test": 1})
+        self.assertNotEqual(self.row(ident)["status"], "kept")
+
+    def test_a_public_address_that_is_an_ip_is_its_own_site_and_is_counted_once_however_often_it_is_asked(self):
+        self.srv.routes["/r0"] = redirect("http://8.8.8.8/m1")
+        self.srv.routes["/m1"] = redirect("http://8.8.8.8/page")
+        self.doc("/page", "the page at a public address, with its own words")
+        ident = self.add("/r0", host="r0.test")
+        self.run_step()
+        self.assertEqual(self.row(ident)["status"], "kept")
+        self.assertEqual(self.hops(), {"8.8.8.8": 1})
 
     def test_a_redirect_to_a_site_at_its_daily_limit_is_deferred_with_its_own_reason(self):
         self.plan.update(per_domain_per_day=1)

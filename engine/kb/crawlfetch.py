@@ -275,10 +275,11 @@ class _Run:
 
     def _policy(self):
         """The policy of this candidate: the shared one, with a hook that also takes a unit of the day of each site a redirect leads to (the first site's units were taken by `reserve`) and refuses a site that is stopped
-        or at its limit, so that redirectors cannot aim requests at one site past its limits. `self.hop` says the first and the latest site, for the charge of a refusal."""
+        or at its limit, so that redirectors cannot aim requests at one site past its limits. **A site is counted once for a candidate, however many requests it makes to it** (a DOI address goes to a publisher
+        and on inside it: one paper, one visit): the sites already counted are kept in `self.hop`, which also says the first and the latest site, for the charge of a refusal."""
         own = copy.copy(self.fp.policy)
         base, suffixes = self.fp.policy.check, self.fp.policy.suffixes
-        hop = self.hop = {"first": None, "last": None}
+        hop = self.hop = {"first": None, "last": None, "counted": set()}
 
         def check(address):
             why = base(address)
@@ -289,11 +290,14 @@ class _Run:
             if hop["first"] is None:
                 hop["first"] = site
                 return None
-            if site != hop["first"]:
+            if site != hop["first"] and site not in hop["counted"]:
                 try:
-                    return crawlstate.charge_hop(self.ctx.conn, self.ctx.plan, self.now(), site) or None
+                    why = crawlstate.charge_hop(self.ctx.conn, self.ctx.plan, self.now(), site)
                 except KbError:
                     return "the site of that address is unusable"          # a literal address or a name the counters cannot hold: a block, not a failure
+                if why:
+                    return why
+                hop["counted"].add(site)                                      # (a refused hop is not counted, and ends the fetch)
             return None
 
         own.check = check
