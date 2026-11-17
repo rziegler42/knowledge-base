@@ -311,9 +311,9 @@ class Passing(Case):
         self.assertEqual(sorted(os.listdir(self.crawl("approved"))), before_approved)
 
     def test_a_run_saves_the_guard_state_with_the_model_server_seen_up(self):
-        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:00:00Z", "history": [True, False]})
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:00:00Z", "history": [True, False], "entries_down": {}})
         self.do_run()
-        self.assertEqual(crawlguard.load_state(self.index), ({"model_down_since": None, "history": [True, False]}, False))
+        self.assertEqual(crawlguard.load_state(self.index), ({"model_down_since": None, "history": [True, False], "entries_down": {}}, False))
 
 
 class Refusals(Case):
@@ -1237,7 +1237,7 @@ class Contract(Case):
         self.assertEqual(sorted(breaker), ["at", "kind", "reason", "run", "tripped"])
         self.assertIs(breaker["tripped"], False)
         state = json.load(open(self.crawl("guard.json")))
-        self.assertEqual(sorted(state), ["history", "model_down_since"])
+        self.assertEqual(sorted(state), ["entries_down", "history", "model_down_since"])
         lines = self.log_lines()
         for line in lines:
             self.assertEqual(list(line), ["ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds"])

@@ -1051,7 +1051,7 @@ class JudgingRefusals(JudgeCase):
 
 class JudgingFailures(JudgeCase):
     def test_a_kept_verdict_clears_the_down_clock_and_asks_nothing_of_the_probe(self):
-        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:55:00Z", "history": []})
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:55:00Z", "history": [], "entries_down": {}})
         self.ready()
         self.run_judge()
         self.assertEqual((self.clock_state(), self.probes), (None, []))
@@ -1068,7 +1068,7 @@ class JudgingFailures(JudgeCase):
     def test_a_probe_that_raises_is_a_server_that_does_not_answer(self):
         for error in (KbError("refused"), OSError("no route")):
             with self.subTest(type(error).__name__):
-                crawlguard.save_state(self.index, {"model_down_since": None, "history": []})
+                crawlguard.save_state(self.index, {"model_down_since": None, "history": [], "entries_down": {}})
                 book = self.ready()
                 self.judge.results[book] = "retry"
 
@@ -1082,7 +1082,7 @@ class JudgingFailures(JudgeCase):
                 self.assertIsNone(self.clock_state())
 
     def test_a_text_that_is_not_a_document_asks_no_model_and_neither_clears_the_clock_nor_ends_a_run_of_failures(self):
-        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:55:00Z", "history": []})
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:55:00Z", "history": [], "entries_down": {}})
         book = self.ready()
         self.judge.results[book] = "nodoc"
         self.run_judge()
@@ -1111,7 +1111,7 @@ class JudgingFailures(JudgeCase):
         self.assertEqual((len(bad.calls), self.tripped[0][0]), (2, "stage_bound"))
 
     def test_a_server_that_has_been_down_for_longer_than_the_limit_trips_the_breaker_as_model_down(self):
-        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T10:00:00Z", "history": []})
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T10:00:00Z", "history": [], "entries_down": {}})
         book = self.ready()
         self.judge.results[book] = "retry"
         self.up = False

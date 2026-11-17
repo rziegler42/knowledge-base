@@ -29,6 +29,9 @@ REASON_MAX = 300
 MAX_FILE = 16 * 1024
 MAX_HISTORY = 1000
 PROBE_TEXT = "ping"
+PROBE_PROMPT = "Answer with one word: ok"
+MAX_ENTRIES = 32                       # the entries of the models' registry that the file may hold as down at once
+_ENTRY = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")      # the name of an entry as `models` allows it
 WITHHELD = "the reason was withheld"
 BREAKER_KEYS = ("tripped", "reason", "kind", "at", "run")
 _TS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
@@ -312,8 +315,8 @@ def clear(index_root, yes, is_tty=None, now=None, run=None):
 # ---- the rules that trip it
 
 def fresh_state():
-    """The guard state of a library that has none: no sighting of the model server down and no history."""
-    return {"model_down_since": None, "history": []}
+    """The guard state of a library that has none: no sighting of the model server down, no entry down and no history."""
+    return {"model_down_since": None, "history": [], "entries_down": {}}
 
 
 def _parsed(text):
@@ -327,9 +330,11 @@ def _parsed(text):
 
 
 def _valid_state(state):
-    return (isinstance(state, dict) and sorted(state) == ["history", "model_down_since"]
+    return (isinstance(state, dict) and sorted(state) == ["entries_down", "history", "model_down_since"]
             and (state["model_down_since"] is None or _parsed(state["model_down_since"]) is not None)
-            and isinstance(state["history"], list) and len(state["history"]) <= MAX_HISTORY and all(isinstance(x, bool) for x in state["history"]))
+            and isinstance(state["history"], list) and len(state["history"]) <= MAX_HISTORY and all(isinstance(x, bool) for x in state["history"])
+            and isinstance(state["entries_down"], dict) and len(state["entries_down"]) <= MAX_ENTRIES
+            and all(isinstance(k, str) and _ENTRY.fullmatch(k) and _parsed(v) is not None for k, v in state["entries_down"].items()))
 
 
 def load_state(index_root):
@@ -341,7 +346,7 @@ def load_state(index_root):
         return fresh_state(), not e.missing
     if not _valid_state(state):
         return fresh_state(), True
-    return {"model_down_since": state["model_down_since"], "history": list(state["history"])}, False
+    return {"model_down_since": state["model_down_since"], "history": list(state["history"]), "entries_down": dict(state["entries_down"])}, False
 
 
 def save_state(index_root, state):
@@ -388,6 +393,28 @@ def note_model(state, ok, now, plan):
         return None
     if (now - began).total_seconds() > plan["model_down_minutes"] * 60:
         return "model_down", f"the model server has not answered for over {plan['model_down_minutes']} minutes"
+    return None
+
+
+def note_entry(state, entry, ok, now, plan):
+    """Note one sighting of one model entry (its name as the config gives it): `None`, or the trip `(kind, reason)` once that entry has been down for longer than `model_down_minutes`, counted from the first sighting
+    that failed. An answer clears the entry's clock. The clocks of two entries are independent of each other and of the clock `note_model` keeps for the card embedding. The reason names the entry and the minutes
+    and holds no text of any reply."""
+    stamp = _stamp(now)
+    if not isinstance(entry, str) or not _ENTRY.fullmatch(entry):
+        raise KbError("a model entry is named as the config names it")
+    if not isinstance(ok, bool):
+        raise KbError("a probe of a model entry succeeded or it did not")
+    table = state["entries_down"]
+    if ok:
+        table.pop(entry, None)
+        return None
+    began = _parsed(table[entry]) if entry in table else None
+    if began is None or began > now:          # no sighting yet, one that is not a real time, or one in the future: the clock starts now
+        table[entry] = stamp
+        return None
+    if (now - began).total_seconds() > plan["model_down_minutes"] * 60:
+        return "model_down", f"the model entry {entry} has not answered for over {plan['model_down_minutes']} minutes"
     return None
 
 
@@ -442,6 +469,15 @@ def check_disk(bulk_root, index_root, plan, statvfs=os.statvfs):
 
 # ---- the model probe
 
+def entry_of(cfg, task):
+    """The name of the entry that the config sets for a task of the engine (two tasks may name one entry), or `None` for an optional task that is not set. `KbError` for a task the engine does not know, a task that
+    is needed and not set, and a config with model work off."""
+    from . import models
+    if task in models.OPTIONAL_TASKS:
+        return models.optional(cfg, task)
+    return models.choose(cfg, task)[0]
+
+
 def probe_model(cfg, embed=None):
     """One call of the engine's `embed` on one short text; true when vectors come back. A refusal or an error of the connection is a server that does not answer."""
     try:
@@ -459,3 +495,39 @@ def probe_model(cfg, embed=None):
         return False
     vectors = reply.get("vectors") if isinstance(reply, dict) else None
     return isinstance(vectors, list) and bool(vectors) and isinstance(vectors[0], list) and bool(vectors[0])
+
+
+def probe_entry(cfg, task, call=None, embed=None):
+    """One short call of the entry that the config sets for `task`: of `embed` on a fixed short text for an embedding task, of `call` on a fixed short prompt for a chat task (`models` is the default of both). True when
+    a usable reply comes back (vectors, or a text that is not empty). A task with no entry, model work off, a refusal, an error of the connection and a reply that is not usable are all "did not answer". Nothing of the
+    reply is returned or kept."""
+    from . import models
+    try:
+        name = entry_of(cfg, task)
+    except (KbError, TypeError, AttributeError):
+        return False
+    if not name:
+        return False
+    try:
+        if task in models.EMBED_TASKS:
+            reply = (embed or models.embed)(cfg, name, [PROBE_TEXT])
+            vectors = reply.get("vectors") if isinstance(reply, dict) else None
+            return isinstance(vectors, list) and bool(vectors) and isinstance(vectors[0], list) and bool(vectors[0])
+        reply = (call or models.call)(cfg, name, PROBE_PROMPT)
+    except (KbError, OSError):
+        return False
+    text = reply.get("reply") if isinstance(reply, dict) else None
+    return isinstance(text, str) and bool(text.strip())
+
+
+def probe_tasks(cfg, tasks, call=None, embed=None):
+    """`{entry name: answered}` for the entries of these tasks, **each entry probed once** (two tasks that name one entry share one probe); a task that names no entry is left out."""
+    out = {}
+    for task in tasks:
+        try:
+            name = entry_of(cfg, task)
+        except (KbError, TypeError, AttributeError):
+            continue
+        if name and name not in out:
+            out[name] = probe_entry(cfg, task, call=call, embed=embed)
+    return out

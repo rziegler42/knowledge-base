@@ -521,7 +521,7 @@ class Clear(Case):
 
     def test_a_clear_starts_the_guard_state_afresh(self):
         self.tripped()
-        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T10:00:00Z", "history": [False] * 8})
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T10:00:00Z", "history": [False] * 8, "entries_down": {}})
         crawlguard.clear(self.index, yes=True, is_tty=lambda: True, now=NOW)
         self.assertEqual(crawlguard.load_state(self.index), (crawlguard.fresh_state(), False))
         p = plan(consecutive_failures=8)
@@ -555,7 +555,7 @@ class Rules(Case):
 
     def test_the_share_looks_at_exactly_the_last_window_of_fetches(self):
         p = plan(consecutive_failures=1000, window=4, failure_share=0.75)
-        state = {"model_down_since": None, "history": [True, True]}
+        state = {"model_down_since": None, "history": [True, True], "entries_down": {}}
         self.assertIsNone(crawlguard.record_fetch(state, False, p))
         self.assertIsNone(crawlguard.record_fetch(state, False, p))
         trip = crawlguard.record_fetch(state, False, p)             # the last four are T, F, F, F
@@ -623,7 +623,7 @@ class Rules(Case):
     def test_a_sighting_in_the_future_or_not_a_real_time_restarts_the_clock_and_a_probe_is_a_truth_value_only(self):
         p = plan(model_down_minutes=1)
         for since in ("2026-11-16T12:00:00Z", "9999-01-01T00:00:00Z", "2026-13-45T00:00:00Z"):
-            state = {"model_down_since": since, "history": []}
+            state = {"model_down_since": since, "history": [], "entries_down": {}}
             self.assertIsNone(crawlguard.note_model(state, False, NOW - datetime.timedelta(hours=5), p) if since.startswith("2026-11") else crawlguard.note_model(state, False, NOW, p))
             self.assertEqual(state["model_down_since"], _stamp_of(NOW - datetime.timedelta(hours=5)) if since.startswith("2026-11") else "2026-11-16T12:00:00Z")
         for bad in (1, 0, None, "no", []):
@@ -632,13 +632,13 @@ class Rules(Case):
         os.makedirs(self.crawl(), mode=0o700)
         for since in ("2026-13-45T00:00:00Z", "2026-02-30T00:00:00Z"):
             with open(self.crawl("guard.json"), "w") as f:
-                f.write(json.dumps({"model_down_since": since, "history": []}))
+                f.write(json.dumps({"model_down_since": since, "history": [], "entries_down": {}}))
             os.chmod(self.crawl("guard.json"), 0o600)
             self.assertEqual(crawlguard.load_state(self.index), (crawlguard.fresh_state(), True))
 
     def test_a_clock_that_went_back_does_not_trip_and_a_time_without_a_zone_is_refused(self):
         p = plan(model_down_minutes=1)
-        state = {"model_down_since": "2026-11-16T12:00:00Z", "history": []}
+        state = {"model_down_since": "2026-11-16T12:00:00Z", "history": [], "entries_down": {}}
         self.assertIsNone(crawlguard.note_model(state, False, NOW - datetime.timedelta(hours=5), p))
         with self.assertRaises(KbError):
             crawlguard.note_model(state, False, datetime.datetime(2026, 11, 16), p)
@@ -663,13 +663,13 @@ class Rules(Case):
 
 class State(Case):
     def test_it_is_written_atomically_at_mode_600_and_read_back(self):
-        state = {"model_down_since": "2026-11-16T12:00:00Z", "history": [True, False, True]}
+        state = {"model_down_since": "2026-11-16T12:00:00Z", "history": [True, False, True], "entries_down": {}}
         crawlguard.save_state(self.index, state)
         self.assertEqual(stat.S_IMODE(os.stat(self.crawl("guard.json")).st_mode), 0o600)
         self.assertEqual(crawlguard.load_state(self.index), (state, False))
         with mock.patch.object(crawlguard.os, "replace", side_effect=OSError(28, "full")):
             with self.assertRaises(KbError):
-                crawlguard.save_state(self.index, {"model_down_since": None, "history": []})
+                crawlguard.save_state(self.index, {"model_down_since": None, "history": [], "entries_down": {}})
         self.assertEqual(crawlguard.load_state(self.index), (state, False))
         self.assertEqual([n for n in os.listdir(self.crawl()) if n != "guard.json"], [])
 
@@ -677,7 +677,7 @@ class State(Case):
         self.assertEqual(crawlguard.load_state(self.index), (crawlguard.fresh_state(), False))
         os.makedirs(self.crawl(), mode=0o700)
         self.assertEqual(crawlguard.load_state(self.index), (crawlguard.fresh_state(), False))
-        good = {"model_down_since": "2026-11-16T12:00:00Z", "history": [True]}
+        good = {"model_down_since": "2026-11-16T12:00:00Z", "history": [True], "entries_down": {}}
         bad = ["", "{", "[]", "null", json.dumps({"model_down_since": None}), json.dumps({"history": []}), json.dumps(dict(good, extra=1)), json.dumps(dict(good, history=[1])),
                json.dumps(dict(good, history="x")), json.dumps(dict(good, model_down_since="now")), json.dumps(dict(good, model_down_since=5)), json.dumps(dict(good, history=[True] * 5000)),
                "x" * 100000]
@@ -698,21 +698,21 @@ class State(Case):
         for count, restarted in ((1000, False), (1001, True)):
             os.makedirs(self.crawl(), mode=0o700, exist_ok=True)
             with open(self.crawl("guard.json"), "w") as f:
-                f.write(json.dumps({"model_down_since": None, "history": [True] * count}))
+                f.write(json.dumps({"model_down_since": None, "history": [True] * count, "entries_down": {}}))
             os.chmod(self.crawl("guard.json"), 0o600)
             self.assertEqual(crawlguard.load_state(self.index)[1], restarted, count)
         with self.assertRaises(KbError):
-            crawlguard.save_state(self.index, {"model_down_since": None, "history": [True] * 1001})
-        crawlguard.save_state(self.index, {"model_down_since": None, "history": [True] * 1000})
+            crawlguard.save_state(self.index, {"model_down_since": None, "history": [True] * 1001, "entries_down": {}})
+        crawlguard.save_state(self.index, {"model_down_since": None, "history": [True] * 1000, "entries_down": {}})
 
     def test_a_link_a_folder_or_a_pipe_is_not_read_and_not_written_through(self):
         os.makedirs(self.crawl(), mode=0o700)
         target = os.path.join(self.dir, "t.json")
-        open(target, "w").write(json.dumps({"model_down_since": None, "history": [True]}))
+        open(target, "w").write(json.dumps({"model_down_since": None, "history": [True], "entries_down": {}}))
         os.chmod(target, 0o600)
         os.symlink(target, self.crawl("guard.json"))
         self.assertEqual(crawlguard.load_state(self.index), (crawlguard.fresh_state(), True))
-        crawlguard.save_state(self.index, {"model_down_since": None, "history": [False]})
+        crawlguard.save_state(self.index, {"model_down_since": None, "history": [False], "entries_down": {}})
         self.assertEqual(json.load(open(target))["history"], [True])
         self.assertFalse(os.path.islink(self.crawl("guard.json")))
         os.remove(self.crawl("guard.json"))
@@ -723,14 +723,210 @@ class State(Case):
         self.assertEqual(crawlguard.load_state(self.index), (crawlguard.fresh_state(), True))
 
     def test_a_state_that_is_not_the_shape_is_not_saved(self):
-        for bad in ({"model_down_since": None}, {"model_down_since": "x", "history": []}, {"model_down_since": None, "history": [1]}, [], None, {"model_down_since": None, "history": [], "x": 1}):
+        for bad in ({"model_down_since": None}, {"model_down_since": "x", "history": [], "entries_down": {}}, {"model_down_since": None, "history": [1], "entries_down": {}}, [], None, {"model_down_since": None, "history": [], "x": 1, "entries_down": {}}):
             with self.assertRaises(KbError):
                 crawlguard.save_state(self.index, bad)
 
     def test_a_fresh_state_is_a_new_one_each_time(self):
         a, b = crawlguard.fresh_state(), crawlguard.fresh_state()
         a["history"].append(True)
-        self.assertEqual(b, {"model_down_since": None, "history": []})
+        self.assertEqual(b, {"model_down_since": None, "history": [], "entries_down": {}})
+
+
+def models_cfg(**tasks):
+    chat = {"bridge": "ask-ollama", "server": "ned", "model": "m", "kind": "chat", "thinking": "off"}
+    emb = {"bridge": "ask-ollama", "server": "ned", "model": "e", "kind": "embedding", "dimension": 8}
+    base = {"card-embed": "emb", "place-embed": "emb2", "card-notes": "notes", "card": "cardm", "card-check": "notes"}
+    base.update(tasks)
+    return {"models_on": True, "models": {"emb": emb, "emb2": dict(emb), "notes": chat, "cardm": dict(chat), "placem": dict(chat)}, "tasks": base}
+
+
+class Calls:
+    """A fake `embed` and a fake `call` that note what they were given and answer as they are told."""
+
+    def __init__(self, embed_reply=None, call_reply=None, error=None):
+        self.embed_reply = {"vectors": [[0.1, 0.2]]} if embed_reply is None else embed_reply
+        self.call_reply = {"model": "m", "reply": "ok", "usage": {}} if call_reply is None else call_reply
+        self.error, self.embeds, self.calls = error, [], []
+
+    def embed(self, cfg, name, texts, **kw):
+        self.embeds.append((name, list(texts)))
+        if self.error is not None:
+            raise self.error
+        return self.embed_reply
+
+    def call(self, cfg, name, prompt, **kw):
+        self.calls.append((name, prompt))
+        if self.error is not None:
+            raise self.error
+        return self.call_reply
+
+
+class Entries(Case):
+    def test_a_fresh_state_has_no_entry_down_and_each_is_a_new_one(self):
+        a, b = crawlguard.fresh_state(), crawlguard.fresh_state()
+        a["entries_down"]["notes"] = "2026-11-16T12:00:00Z"
+        self.assertEqual((b["entries_down"], sorted(a)), ({}, ["entries_down", "history", "model_down_since"]))
+
+    def test_a_state_file_in_the_old_shape_is_read_as_a_fresh_state_that_says_the_clock_restarted(self):
+        os.makedirs(self.crawl(), mode=0o700)
+        with open(self.crawl("guard.json"), "w") as f:
+            f.write(json.dumps({"model_down_since": "2026-11-16T11:00:00Z", "history": [True]}))        # the shape before the entries had clocks
+        os.chmod(self.crawl("guard.json"), 0o600)
+        self.assertEqual(crawlguard.load_state(self.index), (crawlguard.fresh_state(), True))
+
+    def test_the_entries_that_are_down_are_kept_through_a_save_and_a_load_and_a_load_gives_a_copy(self):
+        state = crawlguard.fresh_state()
+        state["entries_down"] = {"notes": "2026-11-16T11:00:00Z", "emb2": "2026-11-16T11:30:00Z"}
+        crawlguard.save_state(self.index, state)
+        loaded, restarted = crawlguard.load_state(self.index)
+        self.assertEqual((loaded, restarted), (state, False))
+        loaded["entries_down"]["notes"] = "changed"
+        self.assertEqual(crawlguard.load_state(self.index)[0], state)
+
+    def test_a_state_with_a_bad_table_of_entries_is_not_saved_and_a_file_with_one_is_not_believed(self):
+        base = crawlguard.fresh_state()
+        too_many = {f"e{n}": "2026-11-16T11:00:00Z" for n in range(crawlguard.MAX_ENTRIES + 1)}
+        bad = [None, [], "x", {"A b": "2026-11-16T11:00:00Z"}, {"": "2026-11-16T11:00:00Z"}, {"n" * 40: "2026-11-16T11:00:00Z"}, {"notes": "now"}, {"notes": None}, {"notes": "2026-13-45T00:00:00Z"}, too_many]
+        os.makedirs(self.crawl(), mode=0o700)
+        for table in bad:
+            with self.subTest(str(table)[:40]):
+                with self.assertRaises(KbError):
+                    crawlguard.save_state(self.index, dict(base, entries_down=table))
+                with open(self.crawl("guard.json"), "w") as f:
+                    f.write(json.dumps(dict(base, entries_down=table)))                            # (a key that is a number is a text in a file, and is no entry name either)
+                os.chmod(self.crawl("guard.json"), 0o600)
+                self.assertEqual(crawlguard.load_state(self.index), (crawlguard.fresh_state(), True))
+        with self.assertRaises(KbError):
+            crawlguard.save_state(self.index, dict(base, entries_down={1: "2026-11-16T11:00:00Z"}))
+        full = {f"e{n}": "2026-11-16T11:00:00Z" for n in range(crawlguard.MAX_ENTRIES)}
+        crawlguard.save_state(self.index, dict(base, entries_down=full))
+
+    def test_the_table_holds_exactly_32_entries_and_a_name_exactly_32_characters_long(self):
+        stamp = "2026-11-16T11:00:00Z"
+        crawlguard.save_state(self.index, dict(crawlguard.fresh_state(), entries_down={f"e{n}": stamp for n in range(32)}))
+        with self.assertRaises(KbError):
+            crawlguard.save_state(self.index, dict(crawlguard.fresh_state(), entries_down={f"e{n}": stamp for n in range(33)}))
+        crawlguard.save_state(self.index, dict(crawlguard.fresh_state(), entries_down={"a" * 32: stamp}))
+        with self.assertRaises(KbError):
+            crawlguard.save_state(self.index, dict(crawlguard.fresh_state(), entries_down={"a" * 33: stamp}))
+        self.assertIsNone(crawlguard.note_entry(crawlguard.fresh_state(), "a" * 32, False, NOW, plan()))
+        with self.assertRaises(KbError):
+            crawlguard.note_entry(crawlguard.fresh_state(), "a" * 33, False, NOW, plan())
+
+    def test_a_config_that_is_not_a_table_is_not_probed_and_names_no_entry(self):
+        fake = Calls()
+        for cfg in (None, [], "x", 3):
+            with self.subTest(repr(cfg)):
+                self.assertIs(crawlguard.probe_entry(cfg, "card", call=fake.call, embed=fake.embed), False)
+                self.assertEqual(crawlguard.probe_tasks(cfg, ("card", "card-embed"), call=fake.call, embed=fake.embed), {})
+        self.assertEqual((fake.embeds, fake.calls), ([], []))
+
+    def test_an_entry_clock_starts_at_the_first_failure_keeps_it_trips_after_the_limit_and_an_answer_clears_it(self):
+        p = plan(model_down_minutes=30)
+        state = crawlguard.fresh_state()
+        self.assertIsNone(crawlguard.note_entry(state, "notes", False, NOW, p))
+        self.assertEqual(state["entries_down"], {"notes": "2026-11-16T12:00:00Z"})
+        self.assertIsNone(crawlguard.note_entry(state, "notes", False, NOW + datetime.timedelta(minutes=30), p))          # exactly the limit is not over it
+        trip = crawlguard.note_entry(state, "notes", False, NOW + datetime.timedelta(minutes=30, seconds=1), p)
+        self.assertEqual(trip[0], "model_down")
+        self.assertIn("notes", trip[1])
+        self.assertIn("30 minutes", trip[1])
+        self.assertEqual(state["entries_down"], {"notes": "2026-11-16T12:00:00Z"})                                     # the first sight is kept
+        self.assertIsNone(crawlguard.note_entry(state, "notes", True, NOW + datetime.timedelta(hours=2), p))
+        self.assertEqual(state["entries_down"], {})
+        self.assertIsNone(crawlguard.note_entry(state, "notes", True, NOW + datetime.timedelta(hours=3), p))             # an answer for an entry that was not down changes nothing
+        self.assertEqual(state["entries_down"], {})
+
+    def test_the_clocks_of_two_entries_are_independent_and_do_not_touch_the_clock_of_the_card_embedding_entry(self):
+        p = plan(model_down_minutes=30)
+        state = crawlguard.fresh_state()
+        crawlguard.note_model(state, False, NOW, p)
+        crawlguard.note_entry(state, "notes", False, NOW, p)
+        crawlguard.note_entry(state, "placem", False, NOW + datetime.timedelta(minutes=20), p)
+        self.assertEqual(crawlguard.note_entry(state, "notes", False, NOW + datetime.timedelta(minutes=40), p)[0], "model_down")
+        self.assertIsNone(crawlguard.note_entry(state, "placem", False, NOW + datetime.timedelta(minutes=40), p))
+        crawlguard.note_entry(state, "notes", True, NOW + datetime.timedelta(minutes=41), p)
+        self.assertEqual((sorted(state["entries_down"]), state["model_down_since"]), (["placem"], "2026-11-16T12:00:00Z"))
+        crawlguard.note_model(state, True, NOW + datetime.timedelta(minutes=42), p)
+        self.assertEqual(sorted(state["entries_down"]), ["placem"])
+
+    def test_a_sighting_in_the_future_or_not_a_time_restarts_the_clock_and_the_reason_holds_no_text_but_the_name_and_the_minutes(self):
+        p = plan(model_down_minutes=1)
+        state = dict(crawlguard.fresh_state(), entries_down={"notes": "9999-01-01T00:00:00Z"})
+        self.assertIsNone(crawlguard.note_entry(state, "notes", False, NOW, p))
+        self.assertEqual(state["entries_down"]["notes"], "2026-11-16T12:00:00Z")
+        trip = crawlguard.note_entry(state, "notes", False, NOW + datetime.timedelta(minutes=5), p)
+        self.assertEqual(trip[1], "the model entry notes has not answered for over 1 minutes")
+
+    def test_a_name_that_is_not_an_entry_name_an_answer_that_is_not_a_truth_value_and_a_time_without_a_zone_are_refused(self):
+        p = plan()
+        for name in ("", "A", "a b", "x" * 40, None, 3, "-a", "a/b"):
+            with self.subTest(repr(name)), self.assertRaises(KbError):
+                crawlguard.note_entry(crawlguard.fresh_state(), name, False, NOW, p)
+        for ok in (1, 0, None, "no", []):
+            with self.subTest(repr(ok)), self.assertRaises(KbError):
+                crawlguard.note_entry(crawlguard.fresh_state(), "notes", ok, NOW, p)
+        with self.assertRaises(KbError):
+            crawlguard.note_entry(crawlguard.fresh_state(), "notes", False, datetime.datetime(2026, 11, 16, 12, 0), p)
+
+    def test_a_task_is_resolved_to_the_entry_the_config_names_for_it_and_two_tasks_can_name_one_entry(self):
+        cfg = models_cfg()
+        self.assertEqual([crawlguard.entry_of(cfg, t) for t in ("card-embed", "place-embed", "card-notes", "card", "card-check")], ["emb", "emb2", "notes", "cardm", "notes"])
+        self.assertIsNone(crawlguard.entry_of(cfg, "place"))                                      # an optional task that is not set
+        self.assertEqual(crawlguard.entry_of(models_cfg(place="placem"), "place"), "placem")
+        for bad in ("nothing", "", None, 3):
+            with self.subTest(repr(bad)), self.assertRaises(KbError):
+                crawlguard.entry_of(cfg, bad)
+        with self.assertRaises(KbError):
+            crawlguard.entry_of(dict(cfg, models_on=False), "card")
+
+    def test_an_embedding_entry_is_probed_by_one_embedding_of_a_fixed_short_text_and_a_chat_entry_by_one_short_call(self):
+        cfg, fake = models_cfg(place="placem"), Calls()
+        self.assertIs(crawlguard.probe_entry(cfg, "place-embed", call=fake.call, embed=fake.embed), True)
+        self.assertEqual((fake.embeds, fake.calls), ([("emb2", [crawlguard.PROBE_TEXT])], []))
+        self.assertIs(crawlguard.probe_entry(cfg, "place", call=fake.call, embed=fake.embed), True)
+        self.assertEqual((len(fake.embeds), fake.calls), (1, [("placem", crawlguard.PROBE_PROMPT)]))
+        self.assertLess(len(crawlguard.PROBE_PROMPT), 60)
+
+    def test_an_entry_that_does_not_answer_or_answers_with_something_unusable_is_false_and_nothing_of_the_reply_is_returned(self):
+        cfg = models_cfg(place="placem")
+        for error in (KbError("refused"), OSError("no route")):
+            fake = Calls(error=error)
+            for task in ("card-embed", "card"):
+                with self.subTest((type(error).__name__, task)):
+                    self.assertIs(crawlguard.probe_entry(cfg, task, call=fake.call, embed=fake.embed), False)
+        for reply in ({"vectors": []}, {"vectors": [[]]}, {"vectors": "x"}, {}, None, [], "text", {"vectors": [None]}):
+            with self.subTest(repr(reply)):
+                fake = Calls(embed_reply=reply if reply is not None else {"vectors": None})
+                self.assertIs(crawlguard.probe_entry(cfg, "card-embed", embed=fake.embed), False)
+        for reply in ({"reply": ""}, {"reply": "  \n"}, {"reply": 5}, {}, "ok", None, [], {"model": "m"}):
+            with self.subTest(repr(reply)):
+                fake = Calls(call_reply=reply if reply is not None else {"reply": None})
+                self.assertIs(crawlguard.probe_entry(cfg, "card", call=fake.call), False)
+        secret = Calls(call_reply={"reply": "SECRET-TEXT", "usage": {}})
+        self.assertIs(crawlguard.probe_entry(cfg, "card", call=secret.call), True)
+
+    def test_a_task_with_no_entry_or_a_config_with_models_off_is_not_probed_and_is_false(self):
+        fake = Calls()
+        self.assertIs(crawlguard.probe_entry(models_cfg(), "place", call=fake.call, embed=fake.embed), False)        # optional and not set
+        self.assertIs(crawlguard.probe_entry(models_cfg(), "nothing", call=fake.call, embed=fake.embed), False)
+        self.assertIs(crawlguard.probe_entry(dict(models_cfg(), models_on=False), "card", call=fake.call, embed=fake.embed), False)
+        self.assertIs(crawlguard.probe_entry({}, "card", call=fake.call, embed=fake.embed), False)
+        self.assertEqual((fake.embeds, fake.calls), ([], []))
+
+    def test_tasks_that_name_one_entry_are_probed_once_and_each_entry_is_named_by_its_own_name(self):
+        cfg, fake = models_cfg(), Calls()
+        got = crawlguard.probe_tasks(cfg, ("card-notes", "card", "card-check"), call=fake.call, embed=fake.embed)
+        self.assertEqual(got, {"notes": True, "cardm": True})                                       # the notes and the checks sit on one entry: one call
+        self.assertEqual(sorted(name for name, _ in fake.calls), ["cardm", "notes"])
+        down = Calls(error=OSError("x"))
+        self.assertEqual(crawlguard.probe_tasks(cfg, ("card-notes", "card-check", "place", "card-embed"), call=down.call, embed=down.embed), {"notes": False, "emb": False})      # `place` is not set: it names no entry
+
+    def test_the_old_probe_of_the_card_embedding_entry_is_unchanged(self):
+        fake = Calls()
+        self.assertIs(crawlguard.probe_model(models_cfg(), embed=fake.embed), True)
+        self.assertEqual(fake.embeds, [("emb", [crawlguard.PROBE_TEXT])])
 
 
 class Sites(Case):
