@@ -1,13 +1,14 @@
 """The scan and hold step of the unattended crawl, and the steps over a book that follow it (`docs/specs/population.md`, "Scan flags"; the plan `2026-11-16-run-the-steps-of-the-unattended-crawl`, Increment H).
 
-**Scan and hold.** Every unfinished crawl book is scanned before it is converted, and a hostile one is **held**: `crawl_held` (the kinds), a `hold` log line, and the book stays filed (its state is not changed) but is
-terminal, so no later step converts, indexes, cards or moves it, and the report names it. The scan itself is `scan.scan_version` (the tool is the owner's approved `kb-scan`, run through the confined runner), and the
+**Scan and hold.** Every unfinished crawl book is scanned before it is converted, and a hostile one is **held**: `crawl_held` (the kinds), a `hold` log line, and the book stays filed on disk but is terminal and its
+state becomes `weeded` (`crawlbooks.hold`: the event first, the state second), so that no later crawl step, and no command of the engine that walks the active books (`process`, `cards-queue`, `place-propose`,
+the index and the search), converts, indexes, cards or moves it; the report names it by its event, and the rows it had in the index are taken out in the same run. The scan itself is `scan.scan_version` (the tool is the owner's approved `kb-scan`, run through the confined runner), and the
 step reads only what it leaves: the stage `scanned` and the caveats on the version. Which findings hold is the plan's `hold_kinds` (the default is the findings that mean a file is hostile); **`script_elements`,
 `event_handlers` and `pattern_in_binary_data` never hold, whatever the plan lists**, since nearly every page has them.
 
 **Fail closed.** A scan that fails, that cannot run (the tool is not approved, cannot be started) or that is not made for the file holds the book at once, as `scan_failed`, `scan_unavailable` or `scan_timeout`
 (told apart by the fixed wording of the tool runner's own messages, never stored). **A scan is never tried again:** a book whose stage already says `failed` is held without a second scan, so a death between the
-scan and the hold costs nothing and loops nowhere. The owner may release a held book later; nothing here does.
+scan and the hold costs nothing and loops nowhere. Releasing a held book is not built: the owner may set its state back to `active`, but the next run of a step would weed it again, because a hold whose state was not written and a book released cannot be told apart (a release would need a mark that `finish_weeds` honours).
 
 **Refusals are not holds.** The stop file and the disk floors are looked at before each scan. A refusal by either ends the step quietly with one `skipped` line and leaves the book unscanned for the next run.
 
@@ -51,7 +52,7 @@ def _refusal(ctx, statvfs, what="a scan"):
 
 
 def _hold(ctx, library, book_id, kinds):
-    if crawlbooks.record_held(library, book_id, kinds):
+    if crawlbooks.hold(library, book_id, kinds):
         ctx.log.write("hold", "held", book=book_id, reason=", ".join(kinds), now=ctx.clock())
     return "held"
 
@@ -108,6 +109,7 @@ def make_scan_step(scan=None, open_store=None, statvfs=None):
 
     def step(ctx):
         library = (open_store or library_store.Store.open)()
+        finished = crawlbooks.finish_weeds(library)                         # a hold or a weed that died between its event and its state
         approved = crawlbooks.approved_digests(ctx.index_root)
         listed = crawlbooks.crawl_books(library, approved, crawlbooks.scan_crawl_books(library))
         report, ended = {"scanned": 0, "held": 0}, FINISHED
@@ -120,6 +122,8 @@ def make_scan_step(scan=None, open_store=None, statvfs=None):
             if outcome in ("scanned", "held"):
                 report["scanned"] += 1
                 report["held"] += outcome == "held"
+        if report["held"] or finished:
+            index_stage.forget_inactive(library)                            # a book held after it was indexed leaves the search now
         ctx.scan_report = dict(report, ended=ended)
 
     return step
@@ -250,12 +254,14 @@ def convert_and_index(ctx, library, book_id, convert, index, statvfs, counts=Non
 
 
 def _finish_rejections(ctx, library):
-    """Finish what a death left half done: a crawl book with `crawl_rejected` whose state is still `active` becomes `weeded`, and its candidate row, if still `kept`, is rejected with the book's reason."""
+    """Finish what a death left half done: a crawl book with `crawl_rejected` or `crawl_held` whose state is still `active` becomes `weeded`, and the candidate row of a rejected book, if still `kept`, is rejected
+    with the book's reason. Returns the ids of the books whose state was finished."""
     scan = crawlbooks.scan_crawl_books(library)
-    crawlbooks.finish_weeds(library, scan)
+    finished = crawlbooks.finish_weeds(library, scan)
     for entry in scan.entries:
         if any(isinstance(e, dict) and e.get("event") == "crawl_rejected" for e in entry["events"]):
             _reject_row(ctx, library, entry["id"], _rejection_reason(library, entry["id"]) or PARKED_TEXT)
+    return finished
 
 
 def make_convert_step(convert=None, index=None, open_store=None, statvfs=None):
@@ -264,10 +270,10 @@ def make_convert_step(convert=None, index=None, open_store=None, statvfs=None):
 
     def step(ctx):
         library = (open_store or library_store.Store.open)()
-        _finish_rejections(ctx, library)
+        finished = _finish_rejections(ctx, library)
         approved = crawlbooks.approved_digests(ctx.index_root)
         listed = crawlbooks.crawl_books(library, approved, crawlbooks.scan_crawl_books(library))
-        counts, report, ended = {}, {"rejected": 0, "failed": 0, "parked": 0}, CONVERTED
+        counts, report, ended = {}, {"held": 0, "rejected": 0, "failed": 0, "parked": 0}, CONVERTED
         try:
             for book_id in listed:
                 outcome, why = convert_and_index(ctx, library, book_id, convert or convert_stage.convert_version, index or index_stage.index_version, statvfs or os.statvfs, counts)
@@ -282,6 +288,8 @@ def make_convert_step(convert=None, index=None, open_store=None, statvfs=None):
                     ctx.trip(*crawlguard.bound_trip("convert", f"{report['parked']} books were parked in this run"))
                     raise crawlrun.BreakerTripped()
         finally:
+            if report["held"] or finished:
+                index_stage.forget_inactive(library)
             ctx.convert_report = {"converted": counts.get("converted", 0), "indexed": counts.get("indexed", 0), **report, "ended": ended}
 
     return step

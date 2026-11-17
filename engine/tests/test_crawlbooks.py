@@ -246,6 +246,47 @@ class Writers(Case):
         self.assertEqual(crawlbooks.TERMINAL, ("crawl_rejected", "crawl_held", "reshelved", "crawl_unplaced"))
 
 
+class Holding(Case):
+    def test_a_hold_writes_the_event_first_and_then_weeds_the_book_so_that_no_other_command_walks_it(self):
+        ident = self.found()
+        self.assertTrue(crawlbooks.hold(self.store, ident, ["encrypted"]))
+        self.assertEqual((self.names(ident), self.store.read_book(ident)["state"]), (["crawl_found", "crawl_held"], "weeded"))
+        self.assertEqual(crawlbooks.crawl_books(self.store, {DIGEST}), [])
+        self.assertFalse(crawlbooks.hold(self.store, ident, ["javascript"]))
+        self.assertEqual(self.names(ident).count("crawl_held"), 1)
+
+    def test_a_death_between_the_event_and_the_state_is_finished_by_a_second_call_and_by_finish_weeds(self):
+        first, second = self.found(), self.found()
+        for ident in (first, second):
+            crawlbooks.record_held(self.store, ident, ["encrypted"])
+            self.assertEqual(self.store.read_book(ident)["state"], "active")
+        self.assertFalse(crawlbooks.hold(self.store, first, ["encrypted"]))
+        self.assertEqual(self.store.read_book(first)["state"], "weeded")
+        self.assertEqual(crawlbooks.finish_weeds(self.store), [second])
+        self.assertEqual(self.store.read_book(second)["state"], "weeded")
+
+    def test_a_book_that_is_not_active_keeps_its_state_when_it_is_held(self):
+        for state in ("removed", "duplicate", "weeded"):
+            with self.subTest(state):
+                ident = self.found()
+                self.store.set_state(ident, state)
+                self.assertTrue(crawlbooks.hold(self.store, ident, ["encrypted"]))
+                self.assertEqual(self.store.read_book(ident)["state"], state)
+
+    def test_a_book_with_another_terminal_event_is_not_weeded_by_a_hold(self):
+        ident = self.found()
+        crawlbooks.record_unplaced(self.store, ident, "none")
+        self.assertFalse(crawlbooks.hold(self.store, ident, ["encrypted"]))
+        self.assertEqual((self.store.read_book(ident)["state"], "crawl_held" in self.names(ident)), ("active", False))
+
+    def test_an_owners_book_is_never_held_or_weeded(self):
+        owner = self.book(auto_filed=False)
+        self.store.append_event(owner, "crawl_found", candidate=1, source="openalex", found_from=None, topic=None, run="run-1", plan_digest=DIGEST)
+        with self.assertRaises(KbError):
+            crawlbooks.hold(self.store, owner, ["encrypted"])
+        self.assertEqual(self.store.read_book(owner)["state"], "active")
+
+
 class Weeding(Case):
     def test_weed_sets_the_state_and_writes_the_rejection_once(self):
         ident = self.found()
@@ -276,7 +317,7 @@ class Weeding(Case):
         self.assertEqual(self.names(ident), ["crawl_found", "crawl_rejected"])
         self.assertEqual(self.events(ident)[1]["reason"], "below the threshold")
 
-    def test_finish_weeds_touches_only_crawl_books_with_a_rejection_and_an_active_state(self):
+    def test_finish_weeds_touches_only_crawl_books_with_a_rejection_or_a_hold_and_an_active_state(self):
         mine = self.found()
         crawlbooks.record_rejected(self.store, mine, "r", None, "judge")
         held = self.found()
@@ -284,8 +325,8 @@ class Weeding(Case):
         owner = self.book(auto_filed=False)
         self.store.append_event(owner, "crawl_rejected", reason="forged", score=None, stage="judge")
         plain = self.found()
-        self.assertEqual(crawlbooks.finish_weeds(self.store), [mine])
-        self.assertEqual([self.store.read_book(i)["state"] for i in (mine, held, owner, plain)], ["weeded", "active", "active", "active"])
+        self.assertEqual(crawlbooks.finish_weeds(self.store), [mine, held])
+        self.assertEqual([self.store.read_book(i)["state"] for i in (mine, held, owner, plain)], ["weeded", "weeded", "active", "active"])
 
     def test_weed_does_not_overwrite_a_state_that_is_not_active(self):
         for state in ("removed", "duplicate"):

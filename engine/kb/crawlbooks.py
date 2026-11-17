@@ -9,7 +9,7 @@ the writers return `False` when the book already has one.
 order found; `unapproved_books` lists those with a missing, malformed or unapproved digest, and `reconcile_unapproved` is the one place they are dealt with: it writes `crawl_unplaced` once and one log line, and calls no
 model, no move, no proposal and no capture. A book that is not `active` is not work. The owner's books (not `auto_filed`) are never read for these events, listed or touched.
 
-`weed` writes `crawl_rejected` (which holds the reason and the stage) and sets the book's state to `weeded`; a death between the two is finished by `finish_weeds` or by a second call. `fail_step` records
+`weed` writes `crawl_rejected` (which holds the reason and the stage) and sets the book's state to `weeded`, and `hold` does the same for `crawl_held`; a death between the two is finished by `finish_weeds` or by a second call. `fail_step` records
 a failed try of a step and, at the plan's `retries` such failures of one step, weeds the book (**parked**: weeded, terminal, never listed again). This module reads and writes the books' events and states and nothing else:
 no request, no model, no environment variable."""
 import re
@@ -122,6 +122,16 @@ def record_held(store, book_id, kinds):
     if not isinstance(kinds, list) or not kinds or len(set(map(str, kinds))) != len(kinds) or not all(isinstance(k, str) and k in HOLD_KINDS for k in kinds):
         raise KbError("the kinds that held a book are a list of known kinds, none twice")
     return _terminal(store, book_id, "crawl_held", kinds=list(kinds))
+
+
+def hold(store, book_id, kinds):
+    """Hold a crawl book: `crawl_held` is written (`record_held`), and then the book's state becomes `weeded`, so that no command that walks the active books (`process`, `cards-queue`, `place-propose`, the
+    index and the search) meets a book the scan flagged: it is kept on disk, filed, and named in the report by its event. **The event goes first**, as in `weed`: a death between the two writes leaves an active book with a
+    hold, which a second call of this or `finish_weeds` finishes. A book that has another terminal event is not weeded by it. Returns whether the event was written now. A book the crawl did not file is refused."""
+    wrote = record_held(store, book_id, kinds)
+    if "crawl_held" in _names(store.read_events(book_id)) and store.read_book(book_id)["state"] == "active":
+        store.set_state(book_id, "weeded")
+    return wrote
 
 
 def record_rejected(store, book_id, reason, score, stage):
@@ -274,10 +284,10 @@ def filed_count(store, scan=None):
 
 
 def finish_weeds(store, scan=None):
-    """Finish the weeds that died half way: a crawl book with `crawl_rejected` whose state is still `active` becomes `weeded`. Returns the book ids."""
+    """Finish the weeds and the holds that died half way: a crawl book with `crawl_rejected` or `crawl_held` whose state is still `active` becomes `weeded`. Returns the book ids."""
     done = []
     for entry in (scan or scan_crawl_books(store)).entries:
-        if entry["state"] == "active" and "crawl_rejected" in _names(entry["events"]):
+        if entry["state"] == "active" and {"crawl_rejected", "crawl_held"} & set(_names(entry["events"])):
             store.set_state(entry["id"], "weeded")
             done.append(entry["id"])
     return done

@@ -98,7 +98,7 @@ class Case(BooksCase):
 class Holds(Case):
     def test_a_book_with_no_hold_kind_is_scanned_and_goes_on(self):
         book = self.filed()
-        self.fake.kinds = ["hidden_text", "large_image_streams"]
+        self.fake.kinds = ["javascript_urls", "large_image_streams"]
         self.run_step()
         self.assertEqual(self.fake.calls, [book])
         self.assertIsNone(self.held(book))
@@ -113,13 +113,13 @@ class Holds(Case):
                 self.run_step(fake)
                 self.assertEqual(self.held(book), [kind])
                 self.assertNotIn(book, self.listed())
-                self.assertEqual(self.store.read_book(book)["state"], "active")           # filed, not weeded
+                self.assertEqual(self.store.read_book(book)["state"], "weeded")           # kept on disk, but out of the reach of every command that walks the active books
                 hold = [x for x in self.lines() if x["step"] == "hold" and x["book"] == book]
                 self.assertEqual([(x["outcome"], x["reason"]) for x in hold], [("held", kind)])
 
     def test_the_kinds_that_hold_are_listed_and_the_others_found_with_them_are_not(self):
         book = self.filed()
-        self.run_step(FakeScan(["javascript", "hidden_text", "encrypted", "script_elements"]))
+        self.run_step(FakeScan(["javascript", "javascript_urls", "encrypted", "script_elements"]))
         self.assertEqual(self.held(book), ["encrypted", "javascript"])
 
     def test_script_elements_event_handlers_and_pattern_in_binary_data_never_hold_even_if_the_plan_lists_them(self):
@@ -144,6 +144,60 @@ class Holds(Case):
         fakes = {ok: FakeScan(["javascript"]), bad: FakeScan(status="failed")}
         self.run_step(lambda store, b, v: fakes[b](store, b, v))
         self.assertEqual((self.held(ok), self.held(bad)), (None, ["scan_failed"]))
+
+
+class HeldBooksLeaveTheEngine(Case):
+    def model_cfg(self):
+        entry = {"bridge": "ask-ollama", "server": "ned", "model": "m", "kind": "chat", "thinking": False}
+        return {"models_on": True, "models": {"m": entry}, "tasks": {"card-notes": "m", "card": "m", "card-check": "m"}}
+
+    def test_the_commands_that_walk_every_book_skip_a_held_book(self):
+        held, other = self.filed(), self.filed()
+        self.run_step(FakeScan(["javascript"]))                                   # both books are scanned: the first is held, the second ... also (one fake for both)
+        self.assertEqual(self.store.read_book(held)["state"], "weeded")
+        good = self.filed()
+        FakeScan()(self.store, good, self.version(good))
+        from kb import cardqueue, placement, process
+        reported = {r["book_id"] for r in process.process(self.store)}
+        self.assertNotIn(held, reported)
+        self.assertNotIn(other, reported)
+        with mock.patch.object(cardqueue, "_sequence", return_value=["m", "m", "m"]), mock.patch.object(cardqueue.cardmake, "pieces_limit", return_value=1), \
+                mock.patch.object(cardqueue, "_turns", return_value=[]), mock.patch.object(cardqueue, "_count_calls", create=True, return_value=0):
+            try:
+                planned = cardqueue.plan(self.store, {})
+            except Exception as e:                                             # the plan may stop after it has read the books; only what it said of them matters here
+                planned = None
+                self.fail(f"the plan stopped: {type(e).__name__}: {e}")
+        self.assertEqual(planned["skipped"]["inactive"], 2)
+        items, _left = placement.select(self.store)
+        self.assertNotIn(held, [i["book"] for i in items])
+
+    def test_a_book_held_after_it_was_indexed_leaves_the_index_in_the_same_run(self):
+        book = self.filed()
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            self.run_step(FakeScan(["encrypted"]))
+        self.assertEqual(forget.call_count, 1)
+
+    def test_nothing_is_taken_out_of_the_index_when_nothing_was_held(self):
+        self.filed()
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            self.run_step()
+        self.assertEqual(forget.call_count, 0)
+
+    def test_a_hold_finished_by_the_next_scan_step_takes_the_book_out_of_the_index_too(self):
+        book = self.filed()
+        crawlbooks.record_held(self.store, book, ["encrypted"])                     # a hold that died before its state
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            self.run_step()
+        self.assertEqual((forget.call_count, self.store.read_book(book)["state"]), (1, "weeded"))
+
+    def test_a_hold_that_died_before_the_state_was_written_is_finished_by_the_next_scan_step(self):
+        book = self.filed()
+        with mock.patch.object(self.store.__class__, "set_state", side_effect=RuntimeError("died")), self.assertRaises(RuntimeError):
+            self.run_step(FakeScan(["encrypted"]))
+        self.assertEqual((self.held(book), self.store.read_book(book)["state"]), (["encrypted"], "active"))
+        self.run_step()
+        self.assertEqual(self.store.read_book(book)["state"], "weeded")
 
 
 class FailClosed(Case):
@@ -268,12 +322,12 @@ class Idempotent(Case):
 
     def test_a_book_scanned_earlier_whose_findings_the_plan_holds_now_is_held_without_a_scan(self):
         book = self.filed()
-        self.run_step(FakeScan(["hidden_text"]))
+        self.run_step(FakeScan(["javascript_urls"]))
         self.assertIsNone(self.held(book))
-        self.plan["hold_kinds"] = ["hidden_text"]
+        self.plan["hold_kinds"] = ["javascript_urls"]
         fake = FakeScan()
         self.run_step(fake)
-        self.assertEqual((self.held(book), fake.calls), (["hidden_text"], []))
+        self.assertEqual((self.held(book), fake.calls), (["javascript_urls"], []))
 
     def test_the_report_counts_what_the_step_did(self):
         self.filed()
@@ -459,7 +513,7 @@ class ConvertAndIndex(ConvertCase):
         self.assertEqual((self.stage(book, "converted"), self.stage(book, "indexed")), ("done", "done"))
         self.assertEqual([(x["step"], x["outcome"], x["book"]) for x in self.lines()], [("convert", "ok", book), ("index", "ok", book)])
         self.assertEqual(self.listed(), [book])
-        self.assertEqual(ctx.convert_report, {"converted": 1, "indexed": 1, "rejected": 0, "failed": 0, "parked": 0, "ended": "all the books are converted and indexed"})
+        self.assertEqual(ctx.convert_report, {"converted": 1, "indexed": 1, "held": 0, "rejected": 0, "failed": 0, "parked": 0, "ended": "all the books are converted and indexed"})
 
     def test_the_second_run_does_nothing_and_a_book_converted_before_a_death_is_only_indexed(self):
         done, half = self.scanned_book(), self.scanned_book()
@@ -718,6 +772,26 @@ class OneBook(ConvertCase):
         got = crawlsteps.convert_and_index(self.ctx(), self.store, book, self.convert, self.index_fake, roomy)
         self.assertEqual((got, self.convert.calls), (("final", None), []))
 
+    def test_the_convert_step_forgets_the_index_rows_of_a_book_it_held(self):
+        book = self.scanned_book(scanned=False)
+        FakeScan(["javascript"])(self.store, book, self.version(book))
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            ctx = self.run_convert()
+        self.assertEqual((forget.call_count, ctx.convert_report["held"], self.store.read_book(book)["state"]), (1, 1, "weeded"))
+
+    def test_the_convert_step_forgets_the_index_rows_of_a_hold_it_finished(self):
+        book = self.scanned_book()
+        crawlbooks.record_held(self.store, book, ["encrypted"])
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            self.run_convert()
+        self.assertEqual((forget.call_count, self.store.read_book(book)["state"]), (1, "weeded"))
+
+    def test_the_convert_step_forgets_nothing_when_it_held_nothing(self):
+        self.scanned_book()
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            self.run_convert()
+        self.assertEqual(forget.call_count, 0)
+
     def test_a_book_scanned_with_hold_findings_whose_hold_was_never_written_is_held_here_and_not_converted(self):
         book = self.scanned_book(scanned=False)
         FakeScan(["javascript"])(self.store, book, self.version(book))               # the scan step died between the scan and the hold
@@ -726,7 +800,7 @@ class OneBook(ConvertCase):
 
     def test_findings_the_plan_does_not_hold_do_not_stop_the_conversion(self):
         book = self.scanned_book(scanned=False)
-        FakeScan(["hidden_text", "script_elements"])(self.store, book, self.version(book))
+        FakeScan(["javascript_urls", "script_elements"])(self.store, book, self.version(book))
         got = crawlsteps.convert_and_index(self.ctx(), self.store, book, self.convert, self.index_fake, roomy)
         self.assertEqual((got, self.convert.calls, self.held(book)), (("done", None), [book], None))
 
@@ -763,7 +837,7 @@ class Sweep(ConvertCase):
         held = self.scanned_book()
         crawlbooks.record_held(self.store, held, ["encrypted"])
         self.run_convert()
-        self.assertEqual((self.row(held)[0], self.store.read_book(held)["state"]), ("kept", "active"))
+        self.assertEqual((self.row(held)[0], self.store.read_book(held)["state"]), ("kept", "weeded"))       # a hold that died before its state is finished; the row of a held book stays `kept`: the book is only kept aside
 
 
 class ConvertWiring(ConvertCase):
