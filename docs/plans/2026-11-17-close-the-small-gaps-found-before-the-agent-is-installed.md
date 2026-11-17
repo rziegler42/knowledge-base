@@ -1,0 +1,119 @@
+# Close the small gaps found before the agent of the unattended crawl is installed
+
+Status: Proposed
+Created: 2026-11-17
+Candidate: none (corrections that follow from findings: the last security review of the assembled crawl, `2026-11-16-run-the-steps-of-the-unattended-crawl`, and the first supervised run)
+Specs: docs/specs/population.md
+
+## Goal
+
+The first supervised run of the unattended crawl went well (two books filed, judged in and carded, nothing refused, the log and the queue compared the same). Four small gaps are known before the agent that starts a run every 15 minutes is installed. They are one plan, because **every change to the engine's code changes the fingerprint of the approved crawl plan, so each change costs the owner a new approval**: made together, they cost one.
+
+1. **The agent cannot find `wb`.** The text of the launchd agent (`crawl-schedule-text`) sets no environment, so launchd gives the run its default `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), and the engine's model calls (`models._launcher`, `shutil.which("wb")`) fail with "the workbench launcher (wb) was not found", which looks like a model that is down. On the owner's machine `wb` is outside that path.
+2. **The text the owner reads before approving a plan is stale.** `crawl-approve` says "or the model server down N minutes"; the breaker's limit is now counted for each model entry (`2026-11-17-see-when-a-model-of-the-unattended-crawl-is-down`).
+3. **The index folder is not checked.** The run lock (`crawl.lock`) and the stop file (`crawl.stop`) live in the index root, and the files are checked but their folder is not: unlinking the lock while a run holds it lets a second run start, and the stop file can be removed, by another account with write access to that folder.
+4. **A redirect can use another site's day.** A hop of a redirect to a site other than the first is charged to that site's unit of the day (`crawlstate.charge_hop`). A hostile candidate with three hops to one site takes that site's whole `per_domain_per_day` for the day, so its real candidates are skipped; a site that answers 403 to those hops gets refusals counted too, and three of them stop it for the day. It is a loss of availability only.
+
+When this plan is done: the text of the agent sets a `PATH` that holds the folder of `wb`; the plan summary says the model entry; a run is refused when the index folder is not the owner's or can be written by others; and a redirect cannot take a unit of another site's day that a real candidate would have used.
+
+## Scope
+
+**Changed:** `engine/kb/crawlschedule.py`, `engine/kb/__main__.py` (the argument of `crawl-schedule-text`), `engine/kb/crawlapprove.py` (one sentence), `engine/kb/crawlguard.py` and `engine/kb/crawlrun.py` (the check of the index folder, and its line in the dry run), `engine/kb/crawlstate.py` and `engine/kb/crawlfetch.py` (the hop charge), their tests, `README.md` (the step of the agent and the known limits) and `docs/specs/population.md` (where it states what is built: scheduling, the run's checks, the per-site count).
+
+**Not changed:** the steps, the judgement, the models, the plan's keys, the log, the queue's shape, `crawlstatus.py` and `crawlreport.py`.
+
+## Non-goals
+
+- A limit of the memory of the converters, the sweep of old leftovers of `incoming`, the card step's look at the stop file inside a pass, and the other items of the todo list: none of them is needed for the agent.
+- Installing the agent. That is the owner's act, after this plan, after approving the crawl plan again, and after a few supervised runs.
+- A check of the agent under launchd. The text can be tested; whether launchd finds `wb` with the path in the text is shown only by the owner running it once and reading `crawl-agent.log` (the README's checklist says so).
+
+## Assumptions and constraints
+
+- The plan of the crawl is approved against a fingerprint of the engine's code and the model settings; any change here makes `crawl-run` refuse until `crawl-approve` is run again by the owner. The owner's approval of the crawl plan is his act, and this plan does not make it.
+- `crawl-schedule-text` prints only: the module reads no environment variable and starts no process. The folder of `wb` is found by the command in `__main__` (`shutil.which("wb")`, in the owner's own shell, when he prints the text) or is given by an argument, and is passed to the module as text, as the other paths are.
+- The check of the index folder must not refuse the owner's own setup: a folder that the owner owns, that others cannot write. Its mode may be 755 (read by others) as it is now.
+- No test uses the network, a model, the owner's library, config or plan.
+
+## Completion criteria
+
+1. `crawl-schedule-text` prints an `EnvironmentVariables` entry `PATH` that holds the folder of `wb` (found, or given by `--path`) before `/usr/bin:/bin:/usr/sbin:/sbin`; a folder that is not a plain full path is refused; when `wb` is not found and no path is given the text says so in a comment and sets no `PATH`.
+2. The plan summary names a model entry, and no longer says "the model server down N minutes".
+3. A run whose index folder is not owned by the user, or can be written by group or others, is refused (exit 3) with a fixed text before the lock is taken; the dry run shows the check; the owner's own folder (owned, mode 755 or 700) passes.
+4. A hop of a redirect cannot take a unit of the site's day that fetches of real candidates use: a candidate with hops to a third site leaves that site's `per_domain_per_day` for its own candidates, and a hop to a site that is stopped for the day, or whose hops have reached their own limit, is refused.
+5. `wb run code-work check` passes; the tests of the modules changed pass.
+6. The owner has read the result.
+
+## Increments
+
+### Increment A — The text of the agent sets a `PATH`
+
+**Outcome:** the text of the agent holds the folder of `wb` in its `PATH`.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/crawlschedule.py`, `engine/kb/__main__.py`, `engine/tests/test_crawlschedule.py`, `README.md`.
+**Steps:**
+1. Read `crawlschedule.text`, its checks of a path (`_folder`, `_checked`), the command in `__main__` and the tests, and `models._launcher`.
+2. Tests first: `text(index, engine, python, path_dirs)` with a folder gives an `EnvironmentVariables` dict with `PATH` = that folder, then `/usr/bin:/bin:/usr/sbin:/sbin`; no folder gives a comment that says `wb` was not found and no `EnvironmentVariables`; a folder that is relative, empty, has a control character or a colon, or is `.` or `..` in a part, is refused with a reason that does not show it; the text stays valid XML (the escape of `&`, `<`, `>`); the module reads no environment variable and starts no process (the existing test of that); the command passes `--path` when given and else the folder of `wb` found by `shutil.which`.
+3. Write the change; deliberate breaks; the `reviewer`'s reading; the Result. The README's step of the agent says to check `crawl-agent.log` after the agent's first firing, and that `--path` sets another folder.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlschedule`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-17-close-the-small-gaps-found-before-the-agent-is-installed#A`.
+
+### Increment B — The plan summary names the model entry
+
+**Outcome:** the breaker line of the summary is true of what is built.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/crawlapprove.py`, `engine/tests/test_crawlapprove.py`.
+**Steps:**
+1. Read the summary's breaker line and the tests that quote it.
+2. Tests first: the line says "or a model entry that has not answered for N minutes" and not "the model server down"; the digest of the summary changes only through the text (a plan with the same keys still has one digest for one text).
+3. Write the change; deliberate break; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlapprove`; the break; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#B`.
+
+### Increment C — A run is refused when its index folder is not the owner's
+
+**Outcome:** the lock and the stop file are in a folder that only the owner can change.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/crawlguard.py`, `engine/kb/crawlrun.py`, `engine/tests/test_crawlguard.py`, `engine/tests/test_crawlrun.py`.
+**Steps:**
+1. Read `crawlguard.acquire_run_lock`, `stop_requested`, `crawllog._private_dir` (which checks the folder `crawl/` the same way) and the order of the run's checks (`crawlrun._checks`, the dry run).
+2. Tests first: `check_index_root(path)` passes a folder owned by the user with no write bit for group or others (mode 700 and 755), and refuses with a fixed text (no path in it) a folder that is owned by another user, one with a write bit for group or others, a path that is a link, and one that is not a folder; a run with a bad folder exits 3 before the lock is taken and writes nothing in it; the dry run says so on its line; a good folder gives the run as before.
+3. Write the change (the check comes first, before the lock); deliberate breaks; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlguard engine.tests.test_crawlrun engine.tests.test_crawlchain`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#C`.
+
+### Increment D — A hop of a redirect is not charged to another site's day
+
+**Outcome:** a hostile redirect cannot use another site's `per_domain_per_day`.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/crawlstate.py`, `engine/kb/crawlfetch.py`, `engine/tests/test_crawlstate.py`, `engine/tests/test_crawlfetch.py`, `docs/specs/population.md`.
+**Steps:**
+1. Read `crawlstate.charge_hop`, its caller in `crawlfetch._Run._policy`, `reserve`, `refusals_today` and the tests of the hops.
+2. **The rule:** a hop is **checked** against the site's own day as now (refused when the site is stopped for the day or when its fetches of real candidates are at `per_domain_per_day`), but is **counted apart**, in a counter of hops for that site (`hop:<site>`, with the same limit `per_domain_per_day`), and not in the counter that `reserve` reads (`fetch:<site>`). A hostile redirect can then use up the hop count of a site, which refuses more hops to it that day, and cannot use a unit that a real candidate would have used. A refusal that the site answers to a hop still counts as the site's refusal, as now.
+3. Tests first: three hops to one site leave that site's `reserve` as before (its `per_domain_per_day` units of real candidates remain) and the fourth hop is refused as at its hop limit; a hop to a site that is stopped for the day is refused; a hop to a site that is at its limit of real fetches is refused; the counters of two sites are independent; a real candidate's first request is counted as before; the day's total `fetches_per_day` is unchanged by hops (as now: hops are not a fetch of a candidate).
+4. Write the change; deliberate breaks; the `reviewer`'s reading; the Result; the spec's sentence about the per-site count says what is built.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlstate engine.tests.test_crawlfetch engine.tests.test_crawlchain`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#D`.
+
+## Verification for the plan as a whole
+
+Each increment's recorded verification stands unless a later one changed its inputs. At the end the tests of the six R1 modules, `test_crawlfetch`, `test_crawlsteps`, `test_crawlcards`, `test_crawlmove`, `test_crawljudge`, `test_crawlschedule`, `test_crawlapprove`, `test_crawlreport`, `test_crawlstatus` and `test_crawlchain` are rerun together, because C and D change code that all of them read; `wb run code-work check` is run; a read-only check shows that no file outside "Scope" changed. The engine's whole suite is not rerun unless the owner asks. **After this plan the owner approves the crawl plan again** (`crawl-approve`), because the code fingerprint changed.
+
+## Risks and sensitive actions
+
+- **A network boundary and the filesystem are touched** (the hop accounting of the fetcher, the check of the index folder): the owner is asked whether to run a security review over the changes once D is done; none runs unless he asks.
+- **A wrong check of the index folder could refuse a run on the owner's own setup.** The criteria say the owner's own folder (owned, 755 or 700) passes, a test covers it, and the dry run shows the check before a real run.
+- **A `PATH` in the agent's text is code that launchd runs with.** The folder is the one that holds `wb`, found in the owner's shell, shown in the text the owner reads before he installs it; nothing is installed by this plan.
+- The change of the code makes the approval of the crawl plan stale: the runs refuse until the owner approves again, which is his act.
+
+## Review record
+
+Empty until a review is asked for.
+
+## Deferred work
+
+The memory limit of the converters, the sweep of `incoming`, the card step's stop file inside a pass, the small leftovers of the review (a probe that raises, a restarted guard state logged by each step) and the flaky tests are left in the owner's todo list.
+
+## Result
+
+Empty until work starts.
