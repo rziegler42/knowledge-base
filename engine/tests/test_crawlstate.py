@@ -602,6 +602,32 @@ class Counters(Case):
         self.assertEqual(self.counters()[("2026-11-16", "card")], 2)
         self.assertTrue(crawlstate.reserve_card(self.conn, self.plan, NOW + datetime.timedelta(days=1)))
 
+    def test_a_hop_to_another_site_takes_one_unit_of_that_sites_day_up_to_its_cap_and_not_when_it_is_stopped(self):
+        self.plan = plan(per_domain_per_day=2, domain_refusals=2)
+        self.assertEqual([crawlstate.charge_hop(self.conn, self.plan, NOW, "v.example") for _ in range(3)], ["", "", "the site is at its limit for the day"])
+        self.assertEqual(self.counters()[("2026-11-16", "fetch:v.example")], 2)
+        crawlstate.note_refusal(self.conn, self.plan, NOW, "w.example")
+        crawlstate.note_refusal(self.conn, self.plan, NOW, "w.example")
+        self.assertEqual(crawlstate.charge_hop(self.conn, self.plan, NOW, "w.example"), "the site is stopped for the day")
+        self.assertNotIn(("2026-11-16", "fetch:w.example"), self.counters())
+        self.assertEqual(crawlstate.charge_hop(self.conn, self.plan, NOW + datetime.timedelta(days=1), "v.example"), "")      # a new day
+        for bad in ("", "A.example", "a b", None, 3, "x" * 300):
+            with self.subTest(bad), self.assertRaises(KbError):
+                crawlstate.charge_hop(self.conn, self.plan, NOW, bad)
+
+    def test_a_failure_part_way_through_a_hop_charge_counts_nothing(self):
+        before = self.table()
+        probe = Failing(self.conn, 10**6)
+        crawlstate.charge_hop(probe, self.plan, NOW, "v.example")
+        statements = probe.calls
+        self.conn.execute("DELETE FROM counters")
+        for n in range(1, statements + 1):
+            with self.subTest(statement=n):
+                with self.assertRaises(sqlite3.OperationalError):
+                    crawlstate.charge_hop(Failing(self.conn, n), self.plan, NOW, "v.example")
+                self.assertFalse(self.conn.in_transaction)
+                self.assertEqual(self.table(), before)
+
     def test_a_card_failure_part_way_loses_nothing_and_counts_nothing(self):
         before = self.table()
         probe = Failing(self.conn, 10**6)
@@ -639,6 +665,31 @@ class Counters(Case):
         self.assertEqual(errors, [])
         self.assertEqual(got.count(True), 7)
         self.assertEqual(self.counters()[("2026-11-16", "card")], 7)
+
+    def test_threads_charging_hops_never_pass_a_sites_cap(self):
+        self.plan = plan(per_domain_per_day=7)
+        got, errors = [], []
+        barrier = threading.Barrier(4)
+
+        def work():
+            conn = crawlqueue.connect(self.folder)
+            try:
+                barrier.wait()
+                for _ in range(5):
+                    got.append(crawlstate.charge_hop(conn, self.plan, NOW, "v.example"))
+            except BaseException as e:           # noqa: BLE001
+                errors.append(e)
+            finally:
+                conn.close()
+
+        threads = [threading.Thread(target=work) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=120)
+        self.assertEqual(errors, [])
+        self.assertEqual(got.count(""), 7)
+        self.assertEqual(self.counters()[("2026-11-16", "fetch:v.example")], 7)
 
     def test_a_refusal_is_counted_for_its_site_in_the_plans_day(self):
         self.plan = plan(timezone="Asia/Tokyo")

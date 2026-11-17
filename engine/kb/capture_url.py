@@ -381,7 +381,7 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
 
     With a `policy` (a `webclient.Policy`) the request is made by the shared client under it: the address is made canonical by `webaddr`, and a refusal by the policy (a blocked address at any hop, a private
     address, a type or content that the policy will not take) raises `webclient.Refused` and records nothing, no book and no index entry. `types` replaces the content types that are taken. `auto_filed` marks a
-    book made by this call as filed by the unattended crawl. Under a policy `allow_private` is not used (the policy's own `allow_private` decides), and a book that is already held is returned without the
+    book made by this call as filed by the unattended crawl; a capture with it **writes nothing to a book that is not marked the same way**: a page whose final address or bytes are held by such a book is `held`, and the owner's book is not changed. Under a policy `allow_private` is not used (the policy's own `allow_private` decides), and a book that is already held is returned without the
     policy's hook being asked, since nothing is fetched."""
     asked = identity.normalize_address(address) if policy is None else webaddr.canon_address(address)
     store._guard()
@@ -390,6 +390,8 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
 
     book_id = _live(store, ident, "url", asked)
     version_id = None
+    if book_id and auto_filed and store.read_book(book_id).get("auto_filed") is not True:
+        return _result("held", book_id, store.read_book(book_id)["current_version"])      # the crawl neither resumes nor marks a book that is not its own
     if book_id:
         version_id = _current_version(store, book_id)
         if stages.read(store, book_id, version_id)["stages"]["fetched"]["status"] in ("done", "skipped"):
@@ -427,6 +429,9 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
     retrieved = now()
     url_owner, hash_owner = _live(store, ident, "url", final), _live(store, ident, "sha256", digest)
     other = next((b for b in (url_owner, hash_owner) if b and b != book_id), None)
+    if other and auto_filed and store.read_book(other).get("auto_filed") is not True:
+        # a book that is not the crawl's is the owner's: the crawl writes no sighting, alias, hash or payload into it
+        return _result("held", other, store.read_book(other)["current_version"])
     if other and _unfinished(store, other):
         # not a duplicate: the book that holds this address is an earlier capture of the same page that never finished
         book_id, other = other, None

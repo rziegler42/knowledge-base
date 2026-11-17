@@ -1306,6 +1306,81 @@ class Crashes(StepCase):
         self.assertEqual(ctx.fetch_report["ended"], "the step failed")
 
 
+class Redirects(StepCase):
+    def redirectors(self, n, target="http://victim.test/p"):
+        self.dns.setdefault("victim.test", [ALL_PUBLIC])
+        for i in range(n):
+            self.srv.routes[f"/r{i}"] = redirect(target)
+        return [self.add(f"/r{i}", host=f"r{i}.test") for i in range(n)]
+
+    def test_a_redirect_to_a_site_that_refuses_is_charged_to_that_site_and_the_site_is_then_left_alone_by_every_redirector(self):
+        self.plan.update(per_domain_per_day=1, domain_refusals=1)
+        self.srv.routes["/p"] = reply(403, body=b"no")
+        rows = self.redirectors(4)
+        self.run_step()
+        self.assertEqual(len([1 for p, _ in self.srv.hits if p == "/p"]), 1)           # one request reached the victim; the other three were not made
+        counters = self.counters()
+        self.assertEqual(counters[("2026-11-16", "refusal:victim.test")], 1)
+        self.assertEqual(counters[("2026-11-16", "fetch:victim.test")], 1)
+        later = [self.row(r) for r in rows[1:]]
+        self.assertEqual([(r["status"], r["tries"]) for r in later], [("queued", 1)] * 3)
+        self.assertTrue(all(r["reason"] == "the site it leads to is stopped for the day" for r in later))
+        self.assertEqual(crawlguard.load_state(self.index)[0]["history"], [])       # deferred, not failed: nothing for the breaker
+
+    def test_a_redirect_to_a_site_at_its_daily_limit_is_deferred_with_its_own_reason(self):
+        self.plan.update(per_domain_per_day=1)
+        self.doc("/p")
+        rows = self.redirectors(2)
+        self.run_step()
+        self.assertEqual(self.row(rows[0])["status"], "kept")
+        self.assertEqual((self.row(rows[1])["status"], self.row(rows[1])["reason"]), ("queued", "the site it leads to is at its limit for the day"))
+        self.assertEqual(len([1 for p, _ in self.srv.hits if p == "/p"]), 1)
+
+    def test_a_redirect_inside_the_same_site_is_not_charged_as_another_site(self):
+        self.plan.update(per_domain_per_day=1)
+        self.srv.routes["/old"] = redirect("http://www.a.test/new")
+        self.doc("/new")
+        ident = self.add("/old", host="a.test")
+        self.run_step()
+        self.assertEqual(self.row(ident)["status"], "kept")
+        self.assertEqual({k for _d, k in self.counters()}, {"fetch", "fetch:a.test"})
+
+    def test_the_sites_of_the_hops_are_found_with_the_public_suffix_list(self):
+        self.plan.update(per_domain_per_day=1)
+        self.dns.setdefault("victim.co.uk", [ALL_PUBLIC])
+        self.srv.routes["/ra"] = redirect("http://victim.co.uk/p")
+        self.srv.routes["/rb"] = redirect("http://victim.co.uk/p")
+        self.doc("/p")
+        first, second = self.add("/ra", host="ra.co.uk", domain="ra.co.uk"), self.add("/rb", host="rb.co.uk", domain="rb.co.uk")
+        self.run_step()
+        self.assertEqual((self.row(first)["status"], self.row(second)["status"]), ("kept", "queued"))
+        self.assertEqual(self.row(second)["reason"], "the site it leads to is at its limit for the day")
+
+    def test_a_redirect_to_an_address_with_no_usable_site_name_is_a_block_and_not_a_failure_for_the_breaker(self):
+        self.srv.routes["/v6"] = redirect("http://[2606:4700:4700::1111]/p")
+        ident = self.add("/v6")
+        self.run_step()
+        row = self.row(ident)
+        self.assertEqual((row["status"], row["reason"]), ("rejected", "the address is not usable"))
+        self.assertEqual(crawlguard.load_state(self.index)[0]["history"], [])
+        self.assertEqual(self.store.list_books(), [])
+
+    def test_a_refusal_at_the_first_hop_is_charged_once_to_that_site_and_not_twice(self):
+        self.srv.routes["/no"] = reply(429, body=b"slow")
+        self.add("/no", host="a.test")
+        self.run_step()
+        self.assertEqual(self.counters()[("2026-11-16", "refusal:a.test")], 1)
+
+    def test_a_deferred_row_is_not_a_reason_to_end_the_batch(self):
+        self.plan.update(per_domain_per_day=1)
+        self.doc("/p")
+        self.doc("/mine")
+        self.redirectors(2)
+        other = self.add("/mine", host="m.test")
+        self.run_step()
+        self.assertEqual(self.row(other)["status"], "kept")
+
+
 class NotTheCrawls(StepCase):
     def test_an_unfinished_capture_of_the_owners_is_not_fetched_into_by_the_crawl(self):
         owners = capture_url.capture(self.store, self.ident, "http://a.test/half", policy=self.build().policy)       # the owner's own capture, which failed and left its book
@@ -1355,6 +1430,16 @@ class ClassifyMore(Case):
             with self.subTest(text):
                 got = crawlfetch.classify(FetchError(text))
                 self.assertEqual((got.kind, got.reason), (kind, reason))
+
+
+class ClassifyDeferred(Case):
+    def test_a_hop_refused_for_the_day_is_deferred_and_the_texts_are_the_policys_own(self):
+        for text in ("refused: the site is stopped for the day", "refused: the site is at its limit for the day"):
+            got = crawlfetch.classify(webclient.Refused(text))
+            self.assertEqual((got.kind, got.retry), ("deferred", True))
+        self.assertEqual(crawlfetch.classify(webclient.Refused("refused: the site is stopped for the day")).reason, "the site it leads to is stopped for the day")
+        self.assertEqual(crawlfetch.classify(webclient.Refused("refused: the site is at its limit for the day")).reason, "the site it leads to is at its limit for the day")
+        self.assertEqual(crawlfetch.classify(webclient.Refused("refused: owner")).kind, "blocked")
 
 
 class Preconditions(StepCase):

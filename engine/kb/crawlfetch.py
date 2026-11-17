@@ -28,6 +28,7 @@ disk floors, the ceilings and the batch; a ceiling or a floor ends the step, not
 fetch is a failure, and a block, a stop, a rejection, a PDF refused without a request and a refusal of a site are none (a refusal counts for its site: `domain_refusals`). A trip is `ctx.trip`, then the run ends.
 
 The module itself makes no request, reads no file and no environment variable; the capture (the shared client) and the library do."""
+import copy
 import math
 import os
 from collections import namedtuple
@@ -87,7 +88,13 @@ def build(plan, matcher, suffixes, index_root, *, pacer=None, log=None, warn=Non
     return FetchPolicy(policy, PAGE_MAX_BYTES, min(capture_url.TIMEOUT, total), total)
 
 
+DEFERRED = {"the site is stopped for the day": "the site it leads to is stopped for the day", "the site is at its limit for the day": "the site it leads to is at its limit for the day"}
+
+
 def _blocked(text):
+    for said, reason in DEFERRED.items():
+        if text == "refused: " + said:
+            return Outcome("deferred", reason, True)
     if "the stop file" in text:
         return Outcome("stopped", "the stop file is present", True)
     if "owner" in text:
@@ -100,7 +107,7 @@ def _blocked(text):
 
 
 def classify(error):
-    """What a failed fetch was: `Outcome(kind, reason, retry)`. `kind` is `blocked`, `stopped`, `refused`, `rejected` or `failed`; `reason` is a fixed text; `retry` says whether the same candidate may be tried
+    """What a failed fetch was: `Outcome(kind, reason, retry)`. `kind` is `blocked`, `stopped`, `deferred` (a redirect led to a site that is stopped or at its limit for the day: a try for later, not a failure), `refused`, `rejected` or `failed`; `reason` is a fixed text; `retry` says whether the same candidate may be tried
     again (a failure and a stop, yes; the others, no). An error that is not a fetch error is raised again."""
     if not isinstance(error, capture_url.FetchError):
         raise error
@@ -160,6 +167,7 @@ class _Run:
         self.orphans = set(scan.orphans)
         self.state, _restarted = crawlguard.load_state(ctx.index_root)
         self.counts = {}
+        self.hop = None
 
     def now(self):
         return self.ctx.clock()
@@ -210,12 +218,14 @@ class _Run:
         if out.kind in ("blocked", "rejected"):
             self.finish(row, "rejected", out.reason, book)
             self.say(out.kind, row, out.reason, book)
-        elif out.kind == "stopped":
+        elif out.kind in ("stopped", "deferred"):
             self.finish(row, "failed", out.reason)
             self.say("skipped", row, out.reason)
         elif out.kind == "refused":
             self.finish(row, "failed", out.reason, refusal=True)
             self.say("refused", row, out.reason)
+            if self.hop is not None and self.hop["last"] != self.hop["first"]:
+                crawlstate.note_refusal(self.ctx.conn, self.ctx.plan, self.now(), self.hop["last"])      # the site that refused is charged too, and not only the one that led to it
         else:
             self.finish(row, "failed", out.reason)
             self.say("failed", row, out.reason)
@@ -235,7 +245,7 @@ class _Run:
             self.say("rejected", row, ALREADY_HELD, owner)
             return
         try:
-            result = self.capture(self.library, self.ident, address, policy=self.fp.policy, types=self.fp.policy.types, auto_filed=True, max_bytes=self.fp.max_bytes,
+            result = self.capture(self.library, self.ident, address, policy=self._policy(), types=self.fp.policy.types, auto_filed=True, max_bytes=self.fp.max_bytes,
                                   timeout=self.fp.timeout, total_timeout=self.fp.total_timeout)
         except webclient.Refused as e:
             return self.outcome(row, classify(e))
@@ -262,6 +272,32 @@ class _Run:
             self.say("ok", row, None if status == "filed" else "the book of an earlier try", book)
             if status == "filed":
                 self.note(True)
+
+    def _policy(self):
+        """The policy of this candidate: the shared one, with a hook that also takes a unit of the day of each site a redirect leads to (the first site's units were taken by `reserve`) and refuses a site that is stopped
+        or at its limit, so that redirectors cannot aim requests at one site past its limits. `self.hop` says the first and the latest site, for the charge of a refusal."""
+        own = copy.copy(self.fp.policy)
+        base, suffixes = self.fp.policy.check, self.fp.policy.suffixes
+        hop = self.hop = {"first": None, "last": None}
+
+        def check(address):
+            why = base(address)
+            if why:
+                return why
+            site = webaddr.site_of(urlsplit(address).hostname or "", suffixes)
+            hop["last"] = site
+            if hop["first"] is None:
+                hop["first"] = site
+                return None
+            if site != hop["first"]:
+                try:
+                    return crawlstate.charge_hop(self.ctx.conn, self.ctx.plan, self.now(), site) or None
+                except KbError:
+                    return "the site of that address is unusable"          # a literal address or a name the counters cannot hold: a block, not a failure
+            return None
+
+        own.check = check
+        return own
 
     def _owners(self, book):
         """True if the address names a book that exists and is not the crawl's (a book of the owner's: nothing here fetches into it)."""

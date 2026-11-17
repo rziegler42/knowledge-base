@@ -175,6 +175,80 @@ class UrlUnderPolicy(PolicyCase):
         self.assertEqual(len(self.books()), 1)
 
 
+class CrawlNeverWritesToABookThatIsNotItsOwn(PolicyCase):
+    def owners_book(self):
+        self.srv.routes["/mine"] = self.ok(PAGE)
+        return self.capture("http://a.test/mine")["book_id"]
+
+    def snapshot(self, book):
+        return (self.store.read_events(book), self.store.read_book(book), self.ident.lookup("url", "http://c.test/mirror"), self.ident.lookup("url", "http://b.test/go"))
+
+    def test_a_page_with_the_same_bytes_as_a_book_of_the_owners_is_held_with_nothing_written_to_it(self):
+        book = self.owners_book()
+        self.srv.routes["/mirror"] = self.ok(PAGE)
+        before = self.snapshot(book)
+        got = self.capture("http://c.test/mirror", auto_filed=True)
+        self.assertEqual((got["status"], got["book_id"]), ("held", book))
+        self.assertEqual(self.snapshot(book), before)
+        self.assertEqual(self.books(), [book])
+
+    def test_a_redirect_to_an_owners_finished_address_whose_page_changed_is_held_and_claims_no_hash_for_it(self):
+        book = self.owners_book()
+        self.srv.routes["/mine"] = self.ok(PAGE + b"<!-- changed -->")
+        self.srv.routes["/go"] = redirect("http://a.test/mine")
+        before = self.snapshot(book)
+        got = self.capture("http://b.test/go", auto_filed=True)
+        self.assertEqual((got["status"], got["book_id"]), ("held", book))
+        self.assertEqual(self.snapshot(book), before)
+
+    def test_a_redirect_to_an_owners_unfinished_capture_does_not_file_a_payload_into_it(self):
+        self.srv.routes["/half"] = reply(500, body=b"x")
+        owners = self.capture("http://a.test/half")
+        self.assertEqual(owners["status"], "failed")
+        self.srv.routes["/half"] = self.ok(PAGE)
+        self.srv.routes["/go"] = redirect("http://a.test/half")
+        before = (self.store.read_events(owners["book_id"]), self.store.read_book(owners["book_id"]))
+        got = self.capture("http://b.test/go", auto_filed=True)
+        self.assertEqual((got["status"], got["book_id"]), ("held", owners["book_id"]))
+        self.assertEqual((self.store.read_events(owners["book_id"]), self.store.read_book(owners["book_id"])), before)
+        self.assertNotIn("page.html", str(self.store.read_version(owners["book_id"], owners["version_id"]).get("payloads")))
+
+    def test_an_unfinished_capture_of_the_owners_at_the_asked_address_is_held_and_not_resumed_or_marked_failed(self):
+        self.srv.routes["/half"] = reply(500, body=b"x")
+        owners = self.capture("http://a.test/half")
+        self.assertEqual(owners["status"], "failed")
+        self.srv.routes["/half"] = self.ok(PAGE)
+        before = (self.store.read_events(owners["book_id"]), self.store.read_book(owners["book_id"]), self.store.read_version(owners["book_id"], owners["version_id"]))
+        hits = len(self.srv.hits)
+        got = self.capture("http://a.test/half", auto_filed=True)
+        self.assertEqual((got["status"], got["book_id"]), ("held", owners["book_id"]))
+        self.assertEqual((self.store.read_events(owners["book_id"]), self.store.read_book(owners["book_id"]), self.store.read_version(owners["book_id"], owners["version_id"])), before)
+        self.assertEqual(len(self.srv.hits), hits)
+
+    def test_the_crawls_own_unfinished_capture_is_still_resumed_by_the_crawl(self):
+        self.srv.routes["/half"] = reply(500, body=b"x")
+        first = self.capture("http://a.test/half", auto_filed=True)
+        self.assertEqual(first["status"], "failed")
+        self.srv.routes["/half"] = self.ok(PAGE)
+        again = self.capture("http://a.test/half", auto_filed=True)
+        self.assertEqual((again["status"], again["book_id"]), ("filed", first["book_id"]))
+
+    def test_without_the_mark_the_capture_still_notes_a_sighting_and_finishes_an_unfinished_book_as_before(self):
+        book = self.owners_book()
+        self.srv.routes["/mirror"] = self.ok(PAGE)
+        got = self.capture("http://c.test/mirror")
+        self.assertEqual((got["status"], got["book_id"]), ("duplicate", book))
+        self.assertIn("sighting", [e["event"] for e in self.store.read_events(book)])
+
+    def test_a_book_the_crawl_filed_is_still_a_duplicate_for_the_crawl(self):
+        self.srv.routes["/p"] = self.ok(PAGE)
+        self.srv.routes["/same"] = self.ok(PAGE)
+        first = self.capture("http://a.test/p", auto_filed=True)
+        second = self.capture("http://b.test/same", auto_filed=True)
+        self.assertEqual((second["status"], second["book_id"]), ("duplicate", first["book_id"]))
+        self.assertIn("sighting", [e["event"] for e in self.store.read_events(first["book_id"])])
+
+
 def feed_route(body):
     return reply(200, body=body, ctype="application/atom+xml")
 
