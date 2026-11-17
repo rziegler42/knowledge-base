@@ -43,7 +43,7 @@ def _log(log, now, name, result):
     log.write("list_update", OUTCOMES.get(status, "failed"), reason=log.safe(f"{name}: {detail}"), n=_count(result), now=now)
 
 
-def _hook(index_root, matcher):
+def address_hook(index_root, matcher):
     """The policy's address hook: the stop file is looked at before each request, and an address the matcher blocks is not requested."""
     def check(address):
         if crawlguard.stop_requested(index_root):
@@ -66,7 +66,7 @@ def _run(ctx, fetch, key_path):
         matcher = weblists.Matcher(plan["blacklist"], plan["allow"], folder, plan["pinned_hosts"])      # the folder is made by the matcher's refresh and by the URLhaus source, in mode 700
     except KbError as e:                       # `ListError` is one: its message is safe to log and names a line, not its text
         raise crawlrun.StepRefused(f"the lists, the owner's blacklist or the allow file cannot be used: {e}") from None
-    hook = _hook(ctx.index_root, matcher)
+    hook = address_hook(ctx.index_root, matcher)
     policy = webclient.Policy(user_agent=webclient.GENERIC_USER_AGENT, gap=plan["min_gap_s"], jitter=plan["jitter"], follow_redirects=True, types=LIST_TYPES, check=hook,
                               suffixes=matcher.suffixes() or None)
     lists_plan = crawlplan.lists_plan(plan)
