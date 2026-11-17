@@ -224,6 +224,8 @@ class _Run:
             root = library.read_book(book)                        # read again, under the lock: it must still be what the proposal was made for
             if root.get("state") != "active" or root.get("current_version") != item["version"]:
                 return self.say("move", "skipped", CHANGED, book)
+            if any(isinstance(e, dict) and e.get("event") in crawlbooks.TERMINAL for e in library.read_events(book)):
+                return self.say("move", "skipped", CHANGED, book)          # another writer (a `place-apply`) finished the book since the scan: nothing is moved and no second line is written
             where = root.get("shelf")
             if where == shelf:
                 action, origin = "record", None                   # a move that was made and not written down: write it down and move nothing

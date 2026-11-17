@@ -570,6 +570,31 @@ class TheChecks(Case):
 
 
 class TheMoveItself(Case):
+    def test_a_terminal_event_written_after_the_scan_is_seen_under_the_lock_and_nothing_is_moved_or_written(self):
+        book = self.crawl_book("The gene book")
+        real_lock = catalog.lock
+
+        class Interloper:
+            """Another writer (a `place-apply`) finishes the book between the step's scan and its lock."""
+
+            def __init__(self, index_root):
+                self.inner = real_lock(index_root)
+
+            def __enter__(self):
+                out = self.inner.__enter__()
+                self.stage.append_event(book, "reshelved", **{"from": "default", "to": "topic-b", "action": "move", "basis": "owner", "via": "place-apply"})
+                return out
+
+            def __exit__(self, *args):
+                return self.inner.__exit__(*args)
+
+        Interloper.stage = self.store
+        sets = []
+        with mock.patch.object(catalog, "lock", Interloper), mock.patch.object(self.store, "set_shelf", lambda *a, **k: sets.append(a)):
+            self.run_step()
+        self.assertEqual((sets, self.names(book).count("reshelved"), self.shelf(book)), ([], 1, "default"))
+        self.assertEqual([x["outcome"] for x in self.lines() if x["step"] == "move"], ["skipped"])
+
     def test_the_catalog_lock_is_taken_for_each_move_and_not_for_the_batch_and_is_held_while_the_shelf_is_set(self):
         books = [self.crawl_book(f"Book {n}") for n in range(3)]
         held, free = [], []
