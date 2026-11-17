@@ -70,8 +70,11 @@ def read_topics(path):
     fit the form above is a refusal that names the line and does not repeat its text. A topic has control, invisible and direction
     characters removed and its white space made single; one that is empty then, over 300 characters, or the same as an earlier one (in
     any case) is refused; so is a topic before any section, a file with no topic, and one with over 5,000."""
-    text = read_text(path)
-    shown = textutil.literal(os.fspath(path))
+    return parse_topics(read_text(path), textutil.literal(os.fspath(path)))
+
+
+def parse_topics(text, shown="the topics file"):
+    """The same from the text of a file that has been read already (so that what is approved is what is parsed)."""
     topics, seen, section, weight = [], set(), None, None
     for number, raw in enumerate(text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
         line = raw.strip()

@@ -1,0 +1,43 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Increment H — Scan and hold, Step 2",
+      "problem": "The plan says a failed scan is immediately held and terminal, as population.md requires, but also says a scan failure is retried and eventually weeded. Once `crawl_held` is written, `crawl_books()` excludes it, so the retry path cannot occur; if failures are retried instead, the required immediate hold is violated.",
+      "severity": "major",
+      "suggestion": "Choose and state one policy. To match the spec, make any scan failure or unavailable tool write `crawl_held` immediately and remove the retry/weeding case; alternatively distinguish a pre-scan transient operation from a failed scan and define its state transitions."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Increment C — The crawl’s books, Step 2; Increment L — The proposal and the move, Step 2",
+      "problem": "C says malformed or unapproved `crawl_found` events are returned only by `unapproved_books`, “which no step acts on.” L nevertheless requires such a book to receive `crawl_unplaced`. No runner stage is assigned to consume that reader, so the required terminal/report event cannot be produced.",
+      "severity": "major",
+      "suggestion": "Define a dedicated, non-proposal/non-move reconciliation path for `unapproved_books`, including when it runs, its idempotent event write, and tests that it cannot invoke models or move the book."
+    },
+    {
+      "id": "R2-F3",
+      "location": "Increment F — The policy of a fetch, Steps 1–2",
+      "problem": "The planned policy tests do not require the public-address check to be bound to the actual connection or repeated safely at redirects. Population.md acceptance criterion 17 requires rejecting private/metadata destinations under DNS rebinding and verifying the connected peer is the checked address; merely reading the existing policy does not make that a delivery requirement.",
+      "severity": "major",
+      "suggestion": "Add explicit policy and integration tests for first-hop and redirect DNS rebinding, private/reserved answers, and mismatched socket peers; require the shared client used by capture, discovery, and list refreshes to preserve those guarantees."
+    },
+    {
+      "id": "R2-F4",
+      "location": "Increment D — The `lists` point, Step 2; Increment F — The policy of a fetch, Step 2",
+      "problem": "The matcher requirements collapse blacklist and public-list behavior: F says a subdomain of a “blacklisted or listed” host is blocked. This drifts from population.md, where only owner-blacklist entries match subdomains; public host-list entries match exactly, and URLhaus entries match only an exact canonical URL (except bare-IP hosts). The plan also does not test that public entries cannot block pinned source hosts.",
+      "severity": "major",
+      "suggestion": "Specify separate matcher tests for owner blacklist, public hostname lists, URL lists, bare IPs, and pinned hosts, then test those rules at candidate, redirect, and discovered-address checks."
+    },
+    {
+      "id": "R2-F5",
+      "location": "Increment D — The `lists` point, Step 2",
+      "problem": "The URLhaus-key work omits several required containment cases from population.md acceptance criteria 14–15: enforcing HTTPS with no redirect followed, proving a redirect target receives no key, and proving a forced exception cannot expose the key through error/report/prompt/environment/command/address paths.",
+      "severity": "major",
+      "suggestion": "Add an explicit URLhaus request policy and fake-302/forced-exception tests covering those paths, including the rest-of-day refusal behavior after a redirect or other refusal."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The prior terminal-state and approved-digest findings are addressed, but the plan still has a scan-state contradiction and gaps in the unapproved-event, network-policy, list-matching, and URLhaus-key requirements of the population spec.",
+  "verdict": "changes_needed"
+}
