@@ -1,12 +1,14 @@
 """The text of the scheduler of the unattended crawl (`docs/specs/population.md`, "Scheduling"; the plan `2026-11-16-run-the-steps-of-the-unattended-crawl`, Increment N).
 
-`text(index_root, engine_dir, python)` is the text of a macOS launchd agent that starts one run of the unattended crawl every 900 seconds: `python3 -X pycache_prefix=<index root>/crawl-pycache -m kb crawl-run`, with the
+`text(index_root, engine_dir, python, wb_dir)` is the text of a macOS launchd agent that starts one run of the unattended crawl every 900 seconds: `python3 -X pycache_prefix=<index root>/crawl-pycache -m kb crawl-run`, with the
 engine folder as its working folder (where `kb` can be imported: `python3 -m kb` is run from `engine/`, as `engine/README.md` runs every command), and the agent's own output (standard output and standard error)
-in one file under the index root, `crawl-agent.log`, which is not in the crawl's log (`<index root>/crawl/log/`). The agent has no other key: it does not run at load, is not kept alive, sets no environment and no
-user. A firing while a run is going exits at once (the run lock), which is why the interval is the only thing that schedules it.
+in one file under the index root, `crawl-agent.log`, which is not in the crawl's log (`<index root>/crawl/log/`). **The one environment variable it sets is `PATH`, and only when a folder for `wb` is given**: launchd
+gives a run its default path (`/usr/bin:/bin:/usr/sbin:/sbin`), and the engine's model calls start `wb` by `shutil.which`, so without the folder of `wb` in the path they fail as if the model were down. The agent has no
+other key: it does not run at load, is not kept alive and sets no user. A firing while a run is going exits at once (the run lock), which is why the interval is the only thing that schedules it.
 
-The text is **only printed**. This module, and the command that prints it, write no file, make no folder, load no config of their own, read no environment variable, start no process and make no request: the index
-root and the engine folder are given as arguments, as text, and nothing is looked at on disk. Installing the agent, and making the bytecode folder private (mode 700, a folder of the owner's, outside the engine's
+The text is **only printed**. This module writes no file, makes no folder, loads no config of its own, reads no environment variable, starts no process and makes no request: the index root, the engine folder and the
+folder of `wb` are given as arguments, as text, and nothing is looked at on disk. (The command that prints it looks for `wb` on the owner's own `PATH`, in his own shell, when he prints the text, or takes `--path`; it
+writes no file and starts no process.) Installing the agent, and making the bytecode folder private (mode 700, a folder of the owner's, outside the engine's
 code, as `crawlrun.prefix_problem` requires), are the owner's acts; the text says so in a comment before the property list, and the README's checklist of the supervised run says so again.
 
 A path is refused, with a plain reason that never shows the path, when it is not text, is empty or only slashes, has a control character or a line break, has a character that cannot be seen (a direction mark, a zero
@@ -21,6 +23,7 @@ INTERVAL = 900
 PREFIX_NAME = "crawl-pycache"
 OUTPUT_NAME = "crawl-agent.log"
 PYTHON = "python3"
+SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"         # the path launchd gives a job; the folder of `wb` is put before it
 
 HEAD = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
 
@@ -53,6 +56,14 @@ def _folder(value, what):
     return folder
 
 
+def _wb_folder(value):
+    """A safe full path of the folder that holds `wb`, with no slash at its end, and no colon (a colon would make it two folders of the `PATH`)."""
+    folder = _folder(value, "folder of wb")
+    if ":" in folder:
+        raise KbError("the folder of wb has a colon, which a path of folders cannot hold")
+    return folder
+
+
 def _program(value):
     if value == PYTHON:
         return value
@@ -72,11 +83,13 @@ def _apart(prefix, engine):
     return prefix == engine or prefix.startswith(engine + "/") or engine.startswith(prefix + "/")
 
 
-def text(index_root, engine_dir, python=PYTHON):
-    """The text of the launchd agent, for the index root and the engine folder (full paths, given as text) and the python program (`python3` or a full path). Refuses an unsafe path with `KbError`."""
+def text(index_root, engine_dir, python=PYTHON, wb_dir=None):
+    """The text of the launchd agent, for the index root and the engine folder (full paths, given as text), the python program (`python3` or a full path) and the folder that holds `wb` (a full path, or `None`: the
+    text then says that `wb` was not found and sets no path). Refuses an unsafe path with `KbError`."""
     index = _folder(index_root, "index root")
     engine = _folder(engine_dir, "engine folder")
     program = _program(python)
+    wb = None if wb_dir is None else _wb_folder(wb_dir)
     prefix = f"{index}/{PREFIX_NAME}"
     output = f"{index}/{OUTPUT_NAME}"
     if _apart(prefix, engine):
@@ -89,6 +102,12 @@ def text(index_root, engine_dir, python=PYTHON):
         "    " + prefix,
         "  The agent's own output goes to this file, which is outside the crawl's log:",
         "    " + output,
+    ]
+    if wb is None:
+        lines += ["  wb was not found when this text was made. Model calls need it, and launchd gives a run only /usr/bin:/bin:/usr/sbin:/sbin. Print this text again, giving the option called path the folder that holds wb, before installing it."]
+    else:
+        lines += ["  The path of the agent is " + wb + " followed by " + SYSTEM_PATH + ", so that model calls find wb. After the agent's first firing read the file above: a model call that cannot find wb is written there."]
+    lines += [
         "-->",
         '<plist version="1.0">',
         "<dict>",
@@ -98,8 +117,10 @@ def text(index_root, engine_dir, python=PYTHON):
         "  <array>",
     ]
     lines += [f"    <string>{_xml(a)}</string>" for a in arguments]
+    lines += ["  </array>"]
+    if wb is not None:
+        lines += ["  <key>EnvironmentVariables</key>", "  <dict>", "    <key>PATH</key>", f"    <string>{_xml(wb + ':' + SYSTEM_PATH)}</string>", "  </dict>"]
     lines += [
-        "  </array>",
         "  <key>WorkingDirectory</key>",
         f"  <string>{_xml(engine)}</string>",
         "  <key>StartInterval</key>",

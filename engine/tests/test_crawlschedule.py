@@ -55,7 +55,7 @@ class TheText(unittest.TestCase):
         agent = parsed(text)
         self.assertEqual(agent["StartInterval"], 900)
         self.assertIs(type(agent["StartInterval"]), int)
-        for key in ("RunAtLoad", "KeepAlive", "EnvironmentVariables", "StartCalendarInterval", "WatchPaths", "ThrottleInterval", "Program", "UserName"):
+        for key in ("RunAtLoad", "KeepAlive", "StartCalendarInterval", "WatchPaths", "ThrottleInterval", "Program", "UserName"):
             self.assertNotIn(key, agent)
             self.assertNotIn("<key>" + key + "</key>", text)
 
@@ -99,6 +99,55 @@ class TheText(unittest.TestCase):
 
     def test_the_constants_are_what_the_plan_says(self):
         self.assertEqual((crawlschedule.INTERVAL, crawlschedule.LABEL, crawlschedule.PREFIX_NAME, crawlschedule.OUTPUT_NAME), (900, "local.knowledge-base.crawl-run", "crawl-pycache", "crawl-agent.log"))
+
+
+WB = "/Users/example/.config/project-workbench/bin"
+SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+
+
+class ThePath(unittest.TestCase):
+    def test_a_folder_of_wb_is_put_in_the_path_before_the_system_path(self):
+        agent = parsed(crawlschedule.text(INDEX, ENGINE, wb_dir=WB))
+        self.assertEqual(agent["EnvironmentVariables"], {"PATH": WB + ":" + SYSTEM_PATH})
+        self.assertEqual(sorted(agent), ["EnvironmentVariables", "Label", "ProgramArguments", "StandardErrorPath", "StandardOutPath", "StartInterval", "WorkingDirectory"])
+
+    def test_with_no_folder_there_is_no_environment_and_a_comment_says_wb_was_not_found(self):
+        text = crawlschedule.text(INDEX, ENGINE)
+        self.assertNotIn("EnvironmentVariables", parsed(text))
+        comment = text[text.index("<!--"):text.index("-->")]
+        self.assertIn("wb was not found", comment)
+        self.assertIn("option called path", comment)
+        self.assertNotIn("--", comment[len("<!--"):])
+
+    def test_with_a_folder_the_comment_names_it_and_says_to_check_the_agents_output_after_its_first_firing(self):
+        text = crawlschedule.text(INDEX, ENGINE, wb_dir=WB)
+        comment = text[text.index("<!--"):text.index("-->")]
+        self.assertIn(WB, comment)
+        self.assertIn("After the agent's first firing", comment)
+        self.assertIn(OUTPUT, comment)
+
+    def test_a_folder_that_is_not_a_plain_full_path_is_refused_and_the_reason_does_not_show_it(self):
+        for bad in ("relative/bin", "", "   ", "/a/./b", "/a/../b", "/a--b", "/a\nb", "/a\u202eb", "/a:b", "/a/b:/c", 5):
+            with self.subTest(bad), self.assertRaises(KbError) as raised:
+                crawlschedule.text(INDEX, ENGINE, wb_dir=bad)
+            if isinstance(bad, str) and bad.strip():
+                self.assertNotIn(bad.strip(), str(raised.exception))
+
+    def test_a_folder_with_markup_is_escaped_and_comes_back_whole(self):
+        weird = "/Users/ex/a&b <bin>"
+        agent = parsed(crawlschedule.text(INDEX, ENGINE, wb_dir=weird))
+        self.assertEqual(agent["EnvironmentVariables"]["PATH"], weird + ":" + SYSTEM_PATH)
+
+    def test_a_folder_that_ends_in_a_slash_does_not_double_it(self):
+        self.assertEqual(parsed(crawlschedule.text(INDEX, ENGINE, wb_dir=WB + "/"))["EnvironmentVariables"]["PATH"], WB + ":" + SYSTEM_PATH)
+
+    def test_the_text_is_the_same_for_the_same_arguments_with_a_folder(self):
+        self.assertEqual(crawlschedule.text(INDEX, ENGINE, wb_dir=WB), crawlschedule.text(INDEX, ENGINE, wb_dir=WB))
+
+    def test_the_text_with_a_folder_still_says_nothing_about_when_or_how_long(self):
+        text = crawlschedule.text(INDEX, ENGINE, wb_dir=WB).lower()
+        for word in ("night", "away", "vacation", "holiday", "weekend", "overnight", "sleep", "asleep"):
+            self.assertNotIn(word, text)
 
 
 class Escaping(unittest.TestCase):
@@ -290,6 +339,9 @@ class TheCommand(StoreCase):
     def setUp(self):
         super().setUp()
         self.addCleanup(os.umask, os.umask(0o077))
+        patch = mock.patch("shutil.which", return_value=None)          # (the command looks for wb on the PATH of whoever runs the tests: none of these tests may depend on it)
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def run_main(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -302,9 +354,10 @@ class TheCommand(StoreCase):
 
     def test_it_prints_the_text_for_the_configs_index_root_and_the_engine_folder_and_changes_nothing(self):
         before = self.tree()
-        code, out, err = self.run_main("crawl-schedule-text")
+        with mock.patch("shutil.which", return_value=WB + "/wb"):
+            code, out, err = self.run_main("crawl-schedule-text")
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(out, crawlschedule.text(config.load()["index_root"], ENGINE_DIR))
+        self.assertEqual(out, crawlschedule.text(config.load()["index_root"], ENGINE_DIR, wb_dir=WB))
         agent = parsed(out)
         self.assertEqual(agent["WorkingDirectory"], ENGINE_DIR)
         self.assertEqual(agent["ProgramArguments"][2], "pycache_prefix=" + os.path.join(self.index, "crawl-pycache"))
@@ -319,6 +372,40 @@ class TheCommand(StoreCase):
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(parsed(out)["WorkingDirectory"], os.path.realpath(ENGINE_DIR))
         self.assertNotIn("engine-link", out)
+
+    def test_the_command_puts_the_folder_of_the_wb_it_finds_in_the_path(self):
+        with mock.patch("shutil.which", return_value=WB + "/wb") as found:
+            code, out, err = self.run_main("crawl-schedule-text")
+        self.assertEqual((code, err), (0, ""))
+        found.assert_called_once_with("wb")
+        self.assertEqual(parsed(out)["EnvironmentVariables"]["PATH"], WB + ":" + SYSTEM_PATH)
+
+    def test_the_command_gives_a_comment_and_no_path_when_wb_is_not_found(self):
+        with mock.patch("shutil.which", return_value=None):
+            code, out, err = self.run_main("crawl-schedule-text")
+        self.assertEqual((code, err), (0, ""))
+        self.assertNotIn("EnvironmentVariables", parsed(out))
+        self.assertIn("option called path", out)
+
+    def test_the_argument_path_names_another_folder_and_wb_is_not_looked_for(self):
+        with mock.patch("shutil.which", side_effect=AssertionError("looked for wb")):
+            code, out, err = self.run_main("crawl-schedule-text", "--path", "/opt/tools/bin")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(parsed(out)["EnvironmentVariables"]["PATH"], "/opt/tools/bin:" + SYSTEM_PATH)
+
+    def test_a_path_that_is_not_a_full_path_is_a_refusal_with_exit_2_and_no_text(self):
+        for bad in ("relative/bin", "/a:b"):
+            with self.subTest(bad):
+                code, out, err = self.run_main("crawl-schedule-text", "--path", bad)
+                self.assertEqual((code, out), (2, ""))
+                self.assertTrue(err.startswith("refused: "))
+                self.assertNotIn(bad, err)
+
+    def test_a_relative_folder_of_wb_found_on_the_path_is_made_full_and_never_refused_for_being_relative(self):
+        with mock.patch("shutil.which", return_value="bin/wb"):
+            code, out, err = self.run_main("crawl-schedule-text")
+        self.assertEqual((code, err), (0, ""))
+        self.assertTrue(parsed(out)["EnvironmentVariables"]["PATH"].startswith(os.path.abspath("bin") + ":"))
 
     def test_a_python_may_be_named_by_its_full_path(self):
         code, out, err = self.run_main("crawl-schedule-text", "--python", "/usr/bin/python3")

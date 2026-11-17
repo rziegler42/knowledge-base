@@ -217,6 +217,7 @@ def main(argv=None):
             "index root that the text names; it installs nothing, writes nothing and makes no folder: you read it, make the folder (mode 700) and install it yourself")
     cst = sub.add_parser("crawl-schedule-text", help=said, description=said)
     cst.add_argument("--python", metavar="PATH", default="python3", help="the python program the agent runs: python3 (the default) or a full path, which launchd may need")
+    cst.add_argument("--path", metavar="FOLDER", default=None, help="the folder that holds wb, which the agent's PATH gets (default: the folder of the wb found on your own PATH)")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -444,7 +445,12 @@ def main(argv=None):
             print("the circuit breaker is cleared; the stop file and any site stopped for the day are as they were")
             return 0
         if args.command == "crawl-schedule-text":
-            sys.stdout.write(crawlschedule.text(config.load()["index_root"], os.path.dirname(os.path.dirname(os.path.realpath(__file__))), args.python))
+            wb_dir = args.path
+            if wb_dir is None:
+                import shutil
+                found = shutil.which("wb")
+                wb_dir = os.path.dirname(os.path.abspath(found)) if found else None
+            sys.stdout.write(crawlschedule.text(config.load()["index_root"], os.path.dirname(os.path.dirname(os.path.realpath(__file__))), args.python, wb_dir))
             return 0
         if args.command in ("crawl-status", "crawl-report"):
             import datetime
