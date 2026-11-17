@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Increment K — Cards over the batch, Steps 2–3; Assumptions and constraints, “The terminal events of a crawl book”",
+      "problem": "After a card-stage failure reaches `retries`, the plan only says the book is “parked.” But `crawl_books()` is defined to return every `crawl_found` book without one of four terminal events, and no terminal event or stage-state exclusion is specified for this parked outcome. The next run will therefore select it again, contradicting the claimed bounded retries and resumability.",
+      "severity": "major",
+      "suggestion": "Define and write a terminal parked/failed event (or explicitly make `crawl_books()` exclude a recorded terminal failed card stage), with a test that a card failure at `retries` is never submitted to the queue again and is reported."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment C — The crawl’s books, Steps 1–2; Increment L — The proposal and the move, Step 2",
+      "problem": "The plan records a `plan_digest` on `crawl_found`, but does not require the move path to verify that it identifies an approved crawl plan. The population spec requires a moved book’s `crawl_found` event to carry a digest of an approved plan. Merely selecting books with `crawl_found` permits an unapproved or malformed marker to reach unattended placement and movement.",
+      "severity": "major",
+      "suggestion": "Require the crawl-book reader/move path to validate that `crawl_found.plan_digest` is a valid stored approved-plan digest before proposing or moving, and add tests that missing, malformed, and unapproved digests leave the book untouched."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "Two gaps leave retry exhaustion non-terminal and omit the required approved-plan provenance check before unattended moves.",
+  "verdict": "changes_needed"
+}

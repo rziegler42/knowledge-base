@@ -1,0 +1,179 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-17T00:29:53Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "Real gap: the card step said parked without a terminal event. Parked now means weeded with a rejection event naming the stage, in the assumptions and in the card and judge increments, with a test that a second run never selects it."
+    },
+    {
+      "at": "2026-11-17T00:29:53Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Real gap: books were chosen by the found event alone. The reader now takes only digests whose approved folder reads strictly, an unapproved or forged marker is neither proposed nor moved, and the move increment tests it."
+    },
+    {
+      "at": "2026-11-17T00:32:38Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "Real contradiction. The spec holds any failed scan at once, so the scan increment now holds immediately and has no retry or weed path; a refusal by a floor or the stop file is not a hold."
+    },
+    {
+      "at": "2026-11-17T00:32:38Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F2",
+      "reason": "Real gap: nothing consumed the reader of unapproved books. A single reconcile function now writes the unplaced event once, runs first in earlier work, and is tested to call no model, move, proposal or capture."
+    },
+    {
+      "at": "2026-11-17T00:32:39Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F3",
+      "reason": "Fair: reading the client did not make the rebinding and peer guarantees a deliverable. The fetch policy increment now requires tests with a fake resolver and socket for private answers, redirect hops, changed answers and peer mismatch, through the one shared client used by capture, discovery and lists."
+    },
+    {
+      "at": "2026-11-17T00:32:39Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F4",
+      "reason": "My wording was wrong against the spec: only the owner blacklist matches subdomains. The matcher tests now state each rule separately (owner list, public host list, URL list, bare IP, pinned hosts, canonical forms) at candidate, redirect and discovered address."
+    },
+    {
+      "at": "2026-11-17T00:32:39Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F5",
+      "reason": "Real omission from the spec criteria on the key. The lists increment now tests https only, no redirect followed, no key shown to a redirect target, no key in any error or prompt path after a forced exception, and the rest-of-day stop after a refusal."
+    },
+    {
+      "at": "2026-11-17T00:33:32Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R3-F1",
+      "reason": "Real defect, checked against the engine readme: the package lives in the engine folder and every command there is run from it. The scheduler text now sets that working folder and a test shows the module is found from it and not from the top folder."
+    }
+  ],
+  "format": 1,
+  "generation": 12,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-16-run-the-steps-of-the-unattended-crawl.md",
+  "rounds": [
+    {
+      "at": "2026-11-17T00:29:12Z",
+      "bridge": "ask-codex",
+      "document_sha256": "adb873eaf4ac872e918e946ff564e5ded6fde6dbfcb5f38f5684b2f60aedb9f6",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "8989badb54640c95723b36204e2913dcf940f4480d0fbcbbf0ae453e24786dcf",
+      "usage": {
+        "input_tokens": 986001,
+        "output_tokens": 4516,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-17T00:32:00Z",
+      "bridge": "ask-codex",
+      "document_sha256": "9649aa2d56f400e848a0e649edde412aca6988c9f275477024cd541bbe694bc4",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F2",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F3",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F4",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F5",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "d0582d5db744cb4f3cab7fa72495a91899642f641d059d303333da6ea0a70b83",
+      "usage": {
+        "input_tokens": 488161,
+        "output_tokens": 4299,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-17T00:33:20Z",
+      "bridge": "ask-codex",
+      "document_sha256": "a5cfee3d0a66aecc373b38b69e2fb02cfb4e30d5b6396e8d98598724fa2222eb",
+      "file": "round-3.json",
+      "findings": [
+        {
+          "id": "R3-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 3,
+      "profile": "second-opinion",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "d9de425aa6593336256b95b3ef2a80eb964b1fc9e4ad6e70a7bbbc723a031f9f",
+      "usage": {
+        "input_tokens": 255159,
+        "output_tokens": 621,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "a8d80781d5cc12a2ee3a3bda5ce7afb3ea77508dc134156d980cdf3a0531d370",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
