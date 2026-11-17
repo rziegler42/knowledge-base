@@ -129,9 +129,9 @@ def _fetch_ceiling(used_limit):
     return used >= limit
 
 
-def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvfs=os.statvfs, probe=None, steps=None, pycache_prefix=_FROM_SYS, secrets=()):
+def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvfs=os.statvfs, probe=None, steps=None, pycache_prefix=_FROM_SYS, secrets=(), entry_probe=None):
     """Make a run. Returns the exit code: 0 done (or the run lock held by another run), 3 refused, 4 the breaker is tripped. `now` fixes the clock (tests); `say` and `warn` print to the output and the error stream;
-    `steps` maps a point name to a function that gets a context (`run`, `index_root`, `cfg`, `plan`, `log`, `clock`, `conn`, `steps`, `secrets`, `tripped`, `plan_digest` (the digest of the approved plan, which a step writes into a book it files), `matcher` and `suffixes` (the lists step sets them for the steps after it), and `trip(kind, reason)`, the one way a step trips the breaker). A step that cannot let the run go on raises `StepRefused`. `pycache_prefix` is the interpreter's bytecode folder (`sys.pycache_prefix`, read when it is not given). `secrets` are values (the key a run loaded) that no log line, breaker reason or step may hold."""
+    `steps` maps a point name to a function that gets a context (`run`, `index_root`, `cfg`, `plan`, `log`, `clock`, `conn`, `steps`, `secrets`, `tripped`, `plan_digest` (the digest of the approved plan, which a step writes into a book it files), `matcher` and `suffixes` (the lists step sets them for the steps after it), and `trip(kind, reason)`, the one way a step trips the breaker). A step that cannot let the run go on raises `StepRefused`. `pycache_prefix` is the interpreter's bytecode folder (`sys.pycache_prefix`, read when it is not given). `entry_probe(cfg, task)` asks one model entry whether it answers (`crawlguard.probe_entry`), for the entries an earlier run found down. `secrets` are values (the key a run loaded) that no log line, breaker reason or step may hold."""
     prefix = sys.pycache_prefix if pycache_prefix is _FROM_SYS else pycache_prefix
     steps = dict(steps or {})
     unknown = sorted(set(steps) - set(POINTS))
@@ -155,7 +155,7 @@ def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvf
             log.write("refuse", "held", reason="a run is in progress", now=clock())
             return EXIT_DONE
         try:
-            plan, conn, digest = _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe, prefix)
+            plan, conn, digest = _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe, prefix, entry_probe)
         except _Refuse as r:
             return _refused(log, clock, warn, r)
         try:
@@ -173,7 +173,7 @@ def _refused(log, clock, warn, refusal):
     return refusal.code
 
 
-def _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe, prefix):
+def _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe, prefix, entry_probe=None):
     """Checks 2 to 7. Returns the approved plan, an open connection to the queue and the plan's digest; raises `_Refuse` at the first that fails. The bytecode folder is part of the second: the code that is approved is only the
     code that runs if no planted bytecode can be read."""
     problem = prefix_problem(prefix, kb_root)
@@ -207,8 +207,8 @@ def _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe, pre
             raise _Refuse(EXIT_REFUSED, "the ceilings cannot be read", "ceilings") from None
         state, restarted = crawlguard.load_state(index_root)
         if restarted:
-            log.write("breaker", "skipped", reason="the guard state could not be read: the model server's down clock restarts", now=clock())
-        _model(cfg, index_root, plan, state, log, clock, probe)
+            log.write("breaker", "skipped", reason="the guard state could not be read: the model clocks restart", now=clock())
+        _model(cfg, index_root, plan, state, log, clock, probe, entry_probe)
         log.write("run_start", "ok", reason=f"plan {approved['digest'][:12]}", n=plan["batch"], now=run_started)
         if _fetch_ceiling(used["fetch"]):
             log.write("fetch", "skipped", reason=f"fetches_per_day reached ({used['fetch'][0]} of {used['fetch'][1]}): no new candidates", now=clock())
@@ -218,9 +218,51 @@ def _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe, pre
     return plan, conn, approved["digest"]
 
 
-def _model(cfg, index_root, plan, state, log, clock, probe):
+def _task_of(cfg, entry):
+    """The first task of the engine that the config sets to the entry named `entry`, or `None` when none does (the entry was renamed or removed)."""
+    from . import models
+    for task in models.TASKS + models.EMBED_TASKS:
+        try:
+            if crawlguard.entry_of(cfg, task) == entry:
+                return task
+        except KbError:
+            continue
+    return None
+
+
+def _entries(cfg, plan, state, log, clock, entry_probe, index_root):
+    """Ask each model entry that an earlier run found down (`state["entries_down"]`, in the order of their names), each by the first task that names it: an entry that answers has its clock cleared; one that does not
+    keeps the time it was first seen down and, once that is over `model_down_minutes`, is the trip `(kind, reason)` that is returned; an entry that the config no longer names has its clock dropped, with a line.
+    **The asking ends at the first trip and at the stop file** (looked at before each probe): the entries not asked keep their clocks as they were, which is harmless, and the wait is bounded by the entries asked
+    (each by its own timeout, 600 seconds by default) and not by all of them."""
+    tripped = None
+    for entry in sorted(state["entries_down"]):
+        if tripped is not None or crawlguard.stop_requested(index_root):
+            break
+        task = _task_of(cfg, entry)
+        if task is None:
+            del state["entries_down"][entry]
+            log.write("breaker", "skipped", reason=f"the model entry {entry} is not named in the config any more: its clock is dropped", now=clock())
+            continue
+        since = state["entries_down"][entry]
+        answered = bool((entry_probe or crawlguard.probe_entry)(cfg, task))
+        trip = crawlguard.note_entry(state, entry, answered, clock(), plan)
+        if answered:
+            log.write("breaker", "ok", reason=f"the model entry {entry} answers again", now=clock())
+        else:
+            log.write("breaker", "failed", reason=f"the model entry {entry} has not answered since {since}", now=clock())
+        tripped = trip
+    return tripped
+
+
+def _model(cfg, index_root, plan, state, log, clock, probe, entry_probe=None):
+    """Check 7: the card embedding answers one short embedding (refused otherwise: exit 3, and its down clock counts toward `model_down_minutes`), and **each entry that an earlier run found down is asked too**, so
+    that a model that fails alone (a chat model) is followed from run to run until it answers or has been down for over `model_down_minutes`. The entries are not asked when the card embedding does not answer: the
+    server is then down for all of them, and a chat probe of a server that is down can wait as long as its timeout."""
     answered = bool(probe(cfg))
     tripped = crawlguard.note_model(state, answered, clock(), plan)
+    if answered:
+        tripped = _entries(cfg, plan, state, log, clock, entry_probe, index_root)        # (an answer cleared the card embedding's clock: there is no trip of it to keep)
     try:
         crawlguard.save_state(index_root, state)
         if tripped is not None:
@@ -376,7 +418,7 @@ def _dry_run(cfg, now, say, kb_root, statvfs, prefix):
             elif check == "ceilings":
                 show(check, _dry_ceilings(index_root, plan, now))
             else:
-                show(check, "a real run would ask it to answer one short embedding (not asked in a dry run)")
+                show(check, "a real run would ask it to answer one short embedding, and each model entry that an earlier run found down (not asked in a dry run)")
         except _Refuse as r:
             outcome = (r.code, r.reason)
             if not r.shown:

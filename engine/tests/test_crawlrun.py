@@ -1179,6 +1179,156 @@ class Assembly(Case):
         self.assertEqual([l for l in self.log_lines() if l["step"] == "fail"], [])
 
 
+class ModelEntries(Case):
+    """The start of a run follows the model entries that an earlier run found down (`crawl/guard.json`, `entries_down`)."""
+
+    def setUp(self):
+        super().setUp()
+        chat = {"bridge": "ask-ollama", "server": "ned", "model": "m", "kind": "chat", "thinking": "off"}
+        emb = {"bridge": "ask-ollama", "server": "ned", "model": "m", "kind": "embedding", "dimension": 8}          # (as the registry of the models accepts it)
+        self.cfg = dict(self.cfg, models=dict(emb=emb, notes=chat, cardm=dict(chat)), tasks={"card-embed": "emb", "card-notes": "notes", "card-check": "notes", "card": "cardm"})
+        self.approve()                                                           # the approval is of the code and of these model settings
+        self.entry_calls, self.answers = [], {}
+
+    def entry_probe(self, cfg, task):
+        self.entry_calls.append(task)
+        return self.answers.get(task, True)
+
+    def down(self, **since):
+        state = crawlguard.fresh_state()
+        state["entries_down"] = since
+        crawlguard.save_state(self.index, state)
+
+    def run_with(self, now=NOW, **kw):
+        return crawlrun.run(self.cfg, now=now, say=self.out.append, warn=self.err.append, kb_root=self.kb, statvfs=lambda p: Reading(self.free), probe=self.probe,
+                            entry_probe=self.entry_probe, pycache_prefix=self.prefix, **kw)
+
+    def clocks(self):
+        return crawlguard.load_state(self.index)[0]["entries_down"]
+
+    def lines_of(self, step):
+        return [(l["outcome"], l["reason"]) for l in self.log_lines() if l["step"] == step]
+
+    def test_with_no_entry_down_the_start_makes_the_one_probe_it_made_before_and_asks_no_entry(self):
+        self.assertEqual(self.run_with(), 0)
+        self.assertEqual((self.probe_calls, self.entry_calls, self.clocks()), (1, [], {}))
+
+    def test_an_entry_that_answers_again_has_its_clock_cleared_and_the_run_goes_on(self):
+        self.down(notes="2026-11-16T11:00:00Z")
+        self.assertEqual(self.run_with(), 0)
+        self.assertEqual((self.entry_calls, self.clocks()), (["card-notes"], {}))
+        self.assertIn(("ok", "the model entry notes answers again"), self.lines_of("breaker"))
+
+    def test_an_entry_that_still_does_not_answer_keeps_the_first_time_and_the_run_goes_on_within_the_limit(self):
+        self.down(notes="2026-11-16T11:50:00Z")
+        self.answers["card-notes"] = False
+        self.assertEqual(self.run_with(), 0)
+        self.assertEqual(self.clocks(), {"notes": "2026-11-16T11:50:00Z"})
+        self.assertIn(("failed", "the model entry notes has not answered since 2026-11-16T11:50:00Z"), self.lines_of("breaker"))
+
+    def test_an_entry_down_for_longer_than_the_limit_trips_the_breaker_and_the_next_run_is_refused_until_it_is_cleared(self):
+        self.down(notes="2026-11-16T10:00:00Z")
+        self.answers["card-notes"] = False
+        self.assertEqual(self.run_with(), 4)
+        breaker = crawlguard.read_breaker(self.index)
+        self.assertEqual((breaker["tripped"], breaker["kind"]), (True, "model_down"))
+        self.assertIn("the model entry notes has not answered for over", breaker["reason"])
+        self.entry_calls.clear()
+        self.assertEqual(self.run_with(), 4)
+        self.assertEqual(self.entry_calls, [])                                   # refused at the breaker, before any probe
+        crawlguard.clear(self.index, yes=True, is_tty=lambda: True, now=NOW)
+        self.answers["card-notes"] = True
+        self.assertEqual(self.run_with(now=NOW + datetime.timedelta(minutes=15)), 0)
+
+    def test_an_entry_the_config_no_longer_names_is_dropped_with_a_line_and_is_not_probed(self):
+        self.down(gone="2026-11-16T10:00:00Z", notes="2026-11-16T11:55:00Z")
+        self.answers["card-notes"] = False
+        self.assertEqual(self.run_with(), 0)
+        self.assertEqual((self.entry_calls, self.clocks()), (["card-notes"], {"notes": "2026-11-16T11:55:00Z"}))
+        self.assertIn(("skipped", "the model entry gone is not named in the config any more: its clock is dropped"), self.lines_of("breaker"))
+
+    def test_the_card_embedding_entry_is_asked_by_its_own_task_when_it_is_the_one_found_down(self):
+        self.down(emb="2026-11-16T11:55:00Z")
+        self.run_with()
+        self.assertEqual((self.entry_calls, self.clocks()), (["card-embed"], {}))
+
+    def test_when_two_entries_are_over_the_limit_the_first_by_name_is_the_trip_that_is_written_and_the_rest_are_not_asked(self):
+        self.down(cardm="2026-11-16T10:00:00Z", notes="2026-11-16T10:00:00Z")
+        self.answers.update({"card": False, "card-notes": False})
+        self.assertEqual(self.run_with(), 4)
+        self.assertIn("the model entry cardm has not answered", crawlguard.read_breaker(self.index)["reason"])
+        self.assertEqual(self.entry_calls, ["card"])                                  # a trip is known: asking the others would only wait for their timeouts
+        self.assertEqual(self.clocks(), {"cardm": "2026-11-16T10:00:00Z", "notes": "2026-11-16T10:00:00Z"})
+
+    def test_the_stop_file_is_looked_at_between_the_probes_and_the_ones_not_asked_keep_their_clocks(self):
+        self.down(cardm="2026-11-16T11:50:00Z", notes="2026-11-16T11:51:00Z")
+        stop = os.path.join(self.index, "crawl.stop")
+
+        def stopping(cfg, task):
+            self.entry_calls.append(task)
+            open(stop, "w").close()
+            return False
+
+        ran = []
+        self.assertEqual(crawlrun.run(self.cfg, now=NOW, say=self.out.append, warn=self.err.append, kb_root=self.kb, statvfs=lambda p: Reading(self.free), probe=self.probe,
+                                      entry_probe=stopping, pycache_prefix=self.prefix, steps={"lists": lambda ctx: ran.append("lists")}), 0)
+        self.assertEqual((self.entry_calls, ran), (["card"], []))                     # one asked; the run ends at its first point: the stop file is there
+        self.assertEqual(self.clocks(), {"cardm": "2026-11-16T11:50:00Z", "notes": "2026-11-16T11:51:00Z"})
+
+    def test_an_entry_that_two_tasks_name_is_probed_once_by_the_first_of_them(self):
+        self.down(notes="2026-11-16T11:55:00Z")
+        self.run_with()
+        self.assertEqual(self.entry_calls, ["card-notes"])
+
+    def test_the_entries_are_asked_in_the_order_of_their_names_and_each_is_noted_in_its_own_clock(self):
+        self.down(notes="2026-11-16T11:55:00Z", cardm="2026-11-16T11:56:00Z")
+        self.answers["card-notes"] = False
+        self.run_with()
+        self.assertEqual((self.entry_calls, self.clocks()), (["card", "card-notes"], {"notes": "2026-11-16T11:55:00Z"}))
+
+    def test_when_the_card_embedding_does_not_answer_the_run_is_refused_as_before_and_no_entry_is_asked(self):
+        self.down(notes="2026-11-16T11:55:00Z")
+        self.probe_ok = False
+        self.assertEqual(self.run_with(), 3)
+        self.assertEqual((self.entry_calls, self.clocks()), ([], {"notes": "2026-11-16T11:55:00Z"}))
+
+    def test_an_entry_that_has_been_down_longer_than_the_limit_trips_even_when_the_card_embedding_answers_and_the_other_clock_is_untouched(self):
+        crawlguard.save_state(self.index, dict(crawlguard.fresh_state(), model_down_since="2026-11-16T11:59:00Z", entries_down={"notes": "2026-11-16T10:00:00Z"}))
+        self.answers["card-notes"] = False
+        self.assertEqual(self.run_with(), 4)
+        self.assertIsNone(crawlguard.load_state(self.index)[0]["model_down_since"])          # the card embedding answered: its own clock is clear
+
+    def test_a_file_in_the_old_shape_starts_the_clocks_afresh_with_one_line_that_says_so(self):
+        os.makedirs(os.path.join(self.index, "crawl"), exist_ok=True)
+        path = os.path.join(self.index, "crawl", "guard.json")
+        with open(path, "w") as f:
+            f.write(json.dumps({"model_down_since": "2026-11-16T10:00:00Z", "history": []}))
+        os.chmod(path, 0o600)
+        self.assertEqual(self.run_with(), 0)
+        self.assertIn(("skipped", "the guard state could not be read: the model clocks restart"), self.lines_of("breaker"))
+        self.assertEqual((self.entry_calls, self.clocks()), ([], {}))
+
+    def test_what_the_entry_probe_returns_is_all_that_is_kept_and_a_line_holds_only_the_name_and_the_time(self):
+        self.down(notes="2026-11-16T11:50:00Z")
+        self.answers["card-notes"] = False
+        self.run_with()
+        text = json.dumps(self.log_lines())
+        self.assertNotIn("CANARY", text)
+
+    def test_the_default_entry_probe_is_the_guards_and_a_run_without_one_uses_it(self):
+        self.down(notes="2026-11-16T11:50:00Z")
+        with mock.patch.object(crawlguard, "probe_entry", return_value=True) as probe:
+            crawlrun.run(self.cfg, now=NOW, say=self.out.append, warn=self.err.append, kb_root=self.kb, statvfs=lambda p: Reading(self.free), probe=self.probe, pycache_prefix=self.prefix)
+        self.assertEqual([c.args[1] for c in probe.call_args_list], ["card-notes"])
+
+    def test_the_dry_run_says_that_it_would_ask_the_entries_found_down_and_asks_none(self):
+        self.down(notes="2026-11-16T11:50:00Z")
+        self.assertEqual(crawlrun.run(self.cfg, dry_run=True, now=NOW, say=self.out.append, warn=self.err.append, kb_root=self.kb, statvfs=lambda p: Reading(self.free),
+                                      probe=self.probe, entry_probe=self.entry_probe, pycache_prefix=self.prefix), 0)
+        self.assertIn("each model entry that an earlier run found down", "\n".join(self.out))
+        self.assertEqual((self.entry_calls, self.probe_calls, self.clocks()), ([], 0, {"notes": "2026-11-16T11:50:00Z"}))
+
+
 class AssemblyOfTheCommand(Case):
     def test_the_command_runs_the_assembled_steps_and_a_dry_run_runs_none(self):
         sentinel = {"lists": lambda ctx: None}
