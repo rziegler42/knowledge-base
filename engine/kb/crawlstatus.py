@@ -70,12 +70,13 @@ HOLD_LIMIT = 10                   # and the most holds shown
 DEFAULT_VALUES = {"bulk_floor_gb": 50, "index_floor_gb": 10, "phishing_domains": True, "urlhaus_recent": False}
 MAX_RUN_FILES = 60                # the most log files `last_run` looks through for a run (it stops at the newest file that has one)
 MAX_RUN_BYTES = 128 * 1024 * 1024  # and the most bytes it reads in all
-GIB = 1024 ** 3                   # a floor of the plan is in gigabytes; read here as 2**30 bytes (to be checked against the runner's guard)
+GIB = 10 ** 9                     # a floor of the plan is in decimal gigabytes, as the runner's guard (`crawlguard.GB`) reads it
 # the values of the approved plan that the status uses, and no others
 PLAN_VALUES = ("fetches_per_day", "per_domain_per_day", "cards_per_day", "filed_total", "timezone", "bulk_floor_gb", "index_floor_gb",
                "domain_refusals", "phishing_domains", "urlhaus_recent")
 
-_TEXT_FIELDS = ("candidate", "book", "host", "reason")
+_TEXT_FIELDS = ("book", "host", "reason")
+MAX_COUNT = 2 ** 63 - 1           # the log writer's largest whole number
 _TS = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 _LOG_NAME = re.compile(r"crawl-([0-9]{4}-[0-9]{2}-[0-9]{2})\.jsonl")
@@ -83,14 +84,27 @@ _DIGEST = re.compile(r"[0-9a-f]{32}\n?")
 _LOCK_LINE = re.compile(r"([0-9]{1,10}) ([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\n?")
 _ZONE = re.compile(r"[A-Za-z][A-Za-z0-9_+\-/]{0,63}")
 _HEADER = re.compile(r"(?<![A-Za-z0-9])(?:auth-key|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)[\"']?\s*[:=]", re.I)
+_HEADER_WIDE = re.compile(r"(?<![A-Za-z0-9?&;#_-])(?:[a-z0-9]+[-_])*(?:auth[-_]?key|api[-_]?key|token|secret|password|passwd|credential|signature|"
+                          r"subscription[-_]key)[\"']?\s*[:=]", re.I)  # not inside a query: there the parameter's value alone is hidden
+_SCHEME_AUTH = re.compile(r"(?<![A-Za-z0-9])authorization\s+(?:basic|digest|negotiate|bearer)\s+\S", re.I)
+_SCHEMELESS_USERINFO = re.compile(r"(?<![A-Za-z0-9:/])//[^/?#\s@]*@")
 _BEARER = re.compile(r"(?<![A-Za-z0-9])bearer\s+[A-Za-z0-9._~+/=-]{8,}", re.I)
 _SCHEME = r"[A-Za-z][A-Za-z0-9+.\-]*://"
 _URL = re.compile(_SCHEME + r"\S+")
 _USERINFO = re.compile(r"^(" + _SCHEME + r")[^/?#]*@")
 _TAIL_BEARER = re.compile(r"(?<![A-Za-z0-9])bearer\s+\S{0,7}$", re.I)
 _TAIL_URL = re.compile(_SCHEME + r"\S*$")
-_PARAM = re.compile(r"([?&;#])([^=&;#\s]*)=([^&;#\s]*)")
-_SECRET_PARAMS = frozenset(("key", "apikey", "api_key", "token", "access_token", "auth", "secret", "password", "passwd", "sig", "signature"))
+_PARAM = re.compile(r"([?&;#])([^=&;#\s]*)=([^&;#\s?]*)")
+_SECRET_PARAMS = frozenset(("key", "apikey", "api_key", "token", "access_token", "auth", "secret", "password", "passwd", "sig", "signature", "jwt", "sessionid",
+                            "session", "sid", "code", "authkey", "secretkey", "accesskey"))
+_SECRET_ENDINGS = ("_key", "_token", "_secret", "_signature", "_credential", "_credentials", "_password", "_passwd")
+
+
+def _secret_name(name):
+    """A parameter name that looks like a credential: after two decodings, lower case, `-` read as `_` and only what follows a `?` or `/` (a route in a fragment),
+    a name in the set, or one that ends in `_key`, `_token`, `_secret`, `_signature`, `_credential` or `_password`."""
+    folded = re.split(r"[?/]", unquote(unquote(name)).lower().replace("-", "_"))[-1]
+    return folded in _SECRET_PARAMS or folded.endswith(_SECRET_ENDINGS)
 
 FileRead = namedtuple("FileRead", "data status reason cut")  # status: ok | missing | bad
 
@@ -163,21 +177,22 @@ def _redact_url(match):
     if cut < 0:
         return url
 
-    def hide(m):
-        if unquote(m.group(2)).lower() in _SECRET_PARAMS:
-            return f"{m.group(1)}{m.group(2)}={PARAM_WITHHELD}"
-        return m.group(0)
+    return url[:cut] + _PARAM.sub(_hide_param, url[cut:])
 
-    return url[:cut] + _PARAM.sub(hide, url[cut:])
+
+def _hide_param(m):
+    if _secret_name(m.group(2)):
+        return f"{m.group(1)}{m.group(2)}={PARAM_WITHHELD}"
+    return m.group(0)
 
 
 def redact(text):
     """`text` with what looks like a credential taken out. It expects text that is already normalised (see `clean`): a header name split by a
     hidden character is not seen here. A value that holds a header name or a bearer token is withheld whole; in an address the user and the
     password are removed and the value of a parameter named like a key is hidden. Anything else is returned as it is."""
-    if _HEADER.search(text) or _BEARER.search(text):
+    if _HEADER.search(text) or _HEADER_WIDE.search(text) or _BEARER.search(text) or _SCHEME_AUTH.search(text):
         return WITHHELD
-    return _URL.sub(_redact_url, text)
+    return _PARAM.sub(_hide_param, _SCHEMELESS_USERINFO.sub("//", _URL.sub(_redact_url, text)))
 
 
 def _drop_split_tail(text):
@@ -284,9 +299,11 @@ def parse_line(line):
         value = obj.get(key)
         if value is not None and not _text_ok(value):
             return None, "bad_field"
-    n, seconds = obj.get("n"), obj.get("seconds")
-    if n is not None and (type(n) is not int or not 0 <= n <= 2**53):
-        return None, "bad_field"
+    for key in ("candidate", "n"):  # `candidate` is the number of a row of the queue, not an address
+        number = obj.get(key)
+        if number is not None and (type(number) is not int or not 0 <= number <= MAX_COUNT):
+            return None, "bad_field"
+    seconds = obj.get("seconds")
     if seconds is not None:
         if type(seconds) not in (int, float):
             return None, "bad_field"
@@ -663,7 +680,7 @@ def _floor(gb):
 
 def disk(bulk_root, index_root, floors, statvfs=os.statvfs):
     """The free space of the two drives against their floors. `free_bytes` is what a user may use (`f_bavail` times the block size); `floor_bytes`
-    is the plan's floor in gigabytes (2**30 bytes) or None if it is not known; `below_floor` is `free < floor` and `at_or_under_floor` is `free <=
+    is the plan's floor in decimal gigabytes (10**9 bytes) or None if it is not known; `below_floor` is `free < floor` and `at_or_under_floor` is `free <=
     floor`, **the runner's refusal rule**; a reading that fails is None with the reason. `same_device` says the two roots are on one drive."""
     floors = floors if isinstance(floors, dict) else {}
     out = {}
@@ -740,7 +757,12 @@ def last_run(index_root, now, *, max_files=MAX_RUN_FILES, max_bytes=MAX_RUN_BYTE
 def run_counts(index_root, day, zone):
     """The runs of a day of `zone`, by the `ts` of their lines: how many started and ended (`run_start` and `run_end` only, the ends by outcome),
     and apart from them how many firings were refused (`refuse` lines, by cleaned reason, the ten commonest). A refused firing is not a run."""
-    found = lines_of_day(index_root, day, zone)
+    return count_runs(lines_of_day(index_root, day, zone))
+
+
+def count_runs(found):
+    """`run_counts` over the answer of `lines_of_day` that the caller already has (so that a report that needs the day's lines for other things does not
+    read the files twice)."""
     started = ended = refused = 0
     outcomes, reasons = {}, {}
     for record in found["lines"]:
@@ -785,6 +807,15 @@ def open_queue(index_root):
         crawlqueue._check_file(path)
     except (KbError, OSError):
         return QueueOpen(None, "bad", "the queue file is not a plain file of the owner's with mode 600")
+    for side in ("-wal", "-shm"):  # SQLite opens these by name and may make them; one that is a link or not a plain file of the owner's is not trusted
+        try:
+            info = os.lstat(str(path) + side)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return QueueOpen(None, "bad", "a side file of the queue cannot be examined")
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != _me():
+            return QueueOpen(None, "bad", "a side file of the queue is not a plain file of the owner's")
     try:
         conn = sqlite3.connect(f"file:{quote(str(path))}?mode=ro", uri=True, timeout=QUEUE_WAIT_S, isolation_level=None)
     except (sqlite3.Error, UnicodeError):  # a path that cannot be written as an address is not a queue we can open
@@ -1205,6 +1236,9 @@ def _part(fn, *args):
         return fn(*args)
     except Exception as e:  # the boundary of a part: what it raised is shown cleaned and the other parts go on
         return {"error": clean(str(e) or type(e).__name__, 200)}
+
+
+guarded = _part  # the name the report module uses: a part that fails is its own answer (`{"error": text}`) and never the whole command's
 
 
 def _queue_part(index_root, plan_day, utc_day, bounds, values):

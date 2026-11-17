@@ -212,6 +212,24 @@ class RedactTest(unittest.TestCase):
                     with self.subTest(name=variant, sep=sep):
                         self.assertEqual(cs.redact(f"failed with {variant}{sep}abc123 and more"), cs.WITHHELD)
 
+    def test_the_more_shapes_of_a_secret_that_the_security_review_named_are_hidden(self):
+        shapes = ["X-Goog-Api-Key: SECRET1", "api-key: SECRET2", "Authorization Basic SECRET3", "x-amz-security-token: SECRET4", "Private-Token: SECRET5",
+                  "Ocp-Apim-Subscription-Key: SECRET6", "https://h/p?api-key=SECRET7", "https://h/p?client_secret=SECRET8&a=1", "https://h/p?refresh_token=SECRET9",
+                  "https://h/p?auth_key=SECRET10", "https://h/p?x-amz-signature=SECRET11", "https://h/p?sessionid=SECRET12", "https://h/p?jwt=SECRET13",
+                  "https://h/p?%256Bey=SECRET14", "https://h/p?id_token=SECRET15", "/cb?access_token=SECRET16", "client_secret=SECRET17", '{"api_key": "SECRET18"}',
+                  "https://app/#/cb?access_token=SECRET19", "https://x/?redirect=https://y/?key=SECRET20", "//u:SECRET21@h/", "https://u:SECRET22@h/p",
+                  "https://h/p?oauth_token=SECRET23", "https://h/p?secret_key=SECRET24"]
+        for text in shapes:
+            with self.subTest(text=text):
+                self.assertNotIn("SECRET", cs.redact(text))
+                self.assertNotIn("SECRET", cs.clean(text, 300))
+
+    def test_ordinary_text_and_addresses_are_not_changed_by_the_wider_rules(self):
+        for text in ("https://example.org/a?page=2&sort=date", "HTTP 503", "the token bucket was empty", "https://example.org/@user/post", "a monkey, a donkey",
+                     "key figures were low", "secrets of the trade", "https://example.org/a#section-2", "tokens: ", "passwords were reset"):
+            with self.subTest(text=text):
+                self.assertEqual(cs.redact(text), text)
+
     def test_a_name_inside_a_longer_word_is_not_a_header(self):
         for text in ("three cookies: yes", "authorizations=2", "mycookie: x", "the cookie jar", "authorization was late"):
             with self.subTest(text=text):
@@ -276,7 +294,7 @@ class RedactTest(unittest.TestCase):
         self.assertEqual(cs.redact("the cookie' jar and the 'authorization' form"), "the cookie' jar and the 'authorization' form")
 
     def test_what_the_rule_cannot_know_is_left_as_it_is(self):
-        for text in ("api_key=SECRET with no address around it", "sk-live-abcdefghijklmnopqrstuvwx", "plain words"):
+        for text in ("sk-live-abcdefghijklmnopqrstuvwx", "plain words"):
             with self.subTest(text=text):
                 self.assertEqual(cs.redact(text), text)
 
@@ -360,10 +378,10 @@ class CleanTest(unittest.TestCase):
 
 class ParseLineTest(unittest.TestCase):
     def test_a_good_line_has_exactly_the_ten_fields(self):
-        rec, kind = cs.parse_line(raw(candidate="https://example.org/a", book="b-1", host="example.org", reason="x", n=5, seconds=0.5))
+        rec, kind = cs.parse_line(raw(candidate=12, book="b-1", host="example.org", reason="x", n=5, seconds=0.5))
         self.assertIsNone(kind)
         self.assertEqual(set(rec), {"ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds"})
-        self.assertEqual((rec["n"], rec["seconds"], rec["host"]), (5, 0.5, "example.org"))
+        self.assertEqual((rec["n"], rec["seconds"], rec["host"], rec["candidate"]), (5, 0.5, "example.org", 12))
 
     def test_a_field_that_is_not_in_the_spec_is_dropped_and_never_copied(self):
         rec, kind = cs.parse_line(raw(auth_key="SECRET", headers={"Cookie": "SECRET"}))
@@ -403,8 +421,8 @@ class ParseLineTest(unittest.TestCase):
                        raw(ts="2026-1-6T5:0:0Z"), raw(ts=chr(0xFF12) + "026-11-16T05:00:00Z")],
             "missing_field": [raw(drop=("ts",)), raw(drop=("run",)), raw(drop=("step",)), raw(drop=("outcome",))],
             "bad_field": [raw(n="12"), raw(n=True), raw(n=-1), raw(n=1.5), raw(seconds="x"), raw(seconds=-1), raw(seconds=False),
-                          raw(candidate=5), raw(host=["a"]), raw(book={"a": 1}), raw(reason=3), raw(run=None), raw(run=7),
-                          raw(reason="x" * (cs.MAX_FIELD + 1)), raw(candidate="c" * (cs.MAX_FIELD + 1)),
+                          raw(candidate="https://example.org/a"), raw(candidate=True), raw(candidate=-1), raw(candidate=1.5), raw(candidate=2 ** 63), raw(n=2 ** 63), raw(host=["a"]), raw(book={"a": 1}), raw(reason=3), raw(run=None), raw(run=7),
+                          raw(reason="x" * (cs.MAX_FIELD + 1)),
                           b'{"ts":"2026-11-16T05:00:00Z","run":"r","step":"fetch","outcome":"ok","reason":"\\ud800"}'],
             "not_utf8": [b"\xff\xfe" + raw(), raw().replace(b"r1", b"\xff\xfe")],
             "nul": [raw().replace(b"r1", b"r\x001")],
@@ -426,10 +444,10 @@ class ParseLineTest(unittest.TestCase):
         self.assertIsNone(cs.parse_line(line + b" " * (cs.MAX_LINE - len(line)))[1])
         self.assertEqual(cs.parse_line(line + b" " * (cs.MAX_LINE - len(line) + 1)), (None, "too_long"))
 
-    def test_n_takes_the_whole_numbers_up_to_two_to_the_53(self):
-        self.assertEqual(cs.parse_line(raw(n=2**53))[0]["n"], 2**53)
+    def test_n_takes_the_whole_numbers_up_to_what_the_log_writer_writes(self):
+        self.assertEqual(cs.parse_line(raw(n=2**63 - 1))[0]["n"], 2**63 - 1)
         self.assertEqual(cs.parse_line(raw(n=0))[0]["n"], 0)
-        self.assertEqual(cs.parse_line(raw(n=2**53 + 1)), (None, "bad_field"))
+        self.assertEqual(cs.parse_line(raw(n=2**63)), (None, "bad_field"))
 
     def test_seconds_takes_zero_and_whole_numbers_and_fractions(self):
         for value in (0, 0.0, 3, 0.25, 1e6):
@@ -437,8 +455,9 @@ class ParseLineTest(unittest.TestCase):
                 self.assertEqual(cs.parse_line(raw(seconds=value))[0]["seconds"], value)
 
     def test_a_field_of_exactly_the_field_limit_is_taken(self):
-        rec, kind = cs.parse_line(raw(reason="y" * cs.MAX_FIELD, candidate="c" * cs.MAX_FIELD))
+        rec, kind = cs.parse_line(raw(reason="y" * cs.MAX_FIELD, candidate=2 ** 63 - 1, n=2 ** 63 - 1))
         self.assertIsNone(kind)
+        self.assertEqual((rec["candidate"], rec["n"]), (2 ** 63 - 1, 2 ** 63 - 1))
         self.assertEqual(len(rec["reason"]), cs.MAX_FIELD)
 
 
@@ -1261,9 +1280,9 @@ class ApprovedPlanTest(StateBase):
 
 
 class DiskTest(Base):
-    GIB = 1024 ** 3
+    GIB = 10 ** 9  # the runner's guard reads a floor in decimal gigabytes
 
-    def vfs(self, free_bytes, frsize=4096):
+    def vfs(self, free_bytes, frsize=1000):
         return types.SimpleNamespace(f_bavail=free_bytes // frsize, f_bfree=free_bytes * 2 // frsize, f_frsize=frsize)
 
     def test_the_free_bytes_are_what_a_user_can_use_times_the_block_size(self):
@@ -1596,6 +1615,27 @@ class OpenQueueTest(QueueBase):
         r = cs.open_queue(self.tmp)
         self.assertEqual((r.conn, r.status), (None, "missing"))
         self.assertEqual(self.listing(), [])
+
+    def test_a_side_file_of_the_queue_that_is_a_link_or_not_a_plain_file_is_refused_and_nothing_is_written_through_it(self):
+        w = self.make_queue()
+        self.put(w, "k")
+        w.close()
+        target = self.tmp / "victim.txt"
+        target.write_bytes(b"VICTIM" * 50)
+        for side in ("-wal", "-shm"):
+            path = Path(str(self.tmp / crawlqueue.FILE) + side)
+            path.unlink(missing_ok=True)
+            for make in (lambda: os.symlink(target, path), lambda: os.mkfifo(path), lambda: path.mkdir()):
+                make()
+                with self.subTest(side=side, kind=make.__code__.co_names[-1]):
+                    r = cs.open_queue(self.tmp)
+                    self.assertEqual((r.conn, r.status), (None, "bad"))
+                    self.assertNotIn(str(self.tmp), r.reason)
+                if path.is_dir() and not path.is_symlink():
+                    path.rmdir()
+                else:
+                    path.unlink()
+        self.assertEqual(target.read_bytes(), b"VICTIM" * 50)
 
     def test_a_queue_is_opened_and_its_rows_are_read(self):
         w = self.make_queue()
@@ -2886,7 +2926,7 @@ class StatusTest(StoreCase):
         self.assertEqual(got["queue"]["counters"]["fetch"], {"n": 5, "limit": 5, "at_or_over": True})
         self.assertEqual(got["queue"]["counts"]["all"]["failed"], 1)
         self.assertEqual(got["queue"]["reasons"]["failed"]["recent"][0]["reason"], "HTTP 503")
-        self.assertEqual(got["disk"]["bulk"]["floor_bytes"], 1024 ** 3)
+        self.assertEqual(got["disk"]["bulk"]["floor_bytes"], 10 ** 9)
         self.assertEqual(got["state"]["state"], "idle")
         self.assertEqual(got["notes"], [])
 
@@ -2899,7 +2939,7 @@ class StatusTest(StoreCase):
         self.assertEqual(got["queue"]["counters"]["fetch"], {"n": 5, "limit": None, "at_or_over": None})
         self.assertFalse(got["queue"]["counters"]["ceilings_known"])
         self.assertTrue(got["notes"][0].startswith("no approved plan"))
-        self.assertEqual((got["disk"]["bulk"]["floor_bytes"], got["disk"]["index"]["floor_bytes"]), (50 * 1024 ** 3, 10 * 1024 ** 3))
+        self.assertEqual((got["disk"]["bulk"]["floor_bytes"], got["disk"]["index"]["floor_bytes"]), (50 * 10 ** 9, 10 * 10 ** 9))
         self.assertTrue(any("no approved plan" in n for n in got["notes"]))
         self.assertEqual(got["books"]["filed"]["limit"], None)
         names = {e["name"]: e for e in got["lists"]["public"]["lists"]}
