@@ -927,6 +927,19 @@ class Hardening(Case):
         with self.assertRaises(crawlapprove.NotApproved):
             self.load()
 
+    def test_the_breaker_line_says_a_model_entry_and_its_minutes_and_not_the_model_server(self):
+        self.set_plan()
+        text, _ = self.approve()
+        line = next(x for x in text.splitlines() if x.startswith("Circuit breaker:"))
+        self.assertIn("or a model entry that has not answered for 30 minutes;", line)
+        self.assertNotIn("model server down", text)
+        self.assertIn("a site that refuses 3 times in a day is stopped for the day.", line)
+
+    def test_the_minutes_of_the_breaker_line_are_the_plans_own(self):
+        self.set_plan(PLAN_TEXT + "[breaker]\nmodel_down_minutes = 45\n")
+        text, _ = self.approve()
+        self.assertIn("a model entry that has not answered for 45 minutes", text)
+
     def test_the_summary_lists_every_allow_host_one_a_line_and_says_how_many(self):
         hosts = [f"host{i}.example" for i in range(60)]
         self.put("allow.txt", "\n".join(hosts) + "\n")

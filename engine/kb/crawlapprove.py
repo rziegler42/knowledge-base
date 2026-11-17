@@ -216,7 +216,7 @@ def render_summary(plan, topics, allow_hosts, fingerprint_hex, date):
         f"{plan['cards_per_day']}; queued rows {plan['queued_total']} ({plan['queued_per_domain']} per site); tries {plan['retries']}; one fetch may take {plan['fetch_timeout_s']} seconds; the day is the day in {plan['timezone']}.",
         f"Pacing: at least {plan['min_gap_s']} seconds between requests to one site and one address, and up to {plan['jitter']} more at random; the page user agent is {plan['user_agent']}.",
         f"Disk: a run stops when free space falls under the floors: the bulk drive {plan['bulk_floor_gb']} GB, the index drive {plan['index_floor_gb']} GB.",
-        f"Circuit breaker: after {plan['consecutive_failures']} failures in a row, or {plan['failure_share']} of the last {plan['window']} fetches, or the model server down {plan['model_down_minutes']} minutes; "
+        f"Circuit breaker: after {plan['consecutive_failures']} failures in a row, or {plan['failure_share']} of the last {plan['window']} fetches, or a model entry that has not answered for {plan['model_down_minutes']} minutes; "
         f"a site that refuses {plan['domain_refusals']} times in a day is stopped for the day.",
         f"Topics: {sum(count for _w, count in sections.values())} topics: " + ", ".join(f"{count} in {_clean(name, 40)} at weight {weight}" for name, (weight, count) in sections.items()) + ".",
         f"Sources: OpenAlex: {_switch(plan['openalex'])}; arXiv: {_switch(plan['arxiv'])}; Wikipedia: {_switch(plan['wikipedia'])}; web search: {_switch(plan['web_search'])}; "
