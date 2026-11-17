@@ -211,7 +211,7 @@ def textutil_sha(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _is_current(events, item, loaded):
+def is_current(events, item, loaded):
     """True if the book has a proposal for this card generation and text, this schema, these shelf vectors and this prompt version that is not an error."""
     for event in events:
         if (isinstance(event, dict) and event.get("event") == EVENT and isinstance(event.get("answer"), dict) and event["answer"].get("kind") != "error"
@@ -219,6 +219,9 @@ def _is_current(events, item, loaded):
                 and event.get("schema_sha256") == loaded["meta"]["schema_sha256"] and event.get("vectors") == loaded["identity"] and event.get("prompt") == PROMPT_VERSION):
             return True
     return False
+
+
+_is_current = is_current  # the name it had while it was private; this module's own caller and the tests still use it
 
 
 def _plan(store, cfg, book_ids, again, schema_path):

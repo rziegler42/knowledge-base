@@ -45,7 +45,7 @@ def _is_text(value):
     return type(value) is str
 
 
-def _proposal_ok(event, schema):
+def proposal_ok(event, schema):
     """True if a `placement_proposed` event has exactly the shape `placement.propose` writes, with the five shelves among the schema's."""
     try:
         answer = event["answer"]
@@ -68,6 +68,9 @@ def _proposal_ok(event, schema):
         return True
     except (KeyError, TypeError):
         return False
+
+
+_proposal_ok = proposal_ok  # the name it had while it was private; this module's own callers, `placeapply` and the tests still use it
 
 
 def _confirmation_ok(event, schema):
