@@ -923,6 +923,9 @@ class TheOtherMachinesReaders(Mixed):
         books = self.books()
         data = crawlreport.build(self.index, datetime.date(2026, 11, 16), "UTC", self.now, store=store.Store.open(write=False))
         self.assertEqual({k: data["counts"][k] for k in ("fetched", "fetch_failed", "kept")}, {"fetched": 4, "fetch_failed": 0, "kept": 2})           # kept: the two judged in (a judge line that says ok)
+        self.assertEqual((data["counts"]["rejected"], data["counts"]["standing"]), (1, 3))                                  # the judged-out book is a rejection, and the three others stand
+        self.assertEqual([(c["what"], c["log"], c["queue"]) for c in data["compare"]], [("kept", 3, 3), ("rejected", 1, 1), ("failed", 0, 0)])
+        self.assertTrue(all(c["same"] for c in data["compare"]), data["compare"])                                          # a healthy run, with a held, a judged-out and an unplaced book, says the same on every row
         self.assertEqual(sorted(b["book"] for b in data["filed"]["books"]), sorted(books.values()))
         self.assertEqual({b["book"]: b["seen_in"] for b in data["filed"]["books"]}, {books["good"]: "both", books["held"]: "both", books["none"]: "both", books["weak"]: "log"})      # the queue's row of a judged-out book is no longer `kept`
         moved = data["books"]["moved"]

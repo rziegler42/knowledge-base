@@ -89,7 +89,7 @@ class BuildTest(ReportBase):
     def test_the_counts_of_the_day_from_the_log(self):
         self.full_day()
         got = self.build()
-        self.assertEqual(got["counts"], {"fetched": 3, "fetch_failed": 2, "kept": 1, "rejected": 1, "failed": 2, "fail_lines": 4})
+        self.assertEqual(got["counts"], {"fetched": 3, "fetch_failed": 2, "kept": 1, "rejected": 1, "standing": 2, "failed": 2, "fail_lines": 4})
         self.assertEqual((got["day"], got["zone"], got["generated"]), ("2026-11-18", "UTC", "2026-11-18T12:00:00Z"))
         self.assertEqual({k: got["log"][k] for k in ("lines", "first", "last", "bad", "cut", "problem")},
                          {"lines": 38, "first": "2026-11-18T05:00:00Z", "last": "2026-11-18T09:00:00Z", "bad": {}, "cut": False, "problem": None})
@@ -121,14 +121,15 @@ class BuildTest(ReportBase):
         self.full_day()
         got = self.build()
         self.assertEqual(got["queue"], {"status": "ok", "reason": None, "counts": {"kept": 2, "rejected": 1, "rejected_type": 4, "failed": 2}})
-        self.assertEqual(got["compare"], [{"what": "kept", "log": 1, "queue": 2, "same": False}, {"what": "rejected", "log": 1, "queue": 1, "same": True},
-                                          {"what": "failed", "log": 2, "queue": 2, "same": True}])
+        self.assertEqual(got["compare"], [{"what": "kept", "log": 2, "queue": 2, "same": True}, {"what": "rejected", "log": 1, "queue": 1, "same": True},
+                                          {"what": "failed", "log": 2, "queue": 2, "same": True}])           # the fixture holds a book judged in, one judged out and one held: the healthy day says the same on every row
+        self.row(self.make_queue(), "x", "kept", "2026-11-18T06:30:00Z", domain="queue-only.example", book_id="b-009", address="https://queue-only.example/x")
+        self.assertEqual([(c["what"], c["log"], c["queue"], c["same"]) for c in self.build()["compare"]][:1], [("kept", 2, 3, False)])         # a book that only the queue knows is a difference
 
     def test_a_log_and_a_queue_that_agree_are_said_to_agree(self):
         self.put_day_log()
         w = self.make_queue()
         self.day_rows(w)
-        w.execute("DELETE FROM candidates WHERE identity_key = 'c'")
         self.assertTrue(all(c["same"] for c in self.build()["compare"]))
 
     def test_rows_of_other_days_are_not_counted(self):
@@ -265,6 +266,89 @@ class BuildTest(ReportBase):
                      dict(ts="2026-11-18T05:00:03Z", run="r1", step="judge", outcome="ok"),
                      dict(ts="2026-11-18T05:00:04Z", run="r1", step="judge", outcome="rejected", book="b-9"))
         self.assertEqual(self.build()["counts"]["kept"], 3)
+
+    def test_a_book_judged_out_is_one_rejection_whether_one_line_or_two_name_it_and_is_not_a_book_that_stands(self):
+        self.put_log("2026-11-18",
+                     dict(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:01Z", run="r1", step="judge", outcome="rejected", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:02Z", run="r1", step="capture", outcome="ok", book="b-2", candidate=2),
+                     dict(ts="2026-11-18T05:00:03Z", run="r1", step="judge", outcome="rejected", book="b-2", candidate=2),
+                     dict(ts="2026-11-18T05:00:04Z", run="r1", step="reject", outcome="rejected", book="b-2", candidate=2))
+        got = self.build()["counts"]
+        self.assertEqual((got["rejected"], got["standing"], got["kept"]), (2, 0, 0))
+
+    def test_a_book_weeded_at_the_scan_or_the_convert_has_a_reject_line_and_no_candidate_and_is_counted(self):
+        self.put_log("2026-11-18",
+                     dict(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:01Z", run="r1", step="reject", outcome="rejected", book="b-1"),
+                     dict(ts="2026-11-18T05:00:02Z", run="r1", step="reject", outcome="rejected"),
+                     dict(ts="2026-11-18T05:00:02Z", run="r1", step="reject", outcome="rejected"),
+                     dict(ts="2026-11-18T05:00:03Z", run="r1", step="reject", outcome="rejected", candidate=7))
+        got = self.build()["counts"]
+        self.assertEqual((got["rejected"], got["standing"]), (4, 0))                                                        # a line that names no book and no candidate is one of its own
+
+    def test_only_a_judge_line_that_says_rejected_is_a_rejection_and_only_a_capture_that_says_ok_is_a_book_filed(self):
+        self.put_log("2026-11-18",
+                     dict(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:01Z", run="r1", step="capture", outcome="failed", book="b-9", candidate=9),
+                     dict(ts="2026-11-18T05:00:02Z", run="r1", step="judge", outcome="failed", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:03Z", run="r1", step="judge", outcome="skipped", book="b-1", candidate=1))
+        got = self.build()["counts"]
+        self.assertEqual((got["rejected"], got["standing"], got["kept"]), (0, 1, 0))
+
+    def test_a_candidate_that_fetch_refused_is_one_rejection_and_does_not_take_away_the_earlier_book_it_repeated(self):
+        self.put_log("2026-11-18",
+                     dict(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:01Z", run="r1", step="fetch", outcome="rejected", book="b-1", candidate=2),
+                     dict(ts="2026-11-18T05:00:02Z", run="r1", step="fetch", outcome="rejected", candidate=3),
+                     dict(ts="2026-11-18T05:00:03Z", run="r1", step="fetch", outcome="blocked", candidate=4),
+                     dict(ts="2026-11-18T05:00:04Z", run="r1", step="fetch", outcome="blocked", candidate=4),
+                     dict(ts="2026-11-18T05:00:05Z", run="r1", step="fetch", outcome="failed", candidate=5),
+                     dict(ts="2026-11-18T05:00:06Z", run="r1", step="fetch", outcome="ok", candidate=6),
+                     dict(ts="2026-11-18T05:00:07Z", run="r1", step="capture", outcome="ok", book="b-5", candidate=7),
+                     dict(ts="2026-11-18T05:00:08Z", run="r1", step="judge", outcome="rejected", book="b-5", candidate=7),
+                     dict(ts="2026-11-18T05:00:09Z", run="r1", step="fetch", outcome="rejected", book="b-5", candidate=8))
+        got = self.build()["counts"]
+        self.assertEqual((got["rejected"], got["standing"]), (5, 1))                                                       # candidates 2, 3, 4 and 8 once each and the judged-out b-5; the failed and the ok fetch are not rejections; b-1 still stands
+
+    def test_a_book_parked_after_the_card_or_the_proposal_still_stands_as_the_queue_holds_it(self):
+        self.put_log("2026-11-18",
+                     dict(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:01Z", run="r1", step="card", outcome="rejected", book="b-1"),
+                     dict(ts="2026-11-18T05:00:02Z", run="r1", step="capture", outcome="ok", book="b-2", candidate=2),
+                     dict(ts="2026-11-18T05:00:03Z", run="r1", step="propose", outcome="rejected", book="b-2"))
+        w = self.make_queue()
+        self.row(w, "p", "kept", "2026-11-18T05:00:01Z", domain="example.org", book_id="b-1")
+        self.row(w, "q", "kept", "2026-11-18T05:00:03Z", domain="example.org", book_id="b-2")
+        got = self.build()
+        self.assertEqual((got["counts"]["rejected"], got["counts"]["standing"], got["compare"][0]["same"]), (0, 2, True))
+
+    def test_a_held_book_and_a_book_waiting_for_its_judgement_stand_with_a_queue_row_that_says_kept(self):
+        self.put_log("2026-11-18",
+                     dict(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:01Z", run="r1", step="hold", outcome="held", book="b-1"),
+                     dict(ts="2026-11-18T05:00:02Z", run="r1", step="capture", outcome="ok", book="b-2", candidate=2))
+        w = self.make_queue()
+        self.row(w, "h", "kept", "2026-11-18T05:00:01Z", domain="example.org", book_id="b-1")
+        self.row(w, "j", "kept", "2026-11-18T05:00:02Z", domain="example.org", book_id="b-2")
+        self.assertEqual([(c["what"], c["log"], c["queue"], c["same"]) for c in self.build()["compare"]][:1], [("kept", 2, 2, True)])
+
+    def test_a_rejection_that_is_in_the_log_only_or_in_the_queue_only_is_a_difference(self):
+        self.put_log("2026-11-18", dict(ts="2026-11-18T05:00:01Z", run="r1", step="judge", outcome="rejected", book="b-1", candidate=1))
+        w = self.make_queue()
+        self.assertEqual([(c["what"], c["log"], c["queue"], c["same"]) for c in self.build()["compare"]][1], ("rejected", 1, 0, False))
+        self.row(w, "r", "rejected", "2026-11-18T05:00:01Z", domain="example.org", reason="below the threshold")
+        self.assertTrue(self.build()["compare"][1]["same"])
+        self.row(w, "r2", "rejected", "2026-11-18T05:00:02Z", domain="example.org", reason="below the threshold")
+        self.assertEqual([(c["what"], c["log"], c["queue"], c["same"]) for c in self.build()["compare"]][1], ("rejected", 1, 2, False))
+
+    def test_a_book_filed_in_the_log_only_is_a_difference_and_a_rejection_of_a_book_not_filed_that_day_does_not_take_one_away(self):
+        self.put_log("2026-11-18",
+                     dict(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book="b-1", candidate=1),
+                     dict(ts="2026-11-18T05:00:01Z", run="r1", step="judge", outcome="rejected", book="b-earlier", candidate=9))
+        self.make_queue()
+        got = self.build()
+        self.assertEqual((got["counts"]["standing"], got["compare"][0]), (1, {"what": "kept", "log": 1, "queue": 0, "same": False}))
 
     def test_a_stop_line_or_a_breaker_line_that_is_not_tripped_is_not_a_pause(self):
         self.put_log("2026-11-18",
@@ -500,14 +584,17 @@ class RenderTest(ReportBase):
         self.assertEqual(headings, ["# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## The log and the queue compared", "## Books filed", "## What the books' own records say", "## Books not reviewed by the owner",
                                     "## Works rejected for their type", "## Pauses of the circuit breaker", "## Lists that could not be refreshed",
                                     "## Failures by reason", "## The log"])
-        for line in ("- Fetched: 3", "- Fetches that failed: 2", "- Kept: 1", "- Rejected: 1", "- Failed: 2 candidates, 4 fail lines", "- Started: 2",
+        for line in ("- Fetched: 3", "- Fetches that failed: 2", "- Judged in: 1", "- Rejected: 1", "- Failed: 2 candidates, 4 fail lines", "- Started: 2",
                      "- Ended: 2", "- Refused firings, which are not runs: 3"):
             self.assertIn(line, text)
 
     def test_a_difference_between_the_log_and_the_queue_is_printed_with_both_numbers(self):
         self.full_day()
         text = self.text()
-        self.assertIn("- kept: log 1, queue 2: DIFFERENT", text)
+        self.row(self.make_queue(), "x", "kept", "2026-11-18T06:30:00Z", domain="queue-only.example", book_id="b-009", address="https://queue-only.example/x")
+        text = self.text()
+        self.assertIn("- kept: log 2, queue 3: DIFFERENT", text)
+        self.assertIn("- The log's kept is the books filed (capture lines that say ok) that no rejection of the day names; the queue's kept is its rows that say kept, a held book's included.", text)
         self.assertIn("- rejected: log 1, queue 1: the same", text)
         self.assertIn("- failed: log 2, queue 2: the same", text)
 

@@ -76,14 +76,31 @@ def _distinct(lines, key):
     return len(seen) + alone
 
 
+def _item(record):
+    """What a rejection line is about: for a `fetch` line its candidate (the book it may name is an earlier one that the candidate repeated), for another line its book when it names one, else its candidate;
+    `None` for a line that names neither (it counts as one of its own)."""
+    if record["step"] != "fetch" and record["book"] is not None:
+        return ("book", record["book"])
+    return None if record["candidate"] is None else ("candidate", record["candidate"])
+
+
 def _counts(lines):
+    """The numbers of the day as the steps write them. `kept` is the books judged in (`judge`/`ok`). `rejected` is the distinct items rejected, by a `reject` line (a book weeded at the scan, the convert or a parking)
+    or by a `judge`/`rejected` line (a book judged out), or a candidate that fetch itself refused (`fetch`/`rejected` or `fetch`/`blocked`: the queue's row is `rejected` too), each once. `standing` is the books filed (`capture`/`ok`, which is when the queue's row becomes `kept`) that no rejection of the day names: the books that
+    the queue still holds as `kept`, a book that waits for its judgement and a held one included (a hold weeds the book and leaves its row `kept`)."""
     by = {}
     for record in lines:
         by.setdefault(record["step"], []).append(record)
     fetches, fails = by.get("fetch", []), by.get("fail", [])
+    rejections = by.get("reject", []) + [r for r in by.get("judge", []) if r["outcome"] == "rejected"]
+    refused = [r for r in fetches if r["outcome"] in ("rejected", "blocked")]                 # a candidate that fetch refused (a duplicate, a PDF, a page over the size limit, a class that is blocked): its row is `rejected`
+    items = [_item(r) for r in rejections + refused]
+    rejected_books = {r["book"] for r in rejections if r["book"] is not None}
+    filed = {r["book"] for r in by.get("capture", []) if r["outcome"] == "ok" and r["book"] is not None}
     return {"fetched": sum(r["outcome"] == "ok" for r in fetches), "fetch_failed": sum(r["outcome"] == "failed" for r in fetches),
             "kept": _distinct([r for r in by.get("judge", []) if r["outcome"] == "ok"], "book"),
-            "rejected": _distinct(by.get("reject", []), "candidate"), "failed": _distinct(fails, "candidate"), "fail_lines": len(fails)}
+            "rejected": len({i for i in items if i is not None}) + sum(i is None for i in items),
+            "standing": len(filed - rejected_books), "failed": _distinct(fails, "candidate"), "fail_lines": len(fails)}
 
 
 def _steps(lines):
@@ -328,9 +345,10 @@ def _queue_reasons(rows):
 
 
 def _compare(counts, queue):
+    """The three rows: `kept` (the log's books filed and not rejected, against the queue's rows that are `kept`), `rejected` and `failed`."""
     if not isinstance(queue, dict) or "error" in queue or not isinstance(counts, dict) or "error" in counts:
         return None
-    return [{"what": what, "log": counts[what], "queue": queue[what], "same": counts[what] == queue[what]} for what in ("kept", "rejected", "failed")]
+    return [{"what": what, "log": counts[mine], "queue": queue[what], "same": counts[mine] == queue[what]} for what, mine in (("kept", "standing"), ("rejected", "rejected"), ("failed", "failed"))]
 
 
 def build(index_root, day, zone, now, store=None):
@@ -444,7 +462,7 @@ def render(data):
         out.append(_unreadable(counts))
     else:
         out += [f"- Fetched: {number(counts['fetched'])} (fetch lines that say ok)", f"- Fetches that failed: {number(counts['fetch_failed'])}",
-                f"- Kept: {number(counts['kept'])} (judge lines that say ok)", f"- Rejected: {number(counts['rejected'])} (candidates with a reject line)",
+                f"- Judged in: {number(counts['kept'])} (judge lines that say ok)", f"- Rejected: {number(counts['rejected'])} (books or candidates with a reject line or a judge line that says rejected)",
                 f"- Failed: {number(counts['failed'])} candidates, {number(counts['fail_lines'])} fail lines"]
     runs = data["runs"]
     out += ["", "## Runs", ""]
@@ -462,6 +480,7 @@ def render(data):
         if _broken(queue["counts"]):
             out.append(_unreadable(queue["counts"]))
     else:
+        out.append("- The log's kept is the books filed (capture lines that say ok) that no rejection of the day names; the queue's kept is its rows that say kept, a held book's included.")
         out += [f"- {c['what']}: log {number(c['log'])}, queue {number(c['queue'])}: {'the same' if c['same'] else 'DIFFERENT'}" for c in data["compare"]]
         out.append(f"- Rejected for their type, which are not in the comparison: {number(queue['counts']['rejected_type'])}")
     filed = data["filed"]
