@@ -28,6 +28,7 @@ the owner is its own `auto_filed`, which this step leaves as it is; it adds no f
 
 What it does not do: it does not call `place-review` or `place-apply` (both need the owner and a terminal), takes no owner's answer and records no `placement_confirmed`, touches no book that is not a crawl book, and is not
 attached to `crawl-run` here (Increment M assembles the steps)."""
+import contextlib
 import os
 import re
 
@@ -61,6 +62,7 @@ DOWN = "the model server did not answer"
 MODEL_REFUSED = "the model server refused a proposal or reported another model than the measured one"
 SETTINGS = "the models for proposals are not set up"
 MOVES_OFF = "moves by the model's pick are off in the approved plan"
+LOCK_BUSY = "the catalog is in use by another writer"
 APPROVALS = "the approved plans cannot be read, or the plan of this run is not among them"
 _DIGEST = re.compile(r"[0-9a-f]{32}")
 
@@ -226,7 +228,11 @@ class _Run:
             return self.unplaced(book, NAME_REFUSED)
         if not placeapply._at_ok(proposal["at"]):
             return self.unplaced(book, UNREADABLE)
-        with catalog.lock(ctx.index_root):
+        with contextlib.ExitStack() as held:
+            try:
+                held.enter_context(catalog.lock(ctx.index_root))
+            except KbError:                                        # the lock timed out (another writer holds it): the step ends quietly and the book waits for the next run; the other books would wait as long
+                raise _Quiet("move", LOCK_BUSY) from None
             root = library.read_book(book)                        # read again, under the lock: it must still be what the proposal was made for
             if root.get("state") != "active" or root.get("current_version") != item["version"]:
                 return self.say("move", "skipped", CHANGED, book)

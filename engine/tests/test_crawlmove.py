@@ -618,6 +618,27 @@ class TheSwitchAndTheApprovals(Case):
 
 
 class TheMoveItself(Case):
+    def test_a_catalog_lock_that_times_out_ends_the_step_quietly_with_one_line_and_leaves_the_books_for_the_next_run(self):
+        books = [self.crawl_book(f"Book {n}") for n in range(2)]
+        before = self.snapshot(books)
+        asked = []
+
+        def busy(index_root):
+            asked.append(index_root)
+            raise KbError("the catalog is in use by another writer")
+
+        with mock.patch.object(catalog, "lock", busy):
+            ctx = self.run_step()                                      # no exception: the run goes on to its next point
+        self.assertEqual((len(asked), ctx.tripped), (1, False))       # asked once: the other writer will still hold it for the second book
+        self.assertEqual([self.shelf(b) for b in books], ["default", "default"])
+        moves = [x for x in self.lines() if x["step"] == "move"]
+        self.assertEqual([(x["outcome"], x["reason"]) for x in moves], [("skipped", "the catalog is in use by another writer")])
+        self.assertEqual([len(self.events(b, "reshelved")) for b in books], [0, 0])
+        self.assertEqual([b for b in books if crawlbooks._has_terminal(self.store.read_events(b))], [])
+        self.run_step()                                                # the next run, with the lock free, moves them
+        self.assertEqual([self.shelf(b) != "default" for b in books], [True, True])
+        self.assertEqual(before.keys(), self.snapshot(books).keys())
+
     def test_a_terminal_event_written_after_the_scan_is_seen_under_the_lock_and_nothing_is_moved_or_written(self):
         book = self.crawl_book("The gene book")
         real_lock = catalog.lock
