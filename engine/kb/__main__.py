@@ -208,6 +208,11 @@ def main(argv=None):
     cc.add_argument("--yes", action="store_true", help="clear it (in your own terminal)")
     cr = sub.add_parser("crawl-run", help="one run of the unattended crawl: the checks in the spec's order, then the steps that attach (none yet); exit 0 done or another run is going, 3 refused, 4 the breaker is tripped")
     cr.add_argument("--dry-run", action="store_true", help="show each check and what a run would do; it takes no lock, writes nothing and makes no request")
+    cs_ = sub.add_parser("crawl-status", help="show the state of the unattended crawl as one JSON object: whether it runs, is stopped or paused, the approved plan, the counters against their ceilings, "
+                                              "the queue, the books it filed, the last run, the disk, the lists and the holds; it only reads (no request, no model, no write)")
+    cp_ = sub.add_parser("crawl-report", help="write the report of one day of the unattended crawl to crawl/report/crawl-report-YYYY-MM-DD.md in the index root and print its path; it reads the log, "
+                                              "the queue and the books and writes that one file")
+    cp_.add_argument("--day", metavar="YYYY-MM-DD", help="the day to report, in the plan's time zone (default: today)")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -433,6 +438,23 @@ def main(argv=None):
         if args.command == "crawl-clear":
             crawlguard.clear(config.load()["index_root"], yes=args.yes)
             print("the circuit breaker is cleared; the stop file and any site stopped for the day are as they were")
+            return 0
+        if args.command in ("crawl-status", "crawl-report"):
+            import datetime
+            import re
+            from . import crawlplan, crawlreport, crawlstatus
+            cfg = config.load()
+            now = datetime.datetime.now(datetime.timezone.utc)
+            if args.command == "crawl-status":
+                print(json.dumps(crawlstatus.status(cfg["index_root"], cfg["bulk_root"], read_plan=crawlplan.read_plan, store=Store.open(write=False), now=now), indent=1))
+                return 0
+            if args.day is not None and not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", args.day):
+                raise KbError("--day is a date written YYYY-MM-DD")
+            try:
+                day = None if args.day is None else datetime.date.fromisoformat(args.day)
+            except ValueError:
+                raise KbError("--day is a date written YYYY-MM-DD") from None
+            print(json.dumps(crawlreport.make_report(cfg["index_root"], read_plan=crawlplan.read_plan, now=now, day=day, store=Store.open(write=False)), indent=1))
             return 0
         if args.command == "trial-problems":
             print(json.dumps(problemtrial.run(Store.open(write=False), config.load(), args.corpus, args.report, replace=args.replace,

@@ -1,0 +1,1 @@
+# a stand-in for the approved copy of the plan: the reader is injected in the tests

@@ -1,0 +1,38 @@
+{"ts":"2026-11-18T05:00:00Z","run":"r1","step":"run_start","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":null,"seconds":null}
+{"ts":"2026-11-18T05:00:01Z","run":"","step":"refuse","outcome":"refused","candidate":null,"book":null,"host":null,"reason":"a run is in progress","n":null,"seconds":null}
+{"ts":"2026-11-18T05:00:02Z","run":"r1","step":"list_update","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":392179,"seconds":4.2}
+{"ts":"2026-11-18T05:00:03Z","run":"r1","step":"list_update","outcome":"failed","candidate":null,"book":null,"host":"publicsuffix.org","reason":"HTTP 503","n":null,"seconds":1.0}
+{"ts":"2026-11-18T05:00:04Z","run":"r1","step":"discover","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":16,"seconds":9.5}
+{"ts":"2026-11-18T05:00:05Z","run":"r1","step":"enqueue","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":12,"seconds":0.1}
+{"ts":"2026-11-18T05:00:06Z","run":"r1","step":"block","outcome":"blocked","candidate":1,"book":null,"host":"blocked.example","reason":"list:phishing_domains","n":null,"seconds":null}
+{"ts":"2026-11-18T05:01:00Z","run":"r1","step":"fetch","outcome":"ok","candidate":2,"book":null,"host":"example.org","reason":null,"n":2048,"seconds":1.1}
+{"ts":"2026-11-18T05:01:02Z","run":"r1","step":"capture","outcome":"ok","candidate":2,"book":"b-001","host":"example.org","reason":null,"n":2048,"seconds":0.4}
+{"ts":"2026-11-18T05:01:03Z","run":"r1","step":"scan","outcome":"ok","candidate":null,"book":"b-001","host":null,"reason":null,"n":0,"seconds":0.3}
+{"ts":"2026-11-18T05:01:04Z","run":"r1","step":"convert","outcome":"ok","candidate":null,"book":"b-001","host":null,"reason":null,"n":1800,"seconds":0.8}
+{"ts":"2026-11-18T05:01:05Z","run":"r1","step":"index","outcome":"ok","candidate":null,"book":"b-001","host":null,"reason":null,"n":1,"seconds":0.2}
+{"ts":"2026-11-18T05:01:06Z","run":"r1","step":"judge","outcome":"ok","candidate":null,"book":"b-001","host":null,"reason":null,"n":null,"seconds":0.5}
+{"ts":"2026-11-18T05:01:07Z","run":"r1","step":"card","outcome":"ok","candidate":null,"book":"b-001","host":null,"reason":null,"n":1,"seconds":30.0}
+{"ts":"2026-11-18T05:01:08Z","run":"r1","step":"propose","outcome":"ok","candidate":null,"book":"b-001","host":null,"reason":null,"n":null,"seconds":2.0}
+{"ts":"2026-11-18T05:01:09Z","run":"r1","step":"move","outcome":"ok","candidate":null,"book":"b-001","host":null,"reason":"model pick","n":null,"seconds":0.1}
+{"ts":"2026-11-18T05:02:00Z","run":"r1","step":"fetch","outcome":"ok","candidate":3,"book":null,"host":"example.net","reason":null,"n":4096,"seconds":1.3}
+{"ts":"2026-11-18T05:02:02Z","run":"r1","step":"capture","outcome":"ok","candidate":3,"book":"b-002","host":"example.net","reason":null,"n":4096,"seconds":0.4}
+{"ts":"2026-11-18T05:02:03Z","run":"r1","step":"scan","outcome":"skipped","candidate":null,"book":"b-002","host":null,"reason":"no scan tool","n":null,"seconds":null}
+{"ts":"2026-11-18T05:02:05Z","run":"r1","step":"judge","outcome":"rejected","candidate":null,"book":"b-002","host":null,"reason":"below the threshold","n":null,"seconds":0.5}
+{"ts":"2026-11-18T05:02:06Z","run":"r1","step":"reject","outcome":"rejected","candidate":3,"book":"b-002","host":"example.net","reason":"below the threshold","n":null,"seconds":null}
+{"ts":"2026-11-18T05:03:00Z","run":"r1","step":"fetch","outcome":"ok","candidate":4,"book":null,"host":"example.com","reason":null,"n":8192,"seconds":2.0}
+{"ts":"2026-11-18T05:03:02Z","run":"r1","step":"capture","outcome":"ok","candidate":4,"book":"b-003","host":"example.com","reason":null,"n":8192,"seconds":0.5}
+{"ts":"2026-11-18T05:03:03Z","run":"r1","step":"hold","outcome":"held","candidate":null,"book":"b-003","host":"example.com","reason":"javascript, embedded_files","n":2,"seconds":null}
+{"ts":"2026-11-18T05:04:00Z","run":"r1","step":"fetch","outcome":"failed","candidate":5,"book":null,"host":"flaky.example","reason":"HTTP 503","n":0,"seconds":2.0}
+{"ts":"2026-11-18T05:04:01Z","run":"r1","step":"fail","outcome":"failed","candidate":5,"book":null,"host":"flaky.example","reason":"HTTP 503","n":1,"seconds":null}
+{"ts":"2026-11-18T05:34:00Z","run":"r1","step":"fail","outcome":"failed","candidate":5,"book":null,"host":"flaky.example","reason":"HTTP 503","n":2,"seconds":null}
+{"ts":"2026-11-18T05:50:00Z","run":"r1","step":"fail","outcome":"failed","candidate":5,"book":null,"host":"flaky.example","reason":"timeout","n":3,"seconds":null}
+{"ts":"2026-11-18T06:00:00Z","run":"r1","step":"run_end","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":3,"seconds":3600}
+{"ts":"2026-11-18T07:00:00Z","run":"r2","step":"run_start","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":null,"seconds":null}
+{"ts":"2026-11-18T07:00:10Z","run":"r2","step":"fetch","outcome":"failed","candidate":6,"book":null,"host":"example.org","reason":"connection reset","n":0,"seconds":1.0}
+{"ts":"2026-11-18T07:00:11Z","run":"r2","step":"fail","outcome":"failed","candidate":6,"book":null,"host":"example.org","reason":"connection reset","n":1,"seconds":null}
+{"ts":"2026-11-18T07:00:20Z","run":"r2","step":"breaker","outcome":"tripped","candidate":null,"book":null,"host":null,"reason":"8 failures in a row","n":null,"seconds":null}
+{"ts":"2026-11-18T07:00:21Z","run":"r2","step":"stop","outcome":"ok","candidate":null,"book":null,"host":null,"reason":"the breaker tripped","n":null,"seconds":null}
+{"ts":"2026-11-18T07:00:30Z","run":"r2","step":"run_end","outcome":"tripped","candidate":null,"book":null,"host":null,"reason":"the breaker tripped","n":0,"seconds":30}
+{"ts":"2026-11-18T07:00:31Z","run":"r2","step":"report","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":1,"seconds":0.2}
+{"ts":"2026-11-18T08:00:00Z","run":"","step":"refuse","outcome":"refused","candidate":null,"book":null,"host":null,"reason":"the breaker is tripped","n":null,"seconds":null}
+{"ts":"2026-11-18T09:00:00Z","run":"","step":"refuse","outcome":"refused","candidate":null,"book":null,"host":null,"reason":"a run is in progress","n":null,"seconds":null}

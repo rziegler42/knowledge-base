@@ -1,0 +1,3 @@
+{"ts":"2026-11-16T12:00:00Z","run":"r2","step":"fetch","outcome":"failed","candidate":1,"book":null,"host":"example.net","reason":"HTTP 503","n":0,"seconds":2.0}
+{"ts":"2026-11-17T04:59:59Z","run":"r2","step":"fetch","outcome":"ok","candidate":2,"book":null,"host":"example.org","reason":null,"n":99,"seconds":0.1}
+{"ts":"2026-11-17T05:00:00Z","run":"r3","step":"run_start","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":null,"seconds":null}
