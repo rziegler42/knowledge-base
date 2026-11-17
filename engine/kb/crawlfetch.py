@@ -34,7 +34,7 @@ import os
 from collections import namedtuple
 from urllib.parse import urlsplit
 
-from . import KbError, capture_url, crawlbooks, crawlguard, crawllists, crawlrun, crawlstate, identity, stages, webaddr, webclient
+from . import KbError, capture_url, convert_run, crawlbooks, crawlguard, crawllists, crawlrun, crawlstate, identity, stages, webaddr, webclient
 from . import store as library_store
 
 # a common browser's string; the plan's `user_agent = browser` sends it. It names no project, tool or contact (the owner chose a browser's, as `shelf.md` agreed).
@@ -42,6 +42,9 @@ BROWSER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605
 PAGE_MAX_BYTES = capture_url.MAX_BYTES               # the plan has no key for the size of a page; this is the capture's own limit
 SITE_REFUSALS = (401, 403, 429, 451)
 PDF_REASON = "pdf not safe to convert"
+NOT_A_PDF = "not a PDF"
+PDFS_OFF = "PDF files are off for this run: the memory of a tool cannot be read here, so a limit of memory could not be enforced"
+MIB = 1024 * 1024
 
 Outcome = namedtuple("Outcome", "kind reason retry")
 
@@ -49,8 +52,28 @@ Outcome = namedtuple("Outcome", "kind reason retry")
 class FetchPolicy:
     """What a fetch is made under: `policy` (a `webclient.Policy`), `max_bytes`, `timeout` (one network operation) and `total_timeout` (one hop). Plain attributes."""
 
-    def __init__(self, policy, max_bytes, timeout, total_timeout):
+    def __init__(self, policy, max_bytes, timeout, total_timeout, pdf_bytes=None):
         self.policy, self.max_bytes, self.timeout, self.total_timeout = policy, max_bytes, timeout, total_timeout
+        self.pdf_bytes = pdf_bytes                            # the largest PDF this fetch takes, in bytes; None takes none (`max_bytes` is then the page cap)
+
+
+def pdf_limit(ctx, reader=None):
+    """The largest PDF, in bytes, that this run takes, or None: the plan's `pdf_max_mb` when it is above 0 **and the memory of a tool can be read here** (the sandbox would not run a tool that has a limit of
+    memory otherwise, so a PDF could not be converted safely); where it cannot, PDFs are off for the run and one line of the log says so. Decided once for a context (`ctx.pdf_bytes`); with `pdf_max_mb` at 0 the memory
+    is not looked at and nothing is logged. `reader` is `convert_run.read_group_rss` unless a test gives another."""
+    if hasattr(ctx, "pdf_bytes"):
+        return ctx.pdf_bytes
+    mb = ctx.plan.get("pdf_max_mb", 0)
+    ctx.pdf_bytes = None
+    if type(mb) is not int or mb <= 0:
+        return None
+    try:
+        (reader or convert_run.read_group_rss)(os.getpgrp())
+    except Exception:
+        ctx.log.write("fetch", "skipped", reason=PDFS_OFF, now=ctx.clock())
+        return None
+    ctx.pdf_bytes = mb * MIB
+    return ctx.pdf_bytes
 
 
 def _refuse(message):
@@ -64,9 +87,12 @@ def _number(plan, key):
     return value
 
 
-def build(plan, matcher, suffixes, index_root, *, pacer=None, log=None, warn=None, now=None):
+def build(plan, matcher, suffixes, index_root, *, pacer=None, log=None, warn=None, now=None, pdf_bytes=None):
     """The `FetchPolicy` for the approved `plan` (a dictionary of the crawl plan's keys), the `matcher` and the Public Suffix List (a set of rules; none is said loudly: `warn(text)` is called and `log` gets a
-    `list_update` line `failed`, and the policy then finds a registrable domain by the last two labels). `pacer` replaces the shared one (tests)."""
+    `list_update` line `failed`, and the policy then finds a registrable domain by the last two labels). `pacer` replaces the shared one (tests). **`pdf_bytes`**, a whole number of bytes (see `pdf_limit`), makes the policy take
+    `application/pdf` as well and raises the cap of a request to the larger of the page cap and `pdf_bytes`; with none, a PDF is not taken."""
+    if pdf_bytes is not None and (type(pdf_bytes) is not int or pdf_bytes < 1):
+        raise _refuse("a PDF limit is a whole number of bytes, at least 1")
     if matcher is None:
         raise _refuse("it needs the matcher of the lists step")
     agent = {"browser": BROWSER_AGENT, "generic": webclient.GENERIC_USER_AGENT}.get(plan.get("user_agent")) if isinstance(plan.get("user_agent"), str) else None
@@ -85,7 +111,9 @@ def build(plan, matcher, suffixes, index_root, *, pacer=None, log=None, warn=Non
         suffixes = None
     policy = webclient.Policy(user_agent=agent, gap=gap, jitter=jitter, max_redirects=capture_url.MAX_REDIRECTS, follow_redirects=True, types=capture_url.PAGE_TYPES,
                               check=crawllists.address_hook(index_root, matcher), allow_private=False, suffixes=suffixes, pacer=pacer)
-    return FetchPolicy(policy, PAGE_MAX_BYTES, min(capture_url.TIMEOUT, total), total)
+    if pdf_bytes:
+        policy.types = capture_url.PAGE_TYPES + ("application/pdf",)
+    return FetchPolicy(policy, max(PAGE_MAX_BYTES, pdf_bytes) if pdf_bytes else PAGE_MAX_BYTES, min(capture_url.TIMEOUT, total), total, pdf_bytes)
 
 
 DEFERRED = {"the site is stopped for the day": "the site it leads to is stopped for the day", "the site is at its limit for the day": "the site it leads to is at its limit for the day"}
@@ -116,6 +144,8 @@ def classify(error):
         # every test below is of the start of one of the client's own fixed messages, or the whole of it: a text a server can put into a message (a content type, an encoding) is never searched
         if text.startswith("refused: "):
             return _blocked(text)
+        if text == "the response says it is a PDF but does not start like one":
+            return Outcome("rejected", NOT_A_PDF, False)
         if text == "not an expected type: its content type is application/pdf":
             return Outcome("rejected", PDF_REASON, False)
         if text.startswith("not an expected type: ") or text == "the response has no Content-Type" or text.startswith("the response says it is "):
@@ -132,6 +162,8 @@ def classify(error):
             if status in SITE_REFUSALS:
                 return Outcome("refused", f"the site refused (HTTP {status})", False)
             return Outcome("failed", f"HTTP {status}", True)
+    if text == "the response says it is a PDF but does not begin with %PDF-":
+        return Outcome("rejected", NOT_A_PDF, False)
     if text.startswith("the response is larger than ") or text.startswith("the page is larger than "):
         return Outcome("rejected", "over the size limit", False)
     if text == "the response looks like binary or compressed data, not a web page":
@@ -234,7 +266,7 @@ class _Run:
 
     def one(self, row):
         """Take one candidate through the capture."""
-        if row["source"] == "arxiv" or _path_is_pdf(row["address"]):
+        if row["source"] == "arxiv" or (self.fp.pdf_bytes is None and _path_is_pdf(row["address"])):
             return self.outcome(row, Outcome("rejected", PDF_REASON, False))
         try:
             address = webaddr.canon_address(row["address"])
@@ -246,8 +278,9 @@ class _Run:
             self.say("rejected", row, ALREADY_HELD, owner)
             return
         try:
+            more = {"pdf_max_bytes": self.fp.pdf_bytes, "page_max_bytes": PAGE_MAX_BYTES} if self.fp.pdf_bytes else {}       # with no PDF limit the capture is called exactly as before
             result = self.capture(self.library, self.ident, address, policy=self._policy(), types=self.fp.policy.types, auto_filed=True, max_bytes=self.fp.max_bytes,
-                                  timeout=self.fp.timeout, total_timeout=self.fp.total_timeout)
+                                  timeout=self.fp.timeout, total_timeout=self.fp.total_timeout, **more)
         except webclient.Refused as e:
             return self.outcome(row, classify(e))
         status, book = result["status"], result["book_id"]
@@ -312,14 +345,14 @@ class _Run:
             return False
 
 
-def make_step(capture=None, open_store=None, statvfs=None):
-    """The function for the `fetch` point. `capture`, `open_store` and `statvfs` replace the real ones (tests)."""
+def make_step(capture=None, open_store=None, statvfs=None, rss_reader=None):
+    """The function for the `fetch` point. `capture`, `open_store`, `statvfs` and `rss_reader` (the reader of the memory of a process group, for `pdf_limit`) replace the real ones (tests)."""
 
     def step(ctx):
         if not isinstance(getattr(ctx, "plan_digest", None), str):
             raise crawlrun.StepRefused("the fetch needs the digest of the approved plan")
         try:
-            fp = build(ctx.plan, ctx.matcher, ctx.suffixes, ctx.index_root, log=ctx.log, now=ctx.clock())
+            fp = build(ctx.plan, ctx.matcher, ctx.suffixes, ctx.index_root, log=ctx.log, now=ctx.clock(), pdf_bytes=pdf_limit(ctx, rss_reader))
         except KbError as e:
             raise crawlrun.StepRefused(str(e)) from None
         library = (open_store or library_store.Store.open)()

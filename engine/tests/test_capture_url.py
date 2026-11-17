@@ -833,6 +833,110 @@ class RefusalTest(CaptureCase):
         self.assertEqual(self.site.count(), 0)
 
 
+PDF = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<< /Type /Catalog >>\nendobj\n\x00\x01\x02 binary bytes\ntrailer\n%%EOF\n"
+BOTH = ("text/html", "application/pdf")
+
+
+class PdfTest(CaptureCase):
+    """A PDF is filed only when the caller gives `pdf_max_bytes`; with none, a capture is as it always was."""
+
+    def test_with_no_pdf_limit_a_pdf_is_refused_as_binary_data_even_when_its_type_is_asked_for(self):
+        self.site.add("/p", PDF, content_type="application/pdf")
+        result = self.capture("/p", types=BOTH)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("binary or compressed", result["reason"])
+        self.assertEqual(self.store.read_version(result["book_id"], result["version_id"]).get("primary"), None)
+
+    def test_a_pdf_under_the_limit_is_filed_as_paper_pdf_with_the_kind_paper_and_its_hash(self):
+        self.site.add("/p", PDF, content_type="application/pdf")
+        result = self.capture("/p", types=BOTH, pdf_max_bytes=len(PDF) + 1)
+        self.assertEqual(result["status"], "filed")
+        book, version = result["book_id"], result["version_id"]
+        v = self.store.read_version(book, version)
+        self.assertEqual(v["primary"], "paper.pdf")
+        with open(os.path.join(self.store.payload_dir(book, version, "original"), "paper.pdf"), "rb") as f:
+            self.assertEqual(f.read(), PDF)
+        digest = hashlib.sha256(PDF).hexdigest()
+        self.assertEqual(self.store.verify_payload(book, version, "original")["files"]["paper.pdf"]["sha256"], digest)
+        root = self.store.read_book(book)
+        self.assertEqual((root["kind"], root["identity_keys"]["sha256"]), ("paper", [digest]))
+        self.assertEqual(v["source"]["bytes"], len(PDF))
+        self.assertEqual(stages.read(self.store, book, version)["stages"]["fetched"]["status"], "done")
+
+    def test_a_pdf_over_the_limit_is_a_failed_fetch_that_says_how_large_it_may_be_and_files_nothing(self):
+        self.site.add("/p", PDF, content_type="application/pdf")
+        result = self.capture("/p", types=BOTH, pdf_max_bytes=len(PDF) - 1)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["reason"].startswith(f"the response is larger than {len(PDF) - 1} bytes"), result["reason"])
+        self.assertEqual(self.store.read_version(result["book_id"], result["version_id"]).get("primary"), None)
+
+    def test_a_response_of_the_type_pdf_must_begin_with_the_five_characters_and_not_after_white_space(self):
+        for n, body in enumerate((b" \n" + PDF, b"<html>not a pdf</html>", b"%PDF")):
+            with self.subTest(body[:12]):
+                self.site.add(f"/p{n}", body, content_type="application/pdf")
+                result = self.capture(f"/p{n}", types=BOTH, pdf_max_bytes=10_000)
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(result["reason"], "the response says it is a PDF but does not begin with %PDF-")
+                self.assertIsNone(self.store.read_version(result["book_id"], result["version_id"]).get("primary"))
+
+    def test_a_page_over_its_own_limit_is_refused_even_when_the_request_allowed_a_larger_pdf(self):
+        body = b"<html><body>" + b"x" * 5000 + b"</body></html>"
+        self.site.add("/p", body)
+        result = self.capture("/p", types=BOTH, max_bytes=100_000, pdf_max_bytes=100_000, page_max_bytes=1000)
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(result["reason"].startswith("the page is larger than 1000 bytes"), result["reason"])
+
+    def test_a_pdf_whose_capture_was_stopped_after_its_payload_was_filed_is_resumed_as_the_same_book_with_paper_pdf(self):
+        self.site.add("/p", PDF, content_type="application/pdf")
+        with mock.patch.object(self.store, "append_event", side_effect=OSError("stopped")):
+            with self.assertRaises(OSError):
+                self.capture("/p", types=BOTH, pdf_max_bytes=10_000)
+        (book,) = self.store.list_books()
+        again = self.capture("/p", types=BOTH, pdf_max_bytes=10_000)
+        self.assertIn(again["status"], ("filed", "held"))
+        self.assertEqual((self.store.list_books(), self.site.count("/p")), ([book], 1))
+        version = self.store.read_book(book)["current_version"]
+        self.assertEqual(self.store.read_version(book, version)["primary"], "paper.pdf")
+        self.assertEqual(stages.read(self.store, book, version)["stages"]["fetched"]["status"], "done")
+        self.assertEqual(self.store.read_book(book)["kind"], "paper")
+
+    def test_a_pdf_with_no_binary_byte_in_its_head_is_still_refused_when_the_caller_gave_no_pdf_limit(self):
+        self.site.add("/p", b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n", content_type="application/pdf")
+        result = self.capture("/p", types=BOTH)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("binary or compressed", result["reason"])
+        self.assertIsNone(self.store.read_version(result["book_id"], result["version_id"]).get("primary"))
+
+    def test_a_pdf_or_a_page_of_exactly_the_size_of_its_limit_is_filed(self):
+        self.site.add("/pdf", PDF, content_type="application/pdf")
+        self.site.add("/page")
+        self.assertEqual(self.capture("/pdf", types=BOTH, pdf_max_bytes=len(PDF))["status"], "filed")
+        self.assertEqual(self.capture("/page", types=BOTH, pdf_max_bytes=10_000, page_max_bytes=len(PAGE))["status"], "filed")
+
+    def test_a_page_within_its_limit_is_filed_as_a_page_with_the_pdf_option_on(self):
+        self.site.add("/p")
+        result = self.capture("/p", types=BOTH, pdf_max_bytes=10_000, page_max_bytes=len(PAGE) + 1)
+        self.assertEqual(result["status"], "filed")
+        self.assertEqual(self.store.read_version(result["book_id"], result["version_id"])["primary"], "page.html")
+        self.assertEqual(self.store.read_book(result["book_id"])["kind"], "web page")
+
+    def test_a_page_that_is_gzip_or_binary_is_still_refused_with_the_pdf_option_on(self):
+        self.site.add("/p", b"\x1f\x8b\x08 compressed", content_type="text/html")
+        result = self.capture("/p", types=BOTH, pdf_max_bytes=10_000)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("binary or compressed", result["reason"])
+
+    def test_the_limits_are_whole_numbers_of_at_least_one_and_a_bad_one_is_refused_before_a_request(self):
+        self.site.add("/p")
+        for bad in (0, -1, True, 1.5, "10"):
+            with self.subTest(pdf=bad), self.assertRaises(KbError):
+                self.capture("/p", pdf_max_bytes=bad)
+        for bad in (0, -1, True, 1.5, "10"):
+            with self.subTest(page=bad), self.assertRaises(KbError):
+                self.capture("/p", page_max_bytes=bad)
+        self.assertEqual(self.site.count("/p"), 0)
+
+
 class CommandLineTest(CaptureCase):
     def run_kb(self, *args):
         return subprocess.run([sys.executable, "-m", "kb", *args], cwd=ENGINE_DIR,

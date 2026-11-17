@@ -118,6 +118,52 @@ class ScanCase(SandboxCase):
         return book, version, scan.scan_version(self.store, book, version)
 
 
+class MemoryLimitTest(ScanCase):
+    """`scan_version(..., rss_limit_mb=)` hands the limit to the sandbox for a PDF and for no other kind of file."""
+
+    def spy(self):
+        calls, real = [], convert_run.run_to_payload
+
+        def run(*a, **k):
+            calls.append(k.get("rss_limit_mb", "absent"))
+            return real(*a, **k)
+
+        return calls, mock.patch.object(convert_run, "run_to_payload", run)
+
+    def test_a_pdf_is_scanned_under_the_limit_it_is_given(self):
+        self.approve_scan()
+        book, version = self.file_original("paper.pdf", CLEAN_PDF)
+        calls, patched = self.spy()
+        with patched:
+            result = scan.scan_version(self.store, book, version, rss_limit_mb=2048)
+        self.assertEqual((result["status"], calls), ("done", [2048]))
+
+    def test_a_page_is_scanned_with_no_limit_even_when_one_is_given(self):
+        self.approve_scan()
+        book, version = self.file_original("page.html", b"<html><body><p>hello</p></body></html>")
+        calls, patched = self.spy()
+        with patched:
+            result = scan.scan_version(self.store, book, version, rss_limit_mb=2048)
+        self.assertEqual((result["status"], calls), ("done", ["absent"]))
+
+    def test_with_no_limit_the_call_is_exactly_as_it_was(self):
+        self.approve_scan()
+        book, version = self.file_original("paper.pdf", CLEAN_PDF)
+        calls, patched = self.spy()
+        with patched:
+            result = scan.scan_version(self.store, book, version)
+        self.assertEqual((result["status"], calls), ("done", ["absent"]))
+
+    def test_a_limit_that_cannot_be_enforced_fails_the_scan_of_a_pdf_and_the_tool_does_not_run(self):
+        self.approve_scan()
+        book, version = self.file_original("paper.pdf", CLEAN_PDF)
+        with mock.patch.object(convert_run, "read_group_rss", side_effect=ValueError("ps gave no rows")):
+            result = scan.scan_version(self.store, book, version, rss_limit_mb=2048)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("its limit of memory could not be enforced here", result["reason"])
+        self.assertEqual(stages.read(self.store, book, version)["stages"]["scanned"]["status"], "failed")
+
+
 class PdfScanTest(ScanCase):
     def test_a_clean_pdf_has_no_caveats_and_its_output_is_filed_as_untrusted(self):
         self.approve_scan()

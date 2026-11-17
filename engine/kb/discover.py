@@ -211,7 +211,7 @@ def _picks(plan, topics, topic_part, day):
 
 
 def fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cache=None, is_blocked=None, canon_address=None, site_of=None,
-         arxiv_pacer=None, clock=time.monotonic, sleep=time.sleep):
+         arxiv_pacer=None, clock=time.monotonic, sleep=time.sleep, pdfs=False):
     """Refill the queue. Returns early with nothing added when the queue holds `queue_low` rows or more that are queued (a `queue_low` of
     nothing means the queue is never refilled); otherwise adds up to `discover_target` rows, never more, and never past the total cap of
     the queue (which ends the refill; a registrable domain at its own cap only leaves that row): `1 - wander_share` of them from queries made from the topics (the
@@ -316,7 +316,8 @@ def fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cac
         """Put the rows of `found` in the queue until the queue is full or `stop()` (which is about rows that are queued: a row that is
         rejected for its type takes no room, and is recorded whatever the target); the `found_from` of each row that was left is the answer."""
         left = set()
-        for kind, rows in (("candidate", found["candidates"]), ("rejected", found["rejected"])):
+        groups = (("candidate", found["candidates"] + found["rejected"]),) if pdfs else (("candidate", found["candidates"]), ("rejected", found["rejected"]))        # with PDFs on, a work whose only text is a PDF is a candidate
+        for kind, rows in groups:
             for row in rows:
                 if result["capped"] or (kind == "candidate" and stop()) or not put(
                         kind, dict(row, topic=topic, weight=weight) if topic is not None else dict(row)):

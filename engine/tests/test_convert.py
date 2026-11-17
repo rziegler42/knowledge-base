@@ -1682,6 +1682,54 @@ class PdfStageTest(ConvertCase):
 
 
 @unittest.skipUnless(os.path.isdir(convert_html.VENV) and POPPLER, VENV_MISSING + " / pdftotext is not installed")
+class MemoryLimitTest(ConvertCase):
+    """`convert_version(..., rss_limit_mb=)` hands the limit to the sandbox for a PDF and for no other kind of file."""
+
+    def spy(self):
+        calls, real = [], convert_run.run_to_payload
+
+        def run(*a, **k):
+            calls.append(k.get("rss_limit_mb", "absent"))
+            return real(*a, **k)
+
+        return calls, mock.patch.object(convert_run, "run_to_payload", run)
+
+    def pdf_version(self):
+        text = ("A page of text with a good many words in it, as a paper has. " * 30).strip()
+        approve([self.fake("pdftotext", "26.10.0-kb1", "text.txt", f"{text}\n\x0c{text}\n\x0c", fmt="pdf")])
+        return self.file_original(name="paper.pdf", data=b"%PDF-1.4 " + b"x" * 20_000)
+
+    def test_a_pdf_is_converted_under_the_limit_it_is_given(self):
+        book, version = self.pdf_version()
+        calls, patched = self.spy()
+        with patched:
+            result = convert.convert_version(self.store, book, version, rss_limit_mb=2048)
+        self.assertEqual((result["status"], calls), ("done", [2048]))
+
+    def test_with_no_limit_the_call_is_exactly_as_it_was(self):
+        book, version = self.pdf_version()
+        calls, patched = self.spy()
+        with patched:
+            result = convert.convert_version(self.store, book, version)
+        self.assertEqual((result["status"], calls), ("done", ["absent"]))
+
+    def test_a_page_is_converted_with_no_limit_even_when_one_is_given(self):
+        approve([self.traf(), self.std()])
+        book, version = self.file_original()
+        calls, patched = self.spy()
+        with patched:
+            result = convert.convert_version(self.store, book, version, rss_limit_mb=2048)
+        self.assertEqual(result["status"], "done")
+        self.assertEqual(set(calls), {"absent"})
+
+    def test_a_limit_that_cannot_be_enforced_fails_the_conversion_of_a_pdf_and_the_tool_does_not_run(self):
+        book, version = self.pdf_version()
+        with mock.patch.object(convert_run, "read_group_rss", side_effect=ValueError("ps gave no rows")):
+            result = convert.convert_version(self.store, book, version, rss_limit_mb=2048)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("its limit of memory could not be enforced here", result["reason"])
+
+
 class RealToolsTest(ConvertCase):
     """The three real tools, approved the way the owner would approve them, converting real documents end to end."""
 

@@ -237,7 +237,7 @@ def _filed(store, book_id, version_id, entry, generation, filename, parse):
     return record, conversion
 
 
-def _convert_with(store, book_id, version_id, entry, filename, parse):
+def _convert_with(store, book_id, version_id, entry, filename, parse, rss_limit_mb=None):
     """One tool on a version: a usable output filed before a stop is adopted; otherwise the tool is run, as the next
     generation beside any output that did not pass its checks."""
     existing = _generations(store, book_id, version_id, entry["name"])
@@ -251,7 +251,8 @@ def _convert_with(store, book_id, version_id, entry, filename, parse):
         if failed >= MAX_FAILED_GENERATIONS:
             raise KbError(f"{label} has failed on this version {failed} times; its outputs are kept and it is not run again")
     generation = (existing[-1] if existing else 0) + 1
-    convert_run.run_to_payload(store, book_id, version_id, entry, f"derived/{entry['name']}/{generation}")
+    limit = {} if rss_limit_mb is None else {"rss_limit_mb": rss_limit_mb}
+    convert_run.run_to_payload(store, book_id, version_id, entry, f"derived/{entry['name']}/{generation}", **limit)
     return _filed(store, book_id, version_id, entry, generation, filename, parse)
 
 
@@ -280,7 +281,7 @@ def _take_title(store, book_id, version_id, made, in_use):
         store.set_metadata(book_id, title=title, metadata_source=version_id)
 
 
-def convert_version(store, book_id, version_id):
+def convert_version(store, book_id, version_id, rss_limit_mb=None):
     """Convert a version that has been fetched and whose scan has finished (done, failed or skipped: a failed scan does
     not block conversion). Returns {"status": "done", ...}, {"status": "failed", "reason": ...} or {"status": "skipped",
     "reason": ...}. Raises KbError only if the version is not ready or the config setting is wrong.
@@ -288,7 +289,9 @@ def convert_version(store, book_id, version_id):
     Each tool for the kind of file runs on the capture; one that is not approved or fails is noted and the others go on.
     The stage is done if at least one made a usable conversion. For a web page the two extractors are compared (the
     extractor-size rule); the conversion to use is the first tool's unless the rule marks the book partial, in which case it
-    is the one with the most text. The capture and the earlier stages are never changed."""
+    is the one with the most text. The capture and the earlier stages are never changed.
+
+    `rss_limit_mb`, a limit of resident memory for each tool (see `convert_run.run`), is used for a PDF and for no other kind of file; with none, nothing changes."""
     cfg = config.load()
     ratio = _ratio(cfg)
     version = store.read_version(book_id, version_id)
@@ -315,7 +318,7 @@ def convert_version(store, book_id, version_id):
             continue
         label = f"{entry['name']} {entry['version']}"
         try:
-            made.append(_convert_with(store, book_id, version_id, entry, filename, parse))
+            made.append(_convert_with(store, book_id, version_id, entry, filename, parse, rss_limit_mb if kind == "pdf" else None))
         except (KbError, OSError, ValueError, MemoryError) as e:  # any failure of one tool is recorded, not raised
             notes[label] = textutil.clean(str(e), 400)
     if not made:

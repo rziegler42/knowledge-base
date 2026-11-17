@@ -228,6 +228,45 @@ class FailClosed(Case):
         self.assertEqual(self.held(book), ["scan_unavailable"])
         self.assertEqual(stages.read(self.store, book, self.version(book))["stages"]["scanned"]["status"], "failed")
 
+    def test_the_real_scan_is_given_the_plans_memory_limit_and_the_book_is_dealt_with_as_before(self):
+        book = self.filed()
+        seen = []
+
+        def spy(store, book_id, version, **kw):
+            seen.append(kw)
+            return {"status": "done", "caveats": []}
+
+        with mock.patch.object(crawlsteps.scan_stage, "scan_version", spy):
+            crawlsteps.make_scan_step(statvfs=roomy)(self.ctx())
+            self.plan["tool_rss_mb"] = 777
+            crawlsteps.make_scan_step(statvfs=roomy)(self.ctx())
+        self.assertEqual(seen, [{"rss_limit_mb": 2048}, {"rss_limit_mb": 777}])
+        self.assertIsNone(self.held(book))
+
+    def test_a_plan_with_no_usable_memory_limit_gives_the_real_scan_no_limit(self):
+        self.filed()
+        seen = []
+
+        def spy(store, book_id, version, **kw):
+            seen.append(kw)
+            return {"status": "done", "caveats": []}
+
+        self.plan["tool_rss_mb"] = 0                                # (a plan file cannot say this; a plan made by hand in a test can)
+        with mock.patch.object(crawlsteps.scan_stage, "scan_version", spy):
+            crawlsteps.make_scan_step(statvfs=roomy)(self.ctx())
+        self.assertEqual(seen, [{}])
+
+    def test_a_scan_that_is_given_to_the_step_is_called_with_the_three_arguments_as_before(self):
+        self.filed()
+        calls = []
+
+        def given(*args, **kw):
+            calls.append((len(args), kw))
+            return {"status": "done", "caveats": []}
+
+        crawlsteps.make_scan_step(scan=given, statvfs=roomy)(self.ctx())
+        self.assertEqual(calls, [(3, {})])
+
     def test_a_tool_that_times_out_or_dies_holds_the_book_with_the_kind_that_says_which(self):
         entry = {"formats": ["html"], "name": "kb-scan"}
         for error, kind in (("kb-scan 1 timed out after 60 seconds", "scan_timeout"), ("kb-scan 1 exited with status 1", "scan_failed"), ("kb-scan 1 could not be started: no such file", "scan_unavailable"),
@@ -717,6 +756,29 @@ class ConverterFailures(ConvertCase):
         book = self.scanned_book()
         crawlsteps.make_convert_step(index=self.index_fake, statvfs=roomy)(self.ctx())              # the real converter: this temporary config approves no tool
         self.assertEqual((self.names(book).count("crawl_step_failed"), self.stage(book, "converted")), (1, "failed"))
+
+    def test_the_real_converter_is_given_the_plans_memory_limit_and_a_given_one_is_called_as_before(self):
+        book = self.scanned_book()
+        seen = []
+
+        def spy(store, book_id, version, **kw):
+            seen.append(kw)
+            return self.convert(store, book_id, version)
+
+        with mock.patch.object(crawlsteps.convert_stage, "convert_version", spy):
+            self.plan["tool_rss_mb"] = 777
+            crawlsteps.make_convert_step(index=self.index_fake, statvfs=roomy)(self.ctx())
+        self.assertEqual(seen, [{"rss_limit_mb": 777}])
+        calls = []
+
+        def given(*args, **kw):
+            calls.append((len(args), kw))
+            return self.convert(*args)
+
+        self.scanned_book()
+        crawlsteps.make_convert_step(convert=given, index=self.index_fake, statvfs=roomy)(self.ctx())
+        self.assertTrue(calls and all(call == (3, {}) for call in calls), calls)
+        self.assertIsNotNone(book)
 
     def test_what_a_tool_said_never_reaches_an_event_a_log_line_or_a_row(self):
         book = self.scanned_book()

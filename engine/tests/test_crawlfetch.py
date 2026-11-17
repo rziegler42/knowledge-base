@@ -982,6 +982,154 @@ class Pdfs(StepCase):
         self.assertEqual(self.store.list_books(), [])
 
 
+PDF_BODY = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<< /Type /Catalog >>\nendobj\n\x00\x01 binary\ntrailer\n%%EOF\n"
+MIB = 1024 * 1024
+
+
+def readable(pgid):
+    return 0
+
+
+def unreadable(pgid):
+    raise ValueError("ps gave no rows")
+
+
+class PdfsOn(StepCase):
+    """With `pdf_max_mb` above 0 and a memory that can be read, a PDF is a book; with 0, or when the memory cannot be read, a PDF is rejected as before."""
+
+    def setUp(self):
+        super().setUp()
+        self.plan.update(pdf_max_mb=5)
+
+    def pdf(self, path="/paper.pdf", body=PDF_BODY, ctype="application/pdf", **kw):
+        self.srv.routes[path] = reply(200, body=body, ctype=ctype)
+        return self.add(path, **kw)
+
+    def off_lines(self):
+        return [x for x in self.lines() if x["step"] == "fetch" and x["outcome"] == "skipped" and "PDF files are off" in (x["reason"] or "")]
+
+    def test_a_pdf_under_the_limit_is_a_crawl_book_with_paper_pdf_as_its_primary_file_and_the_row_is_kept(self):
+        ident = self.pdf()
+        self.run_step(rss_reader=readable)
+        row = self.row(ident)
+        self.assertEqual((row["status"], row["reason"]), ("kept", None))
+        book = row["book_id"]
+        root = self.store.read_book(book)
+        self.assertEqual((root["auto_filed"], root["kind"], root["state"]), (True, "paper", "active"))
+        self.assertEqual(self.store.read_version(book, root["current_version"])["primary"], "paper.pdf")
+        self.assertEqual([e["event"] for e in self.store.read_events(book) if e["event"] == "crawl_found"], ["crawl_found"])
+        self.assertEqual(crawlbooks.filed_count(self.store), 1)
+        self.assertEqual(self.off_lines(), [])
+
+    def test_a_pdf_at_an_address_that_does_not_end_in_pdf_is_taken_too(self):
+        ident = self.pdf("/download?id=7")
+        self.run_step(rss_reader=readable)
+        self.assertEqual(self.row(ident)["status"], "kept")
+
+    def test_a_pdf_over_the_limit_is_rejected_for_its_size_and_leaves_no_active_book(self):
+        self.plan.update(pdf_max_mb=1)
+        ident = self.pdf(body=PDF_BODY + b"x" * MIB)
+        self.run_step(rss_reader=readable)
+        row = self.row(ident)
+        self.assertEqual((row["status"], row["reason"]), ("rejected", "over the size limit"))
+        self.assertEqual(self.active_books(), [])
+
+    def test_a_response_of_the_type_pdf_that_does_not_begin_with_the_five_characters_is_rejected_and_makes_no_active_book(self):
+        a = self.pdf("/html.pdf", body=b"<html><body>not a pdf</body></html>")
+        b = self.pdf("/spaced.pdf", body=b" \n" + PDF_BODY)
+        self.run_step(rss_reader=readable)
+        for ident in (a, b):
+            self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "not a PDF"))
+        self.assertEqual(self.active_books(), [])
+
+    def test_a_pdf_served_as_a_page_is_still_refused_with_pdfs_on(self):
+        ident = self.pdf("/sneaky", body=PDF_BODY, ctype="text/html")
+        self.run_step(rss_reader=readable)
+        self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "not a web page"))
+        self.assertEqual(self.active_books(), [])
+
+    def test_a_page_is_still_a_page_with_pdfs_on(self):
+        self.doc("/p")
+        ident = self.add("/p")
+        self.run_step(rss_reader=readable)
+        book = self.row(ident)["book_id"]
+        self.assertEqual(self.store.read_version(book, self.store.read_book(book)["current_version"])["primary"], "page.html")
+
+    def test_a_page_over_the_page_limit_is_rejected_even_though_the_request_allowed_a_larger_pdf(self):
+        self.srv.routes["/big"] = reply(200, body=b"<html><body>" + b"x" * 200_000 + b"</body></html>")
+        ident = self.add("/big")
+        with mock.patch.object(crawlfetch, "PAGE_MAX_BYTES", 100_000):
+            self.run_step(rss_reader=readable)
+        self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "over the size limit"))
+        self.assertEqual(self.active_books(), [])
+
+    def test_where_the_memory_cannot_be_read_no_pdf_is_taken_without_a_request_and_one_line_says_so(self):
+        pdf = self.pdf("/paper.pdf")
+        hits = len(self.srv.hits)
+        self.run_step(rss_reader=unreadable)
+        self.assertEqual((self.row(pdf)["status"], self.row(pdf)["reason"]), ("rejected", "pdf not safe to convert"))
+        self.assertEqual((len(self.srv.hits), self.store.list_books()), (hits, []))
+        self.assertEqual(len(self.off_lines()), 1)
+        self.assertIn("the memory of a tool cannot be read", self.off_lines()[0]["reason"])
+
+    def test_where_the_memory_cannot_be_read_pages_go_on_as_before(self):
+        self.doc("/p")
+        page = self.add("/p")
+        self.run_step(rss_reader=unreadable)
+        self.assertEqual(self.row(page)["status"], "kept")
+        self.assertEqual(len(self.off_lines()), 1)
+
+    def test_with_pdfs_off_the_memory_is_not_looked_at_and_a_pdf_is_rejected_as_before_with_no_line(self):
+        self.plan.update(pdf_max_mb=0)
+        ident = self.pdf()
+        looked = []
+        self.run_step(rss_reader=lambda pgid: looked.append(pgid))
+        self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "pdf not safe to convert"))
+        self.assertEqual((looked, self.off_lines()), ([], []))
+
+    def test_the_memory_is_probed_once_for_a_run_and_the_limit_is_in_bytes(self):
+        ctx, looked = self.ctx(), []
+        reader = lambda pgid: looked.append(pgid) or 0    # noqa: E731
+        self.assertEqual(crawlfetch.pdf_limit(ctx, reader), 5 * MIB)
+        self.assertEqual(crawlfetch.pdf_limit(ctx, unreadable), 5 * MIB)            # decided once for this context
+        self.assertEqual(looked, [os.getpgrp()])
+        other = self.ctx()
+        self.assertIsNone(crawlfetch.pdf_limit(other, unreadable))
+        self.assertIsNone(crawlfetch.pdf_limit(other, reader))
+
+    def test_the_arxiv_source_is_still_rejected_without_a_request_with_pdfs_on(self):
+        ident = self.add("/abs", host="arxiv.test", source="arxiv")
+        hits = len(self.srv.hits)
+        self.run_step(rss_reader=readable)
+        self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "pdf not safe to convert"))
+        self.assertEqual((len(self.srv.hits), self.store.list_books()), (hits, []))
+
+    def test_the_policy_takes_the_type_and_the_larger_cap_only_when_a_pdf_limit_is_given(self):
+        off = crawlfetch.build(dict(self.plan), self.matcher, SUFFIXES, self.index)
+        self.assertEqual((off.policy.types, off.max_bytes, off.pdf_bytes), (capture_url.PAGE_TYPES, crawlfetch.PAGE_MAX_BYTES, None))
+        on = crawlfetch.build(dict(self.plan), self.matcher, SUFFIXES, self.index, pdf_bytes=3 * crawlfetch.PAGE_MAX_BYTES)
+        self.assertEqual((on.policy.types, on.max_bytes, on.pdf_bytes), (capture_url.PAGE_TYPES + ("application/pdf",), 3 * crawlfetch.PAGE_MAX_BYTES, 3 * crawlfetch.PAGE_MAX_BYTES))
+        small = crawlfetch.build(dict(self.plan), self.matcher, SUFFIXES, self.index, pdf_bytes=MIB)
+        self.assertEqual((small.max_bytes, small.pdf_bytes), (crawlfetch.PAGE_MAX_BYTES, MIB))
+
+    def test_a_bad_pdf_limit_given_to_build_is_refused(self):
+        for bad in (0, -1, True, 1.5, "5"):
+            with self.subTest(bad), self.assertRaises(KbError):
+                crawlfetch.build(dict(self.plan), self.matcher, SUFFIXES, self.index, pdf_bytes=bad)
+
+
+class ClassifyPdf(Case):
+    def test_the_texts_of_a_pdf_that_is_not_one_and_one_that_is_too_large_are_rejections_for_what_they_are(self):
+        for error, expected in (
+                (webclient.Refused("the response says it is a PDF but does not start like one"), ("rejected", "not a PDF", False)),
+                (FetchError("the response says it is a PDF but does not begin with %PDF-"), ("rejected", "not a PDF", False)),
+                (FetchError("the response is larger than 1048576 bytes"), ("rejected", "over the size limit", False)),
+                (webclient.Refused("the response says it is text/html but its first bytes are binary or another format"), ("rejected", "not a web page", False))):
+            with self.subTest(str(error)):
+                out = crawlfetch.classify(error)
+                self.assertEqual((out.kind, out.reason, out.retry), expected)
+
+
 class Breaker(StepCase):
     def test_each_fetch_is_passed_to_the_breaker_and_a_trip_ends_the_run_with_the_breaker_tripped(self):
         self.plan.update(consecutive_failures=2)

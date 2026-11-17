@@ -368,8 +368,13 @@ def require_allowed(address, allow_private, total_timeout=TOTAL_TIMEOUT):
         pass
 
 
+def _limit(name, value):
+    if value is not None and (type(value) is not int or value < 1):
+        raise KbError(f"{name} is a whole number of bytes, at least 1")
+
+
 def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, timeout=TIMEOUT,
-            total_timeout=TOTAL_TIMEOUT, policy=None, types=None, auto_filed=False):
+            total_timeout=TOTAL_TIMEOUT, policy=None, types=None, auto_filed=False, pdf_max_bytes=None, page_max_bytes=None):
     """Capture one web page into the library. Returns a dict whose status is:
 
     filed      the page was fetched and stored as a new book (or into a book whose earlier fetch had failed or stopped);
@@ -382,7 +387,13 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
     With a `policy` (a `webclient.Policy`) the request is made by the shared client under it: the address is made canonical by `webaddr`, and a refusal by the policy (a blocked address at any hop, a private
     address, a type or content that the policy will not take) raises `webclient.Refused` and records nothing, no book and no index entry. `types` replaces the content types that are taken. `auto_filed` marks a
     book made by this call as filed by the unattended crawl; a capture with it **writes nothing to a book that is not marked the same way**: a page whose final address or bytes are held by such a book is `held`, and the owner's book is not changed. Under a policy `allow_private` is not used (the policy's own `allow_private` decides), and a book that is already held is returned without the
-    policy's hook being asked, since nothing is fetched."""
+    policy's hook being asked, since nothing is fetched.
+
+    **A PDF is filed only when the caller gives `pdf_max_bytes`** (and `types` names `application/pdf`): a response of that type whose body begins with `%PDF-` exactly (no white space before it) and is no larger than
+    the limit is filed as the primary file `paper.pdf` of a book of the kind `paper`, and the check for binary data is not made for it; a larger one, or one that does not begin so, is a failed fetch with a fixed reason. With
+    no `pdf_max_bytes` a capture is as it always was, and a PDF is refused as binary data. `page_max_bytes`, when given, is the size a page may have when `max_bytes` was raised for a PDF: a larger page is a failed fetch."""
+    _limit("pdf_max_bytes", pdf_max_bytes)
+    _limit("page_max_bytes", page_max_bytes)
     asked = identity.normalize_address(address) if policy is None else webaddr.canon_address(address)
     store._guard()
     if policy is None:
@@ -400,12 +411,24 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
         if resumed:
             return resumed
 
+    is_pdf = False
     try:
         if policy is None:
             page = fetch(asked, allow_private, max_bytes, timeout, total_timeout, **({} if types is None else {"types": tuple(types)}))
         else:
             page = policy_fetch(policy, asked, max_bytes, timeout, total_timeout, types)
-        if page.body[:2] == b"\x1f\x8b" or b"\x00" in page.body[:8192]:
+        kind_of = str(page.headers.get("content-type") or "").split(";")[0].strip().lower()
+        is_pdf = pdf_max_bytes is not None and kind_of == "application/pdf"
+        if kind_of == "application/pdf" and not is_pdf:
+            raise FetchError("the response looks like binary or compressed data, not a web page")       # a PDF is never filed as a page, whatever bytes it has
+        if is_pdf:
+            if len(page.body) > pdf_max_bytes:
+                raise FetchError(f"the response is larger than {pdf_max_bytes} bytes")
+            if page.body[:5] != b"%PDF-":
+                raise FetchError("the response says it is a PDF but does not begin with %PDF-")
+        elif page_max_bytes is not None and len(page.body) > page_max_bytes:
+            raise FetchError(f"the page is larger than {page_max_bytes} bytes")
+        elif page.body[:2] == b"\x1f\x8b" or b"\x00" in page.body[:8192]:
             # a web page is text; compressed or binary data under a page's name would be stored as page.html
             raise FetchError("the response looks like binary or compressed data, not a web page")
         try:
@@ -452,9 +475,10 @@ def capture(store, ident, address, allow_private=False, max_bytes=MAX_BYTES, tim
         for value in [final] + aliases:
             ident.reassign("url", value, book_id)  # recorded first, so a stop after the book is made still finds it
         keys = {"url": final, **({"url_alias": aliases} if aliases else {})}
-        store.create_book(title="", kind="web page", identity_keys=keys, book_id=book_id, auto_filed=auto_filed)
+        store.create_book(title="", kind="paper" if is_pdf else "web page", identity_keys=keys, book_id=book_id, auto_filed=auto_filed)
         version_id = store.add_version(book_id, source=source)
-    store.file_payload(book_id, version_id, "original", {"page.html": page.body}, primary="page.html", tool=TOOL)
+    name = "paper.pdf" if is_pdf else "page.html"
+    store.file_payload(book_id, version_id, "original", {name: page.body}, primary=name, tool=TOOL)
     _register_from_source(store, ident, book_id, version_id)
     store.append_event(book_id, "filed", address_asked=asked, address_final=final, sha256=digest, retrieved=retrieved)
     stages.mark(store, book_id, version_id, "fetched", "done", tool=TOOL)

@@ -107,6 +107,14 @@ def scan_and_hold(ctx, library, book_id, scan, statvfs):
     return _hold(ctx, library, book_id, [kind]), None
 
 
+def _limited(function, plan):
+    """The real scan or convert function, called with the plan's `tool_rss_mb` as a limit of memory for the tool (which `scan` and `convert` use for a PDF only). A plan with no usable value gives the function as it is."""
+    megabytes = plan.get("tool_rss_mb")
+    if type(megabytes) is not int or megabytes < 1:
+        return function
+    return lambda store, book_id, version_id: function(store, book_id, version_id, rss_limit_mb=megabytes)
+
+
 def make_scan_step(scan=None, open_store=None, statvfs=None):
     """The function that scans and holds every unfinished crawl book, oldest first. `scan`, `open_store` and `statvfs` replace the real ones (tests)."""
 
@@ -117,7 +125,7 @@ def make_scan_step(scan=None, open_store=None, statvfs=None):
         listed = crawlbooks.crawl_books(library, approved, crawlbooks.scan_crawl_books(library))
         report, ended = {"scanned": 0, "held": 0}, FINISHED
         for book_id in listed:
-            outcome, why = scan_and_hold(ctx, library, book_id, scan or scan_stage.scan_version, statvfs or os.statvfs)
+            outcome, why = scan_and_hold(ctx, library, book_id, scan or _limited(scan_stage.scan_version, ctx.plan), statvfs or os.statvfs)
             if outcome == "refused":
                 if ended == FINISHED:                                       # the refusal is said once; the books that need a scan wait, the others are still dealt with
                     ctx.log.write("scan", "skipped", reason=ctx.log.safe(why), now=ctx.clock())
@@ -285,7 +293,7 @@ def make_convert_step(convert=None, index=None, open_store=None, statvfs=None):
         counts, report, ended = {}, {"held": 0, "rejected": 0, "failed": 0, "parked": 0}, CONVERTED
         try:
             for book_id in listed:
-                outcome, why = convert_and_index(ctx, library, book_id, convert or convert_stage.convert_version, index or index_stage.index_version, statvfs or os.statvfs, counts)
+                outcome, why = convert_and_index(ctx, library, book_id, convert or _limited(convert_stage.convert_version, ctx.plan), index or index_stage.index_version, statvfs or os.statvfs, counts)
                 if outcome == "refused":
                     ended = why
                     ctx.log.write("convert", "skipped", reason=ctx.log.safe(why), now=ctx.clock())

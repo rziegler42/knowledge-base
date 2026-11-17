@@ -116,6 +116,11 @@ An index written by an older version of the engine is refused, and the search sa
 The unattended crawl takes candidates from a queue to books on shelves in small, bounded batches, with no one at the keyboard. Starting it is your own act: nothing in this repository installs it or starts it. This is the checklist of the
 supervised run, in order. Run every command from the `engine` folder (`cd engine`), as [engine/README.md](engine/README.md) does, and read it for what each command refuses.
 
+**PDF files are off.** The crawl takes web pages and arXiv abstract pages only, unless the plan has a `[pdf]` section with `pdf_max_mb` above 0 (the default is 0; the most is 200). Then it also takes a PDF of at most that many
+megabytes, scans it before it converts it, and runs the scan and the converter with at most `tool_rss_mb` of memory (default 2,048; the sandbox kills a tool above it, and a run that cannot read memory takes no PDF). The summary that
+`crawl-approve` prints says which it is, in the line that begins `PDF files:`. To turn it off again, set `pdf_max_mb` to 0 and approve the plan again. Take the first PDFs under your eye: a small `pdf_max_mb`, one run by hand, and read
+the books and their cards before the agent is left to run with it.
+
 1. **Approve the plan, at a terminal.** `python3 -m kb crawl-approve` prints a plain summary of your crawl plan and a digest and changes nothing. Read it. Then `python3 -m kb crawl-approve --digest DIGEST`, with the digest from the last line, stores the approval; it needs your own terminal.
 2. **A dry run.** `python3 -m kb crawl-run --dry-run` shows each check and what a run would do. It takes no lock, writes nothing and makes no request.
 3. **The first run, on a small ceiling.** Set the ceilings in the plan low (for example `batch`, `fetches_per_day`, `filed_total` and `cards_per_day` of a few each) and approve it again, since any change of the plan changes its digest. Make the bytecode folder, `crawl-pycache` under the index root,

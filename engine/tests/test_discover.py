@@ -557,6 +557,32 @@ class FillTest(Case):
         self.assertEqual(got["rejected"], 1)
         self.assertEqual(self.rows("WHERE status = 'rejected'")[0][7], "type")
 
+    def pdf_source(self, *addresses):
+        source = Source("openalex")
+        source.search = lambda q, get, limit, *m: {"candidates": [], "rejected": [candidate(a) for a in addresses]}
+        return self.sources(openalex=source, arxiv=Source("arxiv"), wikipedia=Source("wikipedia"))
+
+    def test_with_pdfs_on_a_work_whose_only_text_is_a_pdf_is_queued_as_a_candidate_and_not_rejected(self):
+        got = self.fill({"discover_target": 5, "wander_share": 0.0}, sources=self.pdf_source("https://repo.example.edu/a.pdf", "https://repo.example.edu/b"), pdfs=True)
+        self.assertEqual((got["added"], got["rejected"]), (2, 0))
+        self.assertEqual([(r[0], r[6], r[7]) for r in self.rows()], [("https://repo.example.edu/a.pdf", "queued", None), ("https://repo.example.edu/b", "queued", None)])
+        self.assertEqual((len(self.log.of("enqueue", "ok")), self.log.of("enqueue", "rejected")), (2, []))
+
+    def test_with_pdfs_off_the_same_works_are_rejected_for_their_type_as_before(self):
+        for kw in ({}, {"pdfs": False}):
+            with self.subTest(kw):
+                self.setUp()
+                got = self.fill({"discover_target": 5, "wander_share": 0.0}, sources=self.pdf_source("https://repo.example.edu/a.pdf"), **kw)
+                self.assertEqual((got["added"], got["rejected"]), (0, 1))
+                self.assertEqual([(r[6], r[7]) for r in self.rows()], [("rejected", "type")])
+
+    def test_a_pdf_work_that_the_owner_or_a_list_blocks_is_blocked_and_one_at_a_site_over_its_cap_is_left_out(self):
+        got = self.fill({"discover_target": 5, "wander_share": 0.0}, sources=self.pdf_source("https://repo.example.edu/a.pdf"), pdfs=True, is_blocked=lambda address: "owner")
+        self.assertEqual((got["added"], got["blocked"], got["rejected"]), (0, 1, 0))
+        self.setUp()
+        got = self.fill({"discover_target": 5, "wander_share": 0.0, "queued_per_domain": 1}, sources=self.pdf_source("https://repo.example.edu/a.pdf", "https://repo.example.edu/b.pdf"), pdfs=True)
+        self.assertEqual((got["added"], got["skipped"], got["rejected"]), (1, 1, 0))
+
     def test_a_row_found_again_is_skipped_and_changes_nothing(self):
         self.fill({"discover_target": 10, "wander_share": 0.0})
         before = self.rows()

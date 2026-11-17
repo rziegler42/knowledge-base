@@ -23,7 +23,7 @@ import stat
 from collections.abc import MutableMapping
 from urllib.parse import urlsplit
 
-from . import KbError, crawlguard, crawllists, crawllog, crawlplan, crawlrun, crawltopics, discover, models, webaddr, webclient
+from . import KbError, crawlfetch, crawlguard, crawllists, crawllog, crawlplan, crawlrun, crawltopics, discover, models, webaddr, webclient
 
 CACHE_FILE = "query-cache.json"
 MAX_CACHE_BYTES = 1024 * 1024
@@ -145,7 +145,7 @@ def _stamp(now):
     return now.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _run(ctx, fetch, sources, call):
+def _run(ctx, fetch, sources, call, rss_reader=None):
     plan, log, now = ctx.plan, ctx.log, ctx.clock()
     if ctx.matcher is None:
         raise crawlrun.StepRefused("the refill needs the matcher of the lists step, which did not run")
@@ -190,7 +190,8 @@ def _run(ctx, fetch, sources, call):
     notes = _Notes(log, now)
     try:
         result = discover.fill(ctx.conn, crawlplan.discovery_plan(plan), topics, now=_stamp(now), get=get, chat=chat if isinstance(entry, str) and entry else None, sources=sources, log=notes,
-                               cache=cache, is_blocked=is_blocked, canon_address=webaddr.canon_address, site_of=lambda host: webaddr.site_of(host, suffixes))
+                               cache=cache, is_blocked=is_blocked, canon_address=webaddr.canon_address, site_of=lambda host: webaddr.site_of(host, suffixes),
+                               pdfs=crawlfetch.pdf_limit(ctx, rss_reader) is not None)
     except _Stopped:
         result = {"status": "stopped", "added": 0}
         log.write("discover", "skipped", reason="the stop file is present", now=now)
@@ -210,10 +211,11 @@ def _run(ctx, fetch, sources, call):
         log.write("discover", "ok", reason=said, n=result["added"], now=now)
 
 
-def make_step(fetch=None, sources=None, call=None):
-    """The step for the `refill` point. `fetch` is `webclient.get` or a stand-in with its signature, `sources` replaces the source modules (tests), `call` is `models.call` or a stand-in."""
+def make_step(fetch=None, sources=None, call=None, rss_reader=None):
+    """The step for the `refill` point. `fetch` is `webclient.get` or a stand-in with its signature, `sources` replaces the source modules (tests), `call` is `models.call` or a stand-in, `rss_reader` reads the
+    memory of a process group (`crawlfetch.pdf_limit`: with PDFs on and the memory readable, a work whose only text is a PDF is queued, and otherwise rejected for its type)."""
     def step(ctx):
-        _run(ctx, fetch or webclient.get, sources, call or models.call)
+        _run(ctx, fetch or webclient.get, sources, call or models.call, rss_reader)
     return step
 
 

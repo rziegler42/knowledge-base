@@ -226,6 +226,45 @@ class Client(Case):
             self.fetch.replies[url] = reply
         return asked
 
+    def pdf_only(self, *addresses):
+        class PdfOnly(Source):
+            def search(inner, query, get, limit, *more):
+                return {"candidates": [], "rejected": [candidate(a, found_from=query) for a in addresses]}
+
+        self.sources["openalex"] = PdfOnly("openalex")
+
+    def run_with(self, reader, **plan):
+        self.plan.update(plan)
+        ctx = self.ctx()
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, rss_reader=reader)(ctx)
+        return ctx
+
+    def off_lines(self):
+        return [x for x in self.lines() if x["step"] == "fetch" and "PDF files are off" in (x["reason"] or "")]
+
+    def test_with_pdfs_on_and_the_memory_readable_a_pdf_only_work_is_queued_as_a_candidate(self):
+        self.pdf_only("https://repo.example.org/a.pdf")
+        self.run_with(lambda pgid: 0, pdf_max_mb=5)
+        self.assertEqual([r[1] for r in self.rows()], ["queued"])
+        self.assertEqual(self.off_lines(), [])
+
+    def test_with_pdfs_on_and_the_memory_unreadable_a_pdf_only_work_is_rejected_for_its_type_and_one_line_says_pdfs_are_off(self):
+        self.pdf_only("https://repo.example.org/a.pdf")
+
+        def unreadable(pgid):
+            raise ValueError("ps gave no rows")
+
+        ctx = self.run_with(unreadable, pdf_max_mb=5)
+        self.assertEqual([r[1] for r in self.rows()], ["rejected"])
+        self.assertEqual(len(self.off_lines()), 1)
+        self.assertIsNone(ctx.pdf_bytes)
+
+    def test_with_pdfs_off_the_memory_is_not_looked_at_and_a_pdf_only_work_is_rejected_for_its_type(self):
+        self.pdf_only("https://repo.example.org/a.pdf")
+        looked = []
+        self.run_with(lambda pgid: looked.append(pgid), pdf_max_mb=0)
+        self.assertEqual(([r[1] for r in self.rows()], looked, self.off_lines()), (["rejected"], [], []))
+
     def test_discovery_asks_through_the_shared_client_under_one_policy_and_the_owners_blacklist_is_the_hook(self):
         self.fetch.replies.update({u: (200, {}, b"{}") for u in ("https://api.openalex.org/works?q=x", "https://ok.example/z")})
         asked = self.probe()

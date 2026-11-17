@@ -223,8 +223,8 @@ class Chain(PlaceCase, Net):
         """What the real converter files: the text of the captured page, as the blocks of a conversion record."""
         self.order.append(("convert", book))
         original = library.payload_path(book, version, "original")
-        name = [n for n in os.listdir(original) if n.endswith(".html")][0]
-        with open(os.path.join(original, name), encoding="utf-8") as f:
+        name = [n for n in os.listdir(original) if n.endswith((".html", ".pdf"))][0]            # (a PDF of the fixtures holds the same page after its binary head)
+        with open(os.path.join(original, name), encoding="utf-8", errors="replace") as f:
             html = f.read()
         blocks = [{"kind": "paragraph", "level": None, "text": text} for text in re.findall(r"<p>(.*?)</p>", html, re.S)]
         title = re.search(r"<title>(.*?)</title>", html, re.S).group(1)
@@ -457,6 +457,77 @@ class WholeChain(Chain):
         self.assertEqual(self.requests(), ["/p1"])
         self.assertEqual(self.store.read_book(book)["identity_keys"]["url"], "http://a.test/p1")
         self.assertEqual(self.store.read_book(book)["title"], title)
+
+
+def readable(pgid):
+    return 0
+
+
+def pdf_of(title, body=PROSE * 2):
+    """A stand-in for a PDF: it begins as one, has binary bytes in its head (as a real one does), and holds the text of a page that the fake converter reads."""
+    return b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n\x00\x01 binary\n" + page(title, body) + b"\n%%EOF\n"
+
+
+class PdfChain(Chain):
+    """With `pdf_max_mb` above 0 a PDF is a book that goes through the whole chain, scanned before it is converted; the scan, the converter and the index are the chain's fakes (the real tools are not run here)."""
+
+    plan_text = PLAN_TEXT + "[pdf]\npdf_max_mb = 5\n"
+
+    def steps(self, without=(), **over):
+        over.setdefault("fetch", crawlfetch.make_step(capture=self.capture, statvfs=roomy, rss_reader=readable))
+        over.setdefault("refill", crawlrefill.make_step(fetch=self.lists, sources=self.sources, rss_reader=readable))
+        return super().steps(without, **over)
+
+    def add_pdf(self, path="/paper.pdf", **kw):
+        ident, title = self.add(path, route=False, **kw)
+        self.srv.routes[path] = reply(200, body=pdf_of(title), ctype="application/pdf")
+        return ident, title
+
+    def test_a_pdf_candidate_goes_through_fetch_scan_convert_index_judge_card_and_move_and_the_log_and_the_queue_compare_the_same(self):
+        ident, title = self.add_pdf(target="gene-editing")
+        self.assertEqual(self.go(), 0)
+        book = self.book_of(ident)
+        root = self.store.read_book(book)
+        version = root["current_version"]
+        self.assertEqual((root["auto_filed"], root["kind"], root["state"], root["title"]), (True, "paper", "active", title))
+        self.assertEqual(self.store.read_version(book, version)["primary"], "paper.pdf")
+        (judged,) = self.events(book, "crawl_judged")
+        self.assertTrue(judged["ok"])
+        self.assertTrue(card.generations(self.store, book, version))
+        self.assertEqual(len(self.events(book, "reshelved")), 1)
+        self.assertEqual((self.row(ident)["status"], self.row(ident)["book_id"]), ("kept", book))
+        self.assertEqual([step for step, b in self.order if b == book][:3], ["capture", "scan", "convert"])
+        data = crawlreport.build(self.index, datetime.date(2026, 11, 16), "UTC", self.now, store=store.Store.open(write=False))
+        self.assertTrue(all(c["same"] for c in data["compare"]), data["compare"])
+
+    def test_a_pdf_that_the_scan_flags_is_held_and_never_converted_or_indexed(self):
+        ident, _ = self.add_pdf()
+        self.scan_kinds["/paper.pdf"] = ["javascript"]
+        self.assertEqual(self.go(), 0)
+        book = self.book_of(ident)
+        self.assertIn("crawl_held", self.names(book))
+        self.assertEqual([step for step, b in self.order if b == book], ["capture", "scan"])
+        self.assertEqual(self.events(book, "crawl_judged"), [])
+
+    def test_a_pdf_and_a_page_in_one_run_each_take_their_own_way(self):
+        pdf, _ = self.add_pdf("/paper.pdf", target="gene-editing")
+        page_ident, _ = self.add("/p2", target="additive")
+        self.assertEqual(self.go(), 0)
+        files = [self.store.read_version(self.book_of(i), self.store.read_book(self.book_of(i))["current_version"])["primary"] for i in (pdf, page_ident)]
+        self.assertEqual(sorted(files), ["page.html", "paper.pdf"])
+        self.assertEqual(sorted(self.row(i)["status"] for i in (pdf, page_ident)), ["kept", "kept"])
+
+
+class PdfOffChain(Chain):
+    """The default plan (no `[pdf]` section): a candidate that is a PDF is rejected without a request, as before."""
+
+    def test_a_pdf_candidate_is_rejected_for_its_type_with_no_request_and_no_book(self):
+        ident, _ = self.add("/paper.pdf", route=False)
+        self.srv.routes["/paper.pdf"] = reply(200, body=pdf_of("x"), ctype="application/pdf")
+        self.assertEqual(self.go(), 0)
+        self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "pdf not safe to convert"))
+        self.assertNotIn("/paper.pdf", self.requests())
+        self.assertEqual(self.crawl_books_all(), [])
 
 
 class TheOrder(Chain):
