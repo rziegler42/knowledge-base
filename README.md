@@ -111,6 +111,25 @@ A tool runs only if you have put it on the approved list yourself; the engine pr
 you. The full description of each command, its refusals and what it does not cover is in [engine/README.md](engine/README.md).
 An index written by an older version of the engine is refused, and the search says to run `python3 -m kb index` to build it again.
 
+## Running the crawl unattended
+
+The unattended crawl takes candidates from a queue to books on shelves in small, bounded batches, with no one at the keyboard. Starting it is your own act: nothing in this repository installs it or starts it. This is the checklist of the
+supervised run, in order. Run every command from the `engine` folder (`cd engine`), as [engine/README.md](engine/README.md) does, and read it for what each command refuses.
+
+1. **Approve the plan, at a terminal.** `python3 -m kb crawl-approve` prints a plain summary of your crawl plan and a digest and changes nothing. Read it. Then `python3 -m kb crawl-approve --digest DIGEST`, with the digest from the last line, stores the approval; it needs your own terminal.
+2. **A dry run.** `python3 -m kb crawl-run --dry-run` shows each check and what a run would do. It takes no lock, writes nothing and makes no request.
+3. **The first run, on a small ceiling.** Set the ceilings in the plan low (for example `batch`, `fetches_per_day`, `filed_total` and `cards_per_day` of a few each) and approve it again, since any change of the plan changes its digest. Make the bytecode folder, `crawl-pycache` under the index root,
+   a folder that only you can use (`mkdir -m 700 <index root>/crawl-pycache`), and run once by hand with Python told to use it: `python3 -X pycache_prefix=<index root>/crawl-pycache -m kb crawl-run`. A run refuses to start without that folder. The exit code is 0 for done (or another run is going), 3 for refused and 4 for a tripped breaker.
+4. **Read the log and the report.** `python3 -m kb crawl-status` prints the state, the counters against their ceilings and the last run as one JSON object, and `python3 -m kb crawl-report` writes the day's report (every book filed, by address) and prints its path. The log is `<index root>/crawl/log/crawl-YYYY-MM-DD.jsonl`.
+   Both commands only read.
+5. **A tripped breaker.** A run that trips the breaker is followed by refused runs until you have read why and run `python3 -m kb crawl-clear --yes` in your own terminal. It does not remove the stop file.
+6. **The stop file.** Create a file named `crawl.stop` in the index root (`touch <index root>/crawl.stop`) and the runner stops at its next look, between requests, model calls and moves; it marks no source off. Remove the file to let runs go on.
+7. **The agent.** Only when the first runs and their reports read well: `python3 -m kb crawl-schedule-text` prints the text of a launchd agent with the label `local.knowledge-base.crawl-run`, and it installs nothing and writes nothing. The agent starts one run every 900 seconds from the `engine` folder, with
+   Python's bytecode folder set to the `crawl-pycache` folder of step 3 (the text names it and says to make it private, mode 700, before you install) and its own output in `crawl-agent.log` under the index root, outside the crawl's log. Pass `--python /full/path/to/python3` if launchd cannot find `python3`.
+   Save the text to `~/Library/LaunchAgents/local.knowledge-base.crawl-run.plist`, read it, and install it yourself: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.knowledge-base.crawl-run.plist`. A start while a run is going exits at once, because of the run lock.
+   The computer and the model server must be up for a run to work; the log says when one cannot.
+8. **Stopping the agent.** `launchctl bootout gui/$(id -u)/local.knowledge-base.crawl-run` stops it from starting runs, and removing its file from `~/Library/LaunchAgents` keeps it from coming back. A run that is going stops at its next look when the stop file is there.
+
 ## Where the work stands
 
 | Plan | What it covers | State |

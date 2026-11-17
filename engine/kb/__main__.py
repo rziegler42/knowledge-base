@@ -10,7 +10,7 @@ from . import cardmarks, cardqueue
 from . import placeapply, placement, placereview, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
 from . import cardsample
 from . import discover
-from . import crawlapprove, crawlguard, crawlrun
+from . import crawlapprove, crawlguard, crawlrun, crawlschedule
 from . import problem
 from . import problemtrial
 from . import vectors
@@ -213,6 +213,10 @@ def main(argv=None):
     cp_ = sub.add_parser("crawl-report", help="write the report of one day of the unattended crawl to crawl/report/crawl-report-YYYY-MM-DD.md in the index root and print its path; it reads the log, "
                                               "the queue and the books and writes that one file")
     cp_.add_argument("--day", metavar="YYYY-MM-DD", help="the day to report, in the plan's time zone (default: today)")
+    said = ("print the text of a macOS launchd agent that runs crawl-run every 900 seconds from the engine folder, with Python's bytecode folder set to a private folder under the "
+            "index root that the text names; it installs nothing, writes nothing and makes no folder: you read it, make the folder (mode 700) and install it yourself")
+    cst = sub.add_parser("crawl-schedule-text", help=said, description=said)
+    cst.add_argument("--python", metavar="PATH", default="python3", help="the python program the agent runs: python3 (the default) or a full path, which launchd may need")
     cx = sub.add_parser("card-search", help="keyword search of the cards; every word of the query must match in one card")
     cx.add_argument("query")
     cx.add_argument("--book", metavar="BOOK_ID", help="only the cards of this book")
@@ -438,6 +442,9 @@ def main(argv=None):
         if args.command == "crawl-clear":
             crawlguard.clear(config.load()["index_root"], yes=args.yes)
             print("the circuit breaker is cleared; the stop file and any site stopped for the day are as they were")
+            return 0
+        if args.command == "crawl-schedule-text":
+            sys.stdout.write(crawlschedule.text(config.load()["index_root"], os.path.dirname(os.path.dirname(os.path.abspath(__file__))), args.python))
             return 0
         if args.command in ("crawl-status", "crawl-report"):
             import datetime
