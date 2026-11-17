@@ -4,7 +4,9 @@
 Every test runs on a temporary index root and on hand-made fixture files in the spec's log format. No test opens a socket, reads the owner's library,
 config, plan or keys, or writes outside its temporary folder. Hostile text is made with `chr()` and plain strings here, never typed as hidden characters."""
 
+import contextlib
 import datetime
+import io
 import json
 import os
 import re
@@ -19,7 +21,8 @@ from engine.tests import ENGINE_DIR
 from engine.tests.test_crawlstatus import GOOD_BREAKER, RLO, SIDE_FILES, ZWSP, QueueBase, StateBase, raw
 from engine.tests.test_store import StoreCase
 
-from kb import KbError, crawlqueue, crawlreport as cr, crawlstatus as cs
+from kb import KbError, crawlbooks, crawlqueue, crawlreport as cr, crawlstatus as cs
+from kb import __main__ as kb_main
 
 FIX = Path(ENGINE_DIR) / "tests" / "fixtures" / "crawlstatus"
 UTC = datetime.timezone.utc
@@ -1362,6 +1365,95 @@ class BooksTest(StoreCase):
                 self.assertIn(line, text)
         none = cr.render(cr.build(self.root, DAY, "UTC", NOW))
         self.assertIn("The books were not read", none)
+
+
+class CommandTest(StoreCase):
+    """`python3 -m kb crawl-status` and `crawl-report`, run through `main` on a temporary library and a temporary config (never the owner's)."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(os.umask, os.umask(0o077))
+        self.root = Path(self.index)
+
+    def run_main(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = kb_main.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def tree(self):
+        return {str(p): (p.stat().st_mtime_ns, p.stat().st_size) for p in Path(self.base).rglob("*") if p.is_file() or p.is_dir()}
+
+    def test_the_status_is_one_json_object_with_exit_0_and_changes_nothing(self):
+        before = self.tree()
+        code, out, err = self.run_main("crawl-status")
+        self.assertEqual((code, err), (0, ""))
+        got = json.loads(out)
+        self.assertEqual((got["plan"]["status"], got["state"]["state"]), ("none", "paused"))
+        self.assertEqual(self.tree(), before)
+
+    def test_the_status_shows_an_approved_plan_through_the_real_reader(self):
+        shutil.copytree(FIX / "approved", self.root / "crawl" / "approved")
+        got = json.loads(self.run_main("crawl-status")[1])
+        self.assertEqual((got["plan"]["status"], got["plan"]["values"]["fetches_per_day"]), ("approved", 20))
+
+    def test_the_report_of_today_is_written_and_its_path_and_counts_are_printed(self):
+        code, out, err = self.run_main("crawl-report")
+        self.assertEqual((code, err), (0, ""))
+        got = json.loads(out)
+        self.assertEqual(Path(got["path"]).parent, self.root / "crawl" / "report")
+        self.assertEqual(stat.S_IMODE(os.stat(got["path"]).st_mode), 0o600)
+        self.assertIn("# Crawl report for", Path(got["path"]).read_text())
+        self.assertIn("## What the books' own records say", Path(got["path"]).read_text())
+
+    def test_the_report_of_a_day_asked_for(self):
+        got = json.loads(self.run_main("crawl-report", "--day", "2026-11-10")[1])
+        self.assertEqual((got["day"], Path(got["path"]).name), ("2026-11-10", "crawl-report-2026-11-10.md"))
+
+    def test_a_day_that_is_not_a_day_or_not_yet_is_a_refusal_with_nothing_written_and_the_text_is_not_repeated(self):
+        for bad in ("yesterday", "2026-13-01", "20261118", "2026-11-18T00:00", "2999-01-01", "1999-12-31", "../x", ""):
+            with self.subTest(day=bad):
+                code, out, err = self.run_main("crawl-report", "--day", bad)
+                self.assertEqual((code, out), (2, ""))
+                self.assertTrue(err.startswith("refused: "))
+                if bad:
+                    self.assertNotIn(bad, err)
+        self.assertFalse((self.root / "crawl" / "report").exists())
+
+    def test_no_other_argument_is_taken(self):
+        for argv in (("crawl-status", "--day", "2026-11-18"), ("crawl-status", "extra"), ("crawl-report", "extra"), ("crawl-report", "--plan", "x"), ("crawl-status", "--help-me")):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+                kb_main.main(list(argv))
+            self.assertEqual(raised.exception.code, 2)
+
+    def test_a_library_that_is_not_set_up_is_a_refusal_that_quotes_no_file_text(self):
+        os.environ["KB_CONFIG_DIR"] = os.path.join(self.base, "no-such-config")
+        before = self.tree()
+        for command in ("crawl-status", "crawl-report"):
+            with self.subTest(command=command):
+                code, out, err = self.run_main(command)
+                self.assertNotEqual(code, 0)
+                self.assertEqual(out, "")
+                self.assertTrue(err.startswith(("refused: ", "failed: ")))
+                self.assertEqual(err.count("\n"), 1)
+                self.assertNotIn("Traceback", err)
+        self.assertEqual(self.tree(), before)
+
+    def test_the_help_lists_both_commands_and_the_ones_that_were_there(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), self.assertRaises(SystemExit) as raised:
+            kb_main.main(["--help"])
+        self.assertEqual(raised.exception.code, 0)
+        for name in ("crawl-status", "crawl-report", "crawl-discover", "crawl-approve", "crawl-clear", "crawl-run", "capture-url", "card-search"):
+            self.assertIn(name, buffer.getvalue())
+
+    def test_a_status_with_a_book_the_crawl_filed_counts_it_and_the_report_lists_it(self):
+        book = self.store.create_book(title="A page", kind="preprint", auto_filed=True)
+        crawlbooks.record_found(self.store, book, candidate=1, source=crawlqueue.SOURCES[0], found_from=None, topic=None, run="r1", plan_digest="0" * 32)
+        got = json.loads(self.run_main("crawl-status")[1])
+        self.assertEqual(got["books"]["filed_total"], 1)
+        text = Path(json.loads(self.run_main("crawl-report")[1])["path"]).read_text()
+        self.assertIn("1 books of the crawl, in the whole library, are not yet reviewed", text)
 
 
 class SourceTest(unittest.TestCase):
