@@ -17,11 +17,24 @@ Which of the spec's rules the policy has already, and which this module gives it
   An abuse signal in a body, and the `Retry-After` and rate-limit headers, are not read here: only the status says (a recorded narrowing of the plan's "an abuse signal"). The tests of the text are of the start
   of the client's fixed messages, never of a part a server can fill (a content type, an encoding), so that a server cannot choose its own class.
 
-This module makes no request of its own, reads no file and no environment variable."""
-import math
-from collections import namedtuple
+The **`fetch` step** (`make_step`, `step`; Increment G) takes candidates from the queue and captures each as a book, within every bound. For one candidate, in this order: the stop file and the disk floors (looked at
+before a row is taken, so a refusal reserves no unit and leaves no row `fetching`), `crawlstate.reserve` (a row and its units of the ceilings, in one transaction), the address (a PDF by its source or its name is rejected
+with no request), the capture (`capture_url.capture` under the policy, `auto_filed`), the `crawl_found` event of the book, and last the row (`kept`, `rejected`, or a failed try). A death between two of these is finished
+by the next run from what is written: a book filed with no `crawl_found` (an orphan) is adopted when its address is captured again (it is `held` then, so nothing is fetched twice), and a book that has its event for
+this candidate finishes the row. A failed capture leaves no active book: capture makes a book before it knows the fetch worked, and the step sets it `weeded` with a `capture_failed` event, **not** a `crawl_rejected` one
+and not a `crawl_found` one, because a retry of the same address reuses that book (the identity index has no removal) and a terminal event would end the retry, and because dead addresses must not use the ceiling on books
+filed. A retry that succeeds makes the book `active` again and gives it its `crawl_found`. The step reads no link of a page (the spec leaves that out of the first version). It looks at the stop file before each row, the
+disk floors, the ceilings and the batch; a ceiling or a floor ends the step, not the run. Each fetch that made a request is given to the breaker (`crawlguard.record_fetch`): a page filed or a duplicate is a success, a failed
+fetch is a failure, and a block, a stop, a rejection, a PDF refused without a request and a refusal of a site are none (a refusal counts for its site: `domain_refusals`). A trip is `ctx.trip`, then the run ends.
 
-from . import KbError, capture_url, crawllists, webclient
+The module itself makes no request, reads no file and no environment variable; the capture (the shared client) and the library do."""
+import math
+import os
+from collections import namedtuple
+from urllib.parse import urlsplit
+
+from . import KbError, capture_url, crawlbooks, crawlguard, crawllists, crawlrun, crawlstate, identity, stages, webaddr, webclient
+from . import store as library_store
 
 # a common browser's string; the plan's `user_agent = browser` sends it. It names no project, tool or contact (the owner chose a browser's, as `shelf.md` agreed).
 BROWSER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
@@ -112,6 +125,201 @@ def classify(error):
             if status in SITE_REFUSALS:
                 return Outcome("refused", f"the site refused (HTTP {status})", False)
             return Outcome("failed", f"HTTP {status}", True)
-    if text.startswith("the response is larger than "):
+    if text.startswith("the response is larger than ") or text.startswith("the page is larger than "):
         return Outcome("rejected", "over the size limit", False)
+    if text == "the response looks like binary or compressed data, not a web page":
+        return Outcome("rejected", "not a web page", False)
     return Outcome("failed", "timed out" if text.startswith("timed out") else "the fetch failed", True)
+
+
+# ---- the `fetch` step
+
+STOPPED = "the stop file is present"
+WHY_ENDED = {"fetches_per_day": "fetches_per_day reached: no new candidates today", "filed_total": "filed_total reached: no new books", "batch": "the batch of this run is taken",
+             "nothing_queued": "nothing is queued that can be taken now"}
+ALREADY_HELD = "already held"
+
+
+def _path_is_pdf(address):
+    try:
+        return urlsplit(address).path.lower().endswith(".pdf")
+    except ValueError:
+        return False
+
+
+def _crawl_found(events):
+    return next((e for e in events if isinstance(e, dict) and e.get("event") == "crawl_found"), None)
+
+
+class _Run:
+    """One run of the step: the context, the library, the policy and the counts."""
+
+    def __init__(self, ctx, fp, library, ident, capture, scan):
+        self.ctx, self.fp, self.library, self.ident, self.capture = ctx, fp, library, ident, capture
+        self.filed = crawlbooks.filed_count(library, scan)
+        self.orphans = set(scan.orphans)
+        self.state, _restarted = crawlguard.load_state(ctx.index_root)
+        self.counts = {}
+
+    def now(self):
+        return self.ctx.clock()
+
+    def say(self, outcome, row, reason=None, book=None, step="fetch"):
+        log = self.ctx.log
+        self.ctx.log.write(step, outcome, candidate=row["id"], host=log.safe(row["domain"], "host"), book=book, reason=log.safe(reason), now=self.now())
+        if step == "fetch":
+            self.counts[outcome] = self.counts.get(outcome, 0) + 1
+
+    def finish(self, row, status, reason, book=None, refusal=False):
+        crawlstate.finish(self.ctx.conn, self.ctx.plan, row["id"], status, reason, book, self.now(), refusal=refusal, run=self.ctx.run)
+
+    def note(self, ok):
+        """Give one fetch that made a request to the breaker; a trip is the run's end."""
+        tripped = crawlguard.record_fetch(self.state, ok, self.ctx.plan)
+        crawlguard.save_state(self.ctx.index_root, self.state)
+        if tripped is not None:
+            self.ctx.trip(*tripped)
+            raise crawlrun.BreakerTripped()
+
+    def adopt(self, row, book):
+        """Give a book that was filed or found held its `crawl_found` for this candidate: `"new"` (a book the crawl has not counted), `"counted"` (an orphan or a book of this candidate), or `None` (not ours)."""
+        root = self.library.read_book(book)
+        events = self.library.read_events(book)
+        found = _crawl_found(events)
+        if root.get("auto_filed") is not True:
+            return None
+        if found is not None:
+            return "counted" if found.get("candidate") == row["id"] and root.get("state") == "active" else None
+        weeded = root.get("state") == "weeded"
+        if root.get("state") != "active" and not (weeded and any(e.get("event") == "capture_failed" for e in events)):
+            return None
+        if weeded:
+            self.library.set_state(book, "active")               # a retry of a failed capture that worked: the book is the one the failed try made
+        crawlbooks.record_found(self.library, book, candidate=row["id"], source=row["source"], found_from=row["found_from"], topic=row["topic"], run=self.ctx.run, plan_digest=self.ctx.plan_digest)
+        return "counted" if book in self.orphans else "new"
+
+    def drop(self, book, reason):
+        """A capture that failed: the book it made (if it made one) is not active and not the crawl's."""
+        root = self.library.read_book(book)
+        if root.get("auto_filed") is True and root.get("state") == "active" and _crawl_found(self.library.read_events(book)) is None:
+            self.library.append_event(book, "capture_failed", reason=reason, run=self.ctx.run)      # the event first, as `crawlbooks.weed` does: a death between the two leaves an active orphan that the next sweep finishes
+            self.library.set_state(book, "weeded")
+
+    def outcome(self, row, out, book=None):
+        """The end of a try that failed, was refused or was rejected, from `classify`: the row and the log. (A stop leaves the next turn of the loop to end the batch: it looks at the stop file first.)"""
+        if out.kind in ("blocked", "rejected"):
+            self.finish(row, "rejected", out.reason, book)
+            self.say(out.kind, row, out.reason, book)
+        elif out.kind == "stopped":
+            self.finish(row, "failed", out.reason)
+            self.say("skipped", row, out.reason)
+        elif out.kind == "refused":
+            self.finish(row, "failed", out.reason, refusal=True)
+            self.say("refused", row, out.reason)
+        else:
+            self.finish(row, "failed", out.reason)
+            self.say("failed", row, out.reason)
+            self.note(False)
+
+    def one(self, row):
+        """Take one candidate through the capture."""
+        if row["source"] == "arxiv" or _path_is_pdf(row["address"]):
+            return self.outcome(row, Outcome("rejected", PDF_REASON, False))
+        try:
+            address = webaddr.canon_address(row["address"])
+        except KbError:
+            return self.outcome(row, Outcome("rejected", "the address is not usable", False))
+        owner = self.ident.lookup("url", address)
+        if owner and self._owners(owner):
+            self.finish(row, "rejected", ALREADY_HELD, owner)
+            self.say("rejected", row, ALREADY_HELD, owner)
+            return
+        try:
+            result = self.capture(self.library, self.ident, address, policy=self.fp.policy, types=self.fp.policy.types, auto_filed=True, max_bytes=self.fp.max_bytes,
+                                  timeout=self.fp.timeout, total_timeout=self.fp.total_timeout)
+        except webclient.Refused as e:
+            return self.outcome(row, classify(e))
+        status, book = result["status"], result["book_id"]
+        if status == "duplicate":
+            self.finish(row, "rejected", ALREADY_HELD, book)
+            self.say("rejected", row, ALREADY_HELD, book)
+            self.note(True)
+        elif status == "failed":
+            out = classify(capture_url.FetchError(result.get("reason") or ""))
+            self.drop(book, out.reason)
+            self.outcome(row, out)
+        else:
+            adopted = self.adopt(row, book)
+            if adopted is None:
+                self.finish(row, "rejected", ALREADY_HELD, book)
+                self.say("rejected", row, ALREADY_HELD, book)
+                return
+            self.finish(row, "kept", None, book)
+            if adopted == "new":
+                self.filed += 1
+            if status == "filed":
+                self.say("ok", row, None, book, step="capture")
+            self.say("ok", row, None if status == "filed" else "the book of an earlier try", book)
+            if status == "filed":
+                self.note(True)
+
+    def _owners(self, book):
+        """True if the address names a book that exists and is not the crawl's (a book of the owner's: nothing here fetches into it)."""
+        try:
+            return self.library.read_book(book).get("auto_filed") is not True
+        except KbError:
+            return False
+
+
+def make_step(capture=None, open_store=None, statvfs=None):
+    """The function for the `fetch` point. `capture`, `open_store` and `statvfs` replace the real ones (tests)."""
+
+    def step(ctx):
+        if not isinstance(getattr(ctx, "plan_digest", None), str):
+            raise crawlrun.StepRefused("the fetch needs the digest of the approved plan")
+        try:
+            fp = build(ctx.plan, ctx.matcher, ctx.suffixes, ctx.index_root, log=ctx.log, now=ctx.clock())
+        except KbError as e:
+            raise crawlrun.StepRefused(str(e)) from None
+        library = (open_store or library_store.Store.open)()
+        _sweep(ctx, library)
+        run = _Run(ctx, fp, library, identity.Identity(ctx.index_root), capture or capture_url.capture, crawlbooks.scan_crawl_books(library))
+        ended = "the step failed"
+        try:
+            ended = _loop(ctx, run, statvfs or os.statvfs)
+        except crawlrun.BreakerTripped:
+            ended = "the circuit breaker was tripped"
+            raise
+        finally:
+            ctx.fetch_report = dict(run.counts, filed=run.filed, ended=ended)
+            ctx.log.write("fetch", "skipped", reason=ctx.log.safe(ended), n=sum(run.counts.values()), now=ctx.clock())
+
+    return step
+
+
+def _sweep(ctx, library):
+    """Finish what a death left: an active `auto_filed` book with no `crawl_found` whose fetch never worked (it has no version, or its `fetched` stage is not done) is weeded as a failed capture, so that it is not
+    counted for ever and no later step meets a book with no payload. A retry of its address revives it. An orphan whose payload was filed is left for the capture to adopt."""
+    for book in crawlbooks.scan_crawl_books(library).orphans:
+        version = library.read_book(book).get("current_version")
+        if version and stages.read(library, book, version)["stages"]["fetched"]["status"] in ("done", "skipped"):
+            continue
+        library.append_event(book, "capture_failed", reason="the capture did not finish", run=ctx.run)
+        library.set_state(book, "weeded")
+
+
+def _loop(ctx, run, statvfs):
+    while True:
+        if crawlguard.stop_requested(ctx.index_root):
+            return STOPPED
+        try:
+            crawlguard.check_disk(ctx.cfg["bulk_root"], ctx.index_root, ctx.plan, statvfs=statvfs)
+        except KbError as e:
+            return f"the disk floor refuses a fetch: {e}"
+        row, why = crawlstate.reserve(ctx.conn, ctx.plan, ctx.clock(), ctx.run, run.filed)
+        if row is None:
+            return WHY_ENDED.get(why, why)
+        run.one(row)
+
+
+step = make_step()

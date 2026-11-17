@@ -741,6 +741,12 @@ class Refusing(Case):
         self.assertEqual(later, [("a matcher", frozenset({"com"}))])
 
 
+    def test_the_context_carries_the_digest_of_the_approved_plan_for_the_steps_that_write_it_into_a_book(self):
+        seen = []
+        self.do_run(steps={"lists": lambda ctx: seen.append(ctx.plan_digest)})
+        self.assertEqual(seen, [crawlapprove.load_approved(self.index, self.cfg, kb_root=self.kb)["digest"]])
+
+
 class ListsPoint(Case):
     """The real `lists` step in a real run, with a fake downloader."""
 

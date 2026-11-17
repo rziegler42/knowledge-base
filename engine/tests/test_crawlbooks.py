@@ -388,6 +388,22 @@ class Readers(Case):
         self.assertEqual(self.events(plain), [])
         self.assertEqual(self.names(owners[0]), ["placement_proposed"])
 
+    def test_an_auto_filed_active_book_with_no_found_event_is_an_orphan_and_counts_toward_the_filed_total_until_it_is_found_or_weeded(self):
+        digest = self.approve()
+        mine = self.found(digest)
+        orphan = self.book()
+        weeded = self.book()
+        self.store.set_state(weeded, "weeded")
+        owner = self.book(auto_filed=False)
+        scan = crawlbooks.scan_crawl_books(self.store)
+        self.assertEqual(scan.orphans, [orphan])
+        self.assertEqual(crawlbooks.crawl_books(self.store, {digest}, scan), [mine])         # an orphan is not work for any step: only the fetch step adopts it
+        self.assertEqual(crawlbooks.filed_count(self.store, scan), 2)
+        self.assertEqual(self.names(owner), [])
+        crawlbooks.record_found(self.store, orphan, **self.found_args(digest, candidate=9))
+        self.assertEqual(crawlbooks.scan_crawl_books(self.store).orphans, [])
+        self.assertEqual(crawlbooks.filed_count(self.store), 2)
+
     def test_a_found_event_forged_onto_one_of_the_owners_books_is_ignored_by_every_reader(self):
         digest = self.approve()
         owner = self.book(auto_filed=False)
@@ -491,7 +507,7 @@ class Readers(Case):
         events = crawlbooks.filed_events(self.store)
         self.assertEqual(sorted(events), sorted([a, b]))
         self.assertEqual(crawlstate.filed_total(events), 2)
-        self.assertEqual(crawlbooks.filed_count(self.store), 2)
+        self.assertEqual(crawlbooks.filed_count(self.store), 3)         # the two found books and the active orphan (`auto_filed`, its event not written); the owner's book is not counted
 
 
 class Approved(Case):

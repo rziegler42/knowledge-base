@@ -209,15 +209,16 @@ def fail_step(store, plan, book_id, step, reason, run):
 
 class Scan:
     """What one pass over the library found: `entries`, the crawl books (`auto_filed` and with a `crawl_found` event) as `{"id", "found", "events", "state"}` in the order found, and `unreadable`, the books
-    whose event log could not be read (they are skipped, not an error)."""
+    whose event log could not be read (they are skipped, not an error), and `orphans`, the active `auto_filed` books with no `crawl_found` (a run died between filing a book and writing its event: the fetch step adopts
+    them, and they count toward the filed total in the meantime)."""
 
-    def __init__(self, entries, unreadable):
-        self.entries, self.unreadable = entries, unreadable
+    def __init__(self, entries, unreadable, orphans=()):
+        self.entries, self.unreadable, self.orphans = entries, unreadable, list(orphans)
 
 
 def scan_crawl_books(store):
     """One pass over the library, reading the events of the books the runner could have filed (`auto_filed`); the owner's own books are not read for them."""
-    entries, unreadable = [], []
+    entries, unreadable, orphans = [], [], []
     for book_id in store.list_books():
         try:
             root = store.read_book(book_id)
@@ -230,8 +231,10 @@ def scan_crawl_books(store):
         found = _found(events)
         if found is not None:
             entries.append({"id": book_id, "found": found, "events": events, "state": root.get("state")})
+        elif root.get("state") == "active":
+            orphans.append(book_id)
     entries.sort(key=lambda e: (str(e["found"].get("at")), e["id"]))
-    return Scan(entries, unreadable)
+    return Scan(entries, unreadable, orphans)
 
 
 def _approved(found, approved):
@@ -264,9 +267,10 @@ def filed_events(store, scan=None):
 
 
 def filed_count(store, scan=None):
-    """The number of books the crawl has filed (`filed_total`'s ceiling counts them). A book of the crawl whose event log cannot be read counts too: a ceiling is never undercounted."""
+    """The number of books the crawl has filed (`filed_total`'s ceiling counts them). A book of the crawl whose event log cannot be read counts too, and so does an active orphan (filed, its event not yet written): a
+    ceiling is never undercounted."""
     scan = scan or scan_crawl_books(store)
-    return crawlstate.filed_total(filed_events(store, scan)) + len(scan.unreadable)
+    return crawlstate.filed_total(filed_events(store, scan)) + len(scan.unreadable) + len(scan.orphans)
 
 
 def finish_weeds(store, scan=None):
