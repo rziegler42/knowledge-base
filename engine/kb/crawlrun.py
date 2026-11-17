@@ -144,6 +144,10 @@ def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvf
     index_root, bulk_root = cfg["index_root"], cfg["bulk_root"]
     if dry_run:
         return _dry_run(cfg, clock(), say, kb_root, statvfs, prefix)
+    problem = crawlguard.index_root_problem(index_root)
+    if problem:                          # before the lock and the log: nothing is written into a folder that cannot be trusted
+        warn(f"refused: {problem}")
+        return EXIT_REFUSED
     started = clock()
     log = crawllog.Log(index_root, crawllog.new_run_id(started), secrets=secrets, clock=clock)
     lock = None
@@ -393,7 +397,10 @@ def _dry_run(cfg, now, say, kb_root, statvfs, prefix):
             continue
         try:
             if check == "lock":
-                show(check, "not taken in a dry run (a real run takes it, and exits quietly if another run holds it)")
+                problem = crawlguard.index_root_problem(index_root)
+                if problem:
+                    raise _Refuse(EXIT_REFUSED, problem, check)
+                show(check, "the index folder is yours and others cannot write it; the lock is not taken in a dry run (a real run takes it, and exits quietly if another run holds it)")
             elif check == "approved":
                 problem = prefix_problem(prefix, kb_root)
                 if problem:

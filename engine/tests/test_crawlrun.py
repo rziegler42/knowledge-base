@@ -330,6 +330,58 @@ class Refusals(Case):
             self.assertTrue(self.lock_is_free())
         return lines[0]
 
+    def tree(self):
+        return sorted((os.path.join(d, n), os.lstat(os.path.join(d, n)).st_mtime_ns) for d, ds, fs in os.walk(self.index) for n in ds + fs)
+
+    def test_an_index_folder_that_others_can_write_is_refused_before_the_lock_and_nothing_is_written_in_it(self):
+        self.set_plan(PLAN_TEXT)
+        self.approve()
+        spies = self.spies()
+        os.chmod(self.index, 0o777)
+        self.addCleanup(os.chmod, self.index, 0o700)
+        before = self.tree()
+        self.assertEqual(self.do_run(), 3)
+        self.assertEqual(len(self.err), 1)
+        self.assertTrue(self.err[0].startswith("refused: the index folder"), self.err)
+        self.assertNotIn(self.index, self.err[0])
+        spies["lock"].assert_not_called()
+        self.assertEqual(self.tree(), before)
+        self.assertFalse(os.path.exists(os.path.join(self.index, "crawl.lock")))
+
+    def test_an_index_folder_that_another_user_owns_is_refused_the_same_way(self):
+        self.set_plan(PLAN_TEXT)
+        self.approve()
+        with mock.patch.object(crawlrun.crawlguard.os, "getuid", return_value=os.getuid() + 1):
+            self.assertEqual(self.do_run(), 3)
+        self.assertIn("not ours", self.err[0])
+
+    def test_an_index_folder_with_mode_755_is_the_owners_own_and_a_run_goes_on(self):
+        self.set_plan(PLAN_TEXT)
+        self.approve()
+        os.chmod(self.index, 0o755)
+        self.addCleanup(os.chmod, self.index, 0o700)
+        self.assertEqual(self.do_run(), 0)
+        self.assertEqual(self.err, [])
+
+    def test_the_dry_run_says_what_it_would_refuse_for_the_index_folder_on_the_line_of_the_lock(self):
+        self.set_plan(PLAN_TEXT)
+        self.approve()
+        os.chmod(self.index, 0o777)
+        self.addCleanup(os.chmod, self.index, 0o700)
+        self.assertEqual(self.do_run(dry_run=True), 0)                 # (a dry run only says what a real run would do)
+        text = "\n".join(self.out)
+        self.assertIn("the run lock: would refuse: the index folder", text)
+        self.assertIn("a real run would exit 3 (refused)", text)
+        self.assertIn("the approved plan: not reached", text)
+
+    def test_the_dry_run_for_a_good_index_folder_says_it_is_the_owners(self):
+        self.set_plan(PLAN_TEXT)
+        self.approve()
+        self.do_run(dry_run=True)
+        line = next(x for x in self.out if x.startswith("the run lock:"))
+        self.assertIn("the index folder is yours", line)
+        self.assertIn("not taken in a dry run", line)
+
     def test_a_held_lock_exits_0_prints_nothing_and_logs_one_refuse_line_that_says_a_run_is_in_progress(self):
         spies = self.spies()
         held = crawlguard.acquire_run_lock(self.index, now=NOW)

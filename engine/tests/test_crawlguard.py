@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import re
+import shutil
 import signal
 import sqlite3
 import stat
@@ -71,6 +72,75 @@ class Case(unittest.TestCase):
                 with open(os.path.join(folder, name), encoding="utf-8") as f:
                     out += [json.loads(line) for line in f.read().splitlines()]
         return out
+
+
+class IndexRoot(Case):
+    def folder(self, mode):
+        path = os.path.join(self.tmp_folder, f"idx{mode:o}")
+        os.mkdir(path)
+        os.chmod(path, mode)
+        return path
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_folder, True)
+
+    def test_a_folder_that_is_ours_and_that_others_cannot_write_passes_with_mode_700_or_755_or_750(self):
+        for mode in (0o700, 0o755, 0o750, 0o711):
+            with self.subTest(oct(mode)):
+                self.assertIsNone(crawlguard.index_root_problem(self.folder(mode)))
+                shutil.rmtree(os.path.join(self.tmp_folder, f"idx{mode:o}"))
+
+    def test_a_folder_that_group_or_others_can_write_is_refused_with_a_text_that_does_not_show_the_path(self):
+        for mode in (0o770, 0o775, 0o707, 0o757, 0o777, 0o1777, 0o720, 0o702):
+            with self.subTest(oct(mode)):
+                path = self.folder(mode)
+                problem = crawlguard.index_root_problem(path)
+                self.assertIsInstance(problem, str)
+                self.assertIn("can be written by others", problem)
+                self.assertNotIn(path, problem)
+                self.assertNotIn(self.tmp_folder, problem)
+                os.chmod(path, 0o700)
+                shutil.rmtree(path)
+
+    def test_a_folder_that_another_user_owns_is_refused(self):
+        path = self.folder(0o700)
+        with mock.patch.object(crawlguard.os, "getuid", return_value=os.getuid() + 1):
+            problem = crawlguard.index_root_problem(path)
+        self.assertIn("not ours", problem)
+        self.assertNotIn(path, problem)
+
+    def test_a_link_a_file_and_a_missing_path_are_refused(self):
+        good = self.folder(0o700)
+        link = os.path.join(self.tmp_folder, "link")
+        os.symlink(good, link)
+        plain = os.path.join(self.tmp_folder, "file")
+        with open(plain, "w"):
+            pass
+        for path in (link, link + "/", link + "//", plain, os.path.join(self.tmp_folder, "nowhere")):
+            with self.subTest(os.path.basename(path)):
+                problem = crawlguard.index_root_problem(path)
+                self.assertIsInstance(problem, str)
+                self.assertNotIn(self.tmp_folder, problem)
+
+    def test_a_good_folder_with_a_slash_at_its_end_passes_and_a_link_with_one_does_not(self):
+        good = self.folder(0o700)
+        self.assertIsNone(crawlguard.index_root_problem(good + "/"))
+        link = os.path.join(self.tmp_folder, "link2")
+        os.symlink(good, link)
+        self.assertIn("link", crawlguard.index_root_problem(link + "/"))
+
+    def test_a_path_that_is_not_text_is_refused(self):
+        for bad in (None, 5, "", b"/x"):
+            with self.subTest(repr(bad)):
+                self.assertIsInstance(crawlguard.index_root_problem(bad), str)
+
+    def test_it_reads_nothing_and_writes_nothing(self):
+        path = self.folder(0o700)
+        before = os.stat(path).st_mtime_ns
+        crawlguard.index_root_problem(path)
+        self.assertEqual((os.listdir(path), os.stat(path).st_mtime_ns), ([], before))
 
 
 class RunLock(Case):

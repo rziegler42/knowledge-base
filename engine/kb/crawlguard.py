@@ -97,6 +97,25 @@ class RunLock:
         self.release()
 
 
+def index_root_problem(index_root):
+    """Why the index folder cannot be trusted with the run lock and the stop file, or `None` if it can. The two files are checked (`acquire_run_lock`, `stop_requested`), but a folder that another account can write lets it
+    unlink the lock while a run holds it (a second run then starts) or remove the stop file. The folder must be a real folder, not a link, that is ours and that group and others cannot write (mode 700, 755 and 750 pass). The
+    text names no path; nothing is read from the folder or written to it."""
+    if not isinstance(index_root, str) or not index_root.strip():
+        return "the index folder is not set"
+    try:
+        info = os.lstat(index_root.rstrip("/") or "/")        # (a slash at the end would make the system follow a link: `lstat` is made of the name itself)
+    except OSError:
+        return "the index folder cannot be examined"
+    if not stat.S_ISDIR(info.st_mode):
+        return "the index folder is a link or not a folder"
+    if info.st_uid != os.getuid():
+        return "the index folder is not ours: the run lock and the stop file in it could be changed by its owner"
+    if stat.S_IMODE(info.st_mode) & 0o022:
+        return "the index folder can be written by others: the run lock and the stop file in it could be removed"
+    return None
+
+
 def acquire_run_lock(index_root, now=None, pid=None):
     """The run lock, or `None` when another run holds it (nothing is written then). A refusal for a lock file that is not a plain file of ours."""
     stamp = _stamp(now if now is not None else _utc_now())
