@@ -138,14 +138,16 @@ def reserve(conn, plan, now, run, filed):
         return _row(conn, ident), ""
 
 
-def finish(conn, plan, ident, status, reason, book_id, now, refusal=False, run=None):
+def finish(conn, plan, ident, status, reason, book_id, now, refusal=False, run=None, count=True):
     """Close the try of a `fetching` row: `kept` (with the `book_id`), `rejected` (final; a `book_id` may name the book it duplicates), or `failed` (this try failed: back to `queued` at a later `next_try`, or `failed` and
-    final when `tries` has reached `retries`). With `refusal`, a failed try is a refusal of the site (403, 429, an abuse signal): it waits a day and counts for the site's refusals. With `run`, only the run that took the row can finish it (a late finish of a try that was
+    final when `tries` has reached `retries`). With `refusal`, a failed try is a refusal of the site (403, 429, an abuse signal): it waits a day and, unless `count` is false, counts for the row's own site's refusals (a caller that charges the refusal to a different site, the one that a redirect led to and that answered it, passes `count=False`: the row's site is then not charged for what another site did). With `run`, only the run that took the row can finish it (a late finish of a try that was
     given up and taken again by another run is refused)."""
     _plan_numbers(plan, "retries")
     ident = _id(ident)
     if not isinstance(status, str) or status not in FINISH_STATUSES:
         raise KbError("a try ends as " + ", ".join(FINISH_STATUSES))
+    if not isinstance(count, bool):
+        raise KbError("whether a refusal counts for the row's site is true or false")
     if not isinstance(refusal, bool) or (refusal and status != "failed"):
         raise KbError("a refusal is a failed try")
     book = None
@@ -170,7 +172,7 @@ def finish(conn, plan, ident, status, reason, book_id, now, refusal=False, run=N
             else:
                 text = textutil.clean(f"failed {tries} times" + (f": {text}" if text else ""), REASON_MAX)
         conn.execute("UPDATE candidates SET status = ?, reason = ?, book_id = ?, next_try = ?, updated = ? WHERE id = ? AND status = 'fetching'", (new, text, book, next_try, stamp, ident))
-        if refusal and isinstance(row["domain"], str) and _SITE.fullmatch(row["domain"]):
+        if refusal and count and isinstance(row["domain"], str) and _SITE.fullmatch(row["domain"]):
             _bump(conn, day, f"refusal:{row['domain']}")
 
 

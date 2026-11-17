@@ -178,8 +178,8 @@ class _Run:
         if step == "fetch":
             self.counts[outcome] = self.counts.get(outcome, 0) + 1
 
-    def finish(self, row, status, reason, book=None, refusal=False):
-        crawlstate.finish(self.ctx.conn, self.ctx.plan, row["id"], status, reason, book, self.now(), refusal=refusal, run=self.ctx.run)
+    def finish(self, row, status, reason, book=None, refusal=False, count=True):
+        crawlstate.finish(self.ctx.conn, self.ctx.plan, row["id"], status, reason, book, self.now(), refusal=refusal, run=self.ctx.run, count=count)
 
     def note(self, ok):
         """Give one fetch that made a request to the breaker; a trip is the run's end."""
@@ -222,10 +222,11 @@ class _Run:
             self.finish(row, "failed", out.reason)
             self.say("skipped", row, out.reason)
         elif out.kind == "refused":
-            self.finish(row, "failed", out.reason, refusal=True)
+            answered_by_another = self.hop is not None and self.hop["last"] != self.hop["first"]
+            self.finish(row, "failed", out.reason, refusal=True, count=not answered_by_another)         # the row still waits a day; its own site is charged only when it was its own site that refused
             self.say("refused", row, out.reason)
-            if self.hop is not None and self.hop["last"] != self.hop["first"]:
-                crawlstate.note_refusal(self.ctx.conn, self.ctx.plan, self.now(), self.hop["last"])      # the site that refused is charged too, and not only the one that led to it
+            if answered_by_another:
+                crawlstate.note_refusal(self.ctx.conn, self.ctx.plan, self.now(), self.hop["last"])      # the site that answered the refusal is charged, and not the one that led to it
         else:
             self.finish(row, "failed", out.reason)
             self.say("failed", row, out.reason)

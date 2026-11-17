@@ -89,7 +89,7 @@ consecutive_failures = 8
 failure_share = 0.5         # over the last `window` fetches
 window = 20
 model_down_minutes = 30
-domain_refusals = 3         # 403, 429 or an abuse signal from one site stops that site for the day
+domain_refusals = 3         # 403, 429 or an abuse signal from one site stops that site for the day (counted against the site that answered it: a candidate sent on by a resolver such as doi.org to a publisher that refuses charges the publisher and not the resolver)
 [sources]
 openalex = on
 arxiv = on

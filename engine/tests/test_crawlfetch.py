@@ -1356,6 +1356,31 @@ class Redirects(StepCase):
         self.assertTrue(all(r["reason"] == "the site it leads to is stopped for the day" for r in later))
         self.assertEqual(crawlguard.load_state(self.index)[0]["history"], [])       # deferred, not failed: nothing for the breaker
 
+    def test_a_refusal_by_the_site_a_redirect_led_to_is_not_counted_against_the_site_that_led_to_it(self):
+        self.plan.update(per_domain_per_day=5, domain_refusals=3, batch=10, fetches_per_day=10)
+        for n in range(3):                                   # three different publishers, each reached through one resolver, each refusing
+            host = f"pub{n}.test"
+            self.dns.setdefault(host, [ALL_PUBLIC])
+            self.srv.routes[f"/r{n}"] = redirect(f"http://{host}/p{n}")
+            self.srv.routes[f"/p{n}"] = reply(403, body=b"no")
+        rows = [self.add(f"/r{n}", host="resolver.test") for n in range(3)]
+        self.run_step()
+        counters = self.counters()
+        self.assertEqual([counters.get(("2026-11-16", f"refusal:pub{n}.test")) for n in range(3)], [1, 1, 1])
+        self.assertNotIn(("2026-11-16", "refusal:resolver.test"), counters)                  # the resolver is not stopped by what its publishers do
+        self.assertEqual([self.row(r)["status"] for r in rows], ["queued"] * 3)
+        later = {self.row(r)["next_try"] for r in rows}
+        self.assertTrue(all(later))                                                            # each still waits before its next try
+
+    def test_a_refusal_by_the_first_site_itself_is_counted_against_it_once(self):
+        self.plan.update(per_domain_per_day=5, domain_refusals=3)
+        self.srv.routes["/p"] = reply(403, body=b"no")
+        ident = self.add("/p", host="a.test")
+        self.run_step()
+        counters = self.counters()
+        self.assertEqual(counters[("2026-11-16", "refusal:a.test")], 1)
+        self.assertEqual(self.row(ident)["status"], "queued")
+
     def test_redirects_to_a_site_cannot_use_the_units_that_its_own_candidates_would_have_used(self):
         self.plan.update(per_domain_per_day=2, batch=10, fetches_per_day=10)
         self.dns.setdefault("victim.test", [ALL_PUBLIC])

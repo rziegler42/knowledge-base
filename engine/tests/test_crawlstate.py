@@ -409,6 +409,25 @@ class Finish(Case):
         self.finish(third, "failed", "429", refusal=True)
         self.assertEqual(self.counters()[("2026-11-16", "refusal:b.example")], 2)
 
+    def test_a_refusal_that_is_not_counted_for_the_row_still_waits_a_day_and_counts_nothing_for_its_site(self):
+        ident = self.add("b", domain="b.example", status="fetching", tries=1)
+        self.finish(ident, "failed", "403", refusal=True, count=False)
+        got = self.row(ident)
+        self.assertEqual((got["status"], got["next_try"]), ("queued", "2026-11-17T12:00:00Z"))
+        self.assertNotIn(("2026-11-16", "refusal:b.example"), self.counters())
+
+    def test_a_refusal_counts_for_the_rows_site_unless_it_is_told_not_to(self):
+        ident = self.add("c", domain="c.example", status="fetching", tries=1)
+        self.finish(ident, "failed", "403", refusal=True, count=True)
+        self.assertEqual(self.counters()[("2026-11-16", "refusal:c.example")], 1)
+
+    def test_count_is_a_flag_and_only_means_something_for_a_refusal(self):
+        ident = self.fetching()
+        for bad in (None, 0, 1, "no"):
+            with self.subTest(bad), self.assertRaises(KbError):
+                self.finish(ident, "failed", "403", refusal=True, count=bad)
+        self.assertEqual(self.row(ident)["status"], "fetching")
+
     def test_a_refusal_with_no_tries_left_is_final_and_still_counts(self):
         self.plan = plan(retries=1)
         ident = self.fetching()
