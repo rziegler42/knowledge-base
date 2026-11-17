@@ -60,6 +60,8 @@ PARKED = "the book is parked after failed tries"
 DOWN = "the model server did not answer"
 MODEL_REFUSED = "the model server refused a proposal or reported another model than the measured one"
 SETTINGS = "the models for proposals are not set up"
+MOVES_OFF = "moves by the model's pick are off in the approved plan"
+APPROVALS = "the approved plans cannot be read, or the plan of this run is not among them"
 _DIGEST = re.compile(r"[0-9a-f]{32}")
 
 
@@ -81,8 +83,12 @@ def _newest(events):
 
 
 def _has_card(library, book):
-    version = library.read_book(book).get("current_version")
-    return bool(version) and bool(card.generations(library, book, version))
+    """Whether the book has a card for its current version. A book whose files cannot be read has none here: it is left out and every book behind it still goes, and nothing is written for it."""
+    try:
+        version = library.read_book(book).get("current_version")
+        return bool(version) and bool(card.generations(library, book, version))
+    except KbError:
+        return False
 
 
 def _waiting(library, scan, approved):
@@ -265,9 +271,14 @@ def make_step(open_store=None, statvfs=None, approved=None, probe=None, launcher
     def step(ctx):
         if not isinstance(getattr(ctx, "plan_digest", None), str) or not _DIGEST.fullmatch(ctx.plan_digest):
             raise crawlrun.StepRefused("the move needs the digest of the approved plan")
+        if ctx.plan.get("model_pick") is not True:                # the owner's switch in the approved plan: the books stay where they are, unfinished, so that turning it on later moves them
+            ctx.log.write("propose", "skipped", reason=MOVES_OFF, now=ctx.clock())
+            return
         library = (open_store or library_store.Store.open)()
         scan = crawlbooks.scan_crawl_books(library)
         digests = (approved or crawlbooks.approved_digests)(ctx.index_root)
+        if ctx.plan_digest not in digests:                        # an approved set that could not be read (it is empty then) must not make every waiting book terminal for good
+            raise crawlrun.StepRefused(APPROVALS)
         crawlbooks.reconcile_unapproved(library, digests, ctx.log, scan)
         waiting = _waiting(library, scan, digests)
         if not waiting:

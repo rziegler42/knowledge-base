@@ -316,8 +316,8 @@ class OnlyTheCrawlsBooks(Case):
         self.assertEqual(self.prompts, [])
 
     def test_a_digest_whose_approval_is_gone_after_the_book_was_found_leaves_the_book_unplaced(self):
-        book = self.crawl_book("Found under a plan that was later revoked")
-        self.run_step(approved=lambda index_root: set())
+        book = self.crawl_book("Found under a plan that was later revoked", digest=OTHER_DIGEST)
+        self.run_step(approved=lambda index_root: {DIGEST})                       # the run's own plan is approved; the one the book was found under is not any more
         self.assertEqual(self.unplaced(book), ["its plan digest is not an approved one"])
         self.assertEqual((self.shelf(book), self.prompts), ("default", []))
 
@@ -567,6 +567,54 @@ class TheChecks(Case):
         with mock.patch.object(placereview, "proposal_ok", ok), mock.patch.object(placement, "is_current", cur):
             self.run_step()
         self.assertEqual(order[:2], ["shape", "current"])
+
+
+class TheSwitchAndTheApprovals(Case):
+    def test_with_model_pick_off_in_the_approved_plan_nothing_is_proposed_or_moved_and_the_books_wait(self):
+        book = self.crawl_book("The gene book")
+        before = self.snapshot([book])
+        self.crawl_plan["model_pick"] = False
+        with mock.patch.object(placement, "propose") as propose:
+            ctx = self.run_step()
+        self.assertEqual((propose.call_count, self.snapshot([book]), self.shelf(book)), (0, before, "default"))
+        self.assertEqual([(x["step"], x["outcome"], x["reason"]) for x in self.lines()], [("propose", "skipped", "moves by the model's pick are off in the approved plan")])
+        self.assertFalse(ctx.tripped)
+        self.crawl_plan["model_pick"] = True
+        self.run_step()                                                           # turned on later, the same book is moved
+        self.assertNotEqual(self.shelf(book), "default")
+
+    def test_the_switch_must_be_true_and_nothing_else_turns_the_move_on(self):
+        for value in (False, None, 0, "on", "off", 1):
+            with self.subTest(value):
+                book = self.crawl_book(f"Book {value!r}")
+                self.crawl_plan["model_pick"] = value
+                with mock.patch.object(placement, "propose") as propose:
+                    self.run_step()
+                self.assertEqual((propose.call_count, self.shelf(book)), (0, "default"))
+
+    def test_an_approved_set_that_could_not_be_read_or_lacks_the_runs_own_digest_refuses_the_run_and_marks_no_book(self):
+        book = self.crawl_book("The gene book")
+        before = self.snapshot([book])
+        for approved in (set(), {OTHER_DIGEST}, frozenset()):
+            with self.subTest(sorted(approved)), self.assertRaises(crawlrun.StepRefused):
+                self.run_step(approved=lambda index_root, a=approved: a)
+            self.assertEqual(self.snapshot([book]), before)
+        self.run_step()                                                           # the next run, with the approvals readable again, takes the book as usual
+        self.assertNotEqual(self.shelf(book), "default")
+
+    def test_a_book_whose_card_cannot_be_read_is_left_out_and_the_others_still_go(self):
+        bad, good = self.crawl_book("The bad book"), self.crawl_book("The good book")
+        real = crawlmove.card.generations
+
+        def generations(store, book, version):
+            if book == bad:
+                raise KbError("the card folder cannot be read")
+            return real(store, book, version)
+
+        before = self.snapshot([bad])
+        with mock.patch.object(crawlmove.card, "generations", generations):
+            self.run_step()
+        self.assertEqual((self.snapshot([bad]), self.shelf(good) != "default"), (before, True))
 
 
 class TheMoveItself(Case):
