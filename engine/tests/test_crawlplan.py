@@ -71,7 +71,7 @@ class Defaults(Files):
             "gap_openalex_s": 1, "gap_arxiv_s": 3, "gap_wikipedia_s": 1, "gap_web_search_s": 30, "web_search_per_day": 20,
             "phishing_domains": True, "urlhaus_recent": False, "phishing_domains_format": "domains", "refresh_hours": 12, "list_max_mb": 50, "list_min_share": 0.5, "list_max_change": 0.3,
             "urlhaus_keep_days": 30, "pinned_hosts": ["openalex.org", "arxiv.org", "wikipedia.org"],
-            "threshold": None, "min_chars": 400, "model_pick": True,
+            "threshold": None, "min_chars": 400, "model_pick": True, "pdf_max_mb": 0, "tool_rss_mb": 2048,
             "topics": home + "crawl-topics.txt", "blacklist": home + "crawl-blacklist.txt", "allow": home + "crawl-allow.txt",
         }
         for key, value in expected.items():
@@ -155,6 +155,24 @@ topics = ~/somewhere/topics.txt
         self.assertEqual(plan["topics"], "/abs/../odd//path/topics.txt")
         self.assertEqual(plan["blacklist"], "relative/black.txt")
         self.assertEqual(plan["allow"], os.path.expanduser("~other/allow.txt"))
+
+    def test_pdfs_are_off_by_default_and_the_two_keys_are_whole_numbers_in_range(self):
+        plan = self.read("")
+        self.assertEqual((plan["pdf_max_mb"], plan["tool_rss_mb"]), (0, 2048))
+        self.assertEqual(self.read("[pdf]\npdf_max_mb = 20\ntool_rss_mb = 1024\n")["pdf_max_mb"], 20)
+        self.assertEqual(self.read("[pdf]\npdf_max_mb = 0\n")["pdf_max_mb"], 0)
+        self.assertEqual(self.read("[pdf]\ntool_rss_mb = 64\n")["tool_rss_mb"], 64)
+        self.assertEqual(self.read("[pdf]\npdf_max_mb = 200\n")["pdf_max_mb"], 200)                  # the ends of both ranges are in
+        self.assertEqual(self.read("[pdf]\ntool_rss_mb = 100000\n")["tool_rss_mb"], 100000)
+        for key, bad in (("pdf_max_mb", "-1"), ("pdf_max_mb", "201"), ("pdf_max_mb", "1000"), ("pdf_max_mb", "2.5"), ("pdf_max_mb", "abc"), ("pdf_max_mb", ""), ("tool_rss_mb", "63"), ("tool_rss_mb", "0"),
+                         ("tool_rss_mb", "100001"), ("tool_rss_mb", "1.5"), ("tool_rss_mb", "x")):
+            with self.subTest(f"{key}={bad}"):
+                self.refused(f"[pdf]\n{key} = {bad}\n", "line 2")
+
+    def test_the_two_pdf_keys_belong_to_their_own_section_and_nowhere_else(self):
+        for text in ("[limits]\npdf_max_mb = 5\n", "[files]\ntool_rss_mb = 128\n"):
+            with self.subTest(text):
+                self.refused(text, "line 2")
 
     def test_the_threshold_is_empty_by_default_and_read_as_a_number_in_range(self):
         self.assertIsNone(self.read("[judge]\nthreshold =\n")["threshold"])

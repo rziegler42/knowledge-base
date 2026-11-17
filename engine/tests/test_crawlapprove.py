@@ -935,6 +935,24 @@ class Hardening(Case):
         self.assertNotIn("model server down", text)
         self.assertIn("a site that refuses 3 times in a day is stopped for the day.", line)
 
+    def test_the_summary_says_that_no_pdf_is_taken_by_default_and_what_limits_apply_when_the_plan_sets_them(self):
+        self.set_plan()
+        text, _ = self.approve()
+        self.assertIn("PDF files: none are taken (pdf_max_mb is 0)", text)
+        self.set_plan(PLAN_TEXT + "[pdf]\npdf_max_mb = 20\ntool_rss_mb = 1536\n")
+        text, _ = self.approve()
+        self.assertIn("PDF files: taken up to 20 MB each, scanned before any conversion (a file with a finding in the hold list above is held), and converted in a tool that is killed above 1536 MB of memory", text)
+        self.assertNotIn("none are taken", text)
+
+    def test_a_change_of_the_pdf_keys_changes_the_digest(self):
+        self.set_plan()
+        _, first = self.approve()
+        self.set_plan(PLAN_TEXT + "[pdf]\npdf_max_mb = 20\n")
+        _, second = self.approve()
+        self.set_plan(PLAN_TEXT + "[pdf]\npdf_max_mb = 20\ntool_rss_mb = 4096\n")
+        _, third = self.approve()
+        self.assertEqual(len({first, second, third}), 3)
+
     def test_the_minutes_of_the_breaker_line_are_the_plans_own(self):
         self.set_plan(PLAN_TEXT + "[breaker]\nmodel_down_minutes = 45\n")
         text, _ = self.approve()

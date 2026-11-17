@@ -234,6 +234,8 @@ def render_summary(plan, topics, allow_hosts, fingerprint_hex, date):
         f"Scan findings that hold a book (it is filed, and not converted, indexed, carded or moved): {kinds}. A list named in the plan replaces the default list; it does not add to it.",
         f"Judgement: threshold: {plan['threshold'] if plan['threshold'] is not None else 'not set; a run refuses to fetch until one is set'}; at least {plan['min_chars']} characters of text.",
         f"moves by the model's pick: {_switch(plan['model_pick'])}.",
+        ("PDF files: none are taken (pdf_max_mb is 0)." if plan["pdf_max_mb"] == 0 else
+         f"PDF files: taken up to {plan['pdf_max_mb']} MB each, scanned before any conversion (a file with a finding in the hold list above is held), and converted in a tool that is killed above {plan['tool_rss_mb']} MB of memory."),
         f"  allow file: {len(allow_hosts)} host{'' if len(allow_hosts) == 1 else 's'}"
         + (" (a public list cannot block these; only your blacklist can), every one listed:" if allow_hosts else "") + ("" if allow_hosts else "."),
         *[f"    {_clean(h, 253)}" for h in allow_hosts],

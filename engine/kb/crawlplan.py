@@ -61,6 +61,8 @@ PLAN.update({
     "threshold": ("judge", "threshold", None, -1, 1),
     "min_chars": ("judge", "int", 400, 1, 100_000),
     "model_pick": ("moves", "switch", True, None, None),
+    "pdf_max_mb": ("pdf", "int", 0, 0, 200),                # the largest PDF the crawl takes, in megabytes; 0 takes none (the client holds a response whole in memory, about twice its size at peak)
+    "tool_rss_mb": ("pdf", "int", 2048, 64, 100_000),       # the most resident memory a scan or a converter may use before the sandbox kills it
     "topics": ("files", "path", HOME + "crawl-topics.txt", None, None),
     "blacklist": ("files", "path", HOME + "crawl-blacklist.txt", None, None),
     "allow": ("files", "path", HOME + "crawl-allow.txt", None, None),
