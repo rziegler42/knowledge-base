@@ -7,11 +7,12 @@
    refuses unless Python was started with `-X pycache_prefix=<a private folder of the owner's outside the engine's code>` (`prefix_problem`);
 3. the stop file (3); 4. the breaker (4); 5. the disk floors (3);
 6. the ceilings (not a refusal: an exhausted ceiling only limits new fetches, which the run says in the log);
-7. the model server (a failure is a refusal, 3, and counts toward `model_down_minutes`; once the server has been down longer than that, the breaker trips and the run exits 4).
+7. the model server (the card embedding must answer one short embedding: a failure is a refusal, 3, and counts toward `model_down_minutes`; and each model entry that an earlier run found down is asked one short call: once the
+   server, or an entry, has been down longer than that, the breaker trips and the run exits 4).
 
 A run that passes logs `run_start`, then calls, in the order of the spec's steps, the **points** where the later plan attaches its steps (`lists`, `earlier_work`, `refill`, `fetch`). At each point `attach_point` looks at the stop file (a
 stop ends the run at that point, with exit 0 and a `stop` line) and then calls the step registered for it, if any. A run ends with `run_end` and exits 0 (done), or 4 if a step trips the breaker. Nothing else is done yet:
-no fetch and no change to a candidate row (rows are changed only through `crawlstate`, which a step uses). The one request a passing run makes is the probe of the model server (one short embedding), check 7.
+no fetch and no change to a candidate row (rows are changed only through `crawlstate`, which a step uses). The requests a passing run makes are the probe of the model server (one short embedding) and one short call for each model entry that an earlier run found down, check 7.
 
 `--dry-run` takes no lock and writes nothing (no log line, row, counter or state file), makes no request and does not probe the model server: it prints each check and its result in order, what a real run would do next and the
 exit code a real run would have if the checks it cannot make (the lock, the model server, the state files) also pass. A log that cannot be written ends a run with a `KbError`, and the lock is always let go."""

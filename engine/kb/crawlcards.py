@@ -19,9 +19,11 @@ What this step guards:
 - **A book the queue cannot give a card is a failed try of that book** (`crawlbooks.fail_step`, step `card`, one try for the run however many times the queue asked), with a fixed reason; at the plan's `retries` such
   tries the book is parked (weeded with `crawl_rejected`, stage `card`: a terminal event, so it is never listed or planned again and the report names it). A book the queue leaves out of its plan, and one it drops,
   are failed tries with reasons of their own, so that neither loops for ever.
-- **A model server that does not answer is not the book's fault.** When a pass has a failed call, the step asks the run's own probe of the model server (`crawlguard.probe_model`); a server that does not answer
-  starts or goes on with the down clock (`crawlguard.note_model`, saved in the guard state), costs no book a try, ends the step with one `failed` line, and trips the breaker (`model_down`) once it has been down for
-  longer than `model_down_minutes`; a server that answers clears the clock.
+- **A model that does not answer is not the book's fault.** When a pass has a failed call, the step asks each distinct model entry of the card (the entries of the tasks `card-embed`, `card-notes`, `card`, `card-check`
+  and `card-more` if it is set; two tasks that name one entry share one probe) one short call (`probe(cfg, task)`, `crawlguard.probe_entry`), in that order, and **stops at the first entry that does not answer**: that
+  entry starts or goes on with its own down clock (`crawlguard.record_entry`, saved in the guard state before any trip is written), costs no book a try, ends the step with one `failed` line, and trips the breaker
+  (`model_down`) once it has been down for longer than `model_down_minutes`; each entry that answers has its clock cleared. **The stop file and the time budget are looked at between the probes**: a step that is stopped
+  there ends quietly with one `skipped` line and charges no book a try, because it has not shown that the entries answer. A pass with no failed call makes no probe.
 - **What a model, a card or a page says is data.** The step reads no card and no page text; what it writes (an event, a reason, a log line) is a fixed sentence, a number or a book's id, never a word of the queue's
   report. A card is the book's, filed by the queue as it files every card; the book stays `auto_filed`, which is the mark that the owner has not reviewed it, and nothing in a card changes what a step does.
 
@@ -45,6 +47,8 @@ DROPPED = "the card queue dropped the book"
 NOT_PLANNED = "the book could not be planned for a card"
 PARKED = "the book is parked after failed tries"
 CATALOG = "the catalog was not rebuilt"
+SPENT = "the time budget of the run is spent"
+CARD_TASKS = ("card-embed", "card-notes", "card", "card-check", "card-more")           # the tasks whose entries a card calls, in the order they are asked
 SETTINGS = "the models for cards are not set up"
 
 
@@ -70,19 +74,36 @@ def _refusal(ctx, read_space):
     return None
 
 
-def _answers(ctx, probe):
-    """Ask the model server, note the answer in the down clock and return it; a trip of the clock ends the run."""
-    try:
-        ok = bool((probe or crawlguard.probe_model)(ctx.cfg))
-    except (KbError, OSError):
-        ok = False
-    state, _restarted = crawlguard.load_state(ctx.index_root)
-    tripped = crawlguard.note_model(state, ok, ctx.clock(), ctx.plan)
-    crawlguard.save_state(ctx.index_root, state)
-    if tripped is not None:
-        ctx.trip(*tripped)
-        raise crawlrun.BreakerTripped()
-    return ok
+def _answers(ctx, probe, answered):
+    """Ask each distinct model entry of the card one short call, in the order of `CARD_TASKS`, and note each answer in the entry's own down clock (a trip of a clock ends the run). **An entry that answered earlier in
+    this step (`answered`, kept by the caller) is not asked again**: a later pass that fails with every entry answering has no new evidence, and each probe of a chat entry loads a model on the server. Returns `"ok"` when
+    every entry answered, `"down"` at the first that did not (the entries after it are not asked and keep their clocks), or the reason of a quiet end when the stop file or the time budget appeared between two probes."""
+    asked = set(answered)
+    for task in CARD_TASKS:
+        try:
+            entry = crawlguard.entry_of(ctx.cfg, task)
+        except KbError:
+            continue
+        if not entry or entry in asked:
+            continue
+        if asked:
+            if crawlguard.stop_requested(ctx.index_root):
+                return STOPPED
+            if crawlrun.spent(ctx):
+                return SPENT
+        asked.add(entry)
+        try:
+            ok = bool((probe or crawlguard.probe_entry)(ctx.cfg, task))
+        except (KbError, OSError):
+            ok = False
+        tripped = crawlguard.record_entry(ctx.index_root, entry, ok, ctx.clock(), ctx.plan)
+        if tripped is not None:
+            ctx.trip(*tripped)
+            raise crawlrun.BreakerTripped()
+        if not ok:
+            return "down"
+        answered.add(entry)
+    return "ok"
 
 
 def _say(ctx, outcome, reason, book=None):
@@ -99,7 +120,7 @@ def _failed_try(ctx, library, book, reason):
 
 
 def make_step(open_store=None, statvfs=None, approved=None, probe=None, launcher=None, root=None):
-    """The function for the `card` point. `open_store`, `statvfs`, `approved` (the approved digests, given the index root), `probe` (the model server's, given the config), `launcher` and `root` replace the
+    """The function for the `card` point. `open_store`, `statvfs`, `approved` (the approved digests, given the index root), `probe` (the probe of one model entry, given the config and the task), `launcher` and `root` replace the
     real ones (tests)."""
     read_space = statvfs or os.statvfs
 
@@ -127,16 +148,25 @@ def make_step(open_store=None, statvfs=None, approved=None, probe=None, launcher
             raise crawlrun.StepRefused(SETTINGS) from None
         planned = {item["book_id"] for item in cardstate.read_manifest(ctx.index_root, summary["run"]).items}
         left_out = [book for book in chosen if book not in planned and not _has_card(library, book)]
-        report, down, stopped, bound = None, False, None, False
+        report, down, stopped, bound, uncharged, answered = None, False, None, False, False, set()
         try:
             for _ in range(cardqueue.PASS_CAP):
                 stopped = _refusal(ctx, read_space)
                 if stopped:
                     break
                 report = cardqueue.run(library, ctx.cfg, summary["run"], passes=1, launcher=launcher, root=root)
-                if any(i["status"] == "failed" or (i["status"] == "waiting" and i["attempts"] > 0) for i in report["items"]) and not _answers(ctx, probe):
-                    down = True
-                    break
+                if any(i["status"] == "failed" or (i["status"] == "waiting" and i["attempts"] > 0) for i in report["items"]):
+                    try:
+                        verdict = _answers(ctx, probe, answered)
+                    except crawlrun.BreakerTripped:
+                        uncharged = True                                         # a trip is not shown to be the books' fault: no book is charged
+                        raise
+                    if verdict == "down":
+                        down = True
+                        break
+                    if verdict != "ok":                                          # stopped between two probes: nothing is shown, so no book is charged
+                        stopped, uncharged = verdict, True
+                        break
                 if report["counts"]["waiting"] == 0:
                     break
             else:
@@ -145,20 +175,20 @@ def make_step(open_store=None, statvfs=None, approved=None, probe=None, launcher
                 ctx.trip(*crawlguard.bound_trip("card", f"the queue still had books waiting after {cardqueue.PASS_CAP} passes"))
                 raise crawlrun.BreakerTripped()
         finally:
-            _close(ctx, library, report, left_out, down, stopped or limit)
+            _close(ctx, library, report, left_out, down, stopped or limit, uncharged)
 
     return step
 
 
-def _close(ctx, library, report, left_out, down, ended):
+def _close(ctx, library, report, left_out, down, ended, uncharged=False):
     """The lines and the failed tries of what this run did: each book that ended, each book the queue could not plan, the catalog, and why the step ended early."""
     for item in (report or {"items": []})["items"]:
         if item["status"] == "done":
             generation = item["generation"]
             _say(ctx, "ok", f"generation {generation}" if isinstance(generation, int) and not isinstance(generation, bool) else None, item["book_id"])
-        elif item["status"] in ("failed", "dropped") and not down:
+        elif item["status"] in ("failed", "dropped") and not down and not uncharged:
             _failed_try(ctx, library, item["book_id"], FAILED if item["status"] == "failed" else DROPPED)
-    if not down:
+    if not down and not uncharged:
         for book in left_out:
             _failed_try(ctx, library, book, NOT_PLANNED)
     if report is not None and isinstance(report.get("catalog"), dict) and isinstance(report["catalog"].get("failed"), str):       # a rebuild that worked says how many books failed, a number; one that did not says why

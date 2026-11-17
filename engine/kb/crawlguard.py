@@ -8,10 +8,10 @@ Each guard is a small function that a run calls in the spec's order and a test c
 - **The stop file** `<index root>/crawl.stop`: `stop_requested` is true if the name is there, whatever it is and whatever it holds, or if it cannot be examined.
 - **The breaker** `<index root>/crawl/breaker.json`: `read_breaker` reads it strictly; a file that is missing, cannot be examined or read in its form, or says `"tripped": true` reads as **tripped**. `_write_breaker` (private) writes it
   whole or not at all. `trip` records a trip (the first cause stands while it is tripped). `clear` is `crawl-clear`: it changes nothing without `--yes` and without a terminal, and it starts the guard state afresh.
-- **The rules that trip it**, with a small state kept in `crawl/guard.json`: `record_fetch` (failures in a row, a failure share over a full window), `note_model` (the model server down longer than `model_down_minutes`),
+- **The rules that trip it**, with a small state kept in `crawl/guard.json`: `record_fetch` (failures in a row, a failure share over a full window), `note_model` (the clock of the card embedding, asked at the start of a run) and `note_entry` (a clock for each model entry that a step or the start found down; `record_entry` saves it), each down longer than `model_down_minutes`,
   `bound_trip` (a stage that hits a bound).
 - **A site stopped for the day** is not the breaker: `refusals_today` reads the day's `refusal:<site>` counters (read only) and `site_stopped` says whether one site has reached `domain_refusals`; the stop ends with the plan's day.
-- **The disk floors**: `check_disk` refuses when a drive's free space is at or under its floor or cannot be read. **The model probe**: `probe_model` is one call of the existing `embed` on one short text.
+- **The disk floors**: `check_disk` refuses when a drive's free space is at or under its floor or cannot be read. **The model probes**: `probe_model` is one call of the existing `embed` on one short text; `probe_entry` is one short call of the entry of a task (a chat entry only after a call of it failed).
 
 This module makes no request of its own, reads no environment variable and starts no program."""
 import datetime

@@ -47,6 +47,7 @@ class Case(QueueCase):
         self.crawl_log = crawllog.Log(self.index_root, "run-1", clock=lambda: self.now)
         self.tripped = []
         self.probes = []
+        self.up_for = {}
         self.counter = 0
 
     # -- the fixture
@@ -88,9 +89,16 @@ class Case(QueueCase):
         ctx.trip = trip
         return ctx
 
-    def probe(self, cfg):
-        self.probes.append(1)
-        return self.up
+    def probe(self, cfg, task=None):
+        self.probes.append(task)
+        return self.up_for.get(task, self.up)
+
+    def clocks(self):
+        return crawlguard.load_state(self.index_root)[0]["entries_down"]
+
+    def assertRounds(self, one_round):
+        """Every distinct entry is asked once in a step, however many passes of the queue have a failed call: the probes are that list, once."""
+        self.assertEqual(self.probes, one_round)
 
     up = True
 
@@ -642,7 +650,8 @@ class ModelServer(Case):
         self.assertEqual([self.store.read_book(b)["state"] for b in books], ["active", "active"])
         state, restarted = crawlguard.load_state(self.index_root)
         self.assertFalse(restarted)
-        self.assertEqual(state["model_down_since"], "2026-11-16T12:00:00Z")
+        self.assertEqual(self.clocks(), {"notes": "2026-11-16T12:00:00Z"})                # the first entry asked is the one that does not answer: its own clock, and no other is asked
+        self.assertEqual((state["model_down_since"], self.probes), (None, ["card-notes"]))
         self.assertEqual(self.lines()[-1]["outcome"], "failed")
         self.assertEqual(self.lines()[-1]["reason"], "the model server did not answer")
         self.assertEqual(self.tripped, [])
@@ -664,21 +673,20 @@ class ModelServer(Case):
         self.set_plan(down_card={"Page 0": 999})
         (book,) = self.crawl_books(1)
         state = crawlguard.fresh_state()
-        state["model_down_since"] = "2026-11-16T11:50:00Z"
+        state["entries_down"] = {"notes": "2026-11-16T11:50:00Z", "cardm": "2026-11-16T11:51:00Z", "checker": "2026-11-16T11:52:00Z"}
         crawlguard.save_state(self.index_root, state)
         self.up = True
         self.run_step()
-        state, _ = crawlguard.load_state(self.index_root)
-        self.assertIsNone(state["model_down_since"])
+        self.assertEqual(self.clocks(), {})                                           # every entry of the card answered: all three clocks are cleared
         self.assertEqual(crawlbooks.step_failures(self.store, book, "card"), 1)
-        self.assertTrue(self.probes)
+        self.assertRounds(["card-notes", "card", "card-check"])
 
     def test_a_failure_seen_in_one_pass_is_asked_about_and_a_server_that_is_down_costs_no_try(self):
         (book,) = self.crawl_books(1)
         self.up = False
         with self.stub_run("failed"):
             self.run_step()
-        self.assertEqual(self.probes, [1])
+        self.assertEqual(self.probes, ["card-notes"])
         self.assertEqual(self.events(book, "crawl_step_failed"), [])
         self.assertEqual([(x["outcome"], x["reason"]) for x in self.lines()], [("failed", "the model server did not answer")])
 
@@ -717,8 +725,7 @@ class ModelServer(Case):
         self.crawl_books(2)
         self.run_step()
         self.assertEqual(self.probes, [])
-        state, _ = crawlguard.load_state(self.index_root)
-        self.assertIsNone(state["model_down_since"])
+        self.assertEqual(self.clocks(), {})
 
     def test_the_probe_is_given_the_config_and_a_probe_that_raises_is_a_server_that_does_not_answer(self):
         self.set_plan(down_card={"Page 0": 999})
@@ -729,7 +736,7 @@ class ModelServer(Case):
             with self.subTest(type(error).__name__):
                 given.clear()
 
-                def probe(cfg):
+                def probe(cfg, task=None):
                     given.append(cfg)
                     raise error
 
@@ -739,13 +746,133 @@ class ModelServer(Case):
                 self.assertEqual(self.events(book, "crawl_step_failed"), [])
                 self.assertEqual(self.lines()[-1]["reason"], "the model server did not answer")
 
-    def test_the_default_probe_is_the_runs_own(self):
-        with mock.patch.object(crawlguard, "probe_model", return_value=True) as probe:
+    def test_the_default_probe_asks_each_entry_of_the_card_by_its_task_and_is_given_the_config(self):
+        with mock.patch.object(crawlguard, "probe_entry", return_value=True) as probe:
             self.set_plan(down_card={"Page 0": 999})
             self.crawl_books(1)
             ctx = self.ctx()
             crawlcards.make_step(statvfs=roomy, approved=lambda r: {DIGEST}, launcher=self.launcher)(ctx)
-        self.assertTrue(probe.called)
+        self.assertEqual([c.args[1] for c in probe.call_args_list], ["card-notes", "card", "card-check"])
+        self.assertTrue(all(c.args[0] is ctx.cfg for c in probe.call_args_list))
+
+    def test_the_asking_stops_at_the_first_entry_that_does_not_answer_and_the_entries_after_it_keep_their_clocks(self):
+        self.set_plan(down_card={"Page 0": 999})
+        (book,) = self.crawl_books(1)
+        state = crawlguard.fresh_state()
+        state["entries_down"] = {"checker": "2026-11-16T11:40:00Z"}
+        crawlguard.save_state(self.index_root, state)
+        self.up_for["card"] = False
+        self.run_step()
+        self.assertEqual(self.probes, ["card-notes", "card"])
+        self.assertEqual(self.clocks(), {"cardm": "2026-11-16T12:00:00Z", "checker": "2026-11-16T11:40:00Z"})
+        self.assertEqual(self.events(book, "crawl_step_failed"), [])
+
+    def test_an_entry_that_answered_is_not_asked_again_by_a_later_pass_of_the_same_step(self):
+        self.set_plan(down_card={"Page 0": 999})
+        book = self.crawl_books(1)[0]
+        passes = []
+        real = cardqueue.run
+
+        def run(store, cfg, run_id, passes_=1, launcher=None, root=None, **kw):
+            passes.append(1)
+            return real(store, cfg, run_id, passes=1, launcher=launcher, root=root)
+
+        with mock.patch.object(cardqueue, "run", run):
+            self.run_step()
+        self.assertGreater(len(passes), 1)                                           # (the book failed in more than one pass)
+        self.assertEqual(self.probes, ["card-notes", "card", "card-check"])
+        self.assertEqual(crawlbooks.step_failures(self.store, book, "card"), 1)
+
+    def test_a_trip_while_asking_charges_no_book_even_when_an_item_has_failed(self):
+        left_out = self.crawl_books(1, "Pending", state="pending")[0]
+        (book,) = self.crawl_books(1, "Page")
+        state = crawlguard.fresh_state()
+        state["entries_down"] = {"notes": "2026-11-16T10:00:00Z"}
+        crawlguard.save_state(self.index_root, state)
+        self.up_for["card-notes"] = False
+        with self.stub_run("failed"), self.assertRaises(crawlrun.BreakerTripped):
+            self.run_step()
+        self.assertEqual((self.events(book, "crawl_step_failed"), self.events(left_out, "crawl_step_failed")), ([], []))
+
+    def test_two_tasks_that_name_one_entry_share_one_probe(self):
+        self.set_config(tasks={"card": "cardm", "card-check": "notes", "card-notes": "notes"})
+        self.set_plan(down_card={"Page 0": 999})
+        self.crawl_books(1)
+        self.run_step()
+        self.assertRounds(["card-notes", "card"])
+
+    def test_a_card_more_entry_that_is_set_is_asked_last_and_one_that_is_not_set_is_not_asked(self):
+        self.set_config(tasks={"card": "cardm", "card-check": "checker", "card-notes": "notes", "card-more": "morem"})
+        self.set_plan(down_card={"Page 0": 999})
+        self.crawl_books(1)
+        self.run_step()
+        self.assertRounds(["card-notes", "card", "card-check", "card-more"])
+
+    def test_an_entry_down_for_over_the_limit_trips_the_breaker_naming_the_entry_and_no_book_is_charged(self):
+        self.set_plan(down_card={"Page 0": 999})
+        (book,) = self.crawl_books(1)
+        state = crawlguard.fresh_state()
+        state["entries_down"] = {"cardm": "2026-11-16T10:00:00Z"}
+        crawlguard.save_state(self.index_root, state)
+        self.up_for["card"] = False
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.run_step()
+        self.assertEqual(([k for k, _ in self.tripped], "the model entry cardm" in self.tripped[0][1]), (["model_down"], True))
+        self.assertEqual(self.events(book, "crawl_step_failed"), [])
+
+    def test_the_stop_file_between_the_probes_ends_the_step_quietly_and_charges_no_book(self):
+        self.set_plan(down_card={"Page 0": 999})
+        (book,) = self.crawl_books(1)
+
+        def probe(cfg, task=None):
+            self.probes.append(task)
+            self.stop()
+            return True
+
+        self.run_step(probe=probe)
+        self.assertEqual(self.probes, ["card-notes"])
+        self.assertEqual((self.events(book, "crawl_step_failed"), self.clocks()), ([], {}))
+        self.assertEqual([(x["outcome"], x["reason"]) for x in self.lines()][-1], ("skipped", "the stop file is present"))
+
+    def test_a_stop_between_the_probes_charges_neither_a_failed_book_nor_a_book_the_plan_left_out(self):
+        left_out = self.crawl_books(1, "Pending", state="pending")[0]
+        (book,) = self.crawl_books(1, "Page")
+
+        def probe(cfg, task=None):
+            self.probes.append(task)
+            self.stop()
+            return True
+
+        with self.stub_run("failed"):
+            self.run_step(probe=probe)
+        self.assertEqual(self.probes, ["card-notes"])
+        self.assertEqual((self.events(book, "crawl_step_failed"), self.events(left_out, "crawl_step_failed")), ([], []))
+        self.assertEqual([(x["outcome"], x["reason"]) for x in self.lines()], [("skipped", "the stop file is present")])
+
+    def test_the_embedding_entry_of_the_card_is_asked_first_when_it_is_set(self):
+        emb = {"bridge": "ask-ollama", "server": "ned", "model": "m", "kind": "embedding", "dimension": 8}
+        cfg = self.loaded()
+        self.set_config(models=dict(cfg["models"], emb=emb), tasks=dict(cfg["tasks"], **{"card-embed": "emb"}))
+        self.set_plan(down_card={"Page 0": 999})
+        self.crawl_books(1)
+        self.run_step()
+        self.assertRounds(["card-embed", "card-notes", "card", "card-check"])
+
+    def test_a_spent_time_budget_between_the_probes_ends_the_step_quietly_and_charges_no_book(self):
+        self.set_plan(down_card={"Page 0": 999})
+        (book,) = self.crawl_books(1)
+        ctx = self.ctx()
+        ctx.deadline = self.now + datetime.timedelta(hours=1)
+
+        def probe(cfg, task=None):
+            self.probes.append(task)
+            self.later(hours=2)
+            return True
+
+        self.run_step(ctx=ctx, probe=probe)
+        self.assertEqual(self.probes, ["card-notes"])
+        self.assertEqual(self.events(book, "crawl_step_failed"), [])
+        self.assertEqual([(x["outcome"], x["reason"]) for x in self.lines()][-1], ("skipped", "the time budget of the run is spent"))
 
     def test_cards_made_before_the_server_failed_are_kept_and_have_their_lines(self):
         self.set_plan(down_card={"Page 1": 999})
