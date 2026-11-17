@@ -16,6 +16,7 @@ The transitions it makes, by the spec's statuses (`queued`, `fetching`, `kept`, 
 
 `filed_total` is not a counter: `filed_total(events_by_book)` counts the books with a `crawl_found` event in the events it is given (this module reads no store). This module makes no request and reads no environment variable."""
 import datetime
+import fractions
 import re
 from contextlib import contextmanager
 
@@ -99,7 +100,10 @@ def _row(conn, ident):
 def reserve(conn, plan, now, run, filed):
     """Take the next queued candidate for `run`: `(row, "")`, or `(None, why)` with `why` one of `fetches_per_day`, `filed_total`, `batch`, `nothing_queued`.
 
-    The order is the higher weight first (a wandered candidate counts as 0), then the oldest, then the lower depth. A row waits for its `next_try`; a row of a site at `per_domain_per_day` for the day, or one that
+    **The order is the topics in turn, in proportion to their weights**: the next row comes from the topic (a topic and its weight) whose fetches so far, divided by its weight, are the smallest, so that over time a topic's
+    share of the fetches is its weight's share (core 10, exploratory 5, low 1); a tie goes to the higher weight, then within a topic to the oldest row, then the lower depth, then the lower id. A topic's fetches are its rows that
+    have been taken at least once (`tries` above 0: kept, rejected, failed, fetching or queued for another try), over the whole life of the queue, so that the order does not start again at the first topic at each run. A
+    wandered candidate (weight 0 or none) comes after every weighted row, oldest first. A topic whose weight was changed in the plan has two groups (a row keeps the weight it was added with), each with its own share, until the old rows are used up; and a topic that is new, or has run dry and is refilled, takes the turns until its share has caught up with the others'. A row waits for its `next_try`; a row of a site at `per_domain_per_day` for the day, or one that
     `crawlguard.site_stopped` says is stopped for the day, is skipped (it stays queued), and other sites' rows are still taken; a row with no site cannot be paced and is not taken. `filed` is the number of books filed so far
     (`filed_total`): **required**, so that a caller cannot leave that ceiling unchecked by forgetting it."""
     _plan_numbers(plan, "fetches_per_day", "per_domain_per_day", "batch", "filed_total", "domain_refusals")
@@ -118,14 +122,18 @@ def reserve(conn, plan, now, run, filed):
             return None, "batch"
         used = {key[6:]: n for key, n in conn.execute("SELECT key, n FROM counters WHERE day = ? AND substr(key, 1, 6) = 'fetch:'", (day,)).fetchall()}
         refusals = crawlguard.refusals_today(conn, plan, now)
-        chosen = None
-        cur = conn.execute("SELECT id, domain FROM candidates WHERE status = 'queued' AND domain IS NOT NULL AND (next_try IS NULL OR next_try <= ?) "
-                           "ORDER BY COALESCE(weight, 0) DESC, added ASC, depth ASC, id ASC", (stamp,))
-        for ident, domain in cur:
+        fetched = {(topic, weight): n for topic, weight, n in conn.execute("SELECT topic, COALESCE(weight, 0), COUNT(*) FROM candidates WHERE tries > 0 GROUP BY topic, COALESCE(weight, 0)")}
+        chosen, best = None, None
+        cur = conn.execute("SELECT id, domain, topic, COALESCE(weight, 0), added, depth FROM candidates WHERE status = 'queued' AND domain IS NOT NULL AND (next_try IS NULL OR next_try <= ?)", (stamp,))
+        for ident, domain, topic, weight, added, depth in cur:
             if not _SITE.fullmatch(domain) or used.get(domain, 0) >= plan["per_domain_per_day"] or crawlguard.site_stopped(refusals, domain, plan):
-                continue
-            chosen = (ident, domain)
-            break
+                continue                                                  # (a row that cannot be taken now does not take its topic's turn)
+            if isinstance(weight, int) and not isinstance(weight, bool) and weight > 0:
+                key = (0, fractions.Fraction(fetched.get((topic, weight), 0), weight), -weight, str(added), depth, ident)
+            else:
+                key = (1, 0, 0, str(added), depth, ident)
+            if best is None or key < best:
+                best, chosen = key, (ident, domain)
         cur.close()
         if chosen is None:
             return None, "nothing_queued"

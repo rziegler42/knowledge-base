@@ -60,9 +60,9 @@ class Case(unittest.TestCase):
         self.addCleanup(conn.close)
         return conn
 
-    def add(self, name, domain="a.example", weight=1, added="2026-11-16T10:00:00Z", depth=0, status="queued", tries=0, next_try=None, updated=None, run_id=None):
-        self.conn.execute("INSERT INTO candidates(identity_key, address, source, domain, weight, depth, status, tries, next_try, run_id, added, updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                          (name, f"https://{domain}/{name}", "openalex", domain, weight, depth, status, tries, next_try, run_id, added, updated or added))
+    def add(self, name, domain="a.example", weight=1, added="2026-11-16T10:00:00Z", depth=0, status="queued", tries=0, next_try=None, updated=None, run_id=None, topic=None):
+        self.conn.execute("INSERT INTO candidates(identity_key, address, source, domain, weight, depth, status, tries, next_try, run_id, added, updated, topic) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                          (name, f"https://{domain}/{name}", "openalex", domain, weight, depth, status, tries, next_try, run_id, added, updated or added, topic))
         return self.conn.execute("SELECT id FROM candidates WHERE identity_key = ?", (name,)).fetchone()[0]
 
     def row(self, ident):
@@ -81,16 +81,109 @@ class Case(unittest.TestCase):
 
 
 class Order(Case):
-    def test_higher_weight_first_then_oldest_then_lower_depth_then_the_first_found(self):
-        a = self.add("a", weight=1, added="2026-11-16T08:00:00Z")
-        b = self.add("b", weight=5, added="2026-11-16T09:00:00Z")
-        c = self.add("c", weight=5, added="2026-11-16T07:00:00Z", depth=2)
+    def topic_of(self, row):
+        return self.conn.execute("SELECT topic FROM candidates WHERE id = ?", (row,)).fetchone()[0]
+
+    def take(self, n, **kw):
+        return [self.reserve(run=f"run-{i}", **kw)[0]["id"] for i in range(n)]
+
+    def test_within_a_group_oldest_first_then_lower_depth_then_the_first_found_and_a_wandered_row_last(self):
+        a = self.add("a", weight=5, added="2026-11-16T09:00:00Z")
+        b = self.add("b", weight=5, added="2026-11-16T07:00:00Z", depth=2)
+        c = self.add("c", weight=5, added="2026-11-16T07:00:00Z", depth=1)
         d = self.add("d", weight=5, added="2026-11-16T07:00:00Z", depth=1)
-        e = self.add("e", weight=5, added="2026-11-16T07:00:00Z", depth=1)
         w = self.add("w", weight=None, added="2026-11-16T01:00:00Z")
-        order = [self.reserve()[0]["id"] for _ in range(6)]
-        self.assertEqual(order, [d, e, c, b, a, w])
+        self.assertEqual(self.take(5), [c, d, b, a, w])
         self.assertEqual(self.reserve(), (None, "nothing_queued"))
+
+    def test_a_group_of_weight_5_and_one_of_weight_1_share_the_fetches_five_to_one_and_the_heavier_goes_first_on_a_tie(self):
+        heavy = [self.add(f"h{n}", weight=5, topic="heavy", domain=f"h{n}.example") for n in range(12)]
+        light = [self.add(f"l{n}", weight=1, topic="light", domain=f"l{n}.example") for n in range(4)]
+        got = self.take(12)
+        self.assertEqual(got[0], heavy[0])
+        self.assertEqual((sum(g in heavy for g in got), sum(g in light for g in got)), (10, 2))
+
+    def test_topics_of_equal_weight_are_taken_in_turn_and_not_the_first_one_to_the_end(self):
+        rows = {t: [self.add(f"{t}{n}", weight=10, topic=t, domain=f"{t}{n}.example", added="2026-11-17T18:34:27Z") for n in range(4)] for t in "abc"}
+        got = self.take(9)
+        self.assertEqual([self.topic_of(g) for g in got], ["a", "b", "c"] * 3)
+        self.assertEqual(got[:3], [rows["a"][0], rows["b"][0], rows["c"][0]])
+
+    def test_within_a_topic_the_oldest_row_goes_first(self):
+        late = self.add("late", weight=10, topic="a", domain="late.example", added="2026-11-17T12:00:00Z")
+        early = self.add("early", weight=10, topic="a", domain="early.example", added="2026-11-17T08:00:00Z")
+        other = self.add("other", weight=10, topic="b", domain="other.example", added="2026-11-17T20:00:00Z")
+        self.assertEqual(self.take(3), [early, other, late])
+
+    def test_topics_of_weight_10_and_5_share_the_fetches_two_to_one_over_thirty(self):
+        for n in range(40):
+            self.add(f"h{n}", weight=10, topic="core", domain=f"h{n}.example")
+            self.add(f"e{n}", weight=5, topic="exploratory", domain=f"e{n}.example")
+        got = self.take(30)
+        self.assertEqual([sum(self.topic_of(g) == t for g in got) for t in ("core", "exploratory")], [20, 10])
+
+    def test_the_turn_goes_to_the_smallest_fetches_for_its_weight_and_a_tie_to_the_heavier_topic(self):
+        for n in range(12):
+            self.add(f"h{n}", weight=10, topic="core", domain=f"h{n}.example")
+            self.add(f"e{n}", weight=5, topic="exploratory", domain=f"e{n}.example")
+        got = [self.topic_of(g) for g in self.take(8)]
+        self.assertEqual(got, ["core", "exploratory", "core", "core", "exploratory", "core", "core", "exploratory"])      # fetches over weight: 0 0 (tie: heavier), .1 .0, .1 .2, .2 .2 (tie), ...
+
+    def test_a_topic_of_weight_1_gets_one_fetch_for_ten_of_a_topic_of_weight_10(self):
+        for n in range(20):
+            self.add(f"h{n}", weight=10, topic="core", domain=f"h{n}.example")
+            self.add(f"l{n}", weight=1, topic="low", domain=f"l{n}.example")
+        got = self.take(11)
+        self.assertEqual([sum(self.topic_of(g) == t for g in got) for t in ("core", "low")], [10, 1])
+
+    def test_a_topic_with_nothing_eligible_is_skipped_and_the_turn_goes_on(self):
+        self.add("a1", weight=10, topic="a", domain="a1.example", next_try="2026-11-17T00:00:00Z")      # waiting for its next try (the clock is 2026-11-16)
+        b1 = self.add("b1", weight=10, topic="b", domain="b1.example")
+        b2 = self.add("b2", weight=10, topic="b", domain="b2.example")
+        self.assertEqual(self.take(2), [b1, b2])
+
+    def test_a_row_of_a_site_at_its_cap_does_not_take_its_topics_turn(self):
+        self.plan = plan(per_domain_per_day=1)
+        a1 = self.add("a1", weight=10, topic="a", domain="shared.example")
+        a2 = self.add("a2", weight=10, topic="a", domain="shared.example")
+        b1 = self.add("b1", weight=10, topic="b", domain="b1.example")
+        b2 = self.add("b2", weight=10, topic="b", domain="b2.example")
+        self.assertEqual(self.take(3), [a1, b1, b2])                                              # a2 waits: its site is at the cap, so b gets the turns
+
+    def test_the_counts_are_kept_across_runs_so_two_runs_of_three_take_six_topics(self):
+        for t in range(12):
+            for n in range(2):
+                self.add(f"t{t}n{n}", weight=10, topic=f"topic-{t:02d}", domain=f"t{t}n{n}.example", added="2026-11-17T18:34:27Z")
+        self.plan = plan(batch=3)
+        first = [self.reserve(run="run-a")[0]["id"] for _ in range(3)]
+        second = [self.reserve(run="run-b")[0]["id"] for _ in range(3)]
+        self.assertEqual(len({self.topic_of(r) for r in first + second}), 6)
+
+    def test_rows_already_fetched_count_toward_their_topics_share_whatever_became_of_them(self):
+        for status in ("kept", "rejected", "failed"):
+            self.add(f"done-{status}", weight=10, topic="a", domain=f"done-{status}.example", status=status, tries=1)
+        a = self.add("a1", weight=10, topic="a", domain="a1.example")
+        b = self.add("b1", weight=10, topic="b", domain="b1.example")
+        self.assertEqual(self.take(2), [b, a])                                                    # a has had three, b none
+
+    def test_a_row_never_tried_does_not_count_and_a_queued_row_tried_before_does(self):
+        self.add("retry", weight=10, topic="a", domain="retry.example", tries=1)                   # queued again after a failed try: it was fetched once
+        a = self.add("a1", weight=10, topic="a", domain="a1.example")
+        b = self.add("b1", weight=10, topic="b", domain="b1.example")
+        got = self.take(2)
+        self.assertEqual(got[0], b)                                                               # a has had one, b none
+
+    def test_a_row_that_was_never_taken_leaves_its_topics_share_alone_whatever_its_status(self):
+        for status in ("rejected", "blocked"):
+            self.add(f"never-{status}", weight=10, topic="a", domain=f"never-{status}.example", status=status, tries=0)     # rejected for its type at discovery, or blocked: never fetched
+        a = self.add("a1", weight=10, topic="a", domain="a1.example", added="2026-11-16T08:00:00Z")
+        b = self.add("b1", weight=10, topic="b", domain="b1.example", added="2026-11-16T09:00:00Z")
+        self.assertEqual(self.take(2), [a, b])                                                    # both at none: the older goes first, as if the rejected rows were not there
+
+    def test_a_wandered_row_is_taken_only_when_no_weighted_row_is_eligible(self):
+        w = self.add("w", weight=None, topic=None, domain="w.example", added="2026-11-16T01:00:00Z")
+        a = self.add("a1", weight=10, topic="a", domain="a1.example")
+        self.assertEqual(self.take(2), [a, w])
 
     def test_a_wandered_candidate_counts_as_weight_zero_and_ties_with_it_by_age(self):
         zero = self.add("zero", weight=0, added="2026-11-16T10:00:00Z")

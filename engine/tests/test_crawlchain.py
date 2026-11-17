@@ -285,7 +285,7 @@ class Chain(PlaceCase, Net):
     def host_dns(self, host):
         self.dns.setdefault(host, ["93.184.216.34"])
 
-    def add(self, path, host="a.test", source="openalex", title=None, target="additive", text=None, route=True, resolves=True):
+    def add(self, path, host="a.test", source="openalex", title=None, target="additive", text=None, route=True, resolves=True, topic="verification", weight=1):
         """A queued candidate whose page the fake server serves: the page's title is the book's title, and `target` is the shelf its text is close to."""
         self.found_rows += 1
         if resolves:
@@ -300,7 +300,7 @@ class Chain(PlaceCase, Net):
         conn = crawlqueue.connect(self.index)
         try:
             conn.execute("INSERT INTO candidates(identity_key, address, source, found_from, topic, domain, weight, status, added, updated) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                         (address, address, source, "openalex:W1", "verification", site, 1, "queued", stamp, stamp))
+                         (address, address, source, "openalex:W1", topic, site, weight, "queued", stamp, stamp))
             conn.commit()
             return conn.execute("SELECT id FROM candidates WHERE identity_key = ?", (address,)).fetchone()[0], title
         finally:
@@ -392,6 +392,28 @@ class Chain(PlaceCase, Net):
 
     def requests(self):
         return [path for path, _headers in self.srv.hits]
+
+
+class TheTopicsInTurn(Chain):
+    """The fetches of a run go to the topics in turn, and the turns are kept from one run to the next."""
+
+    def test_the_runs_of_the_chain_spread_their_fetches_over_the_topics_and_keep_the_turns_from_one_run_to_the_next(self):
+        rows = {}
+        for topic in ("alpha", "beta", "gamma", "delta"):
+            rows[topic] = [self.add(f"/{topic}{n}", host=f"{topic}{n}.test", topic=topic, weight=10)[0] for n in range(6)]
+
+        def tried():
+            return {t: sum(1 for i in ids if self.row(i)["tries"] > 0) for t, ids in rows.items()}
+
+        self.assertEqual(self.go(), 0)
+        first = tried()
+        self.assertGreater(sum(first.values()), 0)
+        self.assertLessEqual(max(first.values()) - min(first.values()), 1)                     # the first run did not finish one topic before the next
+        self.assertGreater(min(first.values()), 0)                                             # and every topic had its turn
+        self.assertEqual(self.go(), 0)
+        second = tried()
+        self.assertGreater(sum(second.values()), sum(first.values()))
+        self.assertLessEqual(max(second.values()) - min(second.values()), 1)                   # the turns went on where the first run left them
 
 
 class WholeChain(Chain):
