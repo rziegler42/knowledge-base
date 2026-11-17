@@ -1348,11 +1348,30 @@ class Redirects(StepCase):
         self.assertEqual(len([1 for p, _ in self.srv.hits if p == "/p"]), 1)           # one request reached the victim; the other three were not made
         counters = self.counters()
         self.assertEqual(counters[("2026-11-16", "refusal:victim.test")], 1)
-        self.assertEqual(counters[("2026-11-16", "fetch:victim.test")], 1)
+        self.assertEqual(counters[("2026-11-16", "hop:victim.test")], 1)                 # counted apart from the units of the site's own candidates
+        self.assertNotIn(("2026-11-16", "fetch:victim.test"), counters)
         later = [self.row(r) for r in rows[1:]]
         self.assertEqual([(r["status"], r["tries"]) for r in later], [("queued", 1)] * 3)
         self.assertTrue(all(r["reason"] == "the site it leads to is stopped for the day" for r in later))
         self.assertEqual(crawlguard.load_state(self.index)[0]["history"], [])       # deferred, not failed: nothing for the breaker
+
+    def test_redirects_to_a_site_cannot_use_the_units_that_its_own_candidates_would_have_used(self):
+        self.plan.update(per_domain_per_day=2, batch=10, fetches_per_day=10)
+        self.dns.setdefault("victim.test", [ALL_PUBLIC])
+        redirectors = []
+        for i in range(3):
+            self.doc(f"/page{i}", f"distinct text number {i} of the page")
+            self.srv.routes[f"/r{i}"] = redirect(f"http://victim.test/page{i}")
+            redirectors.append(self.add(f"/r{i}", host=f"r{i}.test"))
+        self.doc("/own", "the victim's own page, with its own words")
+        own = self.add("/own", host="victim.test")                                       # a real candidate of the victim's own, queued after the redirectors
+        self.run_step()
+        rows = [self.row(r) for r in redirectors]
+        self.assertEqual([r["status"] for r in rows[:2]], ["kept", "kept"])              # two hops were let through
+        self.assertEqual((rows[2]["status"], rows[2]["reason"]), ("queued", "the site it leads to is at its limit for the day"))     # the third was refused: the hop count is the limit
+        self.assertEqual(self.row(own)["status"], "kept")                                 # and the site's own candidate still had its units
+        counters = self.counters()
+        self.assertEqual((counters[("2026-11-16", "hop:victim.test")], counters[("2026-11-16", "fetch:victim.test")]), (2, 1))
 
     def test_a_redirect_to_a_site_at_its_daily_limit_is_deferred_with_its_own_reason(self):
         self.plan.update(per_domain_per_day=1)

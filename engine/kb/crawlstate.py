@@ -12,7 +12,7 @@ The transitions it makes, by the spec's statuses (`queued`, `fetching`, `kept`, 
 - `requeue_stale`: a `fetching` row not touched for over 30 minutes goes back to `queued` as a try (its day's count stays), or, at `retries` tries, to `failed`.
 - `block`: `queued` to `blocked`.
 - `reject_kept`: `kept` to `rejected` (a candidate whose book was made and was then judged out).
-- Counters: `fetch`, `fetch:<site>`, `card`, `refusal:<site>`, each by the plan's `timezone` day (`crawlplan.day_of`). `reserve_card` and `note_refusal` write the last two, `charge_hop` takes a unit of `fetch:<site>` for a redirect's hop to another site; `ceilings` reads.
+- Counters: `fetch`, `fetch:<site>`, `card`, `refusal:<site>`, each by the plan's `timezone` day (`crawlplan.day_of`). `reserve_card` and `note_refusal` write the last two, `charge_hop` counts a redirect's hop to another site in `hop:<site>`, apart from the units of `fetch:<site>` that candidates take; `ceilings` reads.
 
 `filed_total` is not a counter: `filed_total(events_by_book)` counts the books with a `crawl_found` event in the events it is given (this module reads no store). This module makes no request and reads no environment variable."""
 import datetime
@@ -238,7 +238,9 @@ def note_refusal(conn, plan, now, site):
 
 
 def charge_hop(conn, plan, now, site):
-    """Take one unit of `site`'s day for a request that a redirect led to (the first request of a candidate is reserved by `reserve`; this is for the hops after it, to a site other than the first). Returns `""` when the
+    """Count one request that a redirect led to, **apart from the units that candidates take** (the first request of a candidate is reserved by `reserve`, in `fetch:<site>`; this is for the hops after it, to a site other
+    than the first, and is counted in `hop:<site>`, which `reserve` does not read: a hostile redirect cannot use up the units that the site's own candidates would have used). A hop is refused when the site is stopped for
+    the day, when its candidates' units are at `per_domain_per_day`, or when its hops have reached `per_domain_per_day` too. Returns `""` when the
     unit was taken, or the reason it was not: `the site is stopped for the day` (it has reached `domain_refusals` refusals) or `the site is at its limit for the day` (`per_domain_per_day`). Nothing is taken then."""
     _plan_numbers(plan, "per_domain_per_day", "domain_refusals")
     if not isinstance(site, str) or len(site) > 253 or not _SITE.fullmatch(site):
@@ -247,9 +249,9 @@ def charge_hop(conn, plan, now, site):
     with _transaction(conn):
         if crawlguard.site_stopped(crawlguard.refusals_today(conn, plan, now), site, plan):
             return "the site is stopped for the day"
-        if _count(conn, day, f"fetch:{site}") >= plan["per_domain_per_day"]:
+        if _count(conn, day, f"fetch:{site}") >= plan["per_domain_per_day"] or _count(conn, day, f"hop:{site}") >= plan["per_domain_per_day"]:
             return "the site is at its limit for the day"
-        _bump(conn, day, f"fetch:{site}")
+        _bump(conn, day, f"hop:{site}")
         return ""
 
 

@@ -602,18 +602,50 @@ class Counters(Case):
         self.assertEqual(self.counters()[("2026-11-16", "card")], 2)
         self.assertTrue(crawlstate.reserve_card(self.conn, self.plan, NOW + datetime.timedelta(days=1)))
 
-    def test_a_hop_to_another_site_takes_one_unit_of_that_sites_day_up_to_its_cap_and_not_when_it_is_stopped(self):
+    def test_a_hop_to_another_site_is_counted_apart_up_to_the_same_cap_and_not_when_it_is_stopped(self):
         self.plan = plan(per_domain_per_day=2, domain_refusals=2)
         self.assertEqual([crawlstate.charge_hop(self.conn, self.plan, NOW, "v.example") for _ in range(3)], ["", "", "the site is at its limit for the day"])
-        self.assertEqual(self.counters()[("2026-11-16", "fetch:v.example")], 2)
+        self.assertEqual(self.counters()[("2026-11-16", "hop:v.example")], 2)
+        self.assertNotIn(("2026-11-16", "fetch:v.example"), self.counters())              # the units that `reserve` reads are not touched
         crawlstate.note_refusal(self.conn, self.plan, NOW, "w.example")
         crawlstate.note_refusal(self.conn, self.plan, NOW, "w.example")
         self.assertEqual(crawlstate.charge_hop(self.conn, self.plan, NOW, "w.example"), "the site is stopped for the day")
-        self.assertNotIn(("2026-11-16", "fetch:w.example"), self.counters())
+        self.assertNotIn(("2026-11-16", "hop:w.example"), self.counters())
         self.assertEqual(crawlstate.charge_hop(self.conn, self.plan, NOW + datetime.timedelta(days=1), "v.example"), "")      # a new day
         for bad in ("", "A.example", "a b", None, 3, "x" * 300):
             with self.subTest(bad), self.assertRaises(KbError):
                 crawlstate.charge_hop(self.conn, self.plan, NOW, bad)
+
+    def test_hops_to_a_site_leave_all_its_units_to_the_candidates_that_are_queued_for_it(self):
+        self.plan = plan(per_domain_per_day=3)
+        ids = [self.add(f"c{n}", domain="v.example") for n in range(3)]
+        self.assertEqual([crawlstate.charge_hop(self.conn, self.plan, NOW, "v.example") for _ in range(4)], ["", "", "", "the site is at its limit for the day"])
+        taken = [self.reserve(run=f"run-{n}")[0] for n in range(3)]
+        self.assertEqual([row["id"] for row in taken], ids)                                  # the three real candidates are all taken
+        self.assertEqual(self.reserve(run="run-9"), (None, "nothing_queued"))
+        self.assertEqual((self.counters()[("2026-11-16", "fetch:v.example")], self.counters()[("2026-11-16", "hop:v.example")]), (3, 3))
+
+    def test_a_hop_to_a_site_whose_real_fetches_are_at_the_cap_is_refused_and_counts_nothing(self):
+        self.plan = plan(per_domain_per_day=2)
+        for n in range(2):
+            self.add(f"c{n}", domain="v.example")
+            self.assertIsNotNone(self.reserve(run=f"run-{n}")[0])
+        self.assertEqual(crawlstate.charge_hop(self.conn, self.plan, NOW, "v.example"), "the site is at its limit for the day")
+        self.assertNotIn(("2026-11-16", "hop:v.example"), self.counters())
+
+    def test_hops_do_not_count_toward_the_fetches_of_the_day(self):
+        self.plan = plan(fetches_per_day=1)
+        self.add("c", domain="a.example")
+        for _ in range(3):
+            crawlstate.charge_hop(self.conn, self.plan, NOW, "v.example")
+        self.assertIsNotNone(self.reserve()[0])                                               # the one fetch of the day is still there
+        self.assertEqual(self.counters()[("2026-11-16", "fetch")], 1)                        # only the candidate's own fetch is in the day's count
+
+    def test_the_hop_counters_of_two_sites_are_independent_and_a_new_day_starts_afresh(self):
+        self.plan = plan(per_domain_per_day=1)
+        self.assertEqual((crawlstate.charge_hop(self.conn, self.plan, NOW, "v.example"), crawlstate.charge_hop(self.conn, self.plan, NOW, "w.example")), ("", ""))
+        self.assertEqual(crawlstate.charge_hop(self.conn, self.plan, NOW, "v.example"), "the site is at its limit for the day")
+        self.assertEqual(crawlstate.charge_hop(self.conn, self.plan, NOW + datetime.timedelta(days=1), "v.example"), "")
 
     def test_a_failure_part_way_through_a_hop_charge_counts_nothing(self):
         before = self.table()
@@ -689,7 +721,7 @@ class Counters(Case):
             t.join(timeout=120)
         self.assertEqual(errors, [])
         self.assertEqual(got.count(""), 7)
-        self.assertEqual(self.counters()[("2026-11-16", "fetch:v.example")], 7)
+        self.assertEqual(self.counters()[("2026-11-16", "hop:v.example")], 7)
 
     def test_a_refusal_is_counted_for_its_site_in_the_plans_day(self):
         self.plan = plan(timezone="Asia/Tokyo")

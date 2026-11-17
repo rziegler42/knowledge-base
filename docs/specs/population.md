@@ -66,7 +66,7 @@ Nobody is at the keyboard to add a piece while a run is unattended, so the first
 [limits]
 fetches_per_day = 20        # candidate fetches started per local day
 filed_total = 200           # books the crawl may file in all
-per_domain_per_day = 3      # fetches per registrable domain per day
+per_domain_per_day = 3      # fetches per registrable domain per day (a redirect's hop to another site is counted apart, with the same limit, so that a redirect cannot use up the fetches of that site's own candidates: a site can see up to twice that many requests in a day)
 batch = 8                   # candidates fetched per run
 cards_per_day = 30          # books given a card per day
 queue_low = 100             # discovery refills the queue when fewer rows than this are queued

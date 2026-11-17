@@ -150,7 +150,9 @@ supervised run, in order. Run every command from the `engine` folder (`cd engine
 - **A card step cut short by the time budget in every run** would give a book a card unit each run and no failed try; the daily card ceiling bounds it. It has not been seen.
 - **The start of a run asks the model entries that an earlier run found down**, one short call each, before the time budget begins; a model server that hangs can hold the run for the entry's timeout.
 - **Pages are converted without a memory limit** (up to the size limit of a capture); a hostile page can use a lot of memory for a while.
-- **The run does not check the permissions of the index folder**: keep it yours.
+- **A redirect to a site that refuses it still counts as that site's refusal**: a hostile page could point up to three redirects a day at a strict site and stop it for the day. It costs a site's availability only, and the attacker cannot force the refusal.
+- **A site can see up to twice its daily fetch limit in requests**, because a redirect's hops to it are counted apart from its own candidates' fetches, with the same limit; the pacing gap per site applies to every request.
+- **The index folder** is checked to be a real folder that is yours and that others cannot write, but not its parent folders, and not an access list that grants write to someone else.
 
 ## Where the work stands
 
