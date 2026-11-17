@@ -20,7 +20,8 @@ from unittest import mock
 
 from engine.tests import ENGINE_DIR
 
-from kb import KbError, crawlapprove, crawlguard, crawllog, crawlplan, crawlqueue, crawlrun
+from engine.tests.test_crawllists import Fetch
+from kb import KbError, crawlapprove, crawlguard, crawllists, crawllog, crawlplan, crawlqueue, crawlrun, weblists
 
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
@@ -697,6 +698,89 @@ class Points(Case):
         self.assertEqual(self.do_run(steps={"earlier_work": trip}), 4)
         self.assertEqual(self.steps_of()[-1], ("run_end", "tripped"))
         self.assertTrue(self.lock_is_free())
+
+
+class Refusing(Case):
+    """A step that cannot let the run go on says so with `StepRefused`: the run refuses (exit 3), with one `refuse` line, and the error text of nothing."""
+
+    def test_a_step_that_refuses_ends_the_run_with_exit_3_one_refuse_line_and_the_lock_let_go(self):
+        reached = []
+
+        def refuse(ctx):
+            raise crawlrun.StepRefused("the required list has no usable copy")
+
+        self.assertEqual(self.do_run(steps={"lists": refuse, "earlier_work": lambda ctx: reached.append(1)}), 3)
+        self.assertEqual(reached, [])
+        lines = self.log_lines()
+        self.assertEqual([(l["step"], l["outcome"]) for l in lines if l["step"] == "refuse"], [("refuse", "refused")])
+        self.assertIn("no usable copy", [l for l in lines if l["step"] == "refuse"][0]["reason"])
+        self.assertEqual(lines[-1]["step"], "run_end")
+        self.assertEqual(lines[-1]["outcome"], "refused")
+        self.assertEqual(self.err, ["refused: the required list has no usable copy"])
+        self.assertTrue(self.lock_is_free())
+        self.assertFalse(crawlguard.read_breaker(self.index)["tripped"])
+
+    def test_the_reason_a_step_gives_is_cleaned_and_a_credential_shape_in_it_is_withheld(self):
+        def refuse(ctx):
+            raise crawlrun.StepRefused("a bad line\x1b[31m Authorization: Bearer abcdefgh12345")
+
+        self.assertEqual(self.do_run(steps={"lists": refuse}), 3)
+        self.assertEqual([l["reason"] for l in self.log_lines() if l["step"] == "refuse"], [crawllog.WITHHELD])
+        self.assertEqual(self.err, ["refused: " + crawllog.WITHHELD])
+
+    def test_the_context_has_a_place_for_the_matcher_and_the_suffix_list_for_the_steps_after(self):
+        seen = []
+        self.do_run(steps={"lists": lambda ctx: seen.append((ctx.matcher, ctx.suffixes))})
+        self.assertEqual(seen, [(None, None)])
+
+        def set_them(ctx):
+            ctx.matcher, ctx.suffixes = "a matcher", frozenset({"com"})
+
+        later = []
+        self.do_run(steps={"lists": set_them, "fetch": lambda ctx: later.append((ctx.matcher, ctx.suffixes))})
+        self.assertEqual(later, [("a matcher", frozenset({"com"}))])
+
+
+class ListsPoint(Case):
+    """The real `lists` step in a real run, with a fake downloader."""
+
+    def setUp(self):
+        super().setUp()
+        floors = mock.patch.dict(weblists.MIN_ENTRIES, {"phishing_domains": 1, "public_suffix": 1})
+        floors.start()
+        self.addCleanup(floors.stop)
+        self.fetch = Fetch()
+        self.fetch.replies[weblists.DEFAULTS["phishing_domains_url"]] = (200, {}, b"bad.example\nbad2.example\n")
+        self.fetch.replies[weblists.DEFAULTS["public_suffix_url"]] = (200, {}, b"com\norg\n")
+        self.step = crawllists.make_step(fetch=self.fetch, key_path=os.path.join(self.dir, "urlhaus.key"))
+
+    def test_a_run_with_the_lists_step_refreshes_the_lists_and_hands_the_matcher_to_the_steps_after(self):
+        seen = []
+        self.assertEqual(self.do_run(steps={"lists": self.step, "fetch": lambda ctx: seen.append((ctx.matcher.blocked("bad.example") is not None, "org" in ctx.suffixes))}), 0)
+        self.assertEqual(seen, [(True, True)])
+        updates = [l for l in self.log_lines() if l["step"] == "list_update"]
+        self.assertEqual(len(updates), 3)
+
+    def test_a_required_list_with_no_copy_and_no_download_refuses_the_run_with_exit_3_before_any_later_step(self):
+        self.fetch.replies[weblists.DEFAULTS["phishing_domains_url"]] = (500, {}, b"")
+        reached = []
+        self.assertEqual(self.do_run(steps={"lists": self.step, "earlier_work": lambda ctx: reached.append(1)}), 3)
+        self.assertEqual(reached, [])
+        self.assertIn("phishing_domains", [l for l in self.log_lines() if l["step"] == "refuse"][0]["reason"])
+        self.assertTrue(self.lock_is_free())
+
+    def test_a_stop_file_made_before_the_step_ends_the_run_at_the_point_and_nothing_is_downloaded(self):
+        open(os.path.join(self.index, "crawl.stop"), "w").close()
+        self.assertEqual(self.do_run(steps={"lists": self.step}), 3)                          # the check of the stop file comes first
+        self.assertEqual(self.fetch.calls, [])
+
+    def test_a_stop_file_made_by_an_earlier_point_is_seen_before_the_lists_step_downloads(self):
+        def make_the_stop_file(ctx):
+            open(os.path.join(self.index, "crawl.stop"), "w").close()
+
+        calls_before = len(self.fetch.calls)
+        self.assertEqual(self.do_run(steps={"lists": make_the_stop_file, "earlier_work": self.step}), 0)
+        self.assertEqual(len(self.fetch.calls), calls_before)                              # the next point's look at the stop file ended the run first
 
 
 class Remembered(Case):

@@ -111,6 +111,12 @@ class Log:
                 raise KbError(f"the log's {field} looks like a credential and is not logged")
         return shown or None
 
+    def add_secrets(self, values):
+        """Name more secrets, found after the log was made (the key a step loads): from now on no field may hold one. Empty values are ignored."""
+        if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple, set, frozenset)) or not all(isinstance(s, str) for s in values):
+            raise KbError("the secrets are a list of strings")
+        self._secrets.extend(("".join(s.split())).casefold() for s in values if "".join(s.split()))
+
     def safe(self, value, field="reason"):
         """`value` as the log would take it for `field`, or, if the log would refuse it (text that looks like a credential, a secret of the run, something that is not text), the fixed `WITHHELD`: for the steps,
         so that what a hostile page said can be logged without a refusal ending the run. `None` and empty text give `None`."""

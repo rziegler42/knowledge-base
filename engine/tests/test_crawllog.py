@@ -183,6 +183,30 @@ class Secrets(Case):
             with self.assertRaises(KbError):
                 crawllog.Log(self.index, "run-1", secrets=bad)
 
+    def test_a_secret_added_after_the_log_was_made_is_refused_from_then_on_in_every_field(self):
+        log = crawllog.Log(self.index, "run-1")
+        log.write("fail", "failed", now=NOW, reason="before hunter22 was known")
+        log.add_secrets(["hunter22", "", "  "])
+        for field in ("reason", "book", "host"):
+            with self.assertRaises(KbError):
+                log.write("fail", "failed", now=NOW, **{field: "see hunter22 here"})
+            self.assertEqual(log.safe("see hunter22 here", field), crawllog.WITHHELD)
+        with self.assertRaises(KbError):
+            log.write("fail", "failed", now=NOW, reason="HUNTER 22")
+        log.write("fail", "failed", now=NOW, reason="nothing here")
+        self.assertEqual(len(self.lines()), 2)
+        for bad in ("a string", 5, [5], None):
+            with self.assertRaises(KbError):
+                log.add_secrets(bad)
+
+    def test_a_secret_added_later_is_compared_without_case_and_without_spaces(self):
+        log = crawllog.Log(self.index, "run-1")
+        log.add_secrets([" Hunter 22 "])
+        for text in ("see HUNTER22 here", "see hunter 22 here", "see h u n t e r 2 2"):
+            with self.assertRaises(KbError):
+                log.write("fail", "failed", now=NOW, reason=text)
+            self.assertEqual(log.safe(text), crawllog.WITHHELD)
+
     def test_a_secret_split_by_a_hidden_character_is_still_found(self):
         guarded = crawllog.Log(self.index, "run-1", secrets=["s3cr3t-value"])
         with self.assertRaises(KbError):
