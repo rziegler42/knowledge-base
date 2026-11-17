@@ -13,7 +13,7 @@ from unittest import mock
 from engine.tests import ENGINE_DIR
 from engine.tests.test_crawlbooks import Case as BooksCase
 
-from kb import KbError, convert_run, crawlbooks, crawlguard, crawllog, crawlplan, crawlsteps, scan, scan_tool, stages
+from kb import KbError, convert_run, crawlbooks, crawlguard, crawllog, crawlplan, crawlqueue, crawlrun, crawlsteps, scan, scan_tool, stages
 
 NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=datetime.timezone.utc)
 PAGE = b"<html><head><title>A page</title></head><body>Some words on a page.</body></html>"
@@ -369,6 +369,406 @@ class Wiring(Case):
             source = f.read()
         for word in ("socket", "urllib", "http.client", "subprocess", "os.environ", "getenv", "open("):
             self.assertNotIn(word, source, word)
+
+
+# ---- Increment I: convert and index
+
+class FakeConvert:
+    """A converter that does what the test says, and files the conversion record the way the real one does."""
+
+    def __init__(self, chars=1000, status="done", reason="the tool failed", error=None):
+        self.chars, self.status, self.reason, self.error, self.calls = chars, status, reason, error, []
+
+    def __call__(self, store, book_id, version_id):
+        self.calls.append(book_id)
+        if self.error is not None:
+            raise self.error
+        if self.status == "done":
+            record = {"tool": "kb-t", "version": "1", "generation": 1, "payload": "derived/kb-t/1", "parse": "blocks-json", "quality": "full", "blocks": 3, "chars": self.chars, "pages": None, "truncated": False}
+            check = {"rule": "extractor-size", "compared": False, "partial": False, "reasons": [], "ratio": 2.0, "chars": {"kb-t 1": self.chars}, "notes": {}}
+            store.set_version_conversions(book_id, version_id, [record], {"tool": "kb-t", "version": "1", "generation": 1}, check)
+            stages.mark(store, book_id, version_id, "converted", "done", tool="kb-t 1")
+            return {"status": "done"}
+        stages.mark(store, book_id, version_id, "converted", self.status, reason=self.reason, tool="kb-t 1")
+        return {"status": self.status, "reason": self.reason}
+
+
+class FakeIndex:
+    def __init__(self, error=None):
+        self.error, self.calls = error, []
+
+    def __call__(self, store, book_id, version_id):
+        self.calls.append(book_id)
+        if self.error is not None:
+            raise self.error
+        stages.mark(store, book_id, version_id, "indexed", "done", tool="kb-index")
+        return {"status": "done"}
+
+
+class ConvertCase(Case):
+    def setUp(self):
+        super().setUp()
+        self.conn = crawlqueue.connect(self.index)
+        self.addCleanup(self.conn.close)
+        self.convert, self.index_fake = FakeConvert(), FakeIndex()
+        self.tripped = []
+
+    def scanned_book(self, scanned=True, **kw):
+        """A crawl book, found with a candidate row that is `kept` for it, whose scan is over."""
+        number = 100 + self.stamp + 1
+        book = self.filed(candidate=number, **kw)
+        self.conn.execute("INSERT INTO candidates(id, identity_key, address, source, domain, status, book_id, added, updated) VALUES (?,?,?,?,?,?,?,?,?)",
+                          (number, f"k{number}", f"http://a.test/{number}", "openalex", "a.test", "kept", book, "2026-11-16T10:00:00Z", "2026-11-16T10:00:00Z"))
+        if scanned:
+            FakeScan()(self.store, book, self.version(book))
+        return book
+
+    def row(self, book):
+        return self.conn.execute("SELECT status, reason FROM candidates WHERE book_id = ?", (book,)).fetchone()
+
+    def stage(self, book, name):
+        return stages.read(self.store, book, self.version(book))["stages"][name]["status"]
+
+    def ctx(self):
+        ctx = super().ctx()
+        ctx.conn = self.conn
+
+        def trip(kind, reason):
+            ctx.tripped = True
+            self.tripped.append((kind, reason))
+            return crawlguard.trip(self.index, kind, reason, "run-1", now=self.now, log=self.log)
+
+        ctx.trip = trip
+        return ctx
+
+    def run_convert(self, ctx=None, convert=None, index=None, statvfs=roomy):
+        ctx = ctx or self.ctx()
+        crawlsteps.make_convert_step(convert=convert or self.convert, index=index or self.index_fake, statvfs=statvfs)(ctx)
+        return ctx
+
+    def parked(self, book):
+        found = [e for e in self.events(book) if e["event"] == "crawl_rejected"]
+        return found[0] if found else None
+
+
+class ConvertAndIndex(ConvertCase):
+    def test_a_scanned_book_is_converted_and_then_indexed_and_the_stages_and_lines_say_so(self):
+        book = self.scanned_book()
+        ctx = self.run_convert()
+        self.assertEqual((self.convert.calls, self.index_fake.calls), ([book], [book]))
+        self.assertEqual((self.stage(book, "converted"), self.stage(book, "indexed")), ("done", "done"))
+        self.assertEqual([(x["step"], x["outcome"], x["book"]) for x in self.lines()], [("convert", "ok", book), ("index", "ok", book)])
+        self.assertEqual(self.listed(), [book])
+        self.assertEqual(ctx.convert_report, {"converted": 1, "indexed": 1, "rejected": 0, "failed": 0, "parked": 0, "ended": "all the books are converted and indexed"})
+
+    def test_the_second_run_does_nothing_and_a_book_converted_before_a_death_is_only_indexed(self):
+        done, half = self.scanned_book(), self.scanned_book()
+        self.run_convert()
+        self.convert.calls.clear()
+        self.index_fake.calls.clear()
+        before = (len(self.lines()), self.events(done))
+        self.run_convert()
+        self.assertEqual((self.convert.calls, self.index_fake.calls, len(self.lines()), self.events(done)), ([], [], before[0], before[1]))
+        third = self.scanned_book()
+        FakeConvert()(self.store, third, self.version(third))
+        self.run_convert()
+        self.assertEqual((self.convert.calls, self.index_fake.calls), ([], [third]))
+
+    def test_only_a_book_whose_scan_is_done_and_that_is_not_final_is_converted(self):
+        pending = self.scanned_book(scanned=False)
+        failed = self.scanned_book(scanned=False)
+        stages.mark(self.store, failed, self.version(failed), "scanned", "failed", reason="the tool failed", tool=scan.TOOL_LABEL)
+        skipped = self.scanned_book(scanned=False)
+        stages.mark(self.store, skipped, self.version(skipped), "scanned", "skipped", reason="no scanner", tool=scan.TOOL_LABEL)
+        held, unplaced = self.scanned_book(), self.scanned_book()
+        crawlbooks.record_held(self.store, held, ["encrypted"])
+        crawlbooks.record_unplaced(self.store, unplaced, "none")
+        stranger = self.scanned_book()
+        self.store.append_event(stranger, "crawl_rejected", reason="x", score=None, stage="judge")
+        owner = self.book(auto_filed=False)
+        mine = self.scanned_book()
+        self.run_convert()
+        self.assertEqual(self.convert.calls, [mine])
+        self.assertEqual((self.index_fake.calls, self.events(owner)), ([mine], []))
+        for book in (pending, failed, skipped):
+            self.assertEqual(self.stage(book, "converted"), "pending")
+
+    def test_a_book_of_an_unapproved_plan_is_not_converted(self):
+        book = self.scanned_book(digest="f" * 32)
+        self.run_convert()
+        self.assertEqual((self.convert.calls, self.stage(book, "converted")), ([], "pending"))
+
+    def test_the_books_are_taken_oldest_found_first(self):
+        a, b, c = self.scanned_book(), self.scanned_book(), self.scanned_book()
+        self.run_convert()
+        self.assertEqual((self.convert.calls, self.index_fake.calls), ([a, b, c], [a, b, c]))
+
+
+class ConvertRefusals(ConvertCase):
+    def test_the_disk_floors_are_read_before_each_conversion_and_each_index_write(self):
+        self.scanned_book()
+        self.scanned_book()
+        asked = []
+
+        def reading(path):
+            asked.append(path)
+            return roomy(path)
+
+        self.run_convert(statvfs=reading)
+        self.assertEqual(len(asked), 4 * 2)                                  # two floors (bulk and index) before each of 2 conversions and 2 index writes
+
+    def test_a_floor_before_the_index_write_leaves_the_book_converted_and_ends_the_step_quietly(self):
+        book, other = self.scanned_book(), self.scanned_book()
+        reads = []
+
+        def reading(path):
+            reads.append(path)
+            return roomy(path) if len(reads) <= 2 else types.SimpleNamespace(f_bavail=1, f_frsize=4096)
+
+        ctx = self.run_convert(statvfs=reading)
+        self.assertEqual((self.stage(book, "converted"), self.stage(book, "indexed"), self.stage(other, "converted")), ("done", "pending", "pending"))
+        self.assertEqual((self.convert.calls, self.index_fake.calls), ([book], []))
+        last = self.lines()[-1]
+        self.assertEqual((last["step"], last["outcome"]), ("convert", "skipped"))
+        self.assertIn("floor", last["reason"])
+        self.assertEqual((self.parked(book), ctx.tripped), (None, False))
+
+    def test_the_stop_file_is_looked_at_before_each_conversion_and_each_index_write(self):
+        first, second = self.scanned_book(), self.scanned_book()
+
+        def stopping(store, book, version):
+            out = self.convert(store, book, version)
+            open(os.path.join(self.index, "crawl.stop"), "w").close()
+            return out
+
+        self.run_convert(convert=stopping)
+        self.assertEqual((self.convert.calls, self.index_fake.calls), ([first], []))
+        self.assertEqual((self.stage(first, "converted"), self.stage(first, "indexed"), self.stage(second, "converted")), ("done", "pending", "pending"))
+        self.assertEqual(self.lines()[-1]["reason"], "the stop file is present")
+
+    def test_a_refusal_is_said_once_and_the_books_after_it_wait(self):
+        for _ in range(3):
+            self.scanned_book()
+        full = lambda path: types.SimpleNamespace(f_bavail=1, f_frsize=4096)    # noqa: E731
+        self.run_convert(statvfs=full)
+        self.assertEqual([(x["step"], x["outcome"]) for x in self.lines()], [("convert", "skipped")])
+
+    def test_a_stop_file_at_the_start_does_nothing_and_a_refusal_is_no_failed_try(self):
+        book = self.scanned_book()
+        open(os.path.join(self.index, "crawl.stop"), "w").close()
+        self.run_convert()
+        self.assertEqual((self.convert.calls, self.names(book).count("crawl_step_failed")), ([], 0))
+
+
+class ConverterFailures(ConvertCase):
+    def test_a_converter_that_fails_is_a_failed_try_and_at_retries_the_book_is_parked_and_its_row_rejected(self):
+        book = self.scanned_book()
+        bad = FakeConvert(status="failed")
+        for expected in ("retry", "retry", "parked"):
+            self.run_convert(convert=bad)
+            self.assertEqual(self.parked(book) is not None, expected == "parked")
+        self.assertEqual(self.names(book).count("crawl_step_failed"), 3)
+        found = self.parked(book)
+        self.assertEqual((found["stage"], self.store.read_book(book)["state"]), ("convert", "weeded"))
+        self.assertEqual(self.row(book)[0], "rejected")
+        self.assertEqual(self.listed(), [])
+        before = len(bad.calls)
+        self.run_convert(convert=bad)
+        self.assertEqual(len(bad.calls), before)                              # parked: never converted again
+
+    def test_a_failed_try_and_a_rejection_are_each_one_line_with_a_fixed_reason(self):
+        failing, short = self.scanned_book(), self.scanned_book()
+        fakes = {failing: FakeConvert(status="failed"), short: FakeConvert(chars=3)}
+        self.run_convert(convert=lambda store, book, version: fakes[book](store, book, version))
+        self.assertEqual([(x["step"], x["outcome"], x["book"], x["reason"]) for x in self.lines()],
+                         [("convert", "failed", failing, "the conversion failed"), ("convert", "ok", short, None), ("reject", "rejected", short, "the converted text is shorter than min_chars")])
+
+    def test_a_book_that_fails_its_last_try_is_said_to_be_parked(self):
+        book = self.scanned_book()
+        self.plan["retries"] = 1
+        self.run_convert(convert=FakeConvert(status="failed"))
+        self.assertEqual([(x["step"], x["outcome"], x["reason"]) for x in self.lines()], [("reject", "rejected", "the book is parked after failed tries")])
+        self.assertEqual(self.row(book)[0], "rejected")
+
+    def test_a_result_that_is_neither_done_failed_nor_skipped_is_a_failed_try(self):
+        book = self.scanned_book()
+        self.run_convert(convert=lambda store, b, v: {"status": "odd"})
+        self.assertEqual((self.names(book).count("crawl_step_failed"), self.stage(book, "converted")), (1, "pending"))
+
+    def test_every_way_a_converter_can_die_is_a_failed_try_and_not_a_crash_of_the_step(self):
+        for error in (KbError("the tool failed"), OSError("no space"), ValueError("bad"), MemoryError(), KeyError("odd"), TypeError("odd"), RuntimeError("odd")):
+            with self.subTest(type(error).__name__):
+                book = self.scanned_book()
+                self.run_convert(convert=FakeConvert(error=error))
+                self.assertEqual((self.names(book).count("crawl_step_failed"), self.parked(book)), (1, None))
+
+    def test_a_converter_that_is_not_made_for_the_file_rejects_the_book_at_once(self):
+        book = self.scanned_book()
+        self.run_convert(convert=FakeConvert(status="skipped", reason="there is no converter for this kind of file"))
+        self.assertEqual((self.parked(book)["stage"], self.row(book)[0]), ("convert", "rejected"))
+        self.assertEqual(self.index_fake.calls, [])
+
+    def test_one_dead_converter_does_not_trip_the_breaker_and_the_other_books_go_on(self):
+        a, b = self.scanned_book(), self.scanned_book()
+        self.plan["retries"] = 1
+        fakes = {a: FakeConvert(status="failed"), b: self.convert}
+        ctx = self.run_convert(convert=lambda store, book, version: fakes[book](store, book, version))
+        self.assertEqual((ctx.tripped, self.tripped, self.stage(b, "indexed")), (False, [], "done"))
+        self.assertIsNotNone(self.parked(a))
+
+    def test_books_parked_in_one_run_over_the_bound_trip_the_breaker_as_a_stage_bound_and_end_the_run(self):
+        self.plan.update(retries=1, consecutive_failures=2)
+        books = [self.scanned_book() for _ in range(3)]
+        ctx = self.ctx()
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.run_convert(ctx=ctx, convert=FakeConvert(status="failed"))
+        self.assertEqual([self.parked(b) is not None for b in books], [True, True, False])
+        self.assertEqual(self.tripped[0][0], "stage_bound")
+        self.assertTrue(crawlguard.read_breaker(self.index)["tripped"])
+        self.assertEqual(ctx.convert_report["parked"], 2)
+        self.assertEqual(ctx.convert_report["ended"], "the circuit breaker was tripped")
+
+    def test_the_real_converter_with_no_approved_tool_is_a_failed_try_and_text_from_it_reaches_no_event_or_line(self):
+        book = self.scanned_book()
+        crawlsteps.make_convert_step(index=self.index_fake, statvfs=roomy)(self.ctx())              # the real converter: this temporary config approves no tool
+        self.assertEqual((self.names(book).count("crawl_step_failed"), self.stage(book, "converted")), (1, "failed"))
+
+    def test_what_a_tool_said_never_reaches_an_event_a_log_line_or_a_row(self):
+        book = self.scanned_book()
+        self.run_convert(convert=FakeConvert(status="failed", reason="Authorization: Bearer abcdefgh12345 CANARY-text"))
+        text = json.dumps([self.lines(), self.events(book), self.row(book)])
+        self.assertNotIn("CANARY", text)
+        self.assertNotIn("abcdefgh12345", text)
+
+
+class TextLimits(ConvertCase):
+    def test_a_converted_text_shorter_than_min_chars_is_rejected_with_its_reason_and_never_indexed(self):
+        self.plan["min_chars"] = 400
+        book = self.scanned_book()
+        self.run_convert(convert=FakeConvert(chars=399))
+        found = self.parked(book)
+        self.assertEqual((found["stage"], found["reason"]), ("convert", "the converted text is shorter than min_chars"))
+        self.assertEqual((self.row(book), self.index_fake.calls), (("rejected", "the converted text is shorter than min_chars"), []))
+
+    def test_a_converted_text_over_the_size_limit_is_rejected_with_its_reason(self):
+        book = self.scanned_book()
+        self.run_convert(convert=FakeConvert(chars=crawlsteps.MAX_TEXT_CHARS + 1))
+        found = self.parked(book)
+        self.assertEqual((found["stage"], found["reason"]), ("convert", "the converted text is over the size limit"))
+        self.assertEqual((self.row(book)[0], self.index_fake.calls), ("rejected", []))
+
+    def test_the_size_limit_is_five_million_characters_exactly(self):
+        ok, over = self.scanned_book(), self.scanned_book()
+        fakes = {ok: FakeConvert(chars=5_000_000), over: FakeConvert(chars=5_000_001)}
+        self.run_convert(convert=lambda store, book, version: fakes[book](store, book, version))
+        self.assertEqual((self.index_fake.calls, self.parked(ok), self.parked(over)["reason"]), ([ok], None, "the converted text is over the size limit"))
+
+    def test_the_text_of_the_conversion_in_use_is_the_one_that_is_measured(self):
+        book = self.scanned_book()
+        version = self.version(book)
+        records = [{"tool": "kb-a", "version": "1", "generation": 1, "payload": "derived/kb-a/1", "parse": "blocks-json", "quality": "full", "blocks": 1, "chars": 10, "pages": None, "truncated": False},
+                   {"tool": "kb-b", "version": "1", "generation": 1, "payload": "derived/kb-b/1", "parse": "blocks-json", "quality": "full", "blocks": 1, "chars": 1000, "pages": None, "truncated": False}]
+        check = {"rule": "extractor-size", "compared": True, "partial": False, "reasons": [], "ratio": 2.0, "chars": {"kb-a 1": 10, "kb-b 1": 1000}, "notes": {}}
+        self.store.set_version_conversions(book, version, records, {"tool": "kb-b", "version": "1", "generation": 1}, check)
+        stages.mark(self.store, book, version, "converted", "done", tool="kb-a 1 + kb-b 1")
+        self.run_convert()
+        self.assertEqual((self.parked(book), self.index_fake.calls), (None, [book]))
+
+    def test_a_conversion_that_is_done_but_has_no_record_is_a_failed_try(self):
+        book = self.scanned_book()
+        stages.mark(self.store, book, self.version(book), "converted", "done", tool="kb-t 1")
+        self.run_convert()
+        self.assertEqual((self.names(book).count("crawl_step_failed"), self.index_fake.calls), (1, []))
+
+    def test_a_text_at_each_limit_is_taken(self):
+        low, high = self.scanned_book(), self.scanned_book()
+        fakes = {low: FakeConvert(chars=self.plan["min_chars"]), high: FakeConvert(chars=crawlsteps.MAX_TEXT_CHARS)}
+        self.run_convert(convert=lambda store, book, version: fakes[book](store, book, version))
+        self.assertEqual((self.index_fake.calls, self.parked(low), self.parked(high)), ([low, high], None, None))
+
+    def test_a_book_converted_in_an_earlier_run_is_checked_before_it_is_indexed(self):
+        book = self.scanned_book()
+        FakeConvert(chars=3)(self.store, book, self.version(book))
+        self.run_convert()
+        self.assertEqual((self.parked(book)["reason"], self.index_fake.calls), ("the converted text is shorter than min_chars", []))
+
+
+class IndexFailures(ConvertCase):
+    def test_an_index_write_that_fails_is_a_failed_try_for_the_index_step_and_at_retries_the_book_is_parked(self):
+        book = self.scanned_book()
+        bad = FakeIndex(error=KbError("the search index could not be written"))
+        for _ in range(3):
+            self.run_convert(index=bad)
+        found = self.parked(book)
+        self.assertEqual((found["stage"], self.row(book)[0], self.stage(book, "converted")), ("index", "rejected", "done"))
+        self.assertEqual([e["step"] for e in self.events(book) if e["event"] == "crawl_step_failed"], ["index"] * 3)         # the failure that parks the book is recorded too
+
+    def test_an_index_that_dies_in_any_way_is_a_failed_try_too(self):
+        for error in (OSError("disk"), KeyError("odd"), TypeError("odd"), MemoryError()):
+            with self.subTest(type(error).__name__):
+                book = self.scanned_book()
+                self.run_convert(index=FakeIndex(error=error))
+                self.assertEqual((self.names(book).count("crawl_step_failed"), self.parked(book)), (1, None))
+
+
+class OneBook(ConvertCase):
+    def test_a_book_that_is_final_is_not_converted_even_when_asked_directly(self):
+        book = self.scanned_book()
+        crawlbooks.record_held(self.store, book, ["encrypted"])
+        got = crawlsteps.convert_and_index(self.ctx(), self.store, book, self.convert, self.index_fake, roomy)
+        self.assertEqual((got, self.convert.calls), (("final", None), []))
+
+    def test_a_book_scanned_with_hold_findings_whose_hold_was_never_written_is_held_here_and_not_converted(self):
+        book = self.scanned_book(scanned=False)
+        FakeScan(["javascript"])(self.store, book, self.version(book))               # the scan step died between the scan and the hold
+        got = crawlsteps.convert_and_index(self.ctx(), self.store, book, self.convert, self.index_fake, roomy)
+        self.assertEqual((got, self.convert.calls, self.held(book)), (("held", None), [], ["javascript"]))
+
+    def test_findings_the_plan_does_not_hold_do_not_stop_the_conversion(self):
+        book = self.scanned_book(scanned=False)
+        FakeScan(["hidden_text", "script_elements"])(self.store, book, self.version(book))
+        got = crawlsteps.convert_and_index(self.ctx(), self.store, book, self.convert, self.index_fake, roomy)
+        self.assertEqual((got, self.convert.calls, self.held(book)), (("done", None), [book], None))
+
+    def test_a_book_whose_findings_cannot_be_read_is_held_as_failed_and_not_converted(self):
+        book = self.scanned_book()
+        with mock.patch.object(self.store.__class__, "read_version", side_effect=KbError("unreadable")):
+            got = crawlsteps.convert_and_index(self.ctx(), self.store, book, self.convert, self.index_fake, roomy)
+        self.assertEqual((got, self.convert.calls, self.held(book)), (("held", None), [], ["scan_failed"]))
+
+    def test_a_book_whose_stage_file_cannot_be_read_is_left_alone(self):
+        book = self.scanned_book()
+        with mock.patch.object(crawlsteps.stages, "read", side_effect=KbError("unreadable")):
+            got = crawlsteps.convert_and_index(self.ctx(), self.store, book, self.convert, self.index_fake, roomy)
+        self.assertEqual((got, self.convert.calls), (("skipped", None), []))
+
+    def test_a_book_with_no_scan_yet_is_left_alone_when_asked_directly(self):
+        book = self.scanned_book(scanned=False)
+        self.assertEqual(crawlsteps.convert_and_index(self.ctx(), self.store, book, self.convert, self.index_fake, roomy), ("skipped", None))
+
+
+class Sweep(ConvertCase):
+    def test_a_book_weeded_whose_row_was_not_rejected_before_a_death_gets_its_row_rejected_the_next_run(self):
+        book = self.scanned_book()
+        crawlbooks.record_rejected(self.store, book, "the judge said no", 0.1, "judge")        # the event was written, the state and the row were not
+        self.assertEqual((self.store.read_book(book)["state"], self.row(book)[0]), ("active", "kept"))
+        self.run_convert()
+        self.assertEqual((self.store.read_book(book)["state"], self.row(book)[0], self.convert.calls), ("weeded", "rejected", []))
+        self.assertEqual(self.row(book)[1], "the judge said no")
+        before = self.lines()
+        self.run_convert()
+        self.assertEqual(self.lines(), before)
+
+    def test_a_held_or_unplaced_book_keeps_its_row_and_nothing_else_is_swept(self):
+        held = self.scanned_book()
+        crawlbooks.record_held(self.store, held, ["encrypted"])
+        self.run_convert()
+        self.assertEqual((self.row(held)[0], self.store.read_book(held)["state"]), ("kept", "active"))
+
+
+class ConvertWiring(ConvertCase):
+    def test_the_module_has_a_default_convert_step(self):
+        self.assertTrue(callable(crawlsteps.convert_step))
 
 
 if __name__ == "__main__":
