@@ -135,8 +135,8 @@ class MemoryLimitTest(ScanCase):
         book, version = self.file_original("paper.pdf", CLEAN_PDF)
         calls, patched = self.spy()
         with patched:
-            result = scan.scan_version(self.store, book, version, rss_limit_mb=2048)
-        self.assertEqual((result["status"], calls), ("done", [2048]))
+            result = scan.scan_version(self.store, book, version, rss_limit_mb=1500)
+        self.assertEqual((result["status"], calls), ("done", [1500]))
 
     def test_a_page_is_scanned_with_no_limit_even_when_one_is_given(self):
         self.approve_scan()
@@ -146,13 +146,37 @@ class MemoryLimitTest(ScanCase):
             result = scan.scan_version(self.store, book, version, rss_limit_mb=2048)
         self.assertEqual((result["status"], calls), ("done", ["absent"]))
 
-    def test_with_no_limit_the_call_is_exactly_as_it_was(self):
+    def test_with_no_limit_given_a_pdf_is_scanned_under_the_default_and_a_page_with_none(self):
         self.approve_scan()
         book, version = self.file_original("paper.pdf", CLEAN_PDF)
         calls, patched = self.spy()
         with patched:
             result = scan.scan_version(self.store, book, version)
+        self.assertEqual((result["status"], calls, convert_run.DEFAULT_PDF_RSS_MB), ("done", [2048], 2048))
+        page, page_version = self.file_original("page.html", b"<html><body><p>hello</p></body></html>")
+        calls, patched = self.spy()
+        with patched:
+            result = scan.scan_version(self.store, page, page_version)
         self.assertEqual((result["status"], calls), ("done", ["absent"]))
+
+    def test_a_pdf_scanned_with_no_limit_given_is_killed_past_the_default(self):
+        approve([self.fake("allocate", 400, 5)])
+        book, version = self.file_original("paper.pdf", CLEAN_PDF)
+        with mock.patch.object(convert_run, "DEFAULT_PDF_RSS_MB", 64):
+            result = scan.scan_version(self.store, book, version)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("used more memory than its limit of 64 MB and was stopped", result["reason"])
+
+    def test_where_the_memory_cannot_be_read_a_pdf_with_no_limit_given_fails_and_a_page_is_scanned(self):
+        self.approve_scan()
+        book, version = self.file_original("paper.pdf", CLEAN_PDF)
+        page, page_version = self.file_original("page.html", b"<html><body><p>hello</p></body></html>")
+        with mock.patch.object(convert_run, "read_group_rss", side_effect=ValueError("ps gave no rows")):
+            pdf_result = scan.scan_version(self.store, book, version)
+            page_result = scan.scan_version(self.store, page, page_version)
+        self.assertEqual(pdf_result["status"], "failed")
+        self.assertIn("its limit of memory could not be enforced here", pdf_result["reason"])
+        self.assertEqual(page_result["status"], "done")
 
     def test_a_limit_that_cannot_be_enforced_fails_the_scan_of_a_pdf_and_the_tool_does_not_run(self):
         self.approve_scan()

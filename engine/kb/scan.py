@@ -77,7 +77,8 @@ def scan_version(store, book_id, version_id, rss_limit_mb=None):
     """Scan the original of a version. Returns {"status": "done", "caveats": [...]}, {"status": "failed", "reason": ...}
     or {"status": "skipped", "reason": ...}. Raises KbError only if the version cannot be scanned yet (it is not fetched).
 
-    `rss_limit_mb`, a limit of resident memory for the scan tool (see `convert_run.run`), is used for a PDF and for no other kind of file; with none, nothing changes.
+    `rss_limit_mb`, a limit of resident memory for the scan tool (see `convert_run.run`), is used for a PDF and for no other kind of file; **a PDF given none is scanned under `convert_run.DEFAULT_PDF_RSS_MB`**, so a PDF
+    is never scanned without a limit (where the memory cannot be read the scan of a PDF fails, as the sandbox says).
 
     A scan output filed before a stop is checked and used. One that fails its checks is left where it is, and the scan
     is run again as the next generation beside it."""
@@ -102,7 +103,7 @@ def scan_version(store, book_id, version_id, rss_limit_mb=None):
         entry = approvals.find(TOOL_NAME, TOOL_VERSION)
         if fmt not in entry["formats"]:
             raise KbError(f"{TOOL_LABEL} is not approved for {fmt} files")
-        limit = {"rss_limit_mb": rss_limit_mb} if rss_limit_mb is not None and fmt == "pdf" else {}
+        limit = {"rss_limit_mb": convert_run.DEFAULT_PDF_RSS_MB if rss_limit_mb is None else rss_limit_mb} if fmt == "pdf" else {}
         convert_run.run_to_payload(store, book_id, version_id, entry, name, **limit)
         return _record(store, book_id, version_id, name)
     except (KbError, OSError, ValueError) as e:  # any failure of the run is recorded, not raised

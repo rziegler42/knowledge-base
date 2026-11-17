@@ -25,7 +25,8 @@ the date the document gives, and nothing in the repository holds the data behind
 - **Scans and converts.** Each capture is scanned for things a reader should know about (scripts, hidden text, links that run
   code, a PDF it could not read to the end), then converted to text by tools you have approved, run in a macOS sandbox with
   no network. A web page goes through two extractors and the results are compared, so a page that one of them read badly is
-  marked partial. A PDF goes through `pdftotext`.
+  marked partial. A PDF goes through `pdftotext`, and a PDF is always scanned and converted under a limit of resident memory
+  (2,048 MB unless the caller gives another; a tool above it is killed, and where the memory cannot be read the PDF is not processed).
 - **Searches by keyword.** A local SQLite index finds the blocks of text that hold every word of a query. A long block is
   indexed in pieces, so a hit in a long page leads to the passage and not to the top of the page.
 - **Reads by locator.** A locator names a place (a section, a page, or an offset) and carries a hash of the words there, so it

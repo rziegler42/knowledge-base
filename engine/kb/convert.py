@@ -291,7 +291,8 @@ def convert_version(store, book_id, version_id, rss_limit_mb=None):
     extractor-size rule); the conversion to use is the first tool's unless the rule marks the book partial, in which case it
     is the one with the most text. The capture and the earlier stages are never changed.
 
-    `rss_limit_mb`, a limit of resident memory for each tool (see `convert_run.run`), is used for a PDF and for no other kind of file; with none, nothing changes."""
+    `rss_limit_mb`, a limit of resident memory for each tool (see `convert_run.run`), is used for a PDF and for no other kind of file; **a PDF given none is converted under `convert_run.DEFAULT_PDF_RSS_MB`**, so a PDF
+    is never converted without a limit (where the memory cannot be read the conversion of a PDF fails, as the sandbox says)."""
     cfg = config.load()
     ratio = _ratio(cfg)
     version = store.read_version(book_id, version_id)
@@ -318,7 +319,7 @@ def convert_version(store, book_id, version_id, rss_limit_mb=None):
             continue
         label = f"{entry['name']} {entry['version']}"
         try:
-            made.append(_convert_with(store, book_id, version_id, entry, filename, parse, rss_limit_mb if kind == "pdf" else None))
+            made.append(_convert_with(store, book_id, version_id, entry, filename, parse, (convert_run.DEFAULT_PDF_RSS_MB if rss_limit_mb is None else rss_limit_mb) if kind == "pdf" else None))
         except (KbError, OSError, ValueError, MemoryError) as e:  # any failure of one tool is recorded, not raised
             notes[label] = textutil.clean(str(e), 400)
     if not made:

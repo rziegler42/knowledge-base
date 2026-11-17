@@ -1694,24 +1694,48 @@ class MemoryLimitTest(ConvertCase):
 
         return calls, mock.patch.object(convert_run, "run_to_payload", run)
 
-    def pdf_version(self):
+    def pdf_version(self, extra=()):
         text = ("A page of text with a good many words in it, as a paper has. " * 30).strip()
-        approve([self.fake("pdftotext", "26.10.0-kb1", "text.txt", f"{text}\n\x0c{text}\n\x0c", fmt="pdf")])
+        approve([self.fake("pdftotext", "26.10.0-kb1", "text.txt", f"{text}\n\x0c{text}\n\x0c", fmt="pdf"), *extra])
         return self.file_original(name="paper.pdf", data=b"%PDF-1.4 " + b"x" * 20_000)
 
     def test_a_pdf_is_converted_under_the_limit_it_is_given(self):
         book, version = self.pdf_version()
         calls, patched = self.spy()
         with patched:
-            result = convert.convert_version(self.store, book, version, rss_limit_mb=2048)
-        self.assertEqual((result["status"], calls), ("done", [2048]))
+            result = convert.convert_version(self.store, book, version, rss_limit_mb=1500)
+        self.assertEqual((result["status"], calls), ("done", [1500]))
 
-    def test_with_no_limit_the_call_is_exactly_as_it_was(self):
+    def test_with_no_limit_given_a_pdf_is_converted_under_the_default_and_a_page_with_none(self):
         book, version = self.pdf_version()
         calls, patched = self.spy()
         with patched:
             result = convert.convert_version(self.store, book, version)
-        self.assertEqual((result["status"], calls), ("done", ["absent"]))
+        self.assertEqual((result["status"], calls, convert_run.DEFAULT_PDF_RSS_MB), ("done", [2048], 2048))
+        approve([self.traf(), self.std()])
+        page, page_version = self.file_original()
+        calls, patched = self.spy()
+        with patched:
+            convert.convert_version(self.store, page, page_version)
+        self.assertEqual(set(calls), {"absent"})
+
+    def test_a_pdf_converted_with_no_limit_given_is_killed_past_the_default(self):
+        approve([self.fake("pdftotext", "26.10.0-kb1", "400", "5", fmt="pdf", mode="allocate")])          # (the probe's allocate mode takes the megabytes and the seconds)
+        book, version = self.file_original(name="paper.pdf", data=b"%PDF-1.4 " + b"x" * 20_000)
+        with mock.patch.object(convert_run, "DEFAULT_PDF_RSS_MB", 64):
+            result = convert.convert_version(self.store, book, version)
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("used more memory than its limit of 64 MB and was stopped", result["reason"])
+
+    def test_where_the_memory_cannot_be_read_a_pdf_with_no_limit_given_fails_and_a_page_is_converted(self):
+        book, version = self.pdf_version(extra=[self.traf(), self.std()])
+        page, page_version = self.file_original()
+        with mock.patch.object(convert_run, "read_group_rss", side_effect=ValueError("ps gave no rows")):
+            pdf_result = convert.convert_version(self.store, book, version)
+            page_result = convert.convert_version(self.store, page, page_version)
+        self.assertEqual(pdf_result["status"], "failed")
+        self.assertIn("its limit of memory could not be enforced here", pdf_result["reason"])
+        self.assertEqual(page_result["status"], "done")
 
     def test_a_page_is_converted_with_no_limit_even_when_one_is_given(self):
         approve([self.traf(), self.std()])

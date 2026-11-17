@@ -12,7 +12,7 @@ interrupted run leaves nothing half filed. A tool cannot hide data from the limi
 that cannot be listed stops the run, and removal restores the modes first.
 
 `sandbox-exec` is marked deprecated by Apple but ships with macOS. macOS does not enforce address-space limits, so
-**memory is limited only when a caller asks for it** (`rss_limit_mb`): the resident memory of the tool's process group is
+**memory is limited when a caller asks for it** (`rss_limit_mb`; the scan and the conversion of a PDF ask for `DEFAULT_PDF_RSS_MB` when their caller gives none): the resident memory of the tool's process group is
 looked at every quarter of a second (`read_group_rss`) and a tool above the limit is killed with its group; a run that
 cannot read the memory does not start the tool. With no limit asked for, memory is not limited. The profile allows reading file metadata everywhere, because the system loader needs it,
 so a tool can learn whether a path exists, not what is in it."""
@@ -204,6 +204,9 @@ def read_group_rss(pgid):
     if rows == 0:
         raise ValueError("ps gave no rows")
     return total
+
+
+DEFAULT_PDF_RSS_MB = 2048          # the limit of memory that `scan_version` and `convert_version` give a PDF when their caller gives none (the default of the crawl plan's `tool_rss_mb`)
 
 
 def _rss_limit_kb(megabytes):
