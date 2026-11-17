@@ -190,7 +190,7 @@ class PerDomainPerDay(Days):
         self.assertEqual(self.run_at(1, 9), 0)
         self.assertEqual((self.state_of(first), self.state_of(own)), (("kept", 1), ("kept", 1)))
         row = self.row(second)                                                              # a hop to a site at its limit is put off, not failed
-        self.assertEqual((row["status"], row["tries"], row["reason"], row["next_try"]), ("queued", 1, "the site it leads to is at its limit for the day", "2026-11-16T10:00:00Z"))
+        self.assertEqual((row["status"], row["tries"], row["reason"], row["next_try"]), ("queued", 1, "the site it leads to is at its limit for the day", "2026-11-17T09:00:00Z"))   # it waits a day
         self.assertEqual((self.counter(1, "hop:victim.test"), self.counter(1, "fetch:victim.test")), (1, 1))        # the hop is counted apart from the site's own candidate
         self.assertEqual(crawlguard.load_state(self.index)[0]["history"], [True, True])                               # a put-off hop is nothing for the breaker
         self.assertEqual(self.requests().count("/page1"), 0)
@@ -198,7 +198,9 @@ class PerDomainPerDay(Days):
         self.assertEqual(self.go(now=at(1, 11)), 0)                                         # later the same day: that site is at its limit, so the candidate is not taken, and the hop count does not move
         self.assertEqual((self.state_of(second), self.counter(1, "hop:victim.test")), (("queued", 1), 1))
         self.assertEqual(self.requests().count("/page1"), 0)
-        self.assertEqual(self.go(now=at(2, 0, 30)), 0)                                      # the next day the site's hops are counted afresh
+        self.assertEqual(self.go(now=at(2, 0, 30)), 0)                                      # the next day, but its wait is not over: it is not taken
+        self.assertEqual(self.state_of(second), ("queued", 1))
+        self.assertEqual(self.go(now=at(2, 9, 30)), 0)                                      # the wait is over and the site's hops are counted afresh
         self.assertEqual(self.state_of(second), ("kept", 2))
         self.assertEqual((self.counter(2, "hop:victim.test"), self.counter(1, "hop:victim.test")), (1, 1))
         self.assertEqual(self.requests().count("/page1"), 1)
@@ -279,9 +281,14 @@ class DomainRefusals(Days):
         self.assertEqual(self.state_of(elsewhere), ("kept", 1))                             # the resolver itself is not stopped by what its publishers do
         self.assertEqual(self.counter(1, "fetch:resolver.test"), 5)
         self.assertNotIn("/p3", self.requests())
-        self.assertEqual(self.go(now=at(2, 0, 30)), 0)                                      # the next day the publisher is available again
+        self.assertEqual(self.go(now=at(2, 0, 30)), 0)                                      # the next day, but the put-off candidate waits for its day
+        self.assertEqual(self.state_of(later), ("queued", 1))
+        for n in range(3):
+            self.serves(f"/p{n}")                                                           # the publisher answers again (the three that it refused are due too, and are taken first)
+        self.assertEqual(self.go(now=at(2, 9, 30)), 0)                                      # its wait is over and the publisher is available again
+        self.assertEqual(self.statuses(refused), ["kept"] * 3)
         self.assertEqual(self.state_of(later), ("kept", 2))
-        self.assertEqual((self.counter(2, "refusal:pub.test"), self.counter(2, "hop:pub.test")), (0, 1))
+        self.assertEqual((self.counter(2, "refusal:pub.test"), self.counter(2, "hop:pub.test")), (0, 4))             # the four of them led to it on day 2
         self.assertEqual(self.counter(1, "refusal:pub.test"), 3)
         self.assertEqual(self.counter(2, "refusal:resolver.test"), 0)
 

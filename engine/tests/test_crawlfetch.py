@@ -881,6 +881,18 @@ class FailedCaptures(StepCase):
         self.assertEqual(self.row(ident)["reason"], "HTTP 500")
 
 
+class StopWaits(StepCase):
+    def test_a_try_ended_by_the_stop_file_still_waits_the_hour_and_is_not_made_a_day(self):
+        ident = self.add("/p")
+
+        def stopped(*args, **kw):
+            raise webclient.Refused("refused: the stop file is present")
+
+        self.run_step(capture=stopped)
+        row = self.row(ident)
+        self.assertEqual((row["status"], row["tries"], row["next_try"]), ("queued", 1, "2026-11-16T13:00:00Z"))
+
+
 class Refusals(StepCase):
     def test_a_refusal_of_a_site_counts_for_the_site_waits_a_day_and_is_not_a_failure_of_the_breaker(self):
         self.srv.routes["/no"] = reply(403, body=b"no")
@@ -1678,6 +1690,57 @@ class Redirects(StepCase):
         other = self.add("/mine", host="m.test")
         self.run_step()
         self.assertEqual(self.row(other)["status"], "kept")
+
+
+    def test_a_put_off_hop_waits_a_day_with_its_try_counted_and_charges_no_site_and_nothing_for_the_breaker(self):
+        self.plan.update(per_domain_per_day=1)
+        self.doc("/p")
+        rows = self.redirectors(2)
+        self.run_step()
+        row = self.row(rows[1])
+        self.assertEqual((row["status"], row["tries"], row["next_try"]), ("queued", 1, "2026-11-17T12:00:00Z"))          # a day after the try, not an hour
+        self.assertEqual([k for _d, k in self.counters() if k.startswith("refusal:")], [])
+        self.assertEqual(crawlguard.load_state(self.index)[0]["history"], [True])                                     # only the page that was kept
+
+    def test_a_hop_to_a_stopped_site_waits_a_day_too_and_only_the_site_that_refused_is_charged(self):
+        self.plan.update(per_domain_per_day=1, domain_refusals=1)
+        self.doc("/p")
+        self.srv.routes["/p"] = reply(403, body=b"no")
+        rows = self.redirectors(3)
+        self.run_step()
+        self.assertEqual({self.row(r)["next_try"] for r in rows}, {"2026-11-17T12:00:00Z"})
+        self.assertEqual({k for _d, k in self.counters() if k.startswith("refusal:")}, {"refusal:victim.test"})
+
+    def test_a_put_off_candidate_is_not_taken_again_the_same_day_and_is_kept_when_its_wait_is_over_and_the_site_allows_it(self):
+        self.plan.update(per_domain_per_day=1)
+        self.dns.setdefault("victim.test", [ALL_PUBLIC])
+        rows = []
+        for i in range(2):                                                                 # two redirectors to two different pages of one publisher (the same page would be a duplicate)
+            self.doc(f"/p{i}")
+            self.srv.routes[f"/r{i}"] = redirect(f"http://victim.test/p{i}")
+            rows.append(self.add(f"/r{i}", host=f"r{i}.test"))
+        self.run_step()
+        self.later(hours=23)
+        self.run_step()                                                                    # 23 hours on: not due yet
+        self.assertEqual((self.row(rows[1])["status"], self.row(rows[1])["tries"]), ("queued", 1))
+        self.later(hours=2)
+        self.run_step()                                                                    # 25 hours on, a new day: the site's limit is counted afresh
+        self.assertEqual((self.row(rows[1])["status"], self.row(rows[1])["tries"]), ("kept", 2))
+
+    def test_a_candidate_put_off_on_each_of_retries_days_fails_with_the_count_of_its_tries_and_not_after_hours(self):
+        self.plan.update(domain_refusals=1, retries=3)
+        self.doc("/p")
+        (row,) = self.redirectors(1)
+        seen = []
+        for _ in range(3):
+            crawlstate.note_refusal(self.conn, self.plan, self.now, "victim.test")                  # the publisher is stopped on this day
+            self.run_step()
+            seen.append((self.row(row)["status"], self.row(row)["tries"]))
+            if self.row(row)["status"] == "queued":                                            # each put-off waits a day from its own try
+                self.assertEqual(self.row(row)["next_try"], (self.now + datetime.timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%SZ"))
+            self.later(hours=25)
+        self.assertEqual(seen, [("queued", 1), ("queued", 2), ("failed", 3)])
+        self.assertIn("failed 3 times", self.row(row)["reason"])
 
 
 class NotTheCrawls(StepCase):

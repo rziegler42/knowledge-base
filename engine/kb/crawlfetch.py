@@ -250,7 +250,10 @@ class _Run:
         if out.kind in ("blocked", "rejected"):
             self.finish(row, "rejected", out.reason, book)
             self.say(out.kind, row, out.reason, book)
-        elif out.kind in ("stopped", "deferred"):
+        elif out.kind == "deferred":
+            self.finish(row, "failed", out.reason, refusal=True, count=False)         # a hop put off for a site that is stopped or at its limit: its try is counted, it waits a day (the site's day will have ended) and no site is charged
+            self.say("skipped", row, out.reason)
+        elif out.kind == "stopped":
             self.finish(row, "failed", out.reason)
             self.say("skipped", row, out.reason)
         elif out.kind == "refused":
