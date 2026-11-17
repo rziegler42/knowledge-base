@@ -12,6 +12,7 @@ in an inline code span with its backticks, pipes and angle brackets written as `
 image, a heading, a table cell or HTML by what the web sent; every other word of the report is this module's own and has none of those characters."""
 
 import datetime
+import math
 import os
 import re
 import stat
@@ -26,6 +27,9 @@ MAX_REASONS = 20                       # the most reasons listed for the failure
 MAX_REPORT_BYTES = 8 * 1024 * 1024     # a report is a text of this size at most
 EARLIEST = datetime.date(2000, 1, 1)   # a report of an earlier day is refused
 UNKNOWN_HOST = "(unknown)"
+MAX_EVENTS_BYTES = 4 * 1024 * 1024     # a book's event log over this is not read for the report (it is counted)
+MAX_LISTED = 200                       # the most books listed under each heading of the books' own records (the totals are said)
+PROPOSAL_KINDS = ("shelf", "none", "malformed", "error")
 _ESCAPES = (("`", "%60"), ("|", "%7C"), ("<", "%3C"), (">", "%3E"))
 
 
@@ -130,6 +134,137 @@ def _breaker_now(index_root):
     return {key: state[key] for key in ("state", "reason", "kind", "at", "run", "detail")}
 
 
+# --- the books' own records ---------------------------------------------------------------------------------------------------------------------
+
+def _events_named(events, name):
+    return [e for e in events if isinstance(e, dict) and e.get("event") == name]
+
+
+def _short(value, limit):
+    return cs.clean(value, limit) if isinstance(value, str) else None
+
+
+def _kinds(value):
+    items = value if isinstance(value, list) else [value]
+    return [cs.clean(k, 40) for k in items if isinstance(k, str)][:20]
+
+
+def _score(value):
+    return value if type(value) in (int, float) and math.isfinite(value) else None
+
+
+def _proposal(events):
+    found = _events_named(events, "placement_proposed")
+    if not found:
+        return "no proposal"
+    answer = found[-1].get("answer")
+    if isinstance(answer, dict) and answer.get("kind") in PROPOSAL_KINDS:
+        return answer["kind"]
+    return "unreadable"
+
+
+def _root(store, book_id):
+    """The root file of a book as a dictionary, read as `crawlstatus` reads files: through one open file, not through a link, not waiting on a pipe, a plain file of
+    the owner's of at most `MAX_ROOT_BYTES`, strict JSON, and it must say that it is this book's. `None` for anything else."""
+    read = cs.read_small(store.book_file(book_id), cs.MAX_ROOT_BYTES)
+    record = cs._object(read.data) if read.status == "ok" else None
+    return record if record is not None and record.get("book_id") == book_id else None
+
+
+def _events(store, book_id):
+    """`(events, status)`: the book's event log as a list of dictionaries, read as the root file is (at most `MAX_EVENTS_BYTES`); `status` is `ok`, `too_large` or
+    `unreadable`. A missing log is empty; a line that is not one JSON object makes the whole log unreadable, as `Store.read_events` refuses it."""
+    read = cs.read_file(store.events_file(book_id), MAX_EVENTS_BYTES)
+    if read.status == "missing":
+        return [], "ok"
+    if read.status != "ok":
+        return None, "unreadable"
+    if read.cut:
+        return None, "too_large"
+    events = []
+    for line in read.data.split(b"\n"):
+        if line.strip():
+            event = cs._object(line)
+            if event is None:
+                return None, "unreadable"
+            events.append(event)
+    return events, "ok"
+
+
+def book_facts(store, book_ids):
+    """What the books' own records say of the books `book_ids` (the books the day filed), each read once: its root file (the shelf) and its event log (at most
+    `MAX_EVENTS_BYTES`; a longer one is counted and skipped). Both are opened as `crawlstatus` opens files (no link, no waiting on a pipe, a size limit). A book with no `crawl_found` event is not the crawl's and is only counted. For the crawl's: the
+    ones **moved** by it (the newest `reshelved` event says `via` `crawl` and `basis` `model-pick`), the ones **left on `default`** (no `reshelved` event at all,
+    not held and not judged out, with the answer of the newest proposal and nothing else of it), the ones **held** by the scan (the kinds of the newest
+    `crawl_held`), the ones **judged out** (the reason and the score of the newest `crawl_rejected`), and the ones whose files cannot be read. No card is
+    opened and nothing is written. Each list holds at most `MAX_LISTED`; `totals` counts them all."""
+    out = {"moved": [], "left_default": [], "held": [], "rejected": [], "unreadable": [],
+           "totals": {"checked": 0, "moved": 0, "left_default": 0, "held": 0, "rejected": 0, "unreadable": 0, "not_filed_by_the_crawl": 0, "log_too_large": 0}}
+    totals = out["totals"]
+
+    def add(kind, entry):
+        totals[kind] += 1
+        if len(out[kind]) < MAX_LISTED:
+            out[kind].append(entry)
+
+    for book_id in dict.fromkeys(b for b in book_ids if isinstance(b, str)):
+        totals["checked"] += 1
+        name = cs.clean(book_id, 100)
+        try:
+            root = _root(store, book_id)
+            events, state = _events(store, book_id) if root is not None else (None, "unreadable")
+        except (KbError, OSError, ValueError, RecursionError, TypeError, AttributeError):
+            root, events, state = None, None, "unreadable"
+        if root is not None and state == "too_large":
+            totals["log_too_large"] += 1
+            continue
+        if root is None or events is None:
+            add("unreadable", {"book": name, "why": "its root file or its event log cannot be read"})
+            continue
+        if not _events_named(events, "crawl_found"):
+            totals["not_filed_by_the_crawl"] += 1
+            continue
+        shelf = _short(root.get("shelf"), 100)
+        reshelved = _events_named(events, "reshelved")
+        held = _events_named(events, "crawl_held")
+        rejected = _events_named(events, "crawl_rejected")
+        if reshelved and reshelved[-1].get("via") == "crawl" and reshelved[-1].get("basis") == "model-pick":
+            add("moved", {"book": name, "from": _short(reshelved[-1].get("from"), 100), "to": _short(reshelved[-1].get("to"), 100), "shelf": shelf})
+        if held:
+            add("held", {"book": name, "kinds": _kinds(held[-1].get("kinds"))})
+        if rejected:
+            add("rejected", {"book": name, "reason": _short(rejected[-1].get("reason"), 200), "score": _score(rejected[-1].get("score"))})
+        if not reshelved and not held and not rejected and root.get("shelf") == "default":
+            add("left_default", {"book": name, "proposal": _proposal(events)})
+    return out
+
+
+def unreviewed(store):
+    """How many books of the whole library are the crawl's and not yet reviewed by the owner: the books whose root file says `auto_filed` true, counted from the
+    root files alone (**no event log and no card is opened**), at most `crawlstatus.MAX_BOOKS` books, with how many were looked at, whether the count stopped
+    early and how many root files could not be read."""
+    out = {"unreviewed": 0, "books_scanned": 0, "unreadable": 0, "cut": False, "stopped_by": "no_more_books", "problem": None}
+    try:
+        book_ids = store.list_books()
+    except (OSError, KbError):
+        out["problem"] = "the library cannot be listed"
+        return out
+    for book_id in book_ids:
+        if out["books_scanned"] >= cs.MAX_BOOKS:
+            out.update(cut=True, stopped_by="max_books")
+            break
+        out["books_scanned"] += 1
+        try:
+            root = _root(store, book_id)
+        except (KbError, OSError):
+            root = None
+        if root is None:
+            out["unreadable"] += 1
+        elif root.get("auto_filed") is True:
+            out["unreviewed"] += 1
+    return out
+
+
 def _queue_facts(conn, low, high):
     """What the queue says of the day, each fact apart so that one that fails does not take the others."""
     bounds = (low, high)
@@ -198,11 +333,12 @@ def _compare(counts, queue):
     return [{"what": what, "log": counts[what], "queue": queue[what], "same": counts[what] == queue[what]} for what in ("kept", "rejected", "failed")]
 
 
-def build(index_root, day, zone, now):
+def build(index_root, day, zone, now, store=None):
     """The facts of the day `day` (a `datetime.date`) in `zone` as plain data. A part that fails is `{"error": text}` in its place and the rest stand. The
     log parts are: `log` (its lines, first and last time, files, bad lines, cut), `counts`, `steps`, `runs`, `breaker` and `lists_failed` and the log's half of
     `failures_by_reason`; the queue parts (read only) are `queue`, `compare`, `filed` (with the log's capture lines), `rejected_for_type` and the queue's half of
-    `failures_by_reason`."""
+    `failures_by_reason`. With a `store`, `books` (what the books' own records say of the books filed) and `unreviewed` are read too; without one they are
+    None and the report says the books were not read."""
     start, end = cs.day_bounds(day, zone)
     if not isinstance(now, datetime.datetime) or now.tzinfo is None:
         raise _refuse("now is a time with a zone")
@@ -239,6 +375,9 @@ def build(index_root, day, zone, now):
     data["rejected_for_type"] = None if facts is None else (facts["hosts"] if isinstance(facts["hosts"], dict) else cs.guarded(_type_hosts, facts["hosts"]))
     queue_reasons = None if facts is None else (facts["failed"] if isinstance(facts["failed"], dict) else cs.guarded(_queue_reasons, facts["failed"]))
     data["failures_by_reason"] = {"log": log_reasons, "queue": queue_reasons}
+    ids = [] if _broken(data["filed"]) else [b["book"] for b in data["filed"]["books"]]
+    data["books"] = None if store is None else cs.guarded(book_facts, store, ids)
+    data["unreviewed"] = None if store is None else cs.guarded(unreviewed, store)
     return data
 
 
@@ -250,6 +389,45 @@ def _broken(part):
 
 def _unreadable(part):
     return f"- This part could not be read: {code(part['error'], 300)}"
+
+
+def _render_books(books, filed):
+    if books is None:
+        return ["- The books were not read: no library was given."]
+    if _broken(books):
+        return [_unreadable(books)]
+    totals = books["totals"]
+    out = [f"- Books looked at: {number(totals['checked'])}, of which not the crawl's (no crawl_found event): {number(totals['not_filed_by_the_crawl'])}",
+           f"- Moved by the crawl to a shelf: {number(totals['moved'])}"]
+    out += [f"  - {code(b['book'])} from {code(b['from'])} to {code(b['to'])}, now on {code(b['shelf'])}" for b in books["moved"]]
+    out.append(f"- Left on the shelf default: {number(totals['left_default'])}")
+    out += [f"  - {code(b['book'])} proposal {code(b['proposal'])}" for b in books["left_default"]]
+    out.append(f"- Held by the scan: {number(totals['held'])}")
+    out += [f"  - {code(b['book'])} kinds {', '.join(code(k) for k in b['kinds']) or code('')}" for b in books["held"]]
+    out.append(f"- Judged out and kept as weeded: {number(totals['rejected'])}")
+    out += [f"  - {code(b['book'])} reason {code(b['reason'], 200)} score {code(b['score'])}" for b in books["rejected"]]
+    out.append(f"- Whose files could not be read: {number(totals['unreadable'])}")
+    out += [f"  - {code(b['book'])}: {code(b['why'], 100)}" for b in books["unreadable"]]
+    if totals["log_too_large"]:
+        out.append(f"- Whose event log is too large to read for this report: {number(totals['log_too_large'])}")
+    if any(totals[k] > len(books[k]) for k in ("moved", "left_default", "held", "rejected", "unreadable")):
+        out.append("- A list above is cut to its first books; the number before it is the whole count.")
+    return out
+
+
+def _render_unreviewed(got):
+    if got is None:
+        return ["- Not read: no library was given."]
+    if _broken(got):
+        return [_unreadable(got)]
+    out = [f"- {number(got['unreviewed'])} books of the crawl, in the whole library, are not yet reviewed by the owner (books looked at: {number(got['books_scanned'])})"]
+    if got["cut"]:
+        out.append(f"- The count stopped early ({code(got['stopped_by'])}), so it is a least number.")
+    if got["unreadable"]:
+        out.append(f"- Books whose files could not be read: {number(got['unreadable'])}, so the count is a least number.")
+    if got["problem"]:
+        out.append(f"- Problem with the library: {code(got['problem'], 300)}")
+    return out
 
 
 def render(data):
@@ -297,6 +475,10 @@ def render(data):
         if data["queue"]["status"] != "ok":
             out.append("- The queue was not read, so only the books of the log are listed.")
         out += [f"- {code(b['ts'])} {code(b['book'])} address {code(b['address'])} host {code(b['host'])} (seen in {b['seen_in']})" for b in filed["books"]]
+    out += ["", "## What the books' own records say", ""]
+    out += _render_books(data["books"], filed)
+    out += ["", "## Books not reviewed by the owner", ""]
+    out += _render_unreviewed(data["unreviewed"])
     typed = data["rejected_for_type"]
     out += ["", "## Works rejected for their type", ""]
     if typed is None:
@@ -442,7 +624,7 @@ def write_report(index_root, day, text, *, today):
 
 # --- the whole report -------------------------------------------------------------------------------------------------------------------------
 
-def make_report(index_root, *, read_plan, now, day=None):
+def make_report(index_root, *, read_plan, now, day=None, store=None):
     """Make and write the report of `day` (today in the plan's zone if none is given). `read_plan` is the reader of the approved plan, as for `status`; its zone
     is the report's, and with no plan that can be read the report is of the machine's zone and says so. Returns `{"path", "day", "zone", "counts", "filed",
     "notes"}`."""
@@ -455,7 +637,7 @@ def make_report(index_root, *, read_plan, now, day=None):
     today = cs.today_in_zone(now, zone)
     day = today if day is None else day
     _check_day(day, today)
-    data = build(index_root, day, zone, now)
+    data = build(index_root, day, zone, now, store)
     data["zone_problem"] = zone_problem
     if plan["status"] != "approved":
         data["notes"].append(("no approved plan" if plan["status"] == "none" else "the approved plan cannot be read") + ": the time zone is the machine's")

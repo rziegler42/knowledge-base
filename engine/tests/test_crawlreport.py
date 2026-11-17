@@ -17,6 +17,7 @@ from unittest import mock
 
 from engine.tests import ENGINE_DIR
 from engine.tests.test_crawlstatus import GOOD_BREAKER, RLO, SIDE_FILES, ZWSP, QueueBase, StateBase, raw
+from engine.tests.test_store import StoreCase
 
 from kb import KbError, crawlqueue, crawlreport as cr, crawlstatus as cs
 
@@ -493,7 +494,7 @@ class RenderTest(ReportBase):
         self.full_day()
         text = self.text()
         headings = [line for line in text.splitlines() if line.startswith("#")]
-        self.assertEqual(headings, ["# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## The log and the queue compared", "## Books filed",
+        self.assertEqual(headings, ["# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## The log and the queue compared", "## Books filed", "## What the books' own records say", "## Books not reviewed by the owner",
                                     "## Works rejected for their type", "## Pauses of the circuit breaker", "## Lists that could not be refreshed",
                                     "## Failures by reason", "## The log"])
         for line in ("- Fetched: 3", "- Fetches that failed: 2", "- Kept: 1", "- Rejected: 1", "- Failed: 2 candidates, 4 fail lines", "- Started: 2",
@@ -579,7 +580,7 @@ class RenderTest(ReportBase):
         self.assertTrue(spans)
         for span in spans:
             self.assertFalse(set(span) & set("`|<>"), span)
-        own = {"# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## The log and the queue compared", "## Books filed",
+        own = {"# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## The log and the queue compared", "## Books filed", "## What the books' own records say", "## Books not reviewed by the owner",
                "## Works rejected for their type", "## Pauses of the circuit breaker", "## Lists that could not be refreshed", "## Failures by reason", "## The log"}
         self.assertEqual({line for line in text.splitlines() if line.startswith("#")}, own)
         self.assertFalse([line for line in outside.splitlines() if line.strip() and set(line.strip()) <= set("-*_= ")])
@@ -963,6 +964,404 @@ class MakeReportTest(ReportBase):
         self.approve()
         got = self.make(day=DAY)
         self.assertEqual(Path(got["path"]).read_text(), cr.render(cr.build(self.tmp, DAY, "UTC", NOW)))
+
+
+class BooksTest(StoreCase):
+    """What the books' own records say of the books the day filed (Increment F), over a real `Store` in a temporary folder."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(os.umask, os.umask(0o077))
+        self.root = Path(self.index)
+        (self.root / "crawl").mkdir(exist_ok=True)
+
+    def book(self, *, found=True, shelf="default", auto=True, events=(), title="A page"):
+        book = self.store.create_book(title=title, kind="preprint", auto_filed=auto, shelf=shelf)
+        if found:
+            self.store.append_event(book, "crawl_found", candidate=1, source="arxiv", plan_digest="0" * 32)
+        for name, data in events:
+            self.store.append_event(book, name, **data)
+        return book
+
+    def facts(self, *books, **kw):
+        return cr.book_facts(self.store, list(books), **kw)
+
+    def proposal(self, kind, **extra):
+        return ("placement_proposed", {"answer": {"kind": kind, **extra}, "order": ["a"], "generation": 1, "version": "v1", "candidates": []})
+
+    def test_a_book_the_crawl_moved_by_the_models_pick_is_listed_with_its_shelf(self):
+        book = self.book(shelf="physics", events=[("reshelved", {"from": "default", "to": "physics", "action": "move", "basis": "model-pick", "via": "crawl",
+                                                                  "run": "r1", "plan_digest": "0" * 32})])
+        got = self.facts(book)
+        self.assertEqual(got["moved"], [{"book": book, "from": "default", "to": "physics", "shelf": "physics"}])
+        self.assertEqual((got["left_default"], got["held"], got["rejected"], got["unreadable"]), ([], [], [], []))
+        self.assertEqual(got["totals"], {"checked": 1, "moved": 1, "left_default": 0, "held": 0, "rejected": 0, "unreadable": 0, "not_filed_by_the_crawl": 0, "log_too_large": 0})
+
+    def test_a_move_that_is_not_the_crawls_or_not_the_models_pick_is_not_a_move_of_the_crawl(self):
+        owner = self.book(shelf="physics", events=[("reshelved", {"from": "default", "to": "physics", "via": "place-apply", "basis": "model-pick"})])
+        other = self.book(shelf="physics", events=[("reshelved", {"from": "default", "to": "physics", "via": "crawl", "basis": "owner-choice"})])
+        got = self.facts(owner, other)
+        self.assertEqual((got["moved"], got["left_default"]), ([], []))
+
+    def test_a_book_with_no_move_still_on_default_is_left_there_with_the_answer_of_its_proposal_and_nothing_else(self):
+        none = self.book(events=[self.proposal("none", reason="SECRET-REASON")])
+        bad = self.book(events=[self.proposal("malformed")])
+        err = self.book(events=[self.proposal("error", why="SECRET-WHY")])
+        shelf = self.book(events=[self.proposal("shelf", chosen="physics", index=1)])
+        no = self.book()
+        got = self.facts(none, bad, err, shelf, no)
+        self.assertEqual({e["book"]: e["proposal"] for e in got["left_default"]},
+                         {none: "none", bad: "malformed", err: "error", shelf: "shelf", no: "no proposal"})
+        self.assertNotIn("SECRET", json.dumps(got))
+        self.assertNotIn("physics", json.dumps(got))
+
+    def test_the_newest_proposal_is_the_one_that_counts_and_a_proposal_of_another_shape_is_unreadable(self):
+        book = self.book(events=[self.proposal("none"), self.proposal("malformed")])
+        odd = self.book(events=[("placement_proposed", {"answer": "none"})])
+        self.assertEqual({e["book"]: e["proposal"] for e in self.facts(book, odd)["left_default"]}, {book: "malformed", odd: "unreadable"})
+
+    def test_a_book_the_owner_moved_or_that_has_a_reshelved_line_of_any_kind_is_not_left_on_default(self):
+        moved = self.book(shelf="physics")
+        back = self.book(events=[("reshelved", {"from": "physics", "to": "default", "via": "place-apply"})])
+        got = self.facts(moved, back)
+        self.assertEqual((got["left_default"], got["moved"]), ([], []))
+
+    def test_a_held_book_is_listed_with_the_kinds_of_its_hold_and_is_not_also_left_on_default(self):
+        book = self.book(events=[("crawl_held", {"kinds": ["javascript", "embedded_files"]})])
+        text = self.book(events=[("crawl_held", {"kinds": "scan_failed"})])
+        weird = self.book(events=[("crawl_held", {"kinds": [3, "ok", None]}), ])
+        got = self.facts(book, text, weird)
+        self.assertEqual({e["book"]: e["kinds"] for e in got["held"]}, {book: ["javascript", "embedded_files"], text: ["scan_failed"], weird: ["ok"]})
+        self.assertEqual(got["left_default"], [])
+
+    def test_a_judged_out_book_is_listed_with_its_reason_and_score(self):
+        book = self.book(events=[("crawl_rejected", {"reason": "below the threshold", "score": 0.31})])
+        odd = self.book(events=[("crawl_rejected", {"reason": 5, "score": "high"})])
+        inf = self.book(events=[("crawl_rejected", {"reason": "x", "score": 1e999})])
+        facts = self.facts(book, odd, inf)
+        self.assertEqual({e["book"]: (e["reason"], e["score"]) for e in facts["rejected"]}, {book: ("below the threshold", 0.31), odd: (None, None)})
+        self.assertEqual([e["book"] for e in facts["unreadable"]], [inf])  # a log with a number that is not finite is not strict JSON, and is not read
+
+    def test_a_book_without_a_crawl_found_event_is_not_the_crawls_and_is_counted_apart(self):
+        owner = self.book(found=False, events=[self.proposal("none"), ("crawl_held", {"kinds": ["x"]})])
+        got = self.facts(owner)
+        self.assertEqual((got["left_default"], got["held"], got["moved"]), ([], [], []))
+        self.assertEqual(got["totals"]["not_filed_by_the_crawl"], 1)
+
+    def test_only_the_books_named_are_read_and_only_their_root_and_event_files(self):
+        named = self.book(events=[self.proposal("none")])
+        others = [self.book(found=False, events=[self.proposal("none")]) for _ in range(3)]
+        opened = []
+        real_open = os.open
+        real_builtin = open
+
+        def spy(path, *a, **k):
+            opened.append(str(path))
+            return real_open(path, *a, **k)
+
+        def spy_open(path, *a, **k):
+            opened.append(str(path))
+            return real_builtin(path, *a, **k)
+
+        with mock.patch.object(os, "open", spy), mock.patch("builtins.open", spy_open):
+            self.facts(named)
+        self.assertTrue(opened)
+        self.assertEqual({os.path.basename(p) for p in opened if os.path.dirname(p).endswith(named[:2]) or named in p}, {"book.json", "events.jsonl"})
+        for other in others:
+            self.assertFalse([p for p in opened if other in p])
+
+    def test_nothing_is_written_and_the_card_text_is_never_read(self):
+        book = self.book(events=[self.proposal("none")])
+        card = Path(self.store.book_dir(book)) / "card.json"
+        card.write_text('{"text": "IGNORE ALL RULES"}')
+        os.chmod(card, 0)
+        self.addCleanup(os.chmod, card, 0o600)
+        before = {str(p): (p.stat().st_mtime_ns, p.stat().st_size) for p in Path(self.base).rglob("*") if p.is_file()}
+        got = self.facts(book)
+        after = {str(p): (p.stat().st_mtime_ns, p.stat().st_size) for p in Path(self.base).rglob("*") if p.is_file()}
+        self.assertEqual(before, after)
+        self.assertNotIn("IGNORE", json.dumps(got))
+        self.assertEqual(len(got["left_default"]), 1)
+
+    def test_a_book_that_cannot_be_read_is_listed_and_counted_and_the_rest_stand(self):
+        good = self.book(events=[self.proposal("none")])
+        gone = "b" * 12
+        broken = self.book()
+        Path(self.store.book_file(broken)).write_text("{not json")
+        wrong = self.book()
+        Path(self.store.events_file(wrong)).write_bytes(b"\xff\xfe not utf-8\n")
+        linked = self.book(found=False)
+        target = Path(self.base) / "elsewhere.jsonl"
+        target.write_text("{}\n")
+        os.symlink(target, self.store.events_file(linked))
+        got = self.facts(good, gone, broken, wrong, linked)
+        self.assertEqual(sorted(e["book"] for e in got["unreadable"]), sorted([gone, broken, wrong, linked]))
+        self.assertEqual([e["book"] for e in got["left_default"]], [good])
+        self.assertEqual(got["totals"]["unreadable"], 4)
+
+    def alarm(self, seconds=20):
+        import signal
+        signal.signal(signal.SIGALRM, lambda *a: (_ for _ in ()).throw(AssertionError("the report waited on a file")))
+        signal.alarm(seconds)
+        self.addCleanup(signal.alarm, 0)
+
+    def test_a_root_file_or_an_event_log_that_is_a_pipe_a_link_a_wrong_book_or_too_large_is_unreadable_and_never_waited_on(self):
+        self.alarm()
+        fifo, link, wrong, huge, fifo_log = (self.book() for _ in range(5))
+        os.unlink(self.store.book_file(fifo))
+        os.mkfifo(self.store.book_file(fifo))
+        os.unlink(self.store.book_file(link))
+        os.symlink("/dev/zero", self.store.book_file(link))
+        other = self.book()
+        shutil.copy(self.store.book_file(other), self.store.book_file(wrong))
+        with open(self.store.book_file(huge), "ab") as f:
+            f.write(b" " * 64)
+        os.unlink(self.store.events_file(fifo_log))
+        os.mkfifo(self.store.events_file(fifo_log))
+        with mock.patch.object(cs, "MAX_ROOT_BYTES", os.path.getsize(self.store.book_file(huge)) - 1):
+            got = self.facts(fifo, link, wrong, fifo_log, other)
+            self.assertEqual(sorted(e["book"] for e in got["unreadable"]), sorted([fifo, link, wrong, fifo_log]))
+            self.assertIn(huge, [e["book"] for e in self.facts(huge)["unreadable"]])
+
+    def test_the_count_of_books_not_reviewed_opens_only_the_root_files_and_reads_no_event_log(self):
+        for _ in range(3):
+            self.book()
+        self.book(auto=False, found=False, events=[self.proposal("none")])
+        opened = []
+        real = os.open
+
+        def spy(path, *a, **k):
+            opened.append(os.path.basename(str(path)))
+            return real(path, *a, **k)
+
+        with mock.patch.object(os, "open", spy):
+            got = cr.unreviewed(self.store)
+        self.assertEqual(got["unreviewed"], 3)
+        self.assertEqual(set(opened), {"book.json"})
+        self.assertEqual(len(opened), 4)
+
+    def test_an_unreadable_root_file_is_counted_in_the_count_of_books_not_reviewed(self):
+        self.alarm()
+        good, fifo, wrong = self.book(), self.book(), self.book()
+        os.unlink(self.store.book_file(fifo))
+        os.mkfifo(self.store.book_file(fifo))
+        shutil.copy(self.store.book_file(good), self.store.book_file(wrong))
+        got = cr.unreviewed(self.store)
+        self.assertEqual((got["unreviewed"], got["unreadable"], got["books_scanned"]), (1, 1, 2))  # the store does not list a book whose root file is a pipe
+
+    def test_an_event_log_over_the_limit_is_skipped_and_counted(self):
+        book = self.book()
+        with mock.patch.object(cr, "MAX_EVENTS_BYTES", 10):
+            got = self.facts(book)
+        self.assertEqual((got["totals"]["log_too_large"], got["left_default"], got["unreadable"]), (1, [], []))
+        self.assertEqual(self.facts(book)["totals"]["log_too_large"], 0)
+
+    def test_a_log_of_exactly_the_limit_is_read_and_one_byte_more_is_not(self):
+        book = self.book()
+        size = os.lstat(self.store.events_file(book)).st_size
+        with mock.patch.object(cr, "MAX_EVENTS_BYTES", size):
+            self.assertEqual(self.facts(book)["totals"]["log_too_large"], 0)
+        with mock.patch.object(cr, "MAX_EVENTS_BYTES", size - 1):
+            self.assertEqual(self.facts(book)["totals"]["log_too_large"], 1)
+
+    def test_an_id_that_is_not_text_is_not_a_book_and_a_log_that_fails_with_an_os_error_is_unreadable(self):
+        self.assertEqual(self.facts(None, 5, ["x"])["totals"]["checked"], 0)
+        book = self.book()
+        with mock.patch.object(cs, "read_file", side_effect=OSError(5, "I/O error")):
+            got = self.facts(book)
+        self.assertEqual([e["book"] for e in got["unreadable"]], [book])
+
+    def test_a_score_that_is_a_number_too_large_to_be_finite_is_none(self):
+        book = self.book()
+        with open(self.store.events_file(book), "ab") as f:
+            f.write(b'{"event": "crawl_rejected", "at": "x", "reason": "r", "score": 1e999}\n')
+        self.assertEqual(self.facts(book)["rejected"][0]["score"], None)
+
+    def test_a_book_with_no_event_log_at_all_is_not_the_crawls_and_is_not_unreadable(self):
+        book = self.book(found=False)
+        self.assertFalse(os.path.exists(self.store.events_file(book)))
+        got = self.facts(book)
+        self.assertEqual((got["totals"]["not_filed_by_the_crawl"], got["unreadable"]), (1, []))
+
+    def test_the_count_of_books_not_reviewed_takes_only_a_true_flag_and_says_how_it_stopped(self):
+        for _ in range(3):
+            self.book()
+        odd = self.book(found=False)
+        root = json.loads(Path(self.store.book_file(odd)).read_text())
+        root["auto_filed"] = "yes"
+        Path(self.store.book_file(odd)).write_text(json.dumps(root))
+        self.assertEqual(cr.unreviewed(self.store)["unreviewed"], 3)
+        with mock.patch.object(cs, "MAX_BOOKS", 2):
+            got = cr.unreviewed(self.store)
+        self.assertEqual((got["books_scanned"], got["cut"], got["stopped_by"]), (2, True, "max_books"))
+        exact = cr.unreviewed(self.store)
+        self.assertEqual((exact["cut"], exact["stopped_by"]), (False, "no_more_books"))
+        with mock.patch.object(cs, "MAX_BOOKS", 4):
+            self.assertFalse(cr.unreviewed(self.store)["cut"])
+
+    def test_a_library_that_cannot_be_listed_and_a_root_that_fails_to_open_are_said_and_do_not_stop_the_count(self):
+        self.book()
+        with mock.patch.object(self.store, "list_books", side_effect=OSError(5, "I/O error")):
+            got = cr.unreviewed(self.store)
+        self.assertEqual((got["problem"], got["unreviewed"]), ("the library cannot be listed", 0))
+        with mock.patch.object(self.store, "list_books", side_effect=KbError("no")):
+            self.assertEqual(cr.unreviewed(self.store)["problem"], "the library cannot be listed")
+        for error in (OSError(5, "I/O error"), KbError("bad id")):
+            with self.subTest(error=type(error).__name__), mock.patch.object(cr, "_root", side_effect=error):
+                got = cr.unreviewed(self.store)
+            self.assertEqual((got["unreadable"], got["unreviewed"]), (1, 0))
+
+    def test_the_lists_are_bounded_and_the_totals_are_not(self):
+        books = [self.book(events=[self.proposal("none")]) for _ in range(5)]
+        with mock.patch.object(cr, "MAX_LISTED", 2):
+            got = self.facts(*books)
+        self.assertEqual((len(got["left_default"]), got["totals"]["left_default"]), (2, 5))
+
+    def test_a_book_listed_twice_is_read_once(self):
+        book = self.book(events=[self.proposal("none")])
+        self.assertEqual(self.facts(book, book)["totals"]["checked"], 1)
+
+    def test_the_texts_of_a_book_are_cleaned_and_a_key_is_not_printed(self):
+        evil = "x" + RLO + chr(0x1b) + ZWSP
+        book = self.book(shelf="s" + "p", events=[("crawl_held", {"kinds": ["Authorization: Bearer SECRETKEY12345678" + evil]}),
+                                                 ("crawl_rejected", {"reason": "Cookie: SECRETCOOKIE " + evil, "score": 1})])
+        text = json.dumps(self.facts(book))
+        self.assertNotIn("SECRET", text)
+        self.assertFalse([c for c in text if c in (RLO, ZWSP, chr(0x1b))])
+
+    def test_the_count_of_books_not_reviewed_by_the_owner_is_the_whole_librarys_and_the_owners_own_books_are_untouched(self):
+        for _ in range(3):
+            self.book()
+        self.book(auto=False, found=False)
+        self.book(found=False, auto=False, events=[self.proposal("none")])
+        got = cr.unreviewed(self.store)
+        self.assertEqual((got["unreviewed"], got["cut"], got["unreadable"]), (3, False, 0))
+        with mock.patch.object(cs, "MAX_BOOKS", 2):
+            self.assertEqual(cr.unreviewed(self.store)["cut"], True)
+
+    def test_hostile_text_in_a_books_records_cannot_make_markup_in_the_report(self):
+        book = self.book(shelf="physics", events=[("reshelved", {"from": "[x](http://evil.example/)", "to": "# h", "basis": "model-pick", "via": "crawl"}),
+                                                  ("crawl_held", {"kinds": HOSTILE}), ("crawl_rejected", {"reason": "![i](http://evil.example/i.png)", "score": 1})])
+        data = cr.build(self.root, DAY, "UTC", NOW, store=self.store)
+        data["books"] = cr.book_facts(self.store, [book])
+        text = cr.render(data)
+        self.assertFalse([line for line in text.splitlines() if line.startswith((">", "!", "|", "<", "[", "    ", "#")) and line not in
+                          {l for l in text.splitlines() if l.startswith(("# Crawl report", "## "))}])
+        outside = re.sub(r"`[^`]*`", "", text)
+        self.assertFalse(re.search(r"\]\(|!\[|<[a-z]|&lt", outside))
+        self.assertIn("`[x](http://evil.example/)`", text)
+        self.assertFalse([c for c in text if not (c.isprintable() or c == "\n")])
+
+    def test_the_newest_move_hold_and_rejection_are_the_ones_that_count(self):
+        move = {"basis": "model-pick", "via": "crawl"}
+        book = self.book(shelf="b", events=[("reshelved", {"from": "x", "to": "old", "basis": "owner", "via": "place-apply"}),
+                                            ("reshelved", {"from": "default", "to": "b", **move}),
+                                            ("crawl_held", {"kinds": ["old"]}), ("crawl_held", {"kinds": ["new"]}),
+                                            ("crawl_rejected", {"reason": "old", "score": 1}), ("crawl_rejected", {"reason": "new", "score": 2})])
+        got = self.facts(book)
+        self.assertEqual((got["moved"][0]["to"], got["held"][0]["kinds"], got["rejected"][0]["reason"]), ("b", ["new"], "new"))
+        early = self.book(shelf="b", events=[("reshelved", {"from": "default", "to": "b", **move}), ("reshelved", {"from": "b", "to": "c", "basis": "owner", "via": "place-apply"})])
+        self.assertEqual(self.facts(early)["moved"], [])
+
+    def test_a_score_that_is_a_boolean_or_not_finite_is_none_and_kinds_are_bounded(self):
+        a = self.book(events=[("crawl_rejected", {"reason": "x", "score": True})])
+        b = self.book(events=[("crawl_held", {"kinds": [f"k{i}" for i in range(30)]})])
+        got = self.facts(a, b)
+        self.assertEqual((got["rejected"][0]["score"], len(got["held"][0]["kinds"])), (None, 20))
+
+    def test_a_judged_out_book_on_default_is_not_also_left_there(self):
+        book = self.book(events=[("crawl_rejected", {"reason": "x", "score": 1})])
+        self.assertEqual(self.facts(book)["left_default"], [])
+
+    def test_the_shelf_and_the_book_name_are_cleaned_and_the_log_that_cannot_be_read_does_not_say_why_in_the_files_words(self):
+        evil = "e" + RLO + chr(0x1b) + ZWSP + "x"
+        book = self.book(events=[("reshelved", {"from": "d", "to": "p", "basis": "model-pick", "via": "crawl"})])
+        root = json.loads(Path(self.store.book_file(book)).read_text())
+        root["shelf"] = "p" + evil
+        Path(self.store.book_file(book)).write_text(json.dumps(root))
+        got = self.facts(book, "z" + evil)
+        text = json.dumps(got, ensure_ascii=False)
+        self.assertFalse([c for c in text if c in (RLO, ZWSP, chr(0x1b))])
+        self.assertEqual(got["moved"][0]["shelf"], "pex")
+        self.assertEqual(got["unreadable"][0]["book"], "zex")
+
+    def test_the_build_reads_the_books_and_the_count_when_it_is_given_a_store_and_a_part_that_fails_is_a_fault_of_its_part(self):
+        book = self.book(events=[self.proposal("none")])
+        folder = self.root / "crawl" / "log"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "crawl-2026-11-18.jsonl").write_bytes(raw(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book=book, host="h.example") + b"\n")
+        data = cr.build(self.root, DAY, "UTC", NOW, store=self.store)
+        self.assertEqual((data["books"]["totals"]["left_default"], data["unreviewed"]["unreviewed"]), (1, 1))
+        with mock.patch.object(cr, "book_facts", side_effect=RuntimeError("it broke: Cookie: sid=1")):
+            broken = cr.build(self.root, DAY, "UTC", NOW, store=self.store)
+        self.assertIn("error", broken["books"])
+        self.assertNotIn("sid=1", json.dumps(broken))
+        self.assertEqual(broken["unreviewed"]["unreviewed"], 1)
+
+    def test_the_report_made_with_a_store_has_the_books_in_its_text(self):
+        book = self.book(events=[self.proposal("none")])
+        folder = self.root / "crawl" / "log"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "crawl-2026-11-18.jsonl").write_bytes(raw(ts="2026-11-18T05:00:00Z", run="r1", step="capture", outcome="ok", book=book, host="h.example") + b"\n")
+        got = cr.make_report(self.root, read_plan=lambda path: {"timezone": "UTC"}, now=NOW, day=DAY, store=self.store)
+        text = Path(got["path"]).read_text()
+        self.assertIn("- Left on the shelf default: 1", text)
+        self.assertIn("1 books of the crawl, in the whole library", text)
+
+    def render(self, books=None, unreviewed=None, filed=None):
+        data = cr.build(self.root, DAY, "UTC", NOW)
+        data["books"], data["unreviewed"] = books, unreviewed
+        return cr.render(data)
+
+    def test_every_line_of_the_books_part_is_there_and_every_text_in_it_is_escaped(self):
+        totals = {"checked": 6, "moved": 1, "left_default": 1, "held": 1, "rejected": 1, "unreadable": 1, "not_filed_by_the_crawl": 1, "log_too_large": 2}
+        books = {"totals": totals, "moved": [{"book": "b`1", "from": "f`2", "to": "t`3", "shelf": "s`4"}], "left_default": [{"book": "b`5", "proposal": "p`6"}],
+                 "held": [{"book": "b`7", "kinds": ["k`8", "k`9"]}], "rejected": [{"book": "b`10", "reason": "r`11", "score": 0.5}],
+                 "unreadable": [{"book": "b`12", "why": "w`13"}]}
+        text = self.render(books, {"unreviewed": 4, "books_scanned": 9, "unreadable": 2, "cut": True, "stopped_by": "max`books", "problem": "p`x"})
+        for want in ("- Books looked at: 6, of which not the crawl's (no crawl_found event): 1", "- Moved by the crawl to a shelf: 1",
+                     "  - `b%601` from `f%602` to `t%603`, now on `s%604`", "- Left on the shelf default: 1", "  - `b%605` proposal `p%606`", "- Held by the scan: 1",
+                     "  - `b%607` kinds `k%608`, `k%609`", "- Judged out and kept as weeded: 1", "  - `b%6010` reason `r%6011` score `0.5`",
+                     "- Whose files could not be read: 1", "  - `b%6012`: `w%6013`", "- Whose event log is too large to read for this report: 2",
+                     "- 4 books of the crawl, in the whole library, are not yet reviewed by the owner (books looked at: 9)",
+                     "The count stopped early (`max%60books`)", "Books whose files could not be read: 2", "Problem with the library: `p%60x`"):
+            with self.subTest(want=want):
+                self.assertIn(want, text)
+        self.assertNotIn("A list above is cut", text)
+        books["moved"] = []
+        self.assertIn("A list above is cut to its first books", self.render(books, {"unreviewed": 0, "books_scanned": 0, "unreadable": 0, "cut": False, "stopped_by": "x", "problem": None}))
+
+    def test_a_quiet_books_part_has_no_extra_lines_and_a_failed_part_is_said(self):
+        totals = {k: 0 for k in ("checked", "moved", "left_default", "held", "rejected", "unreadable", "not_filed_by_the_crawl", "log_too_large")}
+        books = {"totals": totals, "moved": [], "left_default": [], "held": [], "rejected": [], "unreadable": []}
+        text = self.render(books, {"unreviewed": 0, "books_scanned": 0, "unreadable": 0, "cut": False, "stopped_by": "no_more_books", "problem": None})
+        for gone in ("too large to read", "A list above is cut", "stopped early", "Problem with the library", "Books whose files could not be read"):
+            self.assertNotIn(gone, text)
+        text = self.render({"error": "it broke"}, {"error": "it too"})
+        self.assertEqual(text.count("This part could not be read"), 2)
+        self.assertIn("`it broke`", text)
+        self.assertIn("`it too`", text)
+        none = self.render(None, None)
+        self.assertIn("- The books were not read: no library was given.", none)
+        self.assertIn("- Not read: no library was given.", none)
+
+    def test_the_report_has_the_sections_and_they_say_what_was_not_read(self):
+        book = self.book(shelf="physics", events=[("reshelved", {"from": "default", "to": "physics", "basis": "model-pick", "via": "crawl"})])
+        stuck = self.book(events=[self.proposal("none")])
+        held = self.book(events=[("crawl_held", {"kinds": ["javascript"]})])
+        folder = self.root / "crawl" / "log"
+        folder.mkdir(parents=True, exist_ok=True)
+        records = [dict(ts=f"2026-11-18T05:0{i}:00Z", run="r1", step="capture", outcome="ok", book=b, host="h.example") for i, b in enumerate((book, stuck, held))]
+        (folder / "crawl-2026-11-18.jsonl").write_bytes(b"".join(raw(**r) + b"\n" for r in records))
+        data = cr.build(self.root, DAY, "UTC", NOW, store=self.store)
+        text = cr.render(data)
+        self.assertEqual(data["books"]["totals"]["moved"], 1)
+        for line in ("## What the books' own records say", "- Moved by the crawl to a shelf: 1", "- Left on the shelf default: 1", "- Held by the scan: 1",
+                     "## Books not reviewed by the owner", "`javascript`", "proposal `none`"):
+            with self.subTest(line=line):
+                self.assertIn(line, text)
+        none = cr.render(cr.build(self.root, DAY, "UTC", NOW))
+        self.assertIn("The books were not read", none)
 
 
 class SourceTest(unittest.TestCase):
