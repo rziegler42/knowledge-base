@@ -210,10 +210,31 @@ def _reject_row(conn, plan, row, reason, now):
     return True
 
 
-def judge_book(store, conn, cfg, plan, book_id, version_id, run, now, embed=None):
+def charge_failed_try(store, conn, plan, book_id, why, run, now, chars=None):
+    """Charge one failed try of the judgement to a crawl book whose model call failed (`crawlbooks.fail_step`, step `judge`): at the plan's `retries` such tries the book is parked, weeded with its queue row rejected.
+    Returns the result with the outcome `retry` or `parked`. `KbError` for a book that is not one the crawl filed."""
+    log = crawllog.Log(store.cfg["index_root"], run)
+    found = crawlbooks._found(store.read_events(book_id))
+    if found is None or store.read_book(book_id).get("auto_filed") is not True:
+        raise KbError("the book is not one the crawl filed")
+    row = found.get("candidate")
+    why = why if why in (MODEL_FAILED, MODEL_ANSWER_BAD) else MODEL_FAILED          # (only one of the judge's own fixed sentences is ever written)
+    state = crawlbooks.fail_step(store, plan, book_id, "judge", why, run)
+    if state == "parked":
+        parked = _newest(store.read_events(book_id), "crawl_rejected")
+        reason = parked.get("reason") if parked is not None else why
+        if _reject_row(conn, plan, row, reason, now):
+            log.write("judge", "rejected", candidate=row if type(row) is int else None, book=book_id, n=chars, reason=reason, now=now)
+        return _result("parked", None, None, None, reason)
+    log.write("judge", "failed", candidate=row if type(row) is int else None, book=book_id, n=chars, reason=why, now=now)
+    return _result("retry", None, None, None, why)
+
+
+def judge_book(store, conn, cfg, plan, book_id, version_id, run, now, embed=None, charge=True):
     """Take one crawl book through the judgement and its record. Returns `{"outcome", "ok", "score", "shelf", "reason"}`, `outcome` being `kept`, `rejected`, `retry`, `parked`, `already_kept`,
     `already_rejected` or `final`. Refused (`KbError`) before anything is read of the book or sent: an empty or odd threshold, a run that is not a name, a time with no zone; and, before the model is
-    asked, a book that is not one the crawl filed, a version that is not converted, and an entry, shelf vectors or model that are not right."""
+    asked, a book that is not one the crawl filed, a version that is not converted, and an entry, shelf vectors or model that are not right. **With `charge=False` a model that fails is not charged to the book:** the
+    outcome is `model_failed` and nothing is recorded or written for the book (the caller asks whether the entry answers and then charges the try with `charge_failed_try`, or does not)."""
     threshold = _threshold(plan)
     log = crawllog.Log(store.cfg["index_root"], run)
     if not isinstance(now, datetime.datetime) or now.tzinfo is None:
@@ -253,15 +274,9 @@ def judge_book(store, conn, cfg, plan, book_id, version_id, run, now, embed=None
     try:
         ok, score, shelf, reason = _verdict(store, cfg, plan, threshold, title, text, embed)
     except ModelFailed as failed:
-        state = crawlbooks.fail_step(store, plan, book_id, "judge", failed.why, run)
-        if state == "parked":
-            parked = _newest(store.read_events(book_id), "crawl_rejected")
-            reason = parked.get("reason") if parked is not None else failed.why
-            if _reject_row(conn, plan, row, reason, now):
-                line("rejected", reason, len(text))
-            return _result("parked", None, None, None, reason)
-        line("failed", failed.why, len(text))
-        return _result("retry", None, None, None, failed.why)
+        if not charge:
+            return _result("model_failed", None, None, None, failed.why)
+        return charge_failed_try(store, conn, plan, book_id, failed.why, run, now, len(text))
     seconds = round(time.monotonic() - started, 3) if score is not None else None
     if ok:
         crawlbooks.record_judged(store, book_id, score, shelf, True)

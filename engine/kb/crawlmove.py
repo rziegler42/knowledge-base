@@ -19,8 +19,8 @@ What the step does, for one book at a time, oldest first:
 
 What it guards: the stop file before each model call and before each move; the disk floors before each model call (before each proposal; a move writes a few bytes); a refusal by either ends the step with one `skipped` line
 and leaves the book as it was (not unplaced, not a failed try). A chat model that fails for a book is a failed try of the book (`crawlbooks.fail_step`, step `propose`; parked at the plan's `retries`), **but only when
-the model has answered for another book in this run**; a run in which the model answered for nobody is a server that is down, which costs no book a try and feeds the down clock (`crawlguard.note_model`) instead. The
-embedding probe is asked only when the embedding call itself fails, never to decide that the chat model is up, since it cannot see the chat model. A failed embedding that the probe says is a refusal (a model that is not
+the model has answered for another book in this run**; a run in which the model answered for nobody is a server that is down, which costs no book a try and is not charged until the chat entry (`place`) has been asked one short call: one that does not answer starts its own down clock, and one that answers makes the books' failures their own. An
+embedding that fails asks the entry of `place-embed` the same way. A failed embedding that the probe says is a refusal (a model that is not
 the measured one) refuses the run with a fixed text.
 
 What it writes is a fixed sentence, a number or an id: never a word a model or a page said. The proposal's own cleaned fields stay in the proposal that `placement` writes. The only mark that a crawl book is unreviewed by
@@ -99,6 +99,9 @@ def _waiting(library, scan, approved):
     return [book for book in crawlbooks.crawl_books(library, approved, scan) if judged.get(book) and _has_card(library, book)]
 
 
+EMBED_TASK, CHAT_TASK = "place-embed", "place"                                  # the tasks whose entries the proposal calls: the embedding of the book and the chat model that chooses a shelf
+
+
 class _Run:
     """One run of the step: the context, the library, the shelf vectors and what the models have done so far."""
 
@@ -122,15 +125,20 @@ class _Run:
         elif result == "retry":
             self.say("propose", "failed", FAILED_TRY, book)
 
-    def note(self, ok):
-        """Note one sighting of the model server in the down clock; a trip of the clock ends the run."""
+    def note(self, task, ok):
+        """Note one sighting of the entry of `task` in its own down clock; a trip of the clock ends the run."""
         ctx = self.ctx
-        state, _restarted = crawlguard.load_state(ctx.index_root)
-        tripped = crawlguard.note_model(state, ok, ctx.clock(), ctx.plan)
-        crawlguard.save_state(ctx.index_root, state)
+        tripped = crawlguard.record_entry(ctx.index_root, crawlguard.entry_of(ctx.cfg, task), ok, ctx.clock(), ctx.plan)
         if tripped is not None:
             ctx.trip(*tripped)
             raise crawlrun.BreakerTripped()
+
+    def answers(self, task):
+        """Whether the entry of `task` answers one short call (the step's `probe(cfg, task)`, `crawlguard.probe_entry` by default)."""
+        try:
+            return bool((self.make["probe"] or crawlguard.probe_entry)(self.ctx.cfg, task))
+        except (KbError, OSError):
+            return False
 
     # -- the models
     def guard(self, which):
@@ -146,15 +154,11 @@ class _Run:
         return guarded
 
     def embedding_trouble(self):
-        """The embedding call failed: ask the probe, and either it is a server that does not answer (the down clock, and the step ends) or a refusal that stops the run."""
-        try:
-            ok = bool((self.make["probe"] or crawlguard.probe_model)(self.ctx.cfg))
-        except (KbError, OSError):
-            ok = False
-        if ok:
+        """The embedding call failed: ask the embedding entry of the proposal (`place-embed`), and either it does not answer (its down clock, and the step ends) or it is a refusal that stops the run."""
+        if self.answers(EMBED_TASK):
             raise crawlrun.StepRefused(MODEL_REFUSED)
         self.say("propose", "failed", DOWN)
-        self.note(False)
+        self.note(EMBED_TASK, False)
         raise _Down()
 
     def propose(self, book):
@@ -270,7 +274,7 @@ def _refusal(ctx, read_space, disk):
 
 
 def make_step(open_store=None, statvfs=None, approved=None, probe=None, launcher=None, root=None, embed=None, call=None, schema_path=None):
-    """The function for the move point of a run. `open_store`, `statvfs`, `approved` (the approved digests, given the index root), `probe` (the embedding probe, given the config), `launcher`, `root`, `embed`, `call`
+    """The function for the move point of a run. `open_store`, `statvfs`, `approved` (the approved digests, given the index root), `probe` (the probe of one model entry, given the config and the task), `launcher`, `root`, `embed`, `call`
     and `schema_path` replace the real ones (tests)."""
     make = {"statvfs": statvfs or os.statvfs, "probe": probe, "launcher": launcher, "root": root, "embed": embed, "call": call, "schema_path": schema_path}
 
@@ -306,10 +310,16 @@ def make_step(open_store=None, statvfs=None, approved=None, probe=None, launcher
         if quiet is not None:
             run.say(quiet.step, "skipped", quiet.why)
         elif run.pending:
-            run.say("propose", "failed", DOWN)                    # the model answered for nobody: the server's failure, and no book has a try
-            run.note(False)
+            if run.answers(CHAT_TASK):                            # the chat entry answers a short call: the books failed with it answering, and each is charged its try
+                run.note(CHAT_TASK, True)
+                for book in run.pending:
+                    run.failed_try(book)
+            else:                                                 # the chat entry does not answer: its failure, and no book has a try
+                run.say("propose", "failed", DOWN)
+                run.note(CHAT_TASK, False)
         if run.answered:
-            run.note(True)
+            run.note(EMBED_TASK, True)
+            run.note(CHAT_TASK, True)
 
     return step
 

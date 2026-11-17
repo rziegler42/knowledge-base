@@ -884,11 +884,13 @@ class FakeJudge:
     def __init__(self, results=None, default="kept", error=None):
         self.results, self.default, self.error, self.calls = results or {}, default, error, []
 
-    def __call__(self, store, conn, cfg, plan, book_id, version_id, run, now, embed=None):
-        self.calls.append({"book": book_id, "version": version_id, "run": run, "now": now, "embed": embed, "plan": plan, "cfg": cfg})
+    def __call__(self, store, conn, cfg, plan, book_id, version_id, run, now, embed=None, charge=True):
+        self.calls.append({"book": book_id, "version": version_id, "run": run, "now": now, "embed": embed, "plan": plan, "cfg": cfg, "charge": charge})
         if self.error is not None:
             raise self.error
         outcome = self.results.get(book_id, self.default)
+        if outcome in ("retry", "parked") and not charge:                # a model that failed, left to the step: it asks the entry, and charges the try only when the entry answers
+            return {"outcome": "model_failed", "ok": None, "score": None, "shelf": None, "reason": "CANARY-reason"}
         nodoc = outcome == "nodoc"                                    # a text that is not a document: rejected, with no score and no call of the model
         outcome = "rejected" if nodoc else outcome
         shelf = "pid" if outcome in ("kept", "rejected") and not nodoc else None
@@ -903,9 +905,11 @@ class JudgeCase(ConvertCase):
         self.judge = FakeJudge()
         self.probes = []
         self.up = True
+        emb = {"bridge": "ask-ollama", "server": "ned", "model": "m", "kind": "embedding", "dimension": 8}          # (as the registry of the models accepts it)
+        self.cfg = dict(self.cfg, models_on=True, models={"emb": emb}, tasks={"place-embed": "emb"})
 
-    def probe(self, cfg):
-        self.probes.append(1)
+    def probe(self, cfg, task=None):
+        self.probes.append(task)
         return self.up
 
     def ready(self, **kw):
@@ -923,7 +927,7 @@ class JudgeCase(ConvertCase):
         return ctx
 
     def clock_state(self):
-        return crawlguard.load_state(self.index)[0]["model_down_since"]
+        return crawlguard.load_state(self.index)[0]["entries_down"].get("emb")
 
 
 class JudgingOrder(JudgeCase):
@@ -1030,8 +1034,8 @@ class JudgingRefusals(JudgeCase):
             asked.append(path)
             return roomy(path)
 
-        def stopping(store, conn, cfg, plan, book, version, run, now, embed=None):
-            out = self.judge(store, conn, cfg, plan, book, version, run, now, embed=embed)
+        def stopping(store, conn, cfg, plan, book, version, run, now, embed=None, charge=True):
+            out = self.judge(store, conn, cfg, plan, book, version, run, now, embed=embed, charge=charge)
             open(os.path.join(self.index, "crawl.stop"), "w").close()
             return out
 
@@ -1051,7 +1055,7 @@ class JudgingRefusals(JudgeCase):
 
 class JudgingFailures(JudgeCase):
     def test_a_kept_verdict_clears_the_down_clock_and_asks_nothing_of_the_probe(self):
-        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:55:00Z", "history": [], "entries_down": {}})
+        crawlguard.save_state(self.index, {"model_down_since": None, "history": [], "entries_down": {"emb": "2026-11-16T11:55:00Z"}})
         self.ready()
         self.run_judge()
         self.assertEqual((self.clock_state(), self.probes), (None, []))
@@ -1063,7 +1067,54 @@ class JudgingFailures(JudgeCase):
         ctx = self.run_judge()
         self.assertEqual(([x["book"] for x in self.judge.calls], len(self.probes), self.clock_state()), ([a], 1, "2026-11-16T12:00:00Z"))
         self.assertEqual((self.lines()[-1]["step"], self.lines()[-1]["outcome"], self.lines()[-1]["reason"]), ("judge", "failed", "the model server did not answer"))
-        self.assertEqual((ctx.tripped, ctx.judge_report["retry"], ctx.judge_report["ended"]), (False, 1, "the model server did not answer"))
+        self.assertEqual((ctx.tripped, ctx.judge_report["retry"], ctx.judge_report["ended"]), (False, 0, "the model server did not answer"))      # a try is charged only when the entry answers
+        self.assertEqual((self.probes, [x["charge"] for x in self.judge.calls], self.names(a).count("crawl_step_failed")), (["place-embed"], [False], 0))
+
+    def test_an_entry_that_stays_down_for_more_runs_than_the_retries_costs_the_book_no_try_and_parks_nothing(self):
+        self.plan["retries"] = 2
+        self.up = False
+        book = self.ready()
+        self.judge.results[book] = "retry"
+        for number in range(self.plan["retries"] + 2):
+            self.run_judge()
+        self.assertEqual((self.names(book).count("crawl_step_failed"), self.store.read_book(book)["state"], self.row(book)[0], len(self.judge.calls)), (0, "active", "kept", 4))
+        self.assertEqual(self.probes, ["place-embed"] * 4)
+
+    def test_a_failure_while_the_entry_answers_is_the_books_try_and_clears_the_clock_and_a_book_at_the_retries_is_parked(self):
+        crawlguard.save_state(self.index, {"model_down_since": None, "history": [], "entries_down": {"emb": "2026-11-16T11:55:00Z"}})
+        self.plan["retries"] = 2
+        book = self.ready()
+        self.judge.results[book] = "retry"
+        ctx = self.run_judge()
+        self.assertEqual((self.names(book).count("crawl_step_failed"), self.clock_state(), ctx.judge_report["retry"], self.probes), (1, None, 1, ["place-embed"]))
+        self.run_judge()
+        self.assertEqual((self.parked(book)["stage"], self.row(book)[0]), ("judge", "rejected"))
+
+    def test_a_config_with_no_entry_for_the_judgements_task_is_a_refusal_of_the_step_and_charges_no_try(self):
+        book = self.ready()
+        self.judge.results[book] = "retry"
+        ctx = self.ctx()
+        ctx.cfg = dict(self.cfg, tasks={})
+        with self.assertRaises(crawlrun.StepRefused):
+            self.run_judge(ctx=ctx)
+        self.assertEqual((self.names(book).count("crawl_step_failed"), crawlguard.load_state(self.index)[0]["entries_down"]), (0, {}))
+
+    def test_the_default_probe_asks_the_entry_of_the_judgements_own_task_with_the_config(self):
+        book = self.ready()
+        self.judge.results[book] = "retry"
+        with mock.patch.object(crawlsteps.crawlguard, "probe_entry", return_value=False) as probe:
+            crawlsteps.make_judge_step(judge=self.judge, statvfs=roomy)(self.ctx())
+        probe.assert_called_once_with(self.cfg, "place-embed")
+
+    def test_an_entry_down_for_over_the_limit_trips_even_when_the_old_clock_of_the_embedding_is_untouched(self):
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:59:00Z", "history": [], "entries_down": {"emb": "2026-11-16T10:00:00Z"}})
+        book = self.ready()
+        self.judge.results[book] = "retry"
+        self.up = False
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.run_judge()
+        state = crawlguard.load_state(self.index)[0]
+        self.assertEqual((self.tripped[0][0], "the model entry emb" in self.tripped[0][1], state["model_down_since"]), ("model_down", True, "2026-11-16T11:59:00Z"))
 
     def test_a_probe_that_raises_is_a_server_that_does_not_answer(self):
         for error in (KbError("refused"), OSError("no route")):
@@ -1072,7 +1123,7 @@ class JudgingFailures(JudgeCase):
                 book = self.ready()
                 self.judge.results[book] = "retry"
 
-                def probe(cfg, error=error):
+                def probe(cfg, task=None, error=error):
                     raise error
 
                 self.run_judge(probe=probe)
@@ -1082,7 +1133,7 @@ class JudgingFailures(JudgeCase):
                 self.assertIsNone(self.clock_state())
 
     def test_a_text_that_is_not_a_document_asks_no_model_and_neither_clears_the_clock_nor_ends_a_run_of_failures(self):
-        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:55:00Z", "history": [], "entries_down": {}})
+        crawlguard.save_state(self.index, {"model_down_since": None, "history": [], "entries_down": {"emb": "2026-11-16T11:55:00Z"}})
         book = self.ready()
         self.judge.results[book] = "nodoc"
         self.run_judge()
@@ -1111,7 +1162,7 @@ class JudgingFailures(JudgeCase):
         self.assertEqual((len(bad.calls), self.tripped[0][0]), (2, "stage_bound"))
 
     def test_a_server_that_has_been_down_for_longer_than_the_limit_trips_the_breaker_as_model_down(self):
-        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T10:00:00Z", "history": [], "entries_down": {}})
+        crawlguard.save_state(self.index, {"model_down_since": None, "history": [], "entries_down": {"emb": "2026-11-16T10:00:00Z"}})
         book = self.ready()
         self.judge.results[book] = "retry"
         self.up = False
@@ -1142,6 +1193,7 @@ class JudgingFailures(JudgeCase):
         self.plan["consecutive_failures"] = 2
         books = [self.ready() for _ in range(3)]
         self.judge.default = "parked"
+        self.plan["retries"] = 1
         with self.assertRaises(crawlrun.BreakerTripped):
             self.run_judge()
         self.assertEqual(len(self.judge.calls), 2)
@@ -1196,6 +1248,7 @@ class JudgingRecords(JudgeCase):
         self.assertEqual(forget.call_count, 1)
 
     def test_a_rejected_book_alone_or_a_parked_book_alone_takes_the_index_rows_out(self):
+        self.plan["retries"] = 1                                          # (the first failed try parks a book)
         for kind in ("rejected", "parked"):
             with self.subTest(kind):
                 book = self.ready()
@@ -1206,6 +1259,8 @@ class JudgingRecords(JudgeCase):
     def test_the_report_counts_each_kind_of_outcome(self):
         books = [self.ready() for _ in range(5)]
         results = dict(zip(books, ("kept", "rejected", "retry", "parked", "already_kept")))
+        self.plan["retries"] = 2
+        crawlbooks.record_step_failed(self.store, books[3], "judge", "the model did not answer", "run-0")           # (one try already: the next parks this book)
         ctx = self.run_judge(judge=FakeJudge(results))
         self.assertEqual(ctx.judge_report, {"kept": 1, "rejected": 1, "retry": 1, "parked": 1, "ended": "all the books are judged"})
 

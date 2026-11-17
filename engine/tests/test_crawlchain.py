@@ -125,7 +125,7 @@ class Chain(PlaceCase, Net):
         self.ticks += 1
         return (NOW + datetime.timedelta(seconds=self.ticks)).isoformat(timespec="seconds")
 
-    def probe(self, cfg=None):
+    def probe(self, cfg=None, task=None):
         self.probes += 1
         return self.up
 

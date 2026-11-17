@@ -810,6 +810,38 @@ class JudgeBookTest(RecordCase):
         retry, second = self.judge_book(book, version)
         self.assertEqual((retry["outcome"], len(second.calls)), ("kept", 1))
 
+    def test_with_charge_off_a_model_that_fails_is_left_to_the_caller_and_nothing_is_written_for_the_book(self):
+        book, version, row = self.crawl_book(document("pid", 0.7))
+        before, lines = self.events(book), self.log_lines()
+        for fail in (FakeEmbed(fail=KbError("the bridge is down")), FakeEmbed(vectors=[])):
+            got = crawljudge.judge_book(self.store, self.conn, self.cfg, plan(retries=1), book, version, "r1", NOW, embed=fail, charge=False)
+            self.assertEqual((got["outcome"], got["ok"], got["score"], got["shelf"]), ("model_failed", None, None, None))
+            self.assertIn(got["reason"], (crawljudge.MODEL_FAILED, crawljudge.MODEL_ANSWER_BAD))
+        self.assertEqual((self.events(book), self.log_lines(), self.store.read_book(book)["state"], self.row(row)["status"]), (before, lines, "active", "kept"))
+        self.assertEqual(crawlbooks.step_failures(self.store, book, "judge"), 0)
+
+    def test_with_charge_off_a_verdict_is_given_as_before(self):
+        book, version, _ = self.crawl_book(document("pid", 0.7))
+        got = crawljudge.judge_book(self.store, self.conn, self.cfg, plan(), book, version, "r1", NOW, embed=FakeEmbed(), charge=False)
+        self.assertEqual(got["outcome"], "kept")
+
+    def test_charge_failed_try_charges_one_try_and_parks_at_the_retries_and_writes_only_the_judges_own_sentences(self):
+        book, version, row = self.crawl_book(document("pid", 0.7))
+        p = plan(retries=2)
+        first = crawljudge.charge_failed_try(self.store, self.conn, p, book, "CANARY text from elsewhere", "r1", NOW, 10)
+        self.assertEqual((first["outcome"], first["reason"]), ("retry", crawljudge.MODEL_FAILED))
+        second = crawljudge.charge_failed_try(self.store, self.conn, p, book, crawljudge.MODEL_ANSWER_BAD, "r1", NOW, 10)
+        self.assertEqual(second["outcome"], "parked")
+        self.assertEqual((self.store.read_book(book)["state"], self.row(row)["status"], crawlbooks.step_failures(self.store, book, "judge")), ("weeded", "rejected", 2))
+        self.assertNotIn("CANARY", json.dumps([self.events(book), self.log_lines()]))
+        self.assertEqual([(x["step"], x["outcome"]) for x in self.log_lines()], [("judge", "failed"), ("judge", "rejected")])
+
+    def test_charge_failed_try_refuses_a_book_that_is_not_the_crawls(self):
+        other = self.store.create_book(title="Owner book", kind="preprint")
+        with self.assertRaises(KbError):
+            crawljudge.charge_failed_try(self.store, self.conn, plan(), other, crawljudge.MODEL_FAILED, "r1", NOW)
+        self.assertEqual(crawlbooks.step_failures(self.store, other, "judge"), 0)
+
     def test_a_model_answer_that_is_unusable_is_a_failed_try_with_its_own_reason(self):
         book, version, _ = self.crawl_book(document("pid", 0.7))
         got, _ = self.judge_book(book, version, embed=FakeEmbed(vectors=[]))

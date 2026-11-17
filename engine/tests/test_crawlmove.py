@@ -54,7 +54,7 @@ class Case(PlaceCase):
         self.addCleanup(self.conn.close)
         self.now = NOW
         self.crawl_log = crawllog.Log(self.index_root, "run-1", clock=lambda: self.now)
-        self.tripped, self.probes, self.up, self.found = [], [], True, 0
+        self.tripped, self.probes, self.up, self.found, self.up_for = [], [], True, 0, {}
         self.run_cfg = dict(self.cfg_models, bulk_root=self.store.cfg["bulk_root"], index_root=self.index_root)
 
     def tick(self):
@@ -85,9 +85,12 @@ class Case(PlaceCase):
         ctx.trip = trip
         return ctx
 
-    def probe(self, cfg):
-        self.probes.append(1)
-        return self.up
+    def probe(self, cfg, task=None):
+        self.probes.append(task)
+        return self.up_for.get(task, self.up)
+
+    def clocks(self):
+        return crawlguard.load_state(self.index_root)[0]["entries_down"]
 
     def run_step(self, **kw):
         kw.setdefault("open_store", lambda: self.store)
@@ -942,20 +945,48 @@ class Failures(Case):
         books = [self.crawl_book(f"Book {n}") for n in range(2)]
         for n in range(2):
             self.answers[f"Book {n}"] = KbError("down")
-        self.up = True                                                                # the embedding probe answers all the while: only the chat model is down
+        self.up_for["place"] = False                                                  # the chat entry does not answer a short call either: it is the one that is down
         self.run_step()
         self.assertEqual([crawlbooks.step_failures(self.store, b, "propose") for b in books], [0, 0])
         self.assertEqual([self.shelf(b) for b in books], ["default", "default"])
-        state, _ = crawlguard.load_state(self.index_root)
-        self.assertEqual(state["model_down_since"], "2026-11-16T12:00:00Z")
+        self.assertEqual(self.clocks(), {"chat": "2026-11-16T12:00:00Z"})             # its own clock, and the embedding's is not touched
+        self.assertEqual(crawlguard.load_state(self.index_root)[0]["model_down_since"], None)
         self.assertEqual(self.lines()[-1]["outcome"], "failed")
         self.assertEqual(self.lines()[-1]["reason"], "the model server did not answer")
-        self.assertEqual(self.probes, [])                                             # the embedding probe is not asked about the chat model
+        self.assertEqual(self.probes, ["place"])                                      # the chat entry is asked once, and never the embedding
         self.assertEqual(self.tripped, [])
+
+    def test_a_chat_model_that_failed_for_everyone_but_answers_a_short_call_charges_each_book_its_try_and_has_no_clock(self):
+        state = crawlguard.fresh_state()
+        state["entries_down"] = {"chat": "2026-11-16T11:50:00Z"}                      # (an older sighting: the answer to the short call clears it)
+        crawlguard.save_state(self.index_root, state)
+        books = [self.crawl_book(f"Book {n}") for n in range(2)]
+        for n in range(2):
+            self.answers[f"Book {n}"] = KbError("down")
+        self.run_step()                                                               # (the chat entry answers the probe: the books are what failed)
+        self.assertEqual([crawlbooks.step_failures(self.store, b, "propose") for b in books], [1, 1])
+        self.assertEqual((self.clocks(), self.probes, self.tripped), ({}, ["place"], []))
+        self.assertNotIn("the model server did not answer", [x["reason"] for x in self.lines()])
+
+    def test_a_chat_model_that_is_down_costs_no_try_over_more_runs_than_the_retries(self):
+        book = self.crawl_book("Book 0")
+        self.answers["Book 0"] = KbError("down")
+        self.up_for["place"] = False
+        self.crawl_plan["model_down_minutes"] = 100000
+        for _ in range(self.crawl_plan["retries"] + 2):
+            self.run_step()
+        self.assertEqual((crawlbooks.step_failures(self.store, book, "propose"), self.store.read_book(book)["state"], self.shelf(book)), (0, "active", "default"))
+        self.assertEqual(self.probes, ["place"] * 5)
+
+    def test_a_healthy_run_makes_no_probe(self):
+        self.crawl_book("The gene book")
+        self.run_step()
+        self.assertEqual(self.probes, [])
 
     def test_a_chat_model_that_stays_down_past_the_limit_trips_the_breaker_and_ends_the_run(self):
         book = self.crawl_book("Book 0")
         self.answers["Book 0"] = KbError("down")
+        self.up_for["place"] = False
         self.run_step()
         self.later(minutes=31)
         with self.assertRaises(crawlrun.BreakerTripped):
@@ -966,11 +997,10 @@ class Failures(Case):
     def test_a_chat_model_that_answers_clears_the_down_clock(self):
         book = self.crawl_book("The gene book")
         state = crawlguard.fresh_state()
-        state["model_down_since"] = "2026-11-16T11:50:00Z"
+        state["entries_down"] = {"chat": "2026-11-16T11:50:00Z", "emb": "2026-11-16T11:52:00Z"}
         crawlguard.save_state(self.index_root, state)
         self.run_step()
-        state, _ = crawlguard.load_state(self.index_root)
-        self.assertIsNone(state["model_down_since"])
+        self.assertEqual(self.clocks(), {})                                           # both entries answered for a book: both clocks are cleared
         self.assertNotEqual(self.shelf(book), "default")
 
     def test_a_failure_before_an_answer_is_a_try_only_once_a_later_book_is_answered(self):
@@ -981,7 +1011,7 @@ class Failures(Case):
         self.assertEqual((crawlbooks.step_failures(self.store, first, "propose"), self.shelf(first)), (1, "default"))
         self.assertNotEqual(self.shelf(second), "default")
         self.assertNotIn("the model server did not answer", [x["reason"] for x in self.lines()])      # the model answered: the failure was the book's, and the server is not said to be down
-        self.assertIsNone(crawlguard.load_state(self.index_root)[0]["model_down_since"])
+        self.assertEqual(self.clocks(), {})
 
     def test_a_failure_after_an_answer_is_a_try_at_once_and_is_not_the_servers(self):
         good = self.crawl_book("Good book")
@@ -992,7 +1022,7 @@ class Failures(Case):
         self.assertEqual(crawlbooks.step_failures(self.store, bad, "propose"), 1)
         self.assertEqual([(x["step"], x["outcome"], x["reason"]) for x in self.lines() if x["book"] == bad], [("propose", "failed", "the model could not be reached for a proposal")])
         self.assertNotIn("the model server did not answer", [x["reason"] for x in self.lines()])
-        self.assertIsNone(crawlguard.load_state(self.index_root)[0]["model_down_since"])
+        self.assertEqual(self.clocks(), {})
 
     def test_a_book_that_is_final_already_has_no_try_and_no_line(self):
         bad = self.crawl_book("Bad book")
@@ -1018,7 +1048,7 @@ class Failures(Case):
         self.run_step(embed=embed)
         self.assertNotEqual(self.shelf(first), "default")
         self.assertEqual(self.shelf(second), "default")
-        self.assertEqual(crawlguard.load_state(self.index_root)[0]["model_down_since"], "2026-11-16T12:00:00Z")      # it was not cleared by the earlier answer
+        self.assertEqual(self.clocks(), {"emb": "2026-11-16T12:00:00Z"})                 # it was not cleared by the earlier answer, and the chat entry is not asked
         self.assertEqual(self.lines()[-1]["reason"], "the model server did not answer")
 
     def test_an_embedding_server_that_does_not_answer_is_the_down_clock_and_costs_no_try(self):
@@ -1030,11 +1060,25 @@ class Failures(Case):
         self.up = False
         self.run_step(embed=embed)
         self.assertEqual(crawlbooks.step_failures(self.store, book, "propose"), 0)
-        state, _ = crawlguard.load_state(self.index_root)
-        self.assertEqual(state["model_down_since"], "2026-11-16T12:00:00Z")
-        self.assertEqual(self.probes, [1])
+        self.assertEqual(self.clocks(), {"emb": "2026-11-16T12:00:00Z"})
+        self.assertEqual(self.probes, ["place-embed"])
         self.assertEqual(self.lines()[-1]["reason"], "the model server did not answer")
         self.assertEqual(self.shelf(book), "default")
+
+    def test_an_embedding_entry_down_for_over_the_limit_trips_on_its_own_clock_and_costs_no_try(self):
+        book = self.crawl_book("The gene book")
+        state = crawlguard.fresh_state()
+        state["entries_down"] = {"emb": "2026-11-16T10:00:00Z", "chat": "2026-11-16T11:59:00Z"}
+        crawlguard.save_state(self.index_root, state)
+
+        def embed(*a, **k):
+            raise KbError("no answer")
+
+        self.up = False
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.run_step(embed=embed)
+        self.assertEqual(([k for k, _ in self.tripped], "the model entry emb" in self.tripped[0][1]), (["model_down"], True))
+        self.assertEqual((crawlbooks.step_failures(self.store, book, "propose"), self.probes, self.clocks()["chat"]), (0, ["place-embed"], "2026-11-16T11:59:00Z"))
 
     def test_an_embedding_refusal_while_the_probe_answers_is_a_refusal_of_the_run_with_a_fixed_text(self):
         book = self.crawl_book("The gene book")
@@ -1056,22 +1100,22 @@ class Failures(Case):
 
         for error in (OSError("down"), KbError("down")):
             with self.subTest(type(error).__name__):
-                def probe(cfg, error=error):
+                def probe(cfg, task=None, error=error):
                     raise error
 
                 self.run_step(embed=embed, probe=probe)
                 self.assertEqual(self.lines()[-1]["reason"], "the model server did not answer")
 
-    def test_the_default_probe_is_the_runs_own_and_is_given_the_config(self):
+    def test_the_default_probe_asks_the_entry_of_the_task_and_is_given_the_config(self):
         self.crawl_book("The gene book")
 
         def embed(*a, **k):
             raise KbError("no answer")
 
-        with mock.patch.object(crawlguard, "probe_model", return_value=False) as probe:
+        with mock.patch.object(crawlguard, "probe_entry", return_value=False) as probe:
             ctx = self.ctx()
             crawlmove.make_step(open_store=lambda: self.store, statvfs=roomy, approved=lambda r: {DIGEST}, schema_path=self.schema_path, embed=embed, call=self.call)(ctx)
-        probe.assert_called_once_with(self.run_cfg)
+        probe.assert_called_once_with(self.run_cfg, "place-embed")
         self.assertEqual(self.lines()[-1]["reason"], "the model server did not answer")
 
     def test_the_launcher_and_the_root_are_given_to_the_proposal(self):

@@ -418,6 +418,14 @@ def note_entry(state, entry, ok, now, plan):
     return None
 
 
+def record_entry(index_root, entry, ok, now, plan):
+    """Note one sighting of one model entry in the saved guard state and write the state back (before any trip is written: the caller writes the trip). Returns what `note_entry` returns."""
+    state, _restarted = load_state(index_root)
+    tripped = note_entry(state, entry, ok, now, plan)
+    save_state(index_root, state)
+    return tripped
+
+
 def bound_trip(stage, what):
     """The trip of a stage that hit a bound: `("stage_bound", reason)`."""
     if not isinstance(stage, str) or not isinstance(what, str) or not textutil.clean(stage, 40) or not textutil.clean(what, 200):
