@@ -1,15 +1,17 @@
-"""The owner's approval of the crawl plan (`docs/specs/population.md`, "The crawl plan"; the plan `2026-11-16-build-the-safeguards-of-the-unattended-crawl`, Increment B).
+"""The owner's approval of the crawl plan (`docs/specs/population.md`, "The crawl plan"; the plan `2026-11-16-build-the-safeguards-of-the-unattended-crawl`, Increment B; hardened by the plan `2026-11-16-run-the-steps-of-the-unattended-crawl`, Increment A).
 
 `approve(...)` is `crawl-approve`. Without a digest it prints a plain summary of the plan, with the grant it makes in words, and a **digest**: the first 32 hex characters of the SHA-256 of the exact bytes of the plan file, the topics
-file and the allow file (the blacklist and the key file are not in it: the blacklist can only reduce what the runner does, and the key is a credential). With that digest, **at a terminal**, it stores the approval under
+file and the allow file, **and of the full behaviour fingerprint** below (the blacklist and the key file are not in it: the blacklist can only reduce what the runner does, and the key is a credential), so that code or
+model settings that change between the owner's reading and approving are refused. The summary lists every allow host (at most `MAX_ALLOW_HOSTS`, or the file is refused for approval). With that digest, **at a terminal**, it stores the approval under
 `<index root>/crawl/approved/`: `<digest>/` holding `plan.txt`, `topics.txt` and `allow.txt` (the approved copies), `fingerprint` and `summary.txt`, each mode 0400, and `current`, the digest, written last. It also creates
 `crawl/breaker.json` as not tripped if there is none. The terminal check is the interlock `place-apply` uses; it keeps an agent or a scheduled job from approving, and it is not proof that a person typed.
 
 The approval is **also bound to what will run**: the behaviour **fingerprint** is the SHA-256 of one byte string (the recipe is in the plan and the test holds a second implementation of it): a version line, then every regular
-file under `engine/kb/` (a link or any other kind of entry is an error; `__pycache__` and `*.pyc` are left out) in the byte order of its repository-relative path, each as `<path length>:<path>:<file length>:<bytes>`, then
+file under `engine/kb/` (a link or any other kind of entry is an error; the contents of a `__pycache__` folder are left out, and a `.pyc` anywhere else is an error) in the byte order of its repository-relative path, each as `<path length>:<path>:<file length>:<bytes>`, then
 `config:` and a netstring of the canonical JSON of the model settings the crawl uses (`models_on`, the entries that eight named tasks name, and the fields of those entries that the engine reads: nothing else of the config, which
-holds the owner's own settings). `load_approved(...)` is what `crawl-run` calls: it recomputes the digest of the stored copies and the fingerprint and returns the plan **only if both match**, and refuses (`NotApproved`)
-for anything else, a link, a loose mode, a missing or extra file included. The copies it returns are the approved ones, so a plan file the owner has edited since is not what runs.
+holds the owner's own settings). `load_approved(...)` is what `crawl-run` calls: it recomputes the digest of the stored copies and the stored fingerprint and the fingerprint of the code now, and returns the plan **only if
+all match**, and refuses (`NotApproved`) for anything else, a link, a loose mode, a missing or extra file included. **The plan it returns names the approved copies** of the topics and the allow file (`plan["topics"]`,
+`plan["allow"]`), so a step that reads them reads what was approved and not what the owner has edited since. An approval made under an earlier recipe of the digest is refused: approve again.
 
 This module makes no request, reads no secret file and no environment variable."""
 import datetime
@@ -27,7 +29,8 @@ CRAWL_TASKS = ("card-notes", "card", "card-check", "card-more", "place", "card-e
 ENTRY_FIELDS = ("bridge", "server", "model", "max_output", "thinking", "timeout", "kind", "dimension", "query_prefix", "document_prefix")
 PREFIX = "engine/kb/"
 FINGERPRINT_LINE = b"kb-fingerprint-1\n"
-DIGEST_LINE = b"kb-crawl-approval-1\n"
+DIGEST_LINE = b"kb-crawl-approval-2\n"
+MAX_ALLOW_HOSTS = 500
 _DIGEST = re.compile(r"[0-9a-f]{32}")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}")
 MAX_FILE = 1_000_000
@@ -45,10 +48,13 @@ def _utc_text(moment):
     return moment.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def digest_of(plan_bytes, topics_bytes, allow_bytes):
-    """The digest of the three files: the first 32 hex characters of the SHA-256 of their exact bytes, each framed by its name and length so that where one ends and the next begins cannot be moved."""
+def digest_of(plan_bytes, topics_bytes, allow_bytes, fingerprint_hex):
+    """The digest of the three files and of the behaviour fingerprint: the first 32 hex characters of the SHA-256 of their exact bytes, each framed by its name and length so that where one ends and the next
+    begins cannot be moved. **The full fingerprint is in it**, so the digest the owner confirms is also what the code and the model settings were when the summary was read."""
+    if not isinstance(fingerprint_hex, str) or not _FINGERPRINT.fullmatch(fingerprint_hex):
+        raise KbError("the fingerprint is 64 lowercase hexadecimal characters")
     h = hashlib.sha256(DIGEST_LINE)
-    for name, data in (("plan", plan_bytes), ("topics", topics_bytes), ("allow", allow_bytes)):
+    for name, data in (("plan", plan_bytes), ("topics", topics_bytes), ("allow", allow_bytes), ("fingerprint", fingerprint_hex.encode("ascii"))):
         h.update(b"%s:%d:" % (name.encode("ascii"), len(data)))
         h.update(data)
         h.update(b"\n")
@@ -56,7 +62,7 @@ def digest_of(plan_bytes, topics_bytes, allow_bytes):
 
 
 def _tree(root):
-    """`[(repository-relative path, bytes, mtime)]` for every regular file under `root` except `__pycache__` folders and `.pyc` files; anything that is not a plain file or folder is an error."""
+    """`[(repository-relative path, bytes, mtime)]` for every regular file under `root` except the contents of `__pycache__` folders; anything that is not a plain file or folder, and a `.pyc` outside a `__pycache__` folder, is an error."""
     found = []
 
     def walk(folder, rel):
@@ -72,8 +78,9 @@ def _tree(root):
                 if name != "__pycache__":
                     walk(entry.path, rel + name + "/")
             elif entry.is_file(follow_symlinks=False):
-                if not name.endswith(".pyc"):
-                    found.append((rel + name, entry.path))
+                if name.endswith(".pyc"):                   # Python imports a bytecode file that sits beside the code with no source, and it is in no fingerprint
+                    raise KbError("the engine's code holds a bytecode file outside a __pycache__ folder, which Python would run without its source")
+                found.append((rel + name, entry.path))
             else:
                 raise KbError("the engine's code holds something that is neither a file nor a folder")
 
@@ -176,7 +183,10 @@ def _inputs(plan_path):
         raise KbError(f"the allow file cannot be read ({e.strerror})") from None
     else:
         allow_text = _read(plan["allow"], "the allow file")
-    return plan, plan_text, topics, topics_text, _allow_hosts(allow_text), allow_text
+    hosts = _allow_hosts(allow_text)
+    if len(hosts) > MAX_ALLOW_HOSTS:
+        raise KbError(f"the allow file holds {len(hosts)} hosts, more than the {MAX_ALLOW_HOSTS} that the summary can list in full: shorten it")
+    return plan, plan_text, topics, topics_text, hosts, allow_text
 
 
 def _clean(text, limit=200):
@@ -225,8 +235,9 @@ def render_summary(plan, topics, allow_hosts, fingerprint_hex, date):
         f"Judgement: threshold: {plan['threshold'] if plan['threshold'] is not None else 'not set; a run refuses to fetch until one is set'}; at least {plan['min_chars']} characters of text.",
         f"moves by the model's pick: {_switch(plan['model_pick'])}.",
         f"  allow file: {len(allow_hosts)} host{'' if len(allow_hosts) == 1 else 's'}"
-        + (" (a public list cannot block these; only your blacklist can): " + ", ".join(_clean(h, 80) for h in allow_hosts[:20]) + (" and more" if len(allow_hosts) > 20 else "") if allow_hosts else "") + ".",
-        f"Code and model settings: fingerprint {fingerprint_hex[:12]}; the engine's code last changed on {date}. The fingerprint is taken when you approve. Any later change to the engine's code, its schemas, or the "
+        + (" (a public list cannot block these; only your blacklist can), every one listed:" if allow_hosts else "") + ("" if allow_hosts else "."),
+        *[f"    {_clean(h, 253)}" for h in allow_hosts],
+        f"Code and model settings: fingerprint {fingerprint_hex[:12]}; the engine's code last changed on {date}. The digest on the last line covers the whole fingerprint, so code or model settings that change between your reading this and your approving are refused. Any later change to the engine's code, its schemas, or the "
         "model settings of the card, placement, embedding and crawl-query tasks stops every run until you approve again. A change to your blacklist does not need a new approval; a change to the allow file does.",
     ]
     return "\n".join(lines)
@@ -341,8 +352,8 @@ def approve(index_root, cfg, plan_path, digest=None, is_tty=None, say=print, kb_
     plan, plan_text, topics, topics_text, allow_hosts, allow_text = _inputs(plan_path)
     now = now or datetime.datetime.now(datetime.timezone.utc)
     plan_bytes, topics_bytes, allow_bytes = plan_text.encode("utf-8"), topics_text.encode("utf-8"), allow_text.encode("utf-8")
-    current = digest_of(plan_bytes, topics_bytes, allow_bytes)
     fingerprint_hex, date = fingerprint(cfg, kb_root)
+    current = digest_of(plan_bytes, topics_bytes, allow_bytes, fingerprint_hex)
     text = render_summary(plan, topics, allow_hosts, fingerprint_hex, date) + "\ndigest: " + current
     if digest is None:
         return text, current
@@ -353,7 +364,7 @@ def approve(index_root, cfg, plan_path, digest=None, is_tty=None, say=print, kb_
     if not is_tty():
         raise KbError("crawl-approve with a digest takes the owner's approval from a terminal; run it in your own terminal (`crawl-approve` with no digest prints the summary and needs none)")
     if digest != current:
-        raise KbError("the plan, topics or allow file is not the one with that digest (it changed since you read it, or the digest is another's): run `crawl-approve` again, read the summary and give its digest")
+        raise KbError("the plan, topics or allow file, or the engine's code or model settings, are not the ones with that digest (they changed since you read the summary, or the digest is another's): run `crawl-approve` again, read the summary and give its digest")
     files = {"plan.txt": plan_bytes, "topics.txt": topics_bytes, "allow.txt": allow_bytes, "fingerprint": fingerprint_hex.encode("ascii") + b"\n", "summary.txt": text.encode("utf-8") + b"\n"}
     _store(index_root, current, files)
     try:
@@ -419,9 +430,9 @@ def load_approved(index_root, cfg, kb_root=None):
     allow_b = _strict_read(os.path.join(folder, "allow.txt"), MAX_FILE)
     stored = _strict_read(os.path.join(folder, "fingerprint"), 65)
     _strict_read(os.path.join(folder, "summary.txt"), MAX_FILE)
-    if digest_of(plan_b, topics_b, allow_b) != digest:
-        raise NotApproved(UNTRUSTED)
     if len(stored) != 65 or stored[-1:] != b"\n" or not _FINGERPRINT.fullmatch(stored[:-1].decode("ascii", "replace")):
+        raise NotApproved(UNTRUSTED)
+    if digest_of(plan_b, topics_b, allow_b, stored[:-1].decode("ascii")) != digest:
         raise NotApproved(UNTRUSTED)
     try:
         now_fingerprint = fingerprint(cfg, kb_root)[0]
@@ -433,5 +444,7 @@ def load_approved(index_root, cfg, kb_root=None):
         plan = crawlplan.parse_plan(plan_b.decode("utf-8"))
     except (KbError, UnicodeDecodeError):
         raise NotApproved(UNTRUSTED) from None
-    return {"plan": plan, "digest": digest, "fingerprint": now_fingerprint, "plan_path": os.path.join(folder, "plan.txt"), "topics_path": os.path.join(folder, "topics.txt"),
-            "allow_path": os.path.join(folder, "allow.txt"), "folder": folder}
+    topics_path, allow_path = os.path.join(folder, "topics.txt"), os.path.join(folder, "allow.txt")
+    plan["topics"], plan["allow"] = topics_path, allow_path          # a step reads what was approved, never the owner's live files
+    return {"plan": plan, "digest": digest, "fingerprint": now_fingerprint, "plan_path": os.path.join(folder, "plan.txt"), "topics_path": topics_path, "allow_path": allow_path,
+            "folder": folder}

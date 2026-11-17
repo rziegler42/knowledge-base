@@ -1,6 +1,6 @@
 # Run the steps of the unattended crawl: lists, refill, fetch, scan, convert, judge, card, proposal and move
 
-Status: Proposed
+Status: In Progress
 Created: 2026-11-16
 Candidate: none (no roadmap holds a candidate for it: the crawl is specified in `docs/specs/population.md`, which the owner approved as the design to build; adding a candidate is the owner's own change of direction)
 Specs: docs/specs/population.md, docs/specs/pipeline.md, docs/specs/shelf.md
@@ -265,4 +265,17 @@ Plan review: three rounds of the review engine (`ask-codex`; the bound of 3 is u
 
 ## Result
 
-Empty until work starts.
+### Increment A — Harden the approval: bytecode, approved copies, the fingerprint in the digest, all allow hosts (verified, not committed)
+
+- Changed `engine/kb/crawlapprove.py` and `engine/kb/crawlrun.py`, and their tests (`test_crawlapprove` 62 tests, `test_crawlrun` 70; with `test_crawlguard` and `test_crawlplan`, 246 tests together, OK).
+- **The digest, exactly (recipe 2):** the first 32 hex characters of the SHA-256 of `kb-crawl-approval-2` and a line feed, then for `plan`, `topics`, `allow` and `fingerprint`, in that order, `<name>:<decimal length>:<the bytes>` and a line feed; `fingerprint` is the 64 lowercase hex characters of R1's behaviour fingerprint (so the digest now changes with one byte of the engine's code or of the named model settings). `digest_of(plan_bytes, topics_bytes, allow_bytes, fingerprint_hex)` refuses a fingerprint that is not 64 lowercase hex. The stored folder, `current` and the five file names are R1's, unchanged. An approval made under recipe 1 does not match and is refused with `the approval cannot be trusted: approve again`.
+- **F2:** `approve` computes the fingerprint first and the digest after it; with `--digest`, code or model settings that changed since the summary was read refuse and store nothing, and the message names the engine's code and model settings among what may have changed; `load_approved` checks the stored fingerprint file against the digest before it compares it with the code now, so a fingerprint forged to match changed code fails the digest (tested).
+- **F3:** `load_approved` returns the plan with `topics` and `allow` set to the approved copies' paths (tested by editing the live files after the approval); `blacklist` stays the owner's live file, as the spec has it.
+- **F9:** the summary lists every allow host, one a line, cleaned; an allow file of over 500 hosts is refused for approval with the count (tested at 500 and 501, nothing stored).
+- **F1:** `crawl-run` refuses (exit 3, one `refuse` line, before the approval is read) unless Python's bytecode folder (`sys.pycache_prefix`, or the argument tests give) is a folder of the owner's, not a link, mode 700, **given as a full path**, outside the engine's code and not holding it, by resolved names; the dry run says so. A child-process test shows the danger (a planted unchecked-hash `.pyc` over unchanged source runs without the prefix) and the protection (with `-X pycache_prefix` the source runs and the bytecode goes to the private folder).
+- **The caveat the review made me say plainly: the check is a tripwire and not the defence.** By the time `crawl-run` makes it, Python has already imported `kb.__main__` and these modules from wherever its bytecode folder pointed. What protects is the command that starts the process: **the scheduler's text (Increment N) carries `-X pycache_prefix`**, and the supervised run must be started with it by hand. The refusal catches a run started without it.
+- **A residual closed in this increment:** a `.pyc` that sits outside a `__pycache__` folder is importable with no source and is in no fingerprint, so it is now an **error** in the fingerprint (and so a refusal of a run); the contents of a `__pycache__` folder remain left out, since the prefix keeps them from being read. The real engine tree has none.
+- Deliberate breaks: 50 single mutations of the two modules with bytecode caching off; 2 survive, both equivalent (a `.strip()` on a bytecode-folder name that `lstat` already refuses, and an owner-uid check a single-account test cannot reach). Real gaps closed by tests: the private-file and the symlinked-parent forms of a bad prefix, the code folder itself as the prefix, the default code folder, a relative prefix, the dry run's duplicate line, the summary's wording, a forged stored fingerprint.
+- Review (`reviewer`, one exchange): no blocking finding. **Applied:** the tripwire caveat (docstring and this Result), a stray `.pyc` beside the code is an error, a relative prefix is refused, the code-change message is tested by its own words. **Decided, not changed:** the check does not look at the parent folders' modes of the bytecode folder (the stated threat is a planted file in the tree).
+- **For the owner:** `docs/specs/population.md` (line 132) still says the digest is of the plan, topics and allow files; it is now of those and the fingerprint, and the spec should say so. The file is not in this plan's Scope, so I have not changed it; say if you want that one sentence corrected in the commit of this increment.
+- Not run: the rest of the engine's tests (run once at the end of the plan).

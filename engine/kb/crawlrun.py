@@ -3,7 +3,8 @@
 `run(cfg)` is `crawl-run`. It takes no plan argument: the plan is the approved one (`crawlapprove.load_approved`). It makes **the spec's checks in order** and any failure ends the run with one `refuse` log line and an exit code:
 
 1. the run lock (held by another run: exit 0, nothing printed, one `refuse` line that says `a run is in progress`);
-2. the approved plan, its digest and the behaviour fingerprint, and a judgement `threshold` (exit 3);
+2. the approved plan, its digest and the behaviour fingerprint, and a judgement `threshold` (exit 3); and, first, **the interpreter's bytecode folder**: the tree's own `__pycache__` is not in the fingerprint, so the run
+   refuses unless Python was started with `-X pycache_prefix=<a private folder of the owner's outside the engine's code>` (`prefix_problem`);
 3. the stop file (3); 4. the breaker (4); 5. the disk floors (3);
 6. the ceilings (not a refusal: an exhausted ceiling only limits new fetches, which the run says in the log);
 7. the model server (a failure is a refusal, 3, and counts toward `model_down_minutes`; once the server has been down longer than that, the breaker trips and the run exits 4).
@@ -17,6 +18,7 @@ exit code a real run would have if the checks it cannot make (the lock, the mode
 import datetime
 import os
 import sqlite3
+import stat
 import sys
 from types import SimpleNamespace
 
@@ -35,9 +37,37 @@ class BreakerTripped(Exception):
 
 
 class _Refuse(Exception):
-    def __init__(self, code, reason, check):
+    def __init__(self, code, reason, check, shown=False):
         super().__init__(reason)
-        self.code, self.reason, self.check = code, reason, check
+        self.code, self.reason, self.check, self.shown = code, reason, check, shown
+
+
+_FROM_SYS = object()
+
+
+def _kb_root(kb_root):
+    return kb_root or os.path.dirname(os.path.abspath(crawlapprove.__file__))
+
+
+def prefix_problem(prefix, kb_root=None):
+    """Why the interpreter's bytecode folder cannot be trusted, or `None` if it can. The tree's own `__pycache__` is not in the fingerprint, so a run must read its bytecode from a private folder of the owner's
+    that is outside the engine's code (`python3 -X pycache_prefix=<folder>`), or not run (finding F1 of the security review of plan R1). **This is a tripwire and not the defence:** by the time `crawl-run` makes
+    the check, Python has already imported the modules that make it, from wherever its bytecode folder pointed. What keeps planted bytecode from running is the command line that starts the process (the scheduler's
+    text, which a later increment prints); the check refuses a run that was started without it."""
+    if isinstance(prefix, str) and prefix.strip() and not os.path.isabs(prefix):
+        return "the bytecode folder (pycache_prefix) must be given as a full path, not a relative one"
+    if not isinstance(prefix, str) or not prefix.strip():
+        return "the engine is not running with a private bytecode folder: start it as python3 -X pycache_prefix=<a private empty folder> -m kb crawl-run"
+    try:
+        info = os.lstat(prefix)
+    except OSError:
+        return "the bytecode folder (pycache_prefix) cannot be examined"
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        return "the bytecode folder (pycache_prefix) must be a folder of yours that only you can use (mode 700), and not a link"
+    folder, tree = os.path.realpath(prefix), os.path.realpath(_kb_root(kb_root))
+    if folder == tree or folder.startswith(tree + os.sep) or tree.startswith(folder + os.sep):
+        return "the bytecode folder (pycache_prefix) must be outside the engine's code and not hold it"
+    return None
 
 
 def _utc_now():
@@ -79,9 +109,10 @@ def _fetch_ceiling(used_limit):
     return used >= limit
 
 
-def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvfs=os.statvfs, probe=None, steps=None):
+def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvfs=os.statvfs, probe=None, steps=None, pycache_prefix=_FROM_SYS):
     """Make a run. Returns the exit code: 0 done (or the run lock held by another run), 3 refused, 4 the breaker is tripped. `now` fixes the clock (tests); `say` and `warn` print to the output and the error stream;
-    `steps` maps a point name to a function that gets a context (`run`, `index_root`, `cfg`, `plan`, `log`, `clock`, `conn`)."""
+    `steps` maps a point name to a function that gets a context (`run`, `index_root`, `cfg`, `plan`, `log`, `clock`, `conn`). `pycache_prefix` is the interpreter's bytecode folder (`sys.pycache_prefix`, read when it is not given)."""
+    prefix = sys.pycache_prefix if pycache_prefix is _FROM_SYS else pycache_prefix
     steps = dict(steps or {})
     unknown = sorted(set(steps) - set(POINTS))
     if unknown:
@@ -91,7 +122,7 @@ def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvf
     clock = (lambda: now) if now is not None else _utc_now
     index_root, bulk_root = cfg["index_root"], cfg["bulk_root"]
     if dry_run:
-        return _dry_run(cfg, clock(), say, kb_root, statvfs)
+        return _dry_run(cfg, clock(), say, kb_root, statvfs, prefix)
     started = clock()
     log = crawllog.Log(index_root, crawllog.new_run_id(started), clock=clock)
     lock = None
@@ -104,7 +135,7 @@ def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvf
             log.write("refuse", "held", reason="a run is in progress", now=clock())
             return EXIT_DONE
         try:
-            plan, conn = _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe)
+            plan, conn = _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe, prefix)
         except _Refuse as r:
             return _refused(log, clock, warn, r)
         try:
@@ -122,8 +153,12 @@ def _refused(log, clock, warn, refusal):
     return refusal.code
 
 
-def _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe):
-    """Checks 2 to 7. Returns the approved plan and an open connection to the queue; raises `_Refuse` at the first that fails."""
+def _checks(cfg, index_root, bulk_root, log, clock, kb_root, statvfs, probe, prefix):
+    """Checks 2 to 7. Returns the approved plan and an open connection to the queue; raises `_Refuse` at the first that fails. The bytecode folder is part of the second: the code that is approved is only the
+    code that runs if no planted bytecode can be read."""
+    problem = prefix_problem(prefix, kb_root)
+    if problem:
+        raise _Refuse(EXIT_REFUSED, problem, "approved")
     try:
         approved = crawlapprove.load_approved(index_root, cfg, kb_root=kb_root)
     except crawlapprove.NotApproved as e:
@@ -198,7 +233,7 @@ def _steps(cfg, index_root, plan, conn, log, clock, steps):
 
 # ---- --dry-run
 
-def _dry_run(cfg, now, say, kb_root, statvfs):
+def _dry_run(cfg, now, say, kb_root, statvfs, prefix):
     """Print each check, its result, what a real run would do next and its exit code in words; change nothing and make no request."""
     index_root, bulk_root = cfg["index_root"], cfg["bulk_root"]
     plan = None
@@ -215,6 +250,11 @@ def _dry_run(cfg, now, say, kb_root, statvfs):
             if check == "lock":
                 show(check, "not taken in a dry run (a real run takes it, and exits quietly if another run holds it)")
             elif check == "approved":
+                problem = prefix_problem(prefix, kb_root)
+                if problem:
+                    say(f"the bytecode folder: would refuse: {problem}")
+                    raise _Refuse(EXIT_REFUSED, problem, check, shown=True)
+                say("the bytecode folder: private, and outside the engine's code")
                 plan = _check_plan(_dry_approved(cfg, index_root, kb_root, show))
             elif check == "stop":
                 if crawlguard.stop_requested(index_root):
@@ -237,7 +277,8 @@ def _dry_run(cfg, now, say, kb_root, statvfs):
                 show(check, "a real run would ask it to answer one short embedding (not asked in a dry run)")
         except _Refuse as r:
             outcome = (r.code, r.reason)
-            show(check, f"would refuse: {r.reason}")
+            if not r.shown:
+                show(check, f"would refuse: {r.reason}")
     if outcome is None:
         say("then a real run would: " + "; ".join(name.replace("_", " ") for name in POINTS) + f" (the steps that attach there are not built yet), at each looking at the stop file, with up to {plan['batch']} new candidates")
     code, reason = outcome if outcome is not None else (EXIT_DONE, "")

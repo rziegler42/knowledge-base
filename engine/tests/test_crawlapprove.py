@@ -44,7 +44,9 @@ def reference_fingerprint(kb_root, cfg):
     for folder, names, files in os.walk(kb_root):
         names[:] = sorted(n for n in names if n not in skipped)
         for name in files:
-            if not name.endswith(".pyc"):
+            if name.endswith(".pyc"):
+                raise ValueError("a bytecode file outside __pycache__")
+            if True:
                 full = os.path.join(folder, name)
                 found.append(("engine/kb/" + os.path.relpath(full, kb_root).replace(os.sep, "/")).encode("utf-8") + b"\0" + full.encode("utf-8"))
     pieces = [b"kb-fingerprint-1\n"]
@@ -80,7 +82,7 @@ class Case(unittest.TestCase):
         self.cfg = config()
         self.kb = os.path.join(self.dir, "kb")
         for rel, data in {"a.py": b"print(1)\n", "b.py": b"x = 2\n", "schemas/card.json": b"{}", "data/shelf-schema.json": b"[]", "sub/deep/c.py": b"c = 3\n",
-                          "__pycache__/a.cpython-315.pyc": b"junk", "stray.pyc": b"junk"}.items():
+                          "__pycache__/a.cpython-315.pyc": b"junk"}.items():
             full = os.path.join(self.kb, rel)
             os.makedirs(os.path.dirname(full), exist_ok=True)
             with open(full, "wb") as f:
@@ -161,11 +163,29 @@ class Fingerprint(Case):
         os.rename(os.path.join(self.kb, "b.py"), os.path.join(self.kb, "c.py"))
         self.assertNotEqual(crawlapprove.fingerprint(self.cfg, self.kb)[0], base)
 
-    def test_a_pyc_file_a_pycache_folder_and_the_order_of_the_filesystem_do_not_matter(self):
+    def test_a_bytecode_file_outside_a_pycache_folder_is_an_error_because_python_would_run_it_without_its_source(self):
+        for rel in ("stray.pyc", os.path.join("sub", "new.pyc"), os.path.join("sub", "deep", "x.pyc")):
+            path = os.path.join(self.kb, rel)
+            with open(path, "wb") as f:
+                f.write(b"another")
+            with self.subTest(rel=rel):
+                with self.assertRaises(KbError) as caught:
+                    crawlapprove.fingerprint(self.cfg, self.kb)
+                self.assertIn("bytecode", str(caught.exception))
+            os.remove(path)
+        crawlapprove.fingerprint(self.cfg, self.kb)
+
+    def test_a_run_refuses_when_a_bytecode_file_was_planted_beside_the_code_after_the_approval(self):
+        self.approved()
+        with open(os.path.join(self.kb, "planted.pyc"), "wb") as f:
+            f.write(b"x")
+        with self.assertRaises(crawlapprove.NotApproved) as caught:
+            self.load()
+        self.assertIn("approve again", str(caught.exception))
+
+    def test_the_contents_of_a_pycache_folder_and_the_order_of_the_filesystem_do_not_matter(self):
         base = crawlapprove.fingerprint(self.cfg, self.kb)[0]
         with open(os.path.join(self.kb, "__pycache__", "a.cpython-315.pyc"), "wb") as f:
-            f.write(b"another")
-        with open(os.path.join(self.kb, "sub", "new.pyc"), "wb") as f:
             f.write(b"another")
         os.makedirs(os.path.join(self.kb, "sub", "__pycache__"))
         with open(os.path.join(self.kb, "sub", "__pycache__", "z.py"), "wb") as f:
@@ -272,21 +292,39 @@ class Digest(Case):
         self.assertEqual(self.approve()[1], base)
 
     def test_the_framing_cannot_be_confused_by_where_one_file_ends_and_the_next_begins(self):
-        a = crawlapprove.digest_of(b"ab", b"c", b"d")
-        b = crawlapprove.digest_of(b"a", b"bc", b"d")
-        c = crawlapprove.digest_of(b"ab", b"cd", b"")
-        self.assertEqual(len({a, b, c, crawlapprove.digest_of(b"abc", b"d", b"")}), 4)
-        self.assertEqual(a, crawlapprove.digest_of(b"ab", b"c", b"d"))
+        fp = "0" * 64
+        a = crawlapprove.digest_of(b"ab", b"c", b"d", fp)
+        b = crawlapprove.digest_of(b"a", b"bc", b"d", fp)
+        c = crawlapprove.digest_of(b"ab", b"cd", b"", fp)
+        self.assertEqual(len({a, b, c, crawlapprove.digest_of(b"abc", b"d", b"", fp)}), 4)
+        self.assertEqual(a, crawlapprove.digest_of(b"ab", b"c", b"d", fp))
+        self.assertNotEqual(a, crawlapprove.digest_of(b"ab", b"c", b"d", "1" + "0" * 63))
+        for bad in ("", "0" * 63, "G" * 64, "A" * 64, None, 5):
+            with self.assertRaises(KbError):
+                crawlapprove.digest_of(b"ab", b"c", b"d", bad)
 
     def test_the_digest_equals_a_second_implementation_of_the_recipe(self):
-        framed = b"kb-crawl-approval-1\n" + b"plan:2:ab\n" + b"topics:1:c\n" + b"allow:0:\n"
-        self.assertEqual(crawlapprove.digest_of(b"ab", b"c", b""), hashlib.sha256(framed).hexdigest()[:32])
+        fp = "ab" * 32
+        framed = b"kb-crawl-approval-2\n" + b"plan:2:ab\n" + b"topics:1:c\n" + b"allow:0:\n" + b"fingerprint:64:" + fp.encode() + b"\n"
+        self.assertEqual(crawlapprove.digest_of(b"ab", b"c", b"", fp), hashlib.sha256(framed).hexdigest()[:32])
 
-    def test_the_digest_does_not_cover_the_fingerprint(self):
+    def test_the_digest_covers_the_full_fingerprint_of_the_code_and_the_named_model_settings(self):
         self.set_plan()
         base = self.approve()[1]
-        with open(os.path.join(self.kb, "a.py"), "ab") as f:
-            f.write(b"# changed")
+        for rel in ("a.py", "schemas/card.json", "sub/deep/c.py"):
+            full = os.path.join(self.kb, rel)
+            before = open(full, "rb").read()
+            with open(full, "ab") as f:
+                f.write(b"# changed")
+            self.assertNotEqual(self.approve()[1], base, rel)
+            with open(full, "wb") as f:
+                f.write(before)
+            self.assertEqual(self.approve()[1], base, rel)
+        self.cfg["models"]["gpt"]["model"] = "another"
+        self.assertNotEqual(self.approve()[1], base)
+        self.cfg["models"]["gpt"]["model"] = "gpt"
+        self.assertEqual(self.approve()[1], base)
+        self.cfg["models"]["unused"]["model"] = "another"                      # a setting the fingerprint does not name
         self.assertEqual(self.approve()[1], base)
 
 
@@ -511,17 +549,34 @@ class Storing(Case):
         self.approve(digest)
         self.assertFalse(os.path.exists(target))
 
-    def test_approving_the_same_plan_again_after_the_code_changed_replaces_the_fingerprint(self):
+    def test_code_that_changed_between_the_summary_and_the_digest_is_refused_and_the_message_says_so(self):
         self.set_plan()
         digest = self.approve()[1]
-        self.approve(digest)
+        with open(os.path.join(self.kb, "a.py"), "ab") as f:
+            f.write(b"# changed after the summary was read")
+        with self.assertRaises(KbError) as caught:
+            self.approve(digest)
+        self.assertIn("the engine's code or model settings", str(caught.exception))
+        self.assertFalse(os.path.exists(self.crawl("approved")))
+        self.cfg["models"]["gpt"]["model"] = "another"
+        fresh = self.approve()[1]
+        self.cfg["models"]["gpt"]["model"] = "gpt"
+        with self.assertRaises(KbError):
+            self.approve(fresh)
+
+    def test_approving_after_the_code_changed_makes_a_new_approval_and_the_old_one_stops_being_current(self):
+        self.set_plan()
+        first = self.approve()[1]
+        self.approve(first)
         with open(os.path.join(self.kb, "a.py"), "ab") as f:
             f.write(b"# changed")
-        self.approve(digest)
-        with open(os.path.join(self.crawl("approved", digest), "fingerprint"), "rb") as f:
-            self.assertEqual(f.read(), crawlapprove.fingerprint(self.cfg, self.kb)[0].encode() + b"\n")
-        self.assertEqual(sorted(n for n in os.listdir(self.crawl("approved")) if n != "current"), [digest])
-        self.load()
+        with self.assertRaises(crawlapprove.NotApproved):
+            self.load()                                                       # the old approval no longer holds for the changed code
+        second = self.approve()[1]
+        self.assertNotEqual(first, second)
+        self.approve(second)
+        self.assertEqual(self.load()["digest"], second)
+        self.assertEqual(sorted(n for n in os.listdir(self.crawl("approved")) if n != "current"), sorted([first, second]))
 
     def test_a_new_plan_leaves_the_old_approved_copy_and_moves_current(self):
         self.set_plan()
@@ -814,6 +869,86 @@ class Loading(Case):
             self.assertIsInstance(e, KbError)
             self.assertLess(len(str(e)), 200)
             self.assertNotIn(self.dir, str(e))
+
+
+class Hardening(Case):
+    """Findings F2, F3 and F9 of the security review of plan R1."""
+
+    def test_the_plan_a_step_gets_names_the_approved_copies_of_the_topics_and_the_allow_file_and_not_the_live_ones(self):
+        self.approved()
+        with open(self.topics, "a", encoding="utf-8") as f:
+            f.write("a topic added after the approval\n")
+        with open(self.allow, "a", encoding="utf-8") as f:
+            f.write("evil.example\n")
+        loaded = self.load()
+        self.assertEqual(loaded["plan"]["topics"], loaded["topics_path"])
+        self.assertEqual(loaded["plan"]["allow"], loaded["allow_path"])
+        self.assertEqual(open(loaded["plan"]["allow"], encoding="utf-8").read(), ALLOW_TEXT)
+        self.assertNotIn("evil.example", open(loaded["plan"]["allow"], encoding="utf-8").read())
+        self.assertNotIn("a topic added", open(loaded["plan"]["topics"], encoding="utf-8").read())
+        self.assertEqual(loaded["plan"]["blacklist"], self.black)             # the blacklist is the owner's and is read afresh
+
+    def test_an_approval_made_under_the_first_recipe_of_the_digest_is_refused_and_says_to_approve_again(self):
+        self.approved()
+        new = self.load()["digest"]
+        folder = self.crawl("approved", new)
+        planb, topicsb, allowb = (open(os.path.join(folder, n), "rb").read() for n in ("plan.txt", "topics.txt", "allow.txt"))
+        h = hashlib.sha256(b"kb-crawl-approval-1\n")
+        for name, data in (("plan", planb), ("topics", topicsb), ("allow", allowb)):
+            h.update(b"%s:%d:" % (name.encode("ascii"), len(data)))
+            h.update(data)
+            h.update(b"\n")
+        old = h.hexdigest()[:32]
+        self.assertNotEqual(old, new)
+        os.chmod(self.crawl("approved"), 0o700)
+        os.rename(folder, self.crawl("approved", old))
+        os.chmod(self.crawl("approved", "current"), 0o600)
+        with open(self.crawl("approved", "current"), "w") as f:
+            f.write(old + "\n")
+        os.chmod(self.crawl("approved", "current"), 0o400)
+        with self.assertRaises(crawlapprove.NotApproved) as caught:
+            self.load()
+        self.assertIn("approve again", str(caught.exception))
+
+    def test_a_stored_fingerprint_that_was_changed_to_match_changed_code_is_refused_because_the_digest_covers_it(self):
+        self.approved()
+        digest = self.load()["digest"]
+        with open(os.path.join(self.kb, "a.py"), "ab") as f:
+            f.write(b"# changed")
+        forged = crawlapprove.fingerprint(self.cfg, self.kb)[0]
+        folder = self.crawl("approved", digest)
+        os.chmod(folder, 0o700)
+        path = os.path.join(folder, "fingerprint")
+        os.chmod(path, 0o600)
+        with open(path, "wb") as f:
+            f.write(forged.encode() + b"\n")
+        os.chmod(path, 0o400)
+        os.chmod(folder, 0o500)
+        with self.assertRaises(crawlapprove.NotApproved):
+            self.load()
+
+    def test_the_summary_lists_every_allow_host_one_a_line_and_says_how_many(self):
+        hosts = [f"host{i}.example" for i in range(60)]
+        self.put("allow.txt", "\n".join(hosts) + "\n")
+        self.set_plan()
+        text, _ = self.approve()
+        for host in hosts:
+            self.assertIn("    " + host + "\n", text + "\n", host)
+        self.assertIn("60 hosts", text)
+        self.assertIn("every one listed", text)
+        self.assertNotIn("and more", text)
+
+    def test_an_allow_file_with_more_hosts_than_a_summary_lists_in_full_is_refused_for_approval(self):
+        limit = crawlapprove.MAX_ALLOW_HOSTS
+        self.assertEqual(limit, 500)
+        self.put("allow.txt", "\n".join(f"h{i}.example" for i in range(limit)) + "\n")
+        self.set_plan()
+        self.assertIn(f"{limit} hosts", self.approve()[0])
+        self.put("allow.txt", "\n".join(f"h{i}.example" for i in range(limit + 1)) + "\n")
+        with self.assertRaises(KbError) as caught:
+            self.approve()
+        self.assertIn(str(limit + 1), str(caught.exception))
+        self.assertFalse(os.path.exists(self.crawl("approved")))
 
 
 class Wiring(Case):

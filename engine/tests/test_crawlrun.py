@@ -8,8 +8,12 @@ import contextlib
 import datetime
 import json
 import os
+import py_compile
+import importlib.util
 import sqlite3
 import stat
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -24,6 +28,9 @@ CHECKS = ("lock", "approved", "stop", "breaker", "disk", "ceilings", "model")
 POINTS = ("lists", "earlier_work", "refill", "fetch")
 PLAN_TEXT = "[limits]\nbatch = 4\nfetches_per_day = 3\n[judge]\nthreshold = 0.4\n"
 TOPICS = "[core weight=10]\nverification\n"
+
+
+DEFAULT = object()
 
 
 class Reading:
@@ -50,6 +57,8 @@ class Case(unittest.TestCase):
         self.cfg = config(self.index, self.bulk)
         self.kb = os.path.join(self.dir, "kb")
         os.makedirs(self.kb)
+        self.prefix = os.path.join(self.dir, "pyc")
+        os.mkdir(self.prefix, 0o700)
         with open(os.path.join(self.kb, "a.py"), "w") as f:
             f.write("print(1)\n")
         self.files = os.path.join(self.dir, "files")
@@ -85,9 +94,10 @@ class Case(unittest.TestCase):
         self.probe_calls += 1
         return self.probe_ok
 
-    def do_run(self, now=NOW, dry_run=False, steps=None, statvfs=None, probe=None):
+    def do_run(self, now=NOW, dry_run=False, steps=None, statvfs=None, probe=None, prefix=DEFAULT):
         return crawlrun.run(self.cfg, dry_run=dry_run, now=now, say=self.out.append, warn=self.err.append, kb_root=self.kb,
-                            statvfs=statvfs or (lambda path: Reading(self.free)), probe=probe or self.probe, steps=steps)
+                            statvfs=statvfs or (lambda path: Reading(self.free)), probe=probe or self.probe, steps=steps,
+                            pycache_prefix=self.prefix if prefix is DEFAULT else prefix)
 
     def crawl(self, *parts):
         return os.path.join(self.index, "crawl", *parts)
@@ -148,6 +158,109 @@ class Case(unittest.TestCase):
             return False
         lock.release()
         return True
+
+
+class Bytecode(Case):
+    """Finding F1 of the security review: bytecode planted in the tree's own `__pycache__` is not in the fingerprint, so a run reads its bytecode from a private folder outside the tree or does not run."""
+
+    def test_a_run_without_a_bytecode_prefix_is_refused_before_the_approval_is_read(self):
+        spies = self.spies()
+        self.assertEqual(self.do_run(prefix=None), 3)
+        lines = self.refusals()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("pycache_prefix", lines[0]["reason"])
+        self.assertEqual([l["step"] for l in self.log_lines()], ["refuse"])
+        self.assertGreaterEqual(spies["lock"].call_count, 1)
+        for name in ("approved", "stop", "breaker", "disk", "ceilings"):
+            self.assertEqual(spies[name].call_count, 0, name)
+        self.assertEqual(self.probe_calls, 0)
+        self.assertEqual(len(self.err), 1)
+        self.assertTrue(self.lock_is_free())
+
+    def test_a_prefix_that_is_not_a_private_folder_of_ours_outside_the_code_is_refused(self):
+        link = os.path.join(self.dir, "link")
+        os.symlink(self.prefix, link)
+        loose = os.path.join(self.dir, "loose")
+        os.mkdir(loose, 0o700)
+        os.chmod(loose, 0o770)
+        readable = os.path.join(self.dir, "readable")
+        os.mkdir(readable, 0o700)
+        os.chmod(readable, 0o750)
+        afile = os.path.join(self.dir, "afile")
+        open(afile, "w").close()
+        private_file = os.path.join(self.dir, "private-file")
+        open(private_file, "w").close()
+        os.chmod(private_file, 0o700)                                            # private, but not a folder
+        os.chmod(self.kb, 0o700)                                                 # the code folder itself is private, so only its place refuses it
+        inside = os.path.join(self.kb, "cache")
+        os.mkdir(inside, 0o700)
+        alias = os.path.join(self.dir, "alias")
+        os.symlink(self.dir, alias)
+        through_a_link = os.path.join(alias, "kb", "cache")                       # inside the code folder, by a path that only a resolved name shows
+        relative = os.path.relpath(self.prefix)                                  # a real private folder, named relative to the working folder
+        self.assertFalse(os.path.isabs(relative))
+        bad = ["", " ", relative, afile, private_file, link, loose, readable, os.path.join(self.dir, "nowhere"), inside, through_a_link, self.kb, self.dir, os.path.dirname(self.dir), 5, b"x"]
+        for prefix in bad:
+            with self.subTest(prefix=str(prefix)[-20:]):
+                before = len(self.refusals())
+                self.assertEqual(self.do_run(prefix=prefix), 3)
+                self.assertEqual(len(self.refusals()), before + 1)
+                self.assertNotIn(self.dir, self.refusals()[-1]["reason"])
+        self.assertEqual(self.do_run(), 0)                                    # and the good one runs
+
+    def test_the_engines_own_code_folder_is_the_default_place_a_prefix_may_not_be_in(self):
+        self.assertIsNone(crawlrun.prefix_problem(self.prefix, self.kb))
+        inside = os.path.join(self.kb, "cache")
+        os.mkdir(inside, 0o700)
+        with mock.patch.object(crawlrun.crawlapprove, "__file__", os.path.join(self.kb, "crawlapprove.py")):
+            self.assertIsNone(crawlrun.prefix_problem(self.prefix))
+            self.assertIn("outside the engine's code", crawlrun.prefix_problem(inside))
+
+    def test_without_the_argument_the_interpreter_setting_is_read_each_time(self):
+        with mock.patch.object(sys, "pycache_prefix", None):
+            self.assertEqual(crawlrun.run(self.cfg, now=NOW, say=self.out.append, warn=self.err.append, kb_root=self.kb, statvfs=lambda p: Reading(self.free), probe=self.probe), 3)
+        with mock.patch.object(sys, "pycache_prefix", self.prefix):
+            self.assertEqual(crawlrun.run(self.cfg, now=NOW, say=self.out.append, warn=self.err.append, kb_root=self.kb, statvfs=lambda p: Reading(self.free), probe=self.probe), 0)
+
+    def test_the_command_refuses_when_the_interpreter_was_started_without_a_prefix(self):
+        from kb import __main__ as cli
+        with mock.patch.object(cli.config, "load", return_value=self.cfg), mock.patch.object(sys, "pycache_prefix", None), mock.patch("sys.stderr") as err:
+            self.assertEqual(cli.main(["crawl-run"]), 3)
+        self.assertIn("pycache_prefix", "".join(c.args[0] for c in err.write.call_args_list))
+
+    def test_a_dry_run_names_the_bytecode_folder_and_says_what_a_real_run_would_do(self):
+        self.do_run(dry_run=True)
+        text = "\n".join(self.out)
+        self.assertIn("bytecode", text)
+        self.assertNotIn("would refuse", text)
+        self.out.clear()
+        self.assertEqual(self.do_run(dry_run=True, prefix=None), 0)
+        text = "\n".join(self.out)
+        self.assertIn("would refuse", text.split("the bytecode")[1] if "the bytecode" in text else text)
+        self.assertIn("would exit 3 (refused)", text)
+        self.assertIn("not reached", text)
+        self.assertEqual(text.count("would refuse"), 1)                       # said once, not again under the approved plan
+        self.assertFalse(os.path.exists(self.crawl("log")))
+
+    def test_a_planted_bytecode_file_over_unchanged_source_runs_without_the_prefix_and_not_with_it(self):
+        tree = os.path.join(self.dir, "tree")
+        os.makedirs(os.path.join(tree, "kb"))
+        open(os.path.join(tree, "kb", "__init__.py"), "w").close()
+        source = os.path.join(tree, "kb", "probe.py")
+        with open(source, "w") as f:
+            f.write("VALUE = 'the source'\n")
+        evil = os.path.join(self.dir, "evil.py")
+        with open(evil, "w") as f:
+            f.write("VALUE = 'planted bytecode'\n")
+        py_compile.compile(evil, cfile=importlib.util.cache_from_source(source), invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH, doraise=True)
+        code = "import sys; sys.path.insert(0, sys.argv[1]); import kb.probe as m; print(m.VALUE)"
+        without = subprocess.run([sys.executable, "-I", "-c", code, tree], capture_output=True, text=True, timeout=60)
+        self.assertEqual(without.stdout.strip(), "planted bytecode", without.stderr)               # the danger the check closes
+        cache = os.path.join(self.dir, "private-cache")
+        os.mkdir(cache, 0o700)
+        with_prefix = subprocess.run([sys.executable, "-I", "-X", f"pycache_prefix={cache}", "-c", code, tree], capture_output=True, text=True, timeout=60)
+        self.assertEqual(with_prefix.stdout.strip(), "the source", with_prefix.stderr)
+        self.assertTrue(os.listdir(cache))                                                         # the bytecode went to the private folder
 
 
 class Passing(Case):
@@ -308,7 +421,7 @@ class Refusals(Case):
     def test_without_a_warn_function_the_refusal_goes_to_the_error_stream_and_not_the_output(self):
         open(os.path.join(self.index, "crawl.stop"), "w").close()
         with mock.patch("sys.stderr") as err, mock.patch("sys.stdout") as out:
-            crawlrun.run(self.cfg, now=NOW, kb_root=self.kb, statvfs=lambda p: Reading(self.free), probe=self.probe)
+            crawlrun.run(self.cfg, now=NOW, kb_root=self.kb, statvfs=lambda p: Reading(self.free), probe=self.probe, pycache_prefix=self.prefix)
         written = "".join(c.args[0] for c in err.write.call_args_list)
         self.assertIn("refused: the stop file is present", written)
         self.assertEqual(out.write.call_args_list, [])
