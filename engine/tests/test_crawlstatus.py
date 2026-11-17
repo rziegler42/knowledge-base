@@ -27,9 +27,10 @@ from pathlib import Path
 from unittest import mock
 
 from engine.tests import ENGINE_DIR
+from engine.tests import test_crawlapprove as crawlapprove_tests
 from engine.tests.test_store import StoreCase
 
-from kb import KbError, crawlqueue, crawlstatus as cs, textutil
+from kb import KbError, crawlbooks, crawlguard, crawllog, crawlplan, crawlqueue, crawlstate, crawlstatus as cs, textutil
 
 REPO = Path(ENGINE_DIR).parent
 SPEC = REPO / "docs" / "specs" / "population.md"
@@ -3172,6 +3173,123 @@ class StatusTest(StoreCase):
         for bad in (datetime.datetime(2026, 11, 16, 12, 0, 0), "2026-11-16T12:00:00Z", None):
             with self.subTest(now=bad), self.assertRaises(KbError):
                 self.status(now=bad)
+
+
+class WiringTest(crawlapprove_tests.Case):
+    """The status reads what the runner's own code writes, through the runner's own plan reader (Increment G). Every file here is made by the real writer in a
+    temporary folder: the approval by `crawlapprove`, the log by `crawllog`, the breaker and the lock by `crawlguard`, the counters by `crawlstate`."""
+    NOW = datetime.datetime(2026, 11, 16, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def runTest(self):  # the base class is a fixture; its own tests are in test_crawlapprove
+        pass
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(os.umask, os.umask(0o077))
+
+    def test_a_plan_approved_by_the_real_approval_is_read_through_the_real_reader(self):
+        self.approved()
+        got = cs.approved_plan(self.index, crawlplan.read_plan)
+        self.assertEqual((got["status"], got["reason"]), ("approved", None))
+        self.assertEqual(got["digest"], self.digest())
+        self.assertEqual((got["values"]["fetches_per_day"], got["values"]["timezone"], got["values"]["phishing_domains"]), (12, "local", True))
+
+    def test_every_key_the_status_takes_from_a_plan_is_a_key_of_the_real_plan_with_a_plain_value(self):
+        defaults = crawlplan.defaults()
+        for key in cs.PLAN_VALUES:
+            with self.subTest(key=key):
+                self.assertIn(key, defaults)
+                self.assertIn(type(defaults[key]), (int, float, str, bool))
+        for key, value in cs.DEFAULT_VALUES.items():
+            with self.subTest(default=key):
+                self.assertEqual(value, defaults[key])
+
+    def test_a_floor_is_in_decimal_gigabytes_as_the_runners_guard_reads_it(self):
+        self.assertEqual(cs.GIB, crawlguard.GB)
+
+    def test_the_status_of_a_real_approval_is_idle_with_the_ceilings_of_the_plan_and_the_breaker_the_approval_made(self):
+        self.approved()
+        store = types.SimpleNamespace(list_books=lambda: [])
+        got = cs.status(self.index, self.dir, read_plan=crawlplan.read_plan, store=store, now=self.NOW, statvfs=lambda path: types.SimpleNamespace(f_bavail=10 ** 9, f_frsize=4096))
+        self.assertEqual((got["plan"]["status"], got["plan"]["defaults_used"], got["plan"]["values"]["fetches_per_day"]), ("approved", False, 12))
+        self.assertEqual((got["state"]["state"], got["state"]["breaker"]["state"]), ("idle", "not_tripped"))
+
+    def test_the_log_the_real_writer_makes_is_read_whole(self):
+        log = crawllog.Log(self.index, "20261116T120000Z-abc123")
+        for step, outcome, kw in (("run_start", "ok", {}), ("fetch", "ok", dict(candidate=7, host="example.org", n=2048, seconds=1.2)),
+                                  ("capture", "ok", dict(candidate=7, book="b-1", host="example.org")), ("fail", "failed", dict(candidate=8, reason="HTTP 503", n=1)),
+                                  ("refuse", "refused", dict(reason="a run is in progress")), ("breaker", "tripped", dict(reason="8 failures in a row")),
+                                  ("run_end", "ok", dict(n=1, seconds=3))):
+            log.write(step, outcome, now=self.NOW, **kw)
+        found = cs.lines_of_day(self.index, datetime.date(2026, 11, 16), "UTC")
+        self.assertEqual((len(found["lines"]), found["bad"]), (7, {}))
+        self.assertEqual([r["candidate"] for r in found["lines"] if r["candidate"] is not None], [7, 7, 8])
+        runs = cs.count_runs(found)
+        self.assertEqual((runs["started"], runs["ended"], runs["refused"]), (1, 1, 1))
+
+    def test_a_breaker_and_a_lock_the_real_guard_writes_are_read(self):
+        self.approved()  # the approval makes the breaker file, not tripped
+        self.assertEqual(cs.breaker_state(self.index)["state"], "not_tripped")
+        crawlguard.trip(self.index, "consecutive_failures", "8 failures in a row", "r1", now=self.NOW)
+        state = cs.breaker_state(self.index)
+        self.assertEqual((state["state"], state["paused"], state["kind"], state["at"]), ("tripped", True, "consecutive_failures", "2026-11-16T12:00:00Z"))
+        crawlguard.clear(self.index, True, is_tty=lambda: True, now=self.NOW)
+        self.assertEqual(cs.breaker_state(self.index)["state"], "not_tripped")
+        held = crawlguard.acquire_run_lock(self.index, now=self.NOW, pid=4242)
+        self.assertIsNotNone(held)
+        try:
+            lock = cs.lock_state(self.index)
+        finally:
+            held.release()
+        self.assertEqual((lock["held"], lock["holder"]), (True, {"pid": 4242, "since": "2026-11-16T12:00:00Z"}))
+
+    def test_the_counters_the_real_runner_state_keeps_are_shown_against_the_plans_ceilings(self):
+        conn = crawlqueue.connect(self.index)
+        self.addCleanup(conn.close)
+        plan = {"cards_per_day": 3, "timezone": "UTC"}
+        for _ in range(2):
+            self.assertTrue(crawlstate.reserve_card(conn, plan, self.NOW))
+        day = crawlplan.day_of(self.NOW, "UTC")
+        report = cs.counters_report(conn, day, day, {"cards_per_day": 3})
+        self.assertEqual(report["card"], {"n": 2, "limit": 3, "at_or_over": False})
+
+    def test_the_day_of_the_plan_is_the_day_the_status_and_the_report_read(self):
+        zones = ("UTC", "local", "America/New_York", "Pacific/Auckland", "Asia/Kolkata", "Europe/London", "Pacific/Kiritimati", "America/St_Johns")
+        times = [datetime.datetime(2026, 11, 16, h, m, tzinfo=datetime.timezone.utc) for h in (0, 5, 11, 12, 13, 23) for m in (0, 59)]
+        times += [datetime.datetime(2026, 3, 8, 6, 59, tzinfo=datetime.timezone.utc), datetime.datetime(2026, 3, 8, 7, 0, tzinfo=datetime.timezone.utc),
+                  datetime.datetime(2026, 10, 25, 0, 59, tzinfo=datetime.timezone.utc), datetime.datetime(2026, 10, 25, 1, 0, tzinfo=datetime.timezone.utc),
+                  datetime.datetime(2026, 12, 31, 23, 59, 59, tzinfo=datetime.timezone.utc), datetime.datetime(2026, 1, 1, 0, 0, tzinfo=datetime.timezone.utc)]
+        for zone in zones:
+            for when in times:
+                with self.subTest(zone=zone, when=when.isoformat()):
+                    day = crawlplan.day_of(when, zone)
+                    self.assertEqual(cs.today_in_zone(when, zone).isoformat(), day)
+                    low, high = cs.day_bounds(datetime.date.fromisoformat(day), zone)
+                    self.assertTrue(low <= when < high)
+
+
+class BooksContractTest(StoreCase):
+    """The report reads the events the runner's own writers (`crawlbooks`) make."""
+
+    def test_the_events_the_real_writers_make_are_read_by_the_report(self):
+        from kb import crawlreport
+        digest = "0" * 32
+        source = crawlqueue.SOURCES[0]
+
+        def crawl_book(n):
+            book = self.store.create_book(title=f"A page {n}", kind="preprint", auto_filed=True)
+            crawlbooks.record_found(self.store, book, candidate=n, source=source, found_from=None, topic=None, run="r1", plan_digest=digest)
+            return book
+
+        held, rejected, unplaced, plain = (crawl_book(n) for n in range(1, 5))
+        crawlbooks.record_held(self.store, held, ["javascript", "embedded_files"])
+        crawlbooks.record_rejected(self.store, rejected, "below the threshold", 0.31, "judge")
+        crawlbooks.record_unplaced(self.store, unplaced, "no shelf fits")
+        got = crawlreport.book_facts(self.store, [held, rejected, unplaced, plain])
+        self.assertEqual([e["kinds"] for e in got["held"]], [["javascript", "embedded_files"]])
+        self.assertEqual([(e["reason"], e["score"]) for e in got["rejected"]], [("below the threshold", 0.31)])
+        self.assertEqual(sorted(e["book"] for e in got["left_default"]), sorted([unplaced, plain]))
+        self.assertEqual(crawlreport.unreviewed(self.store)["unreviewed"], 4)
 
 
 if __name__ == "__main__":
