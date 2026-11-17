@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Scope; docs/specs/population.md, “Filing and placement” and “Safeguards”",
+      "problem": "The plan calls its spec edit a correction, but the cited spec explicitly specifies one `card-embed` probe before model work and one server-level down breaker. Per-entry clocks and deferred chat probes change that specified behavior, so the plan currently drifts from the spec and bypasses the required direction checkpoint.",
+      "severity": "major",
+      "suggestion": "Treat this as a spec-direction change: stop for the owner’s direction, then revise the relevant spec text before or together with the implementation plan."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment C, step 2",
+      "problem": "The plan requires a down entry to end a step without charging a book a try, but it simultaneously accepts that `judge_book` has already recorded the failed try before the probe and leaves the remedy unspecified. This directly conflicts with the Goal and completion criterion 4.",
+      "severity": "major",
+      "suggestion": "Specify and test the exact rollback/deferred-recording mechanism so a judge failure attributed to an unavailable entry cannot consume retries or park a book."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Assumptions and constraints; Increments C and D; Completion criteria",
+      "problem": "The chat-probe decision is unresolved: the plan says the owner may instead leave chat entries unprobed and omit C/D, while its completion criteria require C/D. The plan therefore has two incompatible completion states.",
+      "severity": "major",
+      "suggestion": "Obtain and record the owner’s choice before approval, then make the increments and completion criteria match that single scope."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has unaddressed spec drift and two unresolved/contradictory implementation decisions.",
+  "verdict": "changes_needed"
+}

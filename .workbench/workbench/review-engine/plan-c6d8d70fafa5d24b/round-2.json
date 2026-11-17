@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Goal and Deferred work",
+      "problem": "The goal promises coverage for each model entry the crawl uses and explicitly includes `crawl-query`, but the deferred-work section excludes its probe. The increments and completion criteria likewise never cover it, leaving the plan with conflicting scope.",
+      "severity": "major",
+      "suggestion": "Either narrow the goal, title, and completion criteria to the three implemented stages and explicitly exclude `crawl-query`, or add its failure/probe/clock behavior and tests to the plan."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Assumptions and constraints; Increment A steps 2–3; Increment D step 2",
+      "problem": "The proposed `entries_down` map and `note_entry` are keyed by task, although the stated outcome is one clock per model entry. Multiple tasks may resolve to the same configured entry, so separate task clocks can duplicate probes and let the same down entry have inconsistent clocks.",
+      "severity": "major",
+      "suggestion": "Resolve each task to its configured entry name before recording or probing, persist clocks keyed by that entry identity, and add tests where two tasks share one entry to prove a single clock and probe."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The earlier changes are present, but the plan still has an unresolved `crawl-query` scope conflict and does not define clocks by actual model-entry identity.",
+  "verdict": "changes_needed"
+}

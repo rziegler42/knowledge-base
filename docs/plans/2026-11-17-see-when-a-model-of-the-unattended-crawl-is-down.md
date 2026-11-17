@@ -1,0 +1,131 @@
+# See when a model of the unattended crawl is down: a probe and a down clock for each entry the crawl uses
+
+Status: Proposed
+Created: 2026-11-17
+Candidate: none (a correction that follows from findings: the reviews of the judge step, the move step and the assembly of `2026-11-16-run-the-steps-of-the-unattended-crawl` found that the crawl sees only one of its models going down)
+Specs: docs/specs/population.md
+
+## Goal
+
+The unattended crawl calls several model entries: the embedding entries `card-embed` and `place-embed`, and the chat entries of the tasks `card-notes`, `card`, `card-check`, `card-more` and `place` (the optional task `crawl-query` is not covered: its failure gives plain queries and is not a failure of the run). Today the run asks one question about the models, at its start: does `card-embed` answer one short embedding (`crawlguard.probe_model`)? The answer feeds one down clock (`model_down_since` in `crawl/guard.json`), which trips the breaker as `model_down` when the server has not answered for longer than `model_down_minutes`.
+
+That leaves three faults, each found in a review and each recorded in the Results of the plan above:
+
+- **A chat model that is down alone is invisible.** The start probe answers (the embedding model is up), so the run goes on, each failing book is charged a failed try and is parked after `retries`, and a poison book repeats its proposal lines. The clock that a step starts (the cards step and the move step do start it) is cleared at the start of the next run by the probe's answer, so it can never reach `model_down_minutes`.
+- **The judge's model is not the one probed.** The judge embeds with `place-embed`; the probe asks `card-embed`. If the two are on different servers, the probe can answer while the judge fails (the failures then count toward the `stage_bound`, not toward the down clock), and the reverse.
+- **A failed call is charged to the book even when the server is the cause**, until the next run's probe says otherwise.
+
+When this plan is done:
+
+- the down clock is kept **for each entry** (`crawl/guard.json` holds the entries that have been seen down, each with the time it was first seen down);
+- a step whose model call fails **probes the entry that failed** (one short call of that entry), notes the answer in that entry's clock, and, if the entry does not answer, ends the step without charging the books a try; an entry that has been down for longer than `model_down_minutes` trips the breaker as `model_down`;
+- the start of a run probes `card-embed` as it does now and **also each entry that is down in the file**, and clears an entry's clock only when that entry answers; so a chat model that fails alone is followed from run to run until it answers or the breaker trips;
+- a healthy system makes **no chat call for a probe**: a chat entry is called only after one of its calls has failed.
+
+## Scope
+
+**Changed:** `engine/kb/crawlguard.py` (the state of the clocks, `note_entry`, `probe_entry`), `engine/kb/crawlrun.py` (`_model`, the start-of-run check), `engine/kb/crawlsteps.py` (the judge step), `engine/kb/crawljudge.py` (one argument: whether `judge_book` charges the failed try itself), `engine/kb/crawlcards.py` (the cards step) and `engine/kb/crawlmove.py` (the move step), with their tests (`test_crawlguard`, `test_crawlrun`, `test_crawlsteps`, `test_crawljudge`, `test_crawlcards`, `test_crawlmove`); `README.md` and `docs/specs/population.md`.
+
+**This plan changes what the spec says about a safeguard, and so its approval is the owner's word on that change (the `change-direction` checkpoint).** The sentences of `docs/specs/population.md` that change are two. In "The order of one run", check 1: "before any model step, that `ned` answers (one call of the existing `embed` on one short text; failing for longer than the plan's `model_down_minutes` trips the breaker)" becomes: before any model step, that `card-embed` answers (as now) **and each model entry that an earlier run found down answers; an entry that has not answered for longer than `model_down_minutes` trips the breaker**. In "Safeguards", the circuit breaker's `model_down_minutes` is counted for each entry, not for the server as one. The rest of the spec's text changes only where it states what was built (Increment D). Approving this plan approves those two sentences; if the owner does not want them changed, the plan is not approved.
+
+**Not changed:** `crawlstatus.py` and `crawlreport.py` (they do not read `guard.json`; a check at the start of Increment A confirms it), `models.py`, `cardqueue.py`, `placement.py`, the plan's keys (`model_down_minutes` keeps its meaning and its default of 30), and every step's own rules about what is a failed try.
+
+## Non-goals
+
+- A probe of every entry at every run. That would call and load each chat model on the owner's model server (`ned`) every 15 minutes, and the card queue's design is to load each model once. A chat model is probed only after it has failed.
+- A change of what a failed try is, of `retries`, or of the `stage_bound` rules of the steps.
+- A new plan key. The one limit remains `model_down_minutes`.
+- Any change to the owner's model server, the bridge or the models' settings.
+
+## Assumptions and constraints
+
+- A **probe of an entry is one short call of that entry**: for an embedding entry, `models.embed` on a short text; for a chat entry, `models.call` on a short fixed prompt that carries no book text. It is made only after a call of that entry has failed, or at the start of a run for an entry that the file says is down. It sends nothing of the owner's and nothing from a page.
+- The entries that a failed call names are known to the step: the judge uses `place-embed`; the move step uses `place-embed` (the proposal's embedding) and the chat entry of the task `place`; the cards step uses the entries of `card-notes`, `card` and `card-check` (and `card-more` if set). A step that cannot tell which of several entries failed probes each of them once.
+- **The state file changes shape.** `crawl/guard.json` now holds `{"model_down_since": null or a time, "history": [...]}`; it will hold also `"entries_down": {"<entry name>": "<time>"}`, **keyed by the name of the entry as the config gives it and not by the task** (a task is resolved to its entry with `models.choose` before anything is recorded or probed, because two tasks may name one entry, as the notes and the checks of a card may sit on one model: they then share one clock and one probe). A file in the old shape is read as the guard state of a library that has none, which `crawlguard.load_state` already does for a file it cannot use (a fresh state, with one log line that says the clock restarted). Nothing else reads the file (to be confirmed in Increment A).
+- Everything is tested with fake models; no test makes a call to a real model or reads the owner's config.
+- The probe of the chat entry is a call that costs a model load on the owner's server, once, after a failure. **The owner accepts that cost by approving this plan.** If the owner does not, the plan is changed before it is approved (Increments C and D leave out the chat entries and the Goal and the completion criteria say so); it is not approved as it stands and then cut.
+
+## Completion criteria
+
+1. `crawlguard` keeps one down clock for each entry, notes an answer or a failure for an entry, and reports the trip `model_down` for the entry that has been down for over `model_down_minutes`; the old single clock keeps its meaning for `card-embed`.
+2. `probe_entry(cfg, task)` makes one short call of the entry the task names and says whether it answered; a refusal, an error of the connection or a reply that is not usable is "did not answer"; no text of the reply is kept.
+3. A run's start probes `card-embed` and each entry the file says is down, clears the clock of an entry that answers, and does not clear the clock of one that does not; a chat model that fails alone is therefore followed across runs, and trips the breaker once it has been down for over `model_down_minutes`.
+4. The judge step, the move step and the cards step probe the entry that failed, note it in its clock, end without a counted try when it does not answer, and trip as `model_down` on its rule; a book that failed while its entry answers is charged a failed try as before.
+5. A healthy run makes no chat call for a probe (shown by a spy on the model call).
+6. The tests of the six R1 modules and of the steps pass; `wb run code-work check` passes; the engine's other tests are not changed.
+7. The owner has read the result.
+
+## Increments
+
+### Increment A — The state of the clocks, `note_entry` and `probe_entry`
+
+**Outcome:** `crawlguard` can keep a down clock for each entry, note an answer or a failure for one, and probe one entry.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/crawlguard.py`, `engine/tests/test_crawlguard.py`.
+**Steps:**
+1. Read `crawlguard.py` (`fresh_state`, `load_state`, `save_state`, `_valid_state`, `note_model`, `probe_model`), `models.py` (`choose`, `optional`, `call`, `embed`) and `crawlstatus.py` and `crawlreport.py` (to confirm that neither reads `guard.json`); write in the Result the exact new shape of the file.
+2. Tests first: a fresh state has an empty `entries_down`; a state in the old shape is read as a fresh one with `restarted` true; `note_entry(state, entry, ok, now, plan)` (`entry` is the entry's name as the config gives it) starts the clock of an entry on its first failure, keeps the first time on later failures, clears it on an answer, and returns `("model_down", reason)` once that entry has been down for over `model_down_minutes`, the reason naming the entry and no text of any reply; a name that is not an entry of the config is refused; the clocks of two entries are independent; **a helper resolves a task to its entry (`models.choose`) before anything is noted or probed, and two tasks that name one entry have one clock and one probe (a test with the notes and the checks of a card on one entry)**; `note_model` still means the clock of `card-embed`; `probe_entry(cfg, task, call=None, embed=None)` makes exactly one call, of `embed` for an embedding task and of `call` for a chat task, with a fixed short text; it is false for a missing or unset task, a `KbError`, an `OSError`, an empty or malformed reply, and true for a usable reply; no text of the reply is returned or kept; `save_state` writes the new shape whole or not at all and refuses a state that is not in it.
+3. Write the functions; deliberate breaks; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlguard engine.tests.test_crawlrun engine.tests.test_crawlstatus engine.tests.test_crawlreport`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-17-see-when-a-model-of-the-unattended-crawl-is-down#A`.
+
+### Increment B — The start of a run follows the entries that are down
+
+**Outcome:** a run's start probes `card-embed` and each entry the file says is down, and a down entry's clock is cleared only by its own answer.
+**Dependencies:** A.
+**Affected areas:** `engine/kb/crawlrun.py`, `engine/tests/test_crawlrun.py`.
+**Steps:**
+1. Read `crawlrun._model` and the check 7 of the run, and write in the Result what a run does with each answer.
+2. Tests first: with nothing down, the start makes the one probe it makes now and no chat call; with an entry down in the file, the start probes that entry too (a spy on `probe_entry`), clears its clock when it answers, leaves it when it does not, and trips the breaker (exit 4, the next run refused) when it has been down for over the limit; an entry that answers while `card-embed` fails keeps the run refused (exit 3) as now; the `refuse` line names the task and holds no reply text; a state in the old shape starts the clocks afresh with the one line that says so.
+3. Write the change; deliberate breaks; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlrun engine.tests.test_crawlguard`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#B`.
+
+### Increment C — The judge step and the move step probe the entry that failed
+
+**Outcome:** a failed judgement or proposal asks whether its own entry answers, and a down entry ends the step without a counted try.
+**Dependencies:** A, B.
+**Affected areas:** `engine/kb/crawlsteps.py` (the judge step), `engine/kb/crawljudge.py`, `engine/kb/crawlmove.py`, `engine/tests/test_crawlsteps.py`, `engine/tests/test_crawljudge.py`, `engine/tests/test_crawlmove.py`.
+**Steps:**
+1. Read the two steps' handling of a failed call (`_model_answers`, `_note_model`, `embedding_trouble`) and `judge_book`'s `fail_step`, and write in the Result which entry each probes.
+2. **The mechanism that keeps a failure of a down entry from costing a try:** `judge_book` gets one argument, `charge` (true by default, so that its own tests and any other caller are unchanged). With `charge=False` a model failure is not charged: it returns the outcome `model_failed` with nothing recorded for the book (no `crawl_step_failed`). The judge step calls it with `charge=False`, probes `place-embed` on `model_failed`, and **only if the entry answers does it charge the failed try itself** (`crawlbooks.fail_step`, step `judge`, the same fixed reason, parking at `retries` as before); if the entry does not answer it notes the clock, charges nothing and ends the step. The move step already charges after it has seen an answer in the run; it is changed to charge only when its entry answers a probe.
+3. Tests first: with `charge=False` a model failure records nothing and returns `model_failed`, and with the default it records the failed try as before (the existing tests of `judge_book` are unchanged); the judge step probes `place-embed` (not `card-embed`) after a `model_failed`, notes it in that entry's clock, **charges the book no try and parks nothing when the entry does not answer, at any number of runs** (a test of `retries + 1` runs with the entry down: the book is still unfinished with no `crawl_step_failed`), ends the step, and charges the try when the entry answers; the move step probes the chat entry of `place` when a proposal's chat call failed and `place-embed` when its embedding call failed, and charges the book only when that entry answers; each trips `model_down` on its rule; a run in which every entry answers makes no probe call.
+4. Write the change; deliberate breaks; the `reviewer`'s reading; the Result.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlsteps engine.tests.test_crawlmove engine.tests.test_crawljudge engine.tests.test_crawlguard`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#C`.
+
+### Increment D — The cards step probes the entries of the card
+
+**Outcome:** a failed card call asks whether the entries of the card answer, and a down entry ends the step without a counted try.
+**Dependencies:** A, B.
+**Affected areas:** `engine/kb/crawlcards.py`, `engine/tests/test_crawlcards.py`.
+**Steps:**
+1. Read `crawlcards._answers` and `cardqueue.run`'s report, and write in the Result which entries a failed pass names.
+2. Tests first: after a pass with a failed call the step probes the entries of `card-notes`, `card`, `card-check` (and `card-more` if set), each once and only each distinct entry once, notes each in its clock, and ends the step with one `failed` line when one of them does not answer, charging no book a try; if all answer, the failure is the book's as now; each trips `model_down` on its rule; a pass in which nothing failed makes no probe call.
+3. Write the change; deliberate breaks; the `reviewer`'s reading; the Result. Update the README and the spec's sentences that state the probe or the clock.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlcards engine.tests.test_cardqueue engine.tests.test_crawlguard`; the breaks; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `...#D`.
+
+## Verification for the plan as a whole
+
+Each increment's recorded verification stands unless a later increment changed its inputs. At the end the tests of the six R1 modules, `test_crawlsteps`, `test_crawlfetch`, `test_crawlcards`, `test_crawlmove`, `test_crawljudge` and `test_crawlchain` are rerun together, because A changes the file that all of them read; `wb run code-work check` is run; a read-only check shows that no file outside "Scope" changed. The engine's whole suite is not rerun unless `__main__.py` or the fingerprint's inputs change beyond these files (they do: the fingerprint covers the code, so every approval is made again, as the plan above says); the owner is asked before it is run.
+
+## Risks and sensitive actions
+
+- The probe of a chat entry calls a model on the owner's server (on the owner's network, in the clear, as the other model work is) with a fixed short prompt that holds no text of a book or a page. It is made only after a failure.
+- A chat entry is loaded on the server for the probe: the cost is one load after a failure, not one at each run.
+- The state file changes shape; a file in the old shape is read as a fresh state and the clock restarts, which delays a trip by at most `model_down_minutes`.
+- A wrong "down" would end a step early and trip the breaker (the next run is refused until `crawl-clear --yes`); a wrong "up" is the present behaviour. The probe says "did not answer" only for a refusal, an error of the connection or a reply that is not usable.
+
+## Review record
+
+Empty until a review is asked for.
+
+## Deferred work
+
+- A probe of the optional entry `crawl-query` (the refill's queries): a failure there already gives plain queries and is not a failure of the run.
+- A probe of the embedding entry of the shelf vectors at every run: `place-embed` is probed after a failure only.
+
+## Result
+
+Empty until work starts.
