@@ -85,10 +85,13 @@ def attach_point(ctx, name):
         try:
             step(ctx)
         except BreakerTripped:
-            if not _breaker_file_tripped(ctx.index_root):          # the step ended the run for a bound it hit and did not write it down: the runner does
-                crawlguard.trip(ctx.index_root, "stage_bound", f"a step at {name} ended the run for a bound it hit", ctx.run, now=ctx.clock(), log=ctx.log)
+            if not _breaker_file_tripped(ctx.index_root):          # the step ended the run for a bound it hit and did not write it down (or wrote it and made the file good again): the runner does
+                try:
+                    ctx.trip("stage_bound", f"a step at {name} ended the run for a bound it hit")
+                except KbError:
+                    pass                                           # the run still ends with exit 4, and the next run reads what was written, or a file that reads as tripped
             raise
-        if _breaker_file_tripped(ctx.index_root):                  # a step that tripped the breaker and went on does not carry the run past it
+        if ctx.tripped or _breaker_file_tripped(ctx.index_root):   # a step that tripped the breaker and went on does not carry the run past it, and one that made the file good again does not either
             raise BreakerTripped()
     return True
 
@@ -109,9 +112,9 @@ def _fetch_ceiling(used_limit):
     return used >= limit
 
 
-def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvfs=os.statvfs, probe=None, steps=None, pycache_prefix=_FROM_SYS):
+def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvfs=os.statvfs, probe=None, steps=None, pycache_prefix=_FROM_SYS, secrets=()):
     """Make a run. Returns the exit code: 0 done (or the run lock held by another run), 3 refused, 4 the breaker is tripped. `now` fixes the clock (tests); `say` and `warn` print to the output and the error stream;
-    `steps` maps a point name to a function that gets a context (`run`, `index_root`, `cfg`, `plan`, `log`, `clock`, `conn`). `pycache_prefix` is the interpreter's bytecode folder (`sys.pycache_prefix`, read when it is not given)."""
+    `steps` maps a point name to a function that gets a context (`run`, `index_root`, `cfg`, `plan`, `log`, `clock`, `conn`, `steps`, `secrets`, `tripped`, and `trip(kind, reason)`, the one way a step trips the breaker). `pycache_prefix` is the interpreter's bytecode folder (`sys.pycache_prefix`, read when it is not given). `secrets` are values (the key a run loaded) that no log line, breaker reason or step may hold."""
     prefix = sys.pycache_prefix if pycache_prefix is _FROM_SYS else pycache_prefix
     steps = dict(steps or {})
     unknown = sorted(set(steps) - set(POINTS))
@@ -124,7 +127,7 @@ def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvf
     if dry_run:
         return _dry_run(cfg, clock(), say, kb_root, statvfs, prefix)
     started = clock()
-    log = crawllog.Log(index_root, crawllog.new_run_id(started), clock=clock)
+    log = crawllog.Log(index_root, crawllog.new_run_id(started), secrets=secrets, clock=clock)
     lock = None
     try:
         try:
@@ -139,7 +142,7 @@ def run(cfg, dry_run=False, now=None, say=print, warn=None, kb_root=None, statvf
         except _Refuse as r:
             return _refused(log, clock, warn, r)
         try:
-            return _steps(cfg, index_root, plan, conn, log, clock, steps)
+            return _steps(cfg, index_root, plan, conn, log, clock, steps, secrets)
         finally:
             conn.close()
     finally:
@@ -214,8 +217,15 @@ def _model(cfg, index_root, plan, state, log, clock, probe):
         raise _Refuse(EXIT_REFUSED, "the model server does not answer, or the model settings are off", "model")
 
 
-def _steps(cfg, index_root, plan, conn, log, clock, steps):
-    ctx = SimpleNamespace(cfg=cfg, index_root=index_root, plan=plan, conn=conn, log=log, run=log.run, clock=clock, steps=steps)
+def _steps(cfg, index_root, plan, conn, log, clock, steps, secrets=()):
+    ctx = SimpleNamespace(cfg=cfg, index_root=index_root, plan=plan, conn=conn, log=log, run=log.run, clock=clock, steps=steps, secrets=tuple(secrets), tripped=False)
+
+    def trip(kind, reason):
+        """Trip the breaker for this run (the only way a step does): the run remembers it, whatever happens to the file afterwards."""
+        ctx.tripped = True                      # remembered before the write: a trip that fails half way is still a trip
+        return crawlguard.trip(index_root, kind, reason, log.run, now=clock(), log=log)
+
+    ctx.trip = trip
     code, reason = EXIT_DONE, "done"
     try:
         for name in POINTS:
@@ -225,6 +235,9 @@ def _steps(cfg, index_root, plan, conn, log, clock, steps):
     except BreakerTripped:
         code, reason = EXIT_BREAKER, "the circuit breaker was tripped"
     except Exception:
+        if ctx.tripped:                                            # a step that tripped the breaker and then failed: the run ends as a tripped one, with no text of the failure
+            log.write("run_end", "tripped", reason="a step failed after the circuit breaker was tripped", now=clock())
+            return EXIT_BREAKER
         log.write("run_end", "failed", reason="a step failed", now=clock())
         raise
     log.write("run_end", "tripped" if code == EXIT_BREAKER else "ok", reason=reason, now=clock())

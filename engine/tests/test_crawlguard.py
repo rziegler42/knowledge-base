@@ -4,8 +4,10 @@ The run lock (`crawl.lock`), the stop file (`crawl.stop`), the breaker file (`cr
 probe and `crawl-clear`. Every test uses a temporary index root, injected clocks, free-space readings and model calls; nothing reads the owner's files or reaches a server.
 Run them with `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlguard`."""
 import datetime
+import inspect
 import json
 import os
+import re
 import signal
 import sqlite3
 import stat
@@ -233,12 +235,12 @@ class StopFile(Case):
 
 class Breaker(Case):
     def test_a_breaker_is_written_in_the_interface_form_and_read_back(self):
-        crawlguard.write_breaker(self.index, False, "", "", "", now=NOW)
+        crawlguard._write_breaker(self.index, False, "", "", "", now=NOW)
         self.assertEqual(self.read_breaker_file(), {"tripped": False, "reason": "", "kind": "", "at": "2026-11-16T12:00:00Z", "run": ""})
         self.assertEqual(stat.S_IMODE(os.stat(self.crawl("breaker.json")).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(self.crawl()).st_mode), 0o700)
         self.assertFalse(crawlguard.read_breaker(self.index)["tripped"])
-        crawlguard.write_breaker(self.index, True, "why", "model_down", "run-1", now=NOW)
+        crawlguard._write_breaker(self.index, True, "why", "model_down", "run-1", now=NOW)
         got = crawlguard.read_breaker(self.index)
         self.assertEqual(got, {"tripped": True, "reason": "why", "kind": "model_down", "at": "2026-11-16T12:00:00Z", "run": "run-1"})
 
@@ -303,17 +305,17 @@ class Breaker(Case):
         self.assertFalse(crawlguard.read_breaker(self.index)["tripped"])
 
     def test_the_file_is_written_whole_or_not_at_all(self):
-        crawlguard.write_breaker(self.index, False, "", "", "", now=NOW)
+        crawlguard._write_breaker(self.index, False, "", "", "", now=NOW)
         before = open(self.crawl("breaker.json"), "rb").read()
         with mock.patch.object(crawlguard.os, "replace", side_effect=OSError(28, "No space left on device")):
             with self.assertRaises(KbError):
-                crawlguard.write_breaker(self.index, True, "x", "stage_bound", "r", now=NOW)
+                crawlguard._write_breaker(self.index, True, "x", "stage_bound", "r", now=NOW)
         self.assertEqual(open(self.crawl("breaker.json"), "rb").read(), before)
         self.assertEqual([n for n in os.listdir(self.crawl()) if n != "breaker.json"], [])
         real = os.fsync
         with mock.patch.object(crawlguard.os, "fsync", side_effect=OSError(5, "io")):
             with self.assertRaises(KbError):
-                crawlguard.write_breaker(self.index, True, "x", "stage_bound", "r", now=NOW)
+                crawlguard._write_breaker(self.index, True, "x", "stage_bound", "r", now=NOW)
         self.assertEqual(open(self.crawl("breaker.json"), "rb").read(), before)
         self.assertEqual([n for n in os.listdir(self.crawl()) if n != "breaker.json"], [])
         del real
@@ -321,7 +323,7 @@ class Breaker(Case):
     def test_a_write_that_the_system_makes_in_pieces_is_still_whole(self):
         real = os.write
         with mock.patch.object(crawlguard.os, "write", lambda fd, data: real(fd, bytes(data)[:3])):
-            crawlguard.write_breaker(self.index, True, "a reason of some length", "model_down", "run-1", now=NOW)
+            crawlguard._write_breaker(self.index, True, "a reason of some length", "model_down", "run-1", now=NOW)
         self.assertEqual(crawlguard.read_breaker(self.index)["reason"], "a reason of some length")
 
     def test_a_breaker_that_is_written_over_a_link_replaces_the_link_and_does_not_write_through_it(self):
@@ -329,7 +331,7 @@ class Breaker(Case):
         target = os.path.join(self.dir, "elsewhere.json")
         open(target, "w").write("keep")
         os.symlink(target, self.crawl("breaker.json"))
-        crawlguard.write_breaker(self.index, False, "", "", "", now=NOW)
+        crawlguard._write_breaker(self.index, False, "", "", "", now=NOW)
         self.assertEqual(open(target).read(), "keep")
         self.assertFalse(os.path.islink(self.crawl("breaker.json")))
 
@@ -339,15 +341,15 @@ class Breaker(Case):
             base.update(kwargs)
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(KbError):
-                    crawlguard.write_breaker(self.index, base["tripped"], base["reason"], base["kind"], base["run"], now=NOW)
+                    crawlguard._write_breaker(self.index, base["tripped"], base["reason"], base["kind"], base["run"], now=NOW)
         with self.assertRaises(KbError):
-            crawlguard.write_breaker(self.index, "yes", "", "", "", now=NOW)
+            crawlguard._write_breaker(self.index, "yes", "", "", "", now=NOW)
         with self.assertRaises(KbError):
-            crawlguard.write_breaker(self.index, True, "", "model_down", "", now=datetime.datetime(2026, 11, 16))
+            crawlguard._write_breaker(self.index, True, "", "model_down", "", now=datetime.datetime(2026, 11, 16))
 
     def test_trip_records_the_kind_and_the_reason_cleaned_and_keeps_the_first_cause(self):
         for kind in KINDS:
-            crawlguard.write_breaker(self.index, False, "", "", "", now=NOW)
+            crawlguard._write_breaker(self.index, False, "", "", "", now=NOW)
             out = crawlguard.trip(self.index, kind, "a\x1b[31m red\r\nline\u202e " + "zz " * 130, "run-9", now=NOW)
             self.assertTrue(out["tripped"])
             got = crawlguard.read_breaker(self.index)
@@ -356,7 +358,7 @@ class Breaker(Case):
             self.assertTrue(got["reason"].startswith("a[31m red line"))
             self.assertNotIn("\x1b", got["reason"])
             self.assertNotIn("\u202e", got["reason"])
-        crawlguard.write_breaker(self.index, False, "", "", "", now=NOW)
+        crawlguard._write_breaker(self.index, False, "", "", "", now=NOW)
         crawlguard.trip(self.index, "model_down", "first", "r1", now=NOW)
         crawlguard.trip(self.index, "stage_bound", "second", "r2", now=NOW + datetime.timedelta(hours=1))
         got = crawlguard.read_breaker(self.index)
@@ -380,7 +382,7 @@ class Breaker(Case):
         self.assertNotIn("SECRETVALUE", open(self.crawl("breaker.json")).read())
         self.assertEqual([(l["step"], l["outcome"], l["reason"]) for l in self.log_lines()], [("breaker", "tripped", "the reason was withheld")])
         keyed = crawllog.Log(self.index, "run-9", secrets=["hunter22"])
-        crawlguard.write_breaker(self.index, False, "", "", "", now=NOW)
+        crawlguard._write_breaker(self.index, False, "", "", "", now=NOW)
         out = crawlguard.trip(self.index, "stage_bound", "failed with hunter22 in it", "run-9", now=NOW, log=keyed)
         self.assertTrue(out["tripped"])
         self.assertTrue(crawlguard.read_breaker(self.index)["tripped"])
@@ -397,9 +399,43 @@ class Breaker(Case):
                 crawlguard.trip(self.index, "model_down", "x", "r", now=NOW)
 
 
+class PrivateWriter(Case):
+    """Finding F5 of the security review: nothing a step can call writes the breaker as not tripped except `clear`."""
+
+    def test_the_writer_is_private_and_only_trip_and_clear_use_it(self):
+        self.assertFalse(hasattr(crawlguard, "write_breaker"))
+        users = sorted(name for name, f in vars(crawlguard).items() if inspect.isfunction(f) and not name.startswith("_") and "_write_breaker" in f.__code__.co_names)
+        self.assertEqual(users, ["clear", "trip"])
+        source = inspect.getsource(crawlguard)
+        self.assertEqual(len(re.findall(r'_atomic_write\(.*"breaker.json"', source)), 1)
+
+    def test_clear_is_the_only_public_way_to_not_tripped_and_it_needs_yes_and_a_terminal(self):
+        crawlguard.trip(self.index, "model_down", "x", "r", now=NOW)
+        for kwargs in ({"yes": False, "is_tty": lambda: True}, {"yes": True, "is_tty": lambda: False}):
+            with self.assertRaises(KbError):
+                crawlguard.clear(self.index, now=NOW, **kwargs)
+            self.assertTrue(crawlguard.read_breaker(self.index)["tripped"])
+        crawlguard.clear(self.index, yes=True, is_tty=lambda: True, now=NOW)
+        self.assertFalse(crawlguard.read_breaker(self.index)["tripped"])
+
+    def test_trip_screens_its_reason_against_the_secrets_of_the_log_it_is_given(self):
+        log = crawllog.Log(self.index, "run-1", secrets=["hunter22"])
+        out = crawlguard.trip(self.index, "stage_bound", "it failed with hunter22 in the text", "run-1", now=NOW, log=log)
+        self.assertEqual(out["reason"], "the reason was withheld")
+        self.assertNotIn("hunter22", open(self.crawl("breaker.json")).read())
+
+    def test_trip_screens_its_reason_against_the_secrets_the_caller_holds(self):
+        out = crawlguard.trip(self.index, "stage_bound", "it failed with hunter22 in the text", "r", now=NOW, secrets=["hunter22"])
+        self.assertEqual(out["reason"], "the reason was withheld")
+        self.assertNotIn("hunter22", open(self.crawl("breaker.json")).read())
+        crawlguard._write_breaker(self.index, False, "", "", "", now=NOW)
+        out = crawlguard.trip(self.index, "stage_bound", "it failed with hunter22 in the text", "r", now=NOW)
+        self.assertIn("hunter22", out["reason"])                                  # without the secret named, it is only text
+
+
 class Clear(Case):
     def tripped(self):
-        crawlguard.write_breaker(self.index, True, "five failures in a row", "consecutive_failures", "r1", now=NOW)
+        crawlguard._write_breaker(self.index, True, "five failures in a row", "consecutive_failures", "r1", now=NOW)
 
     def test_without_yes_nothing_changes_and_it_says_so(self):
         self.tripped()
@@ -937,7 +973,7 @@ class Wiring(Case):
 
     def test_the_clear_command_without_a_terminal_changes_nothing_and_exits_with_an_error(self):
         from kb import __main__ as cli
-        crawlguard.write_breaker(self.index, True, "x", "model_down", "r", now=NOW)
+        crawlguard._write_breaker(self.index, True, "x", "model_down", "r", now=NOW)
         before = open(self.crawl("breaker.json"), "rb").read()
         with mock.patch.object(cli.config, "load", return_value={"index_root": self.index}), mock.patch("sys.stdin") as i, mock.patch("sys.stdout") as o, mock.patch("sys.stderr"):
             i.isatty.return_value, o.isatty.return_value = False, True

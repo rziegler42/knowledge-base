@@ -94,10 +94,10 @@ class Case(unittest.TestCase):
         self.probe_calls += 1
         return self.probe_ok
 
-    def do_run(self, now=NOW, dry_run=False, steps=None, statvfs=None, probe=None, prefix=DEFAULT):
+    def do_run(self, now=NOW, dry_run=False, steps=None, statvfs=None, probe=None, prefix=DEFAULT, secrets=()):
         return crawlrun.run(self.cfg, dry_run=dry_run, now=now, say=self.out.append, warn=self.err.append, kb_root=self.kb,
                             statvfs=statvfs or (lambda path: Reading(self.free)), probe=probe or self.probe, steps=steps,
-                            pycache_prefix=self.prefix if prefix is DEFAULT else prefix)
+                            pycache_prefix=self.prefix if prefix is DEFAULT else prefix, secrets=secrets)
 
     def crawl(self, *parts):
         return os.path.join(self.index, "crawl", *parts)
@@ -378,7 +378,7 @@ class Refusals(Case):
         self.check_refusal("stop", 3, "stop file", spies)
 
     def test_a_tripped_breaker_a_missing_breaker_file_and_an_unreadable_one_are_refusals_with_exit_4(self):
-        crawlguard.write_breaker(self.index, True, "five in a row", "consecutive_failures", "r0", now=NOW)
+        crawlguard._write_breaker(self.index, True, "five in a row", "consecutive_failures", "r0", now=NOW)
         spies = self.spies()
         self.assertEqual(self.do_run(), 4)
         self.assert_checks_made(spies, "breaker")
@@ -435,7 +435,7 @@ class Refusals(Case):
 
     def test_no_refusal_makes_a_request_or_changes_a_row(self):
         for setup in (lambda: open(os.path.join(self.index, "crawl.stop"), "w").close(), lambda: setattr(self, "free", 1),
-                      lambda: crawlguard.write_breaker(self.index, True, "x", "model_down", "r", now=NOW)):
+                      lambda: crawlguard._write_breaker(self.index, True, "x", "model_down", "r", now=NOW)):
             setup()
             self.do_run()
         self.assertEqual(self.probe_calls, 0)
@@ -699,6 +699,101 @@ class Points(Case):
         self.assertTrue(self.lock_is_free())
 
 
+class Remembered(Case):
+    """Finding F5: a run that tripped the breaker ends with exit 4 whatever a step does to the file afterwards."""
+
+    def test_a_step_that_trips_through_the_context_and_then_rewrites_the_file_as_not_tripped_still_ends_the_run_with_exit_4(self):
+        reached = []
+
+        def trip_and_hide(ctx):
+            ctx.trip("stage_bound", "a stage hit a bound")
+            crawlguard._write_breaker(ctx.index_root, False, "", "", "", now=NOW)         # the file is made good again by something inside the process
+
+        code = self.do_run(steps={"lists": trip_and_hide, "earlier_work": lambda ctx: reached.append(1)})
+        self.assertEqual(code, 4)
+        self.assertEqual(reached, [])
+        self.assertEqual(self.steps_of()[-1], ("run_end", "tripped"))
+        self.assertTrue(self.lock_is_free())
+
+    def test_the_context_trip_writes_the_breaker_logs_it_and_remembers_it_for_the_run(self):
+        seen = {}
+
+        def trip(ctx):
+            seen["before"] = ctx.tripped
+            seen["record"] = ctx.trip("stage_bound", "a stage hit a bound")
+            seen["after"] = ctx.tripped
+            seen["secrets"] = ctx.secrets
+
+        self.do_run(steps={"refill": trip})
+        self.assertEqual((seen["before"], seen["after"]), (False, True))
+        self.assertEqual(seen["secrets"], ())
+        self.assertEqual((seen["record"]["tripped"], seen["record"]["kind"]), (True, "stage_bound"))
+        self.assertTrue(crawlguard.read_breaker(self.index)["tripped"])
+        self.assertEqual(crawlguard.read_breaker(self.index)["kind"], "stage_bound")
+        self.assertEqual([(l["step"], l["outcome"]) for l in self.log_lines() if l["step"] == "breaker"], [("breaker", "tripped")])
+
+    def test_a_step_that_trips_and_then_fails_ends_the_run_with_exit_4_and_logs_its_end_without_the_error_text(self):
+        def trip_then_fail(ctx):
+            ctx.trip("stage_bound", "a stage hit a bound")
+            raise KbError("a failure that quotes s3cr3t-value")
+
+        self.assertEqual(self.do_run(steps={"lists": trip_then_fail}, secrets=["s3cr3t-value"]), 4)
+        self.assertEqual(self.steps_of()[-1], ("run_end", "tripped"))
+        self.assertNotIn("s3cr3t-value", "".join(open(os.path.join(self.crawl("log"), n)).read() for n in os.listdir(self.crawl("log"))))
+        self.assertTrue(self.lock_is_free())
+        self.assertEqual(self.do_run(), 4)
+
+    def test_a_trip_that_wrote_the_file_and_then_failed_is_still_remembered_by_the_run(self):
+        def trip_that_fails_after_writing(ctx):
+            real = crawlguard.trip
+
+            def trip(*args, **kwargs):
+                real(*args, **kwargs)
+                raise KbError("the log could not be written")
+
+            with mock.patch.object(crawlrun.crawlguard, "trip", trip):
+                ctx.trip("stage_bound", "a stage hit a bound")
+
+        self.assertEqual(self.do_run(steps={"lists": trip_that_fails_after_writing}), 4)
+        self.assertTrue(crawlguard.read_breaker(self.index)["tripped"])
+
+    def test_a_step_that_trips_clears_the_file_and_gives_up_still_ends_with_exit_4_even_if_the_second_trip_cannot_be_written(self):
+        def hide_and_give_up(ctx):
+            ctx.trip("stage_bound", "a stage hit a bound")
+            crawlguard._write_breaker(ctx.index_root, False, "", "", "", now=NOW)
+            raise crawlrun.BreakerTripped()
+
+        real = crawlguard.trip
+        calls = []
+
+        def trip(*args, **kwargs):
+            calls.append(1)
+            if len(calls) > 1:
+                raise KbError("full")
+            return real(*args, **kwargs)
+
+        with mock.patch.object(crawlrun.crawlguard, "trip", trip):
+            self.assertEqual(self.do_run(steps={"lists": hide_and_give_up}), 4)
+        self.assertEqual(len(calls), 2)
+
+    def test_a_run_that_did_not_trip_is_not_marked_tripped(self):
+        seen = []
+        self.assertEqual(self.do_run(steps={"fetch": lambda ctx: seen.append(ctx.tripped)}), 0)
+        self.assertEqual(seen, [False])
+
+    def test_the_secrets_a_run_is_given_reach_its_log_and_its_trips(self):
+        def step(ctx):
+            ctx.log.write("fetch", "failed", reason=ctx.log.safe("failed after sending s3cr3t-value"))
+            ctx.trip("stage_bound", "bad with s3cr3t-value in it")
+
+        seen = []
+        self.assertEqual(self.do_run(steps={"lists": lambda ctx: (seen.append(ctx.secrets), step(ctx))}, secrets=["s3cr3t-value"]), 4)
+        self.assertEqual(seen, [("s3cr3t-value",)])
+        everything = "".join(open(os.path.join(self.crawl("log"), n)).read() for n in os.listdir(self.crawl("log"))) + open(self.crawl("breaker.json")).read()
+        self.assertNotIn("s3cr3t-value", everything)
+        self.assertIn("withheld", everything)
+
+
 class LogFailure(Case):
     def test_a_log_that_cannot_be_written_ends_the_run_and_lets_go_of_the_lock(self):
         os.makedirs(self.crawl("log"), mode=0o700)
@@ -782,7 +877,7 @@ class DryRun(Case):
         self.assertIn("stop file", text)
         self.assertEqual(text.count("not reached"), 4)                  # breaker, disk, ceilings, model server
         self.assertEqual(self.snapshot(), before)
-        crawlguard.write_breaker(self.index, True, "x", "model_down", "r", now=NOW)
+        crawlguard._write_breaker(self.index, True, "x", "model_down", "r", now=NOW)
         os.remove(os.path.join(self.index, "crawl.stop"))
         self.out.clear()
         self.do_run(dry_run=True)

@@ -7,7 +7,10 @@ spec's names. The line is made as ASCII (so a file never holds a character that 
 The text fields are cleaned of control, invisible and direction characters and cut to a length. A text that looks like a **credential** is refused, not logged: a header line (`Auth-Key: ...`, `Authorization: ...`, a cookie,
 a password or key assignment, `Bearer ...`), a run of 40 or more key characters that is not a hexadecimal digest, and any value the caller names in `secrets` (found even when a hidden character or a line break splits it).
 A refusal says that a field looked like a credential and never quotes it. A line over 8 KiB has its reason cut and says so (`[cut]`). A log that cannot be written raises `KbError`: a run that cannot log must stop. A write that fails part way (a full disk) can leave an unfinished line, so a reader skips a line that is not JSON.
-The patterns are a net; `secrets` (the key the caller holds) is the real guard.
+The patterns are a net; `secrets` (the key the caller holds) is the real guard. Beside the header, bearer and long-run shapes the net holds `Basic <base64>`, a password in the front of an address, `?key=`, `?sig=` and
+similar query values, a JWT, an AWS-style key id and the named assignments (`secret_key=`, `access_key=`, `private_key=`, `pwd=`; `client_secret=`, `auth_token=` and `AWS_SECRET_ACCESS_KEY=` are caught by the plain `secret`, `token` and `access_key` names, since `_` is a boundary). `Log.safe(text, field)` is for the steps: it gives the text as
+the log would take it, or the fixed `WITHHELD` if the log would refuse it, so that what a hostile page said never ends a run. A torn write (a full disk) can leave a file that does not end in a line feed: the next
+record then starts with one, in its own single write, so it is whole and the stub stays a line of its own that a reader skips.
 
 The folders `crawl/` and `crawl/log/` are made mode 700 and the file mode 600; a folder or file that is a link, not a plain folder or file (a folder or a pipe in the file's place included), another user's or writable by
 others is refused. This module reads no environment variable, makes no request and takes no model."""
@@ -25,12 +28,20 @@ STEPS = ("run_start", "refuse", "list_update", "discover", "enqueue", "block", "
 OUTCOMES = ("ok", "skipped", "rejected", "failed", "blocked", "held", "refused", "tripped")
 FIELDS = ("ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds")
 LIMITS = {"reason": 500, "book": 120, "host": 253}
+MARGIN = 256                    # the patterns look at the text that is logged and this much past it, so that a shape that straddles the cut is seen and the cost stays in proportion to what is logged
 LINE_MAX = 8192
 CUT = " [cut]"
 MAX_INT = 2**63 - 1
 _RUN = re.compile(r"[A-Za-z0-9._:-]{1,64}")
-_HEADER = re.compile(r"""(?i)(?:^|[^a-z0-9])(?:auth-key|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|api[-_]?key|password|passwd|secret|token|bearer)['"\]]?\s*[:=]\s*\S""")
+_HEADER = re.compile(r"""(?i)(?:^|[^a-z0-9])(?:auth-key|authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|api[-_]?key|password|passwd|secret|token|bearer|secret[_-]?key|access[_-]?key|private[_-]?key|pwd)['"\]]?\s*[:=]\s*\S""")
 _BEARER = re.compile(r"(?i)\bbearer\s+\S{8,}")
+_BASIC = re.compile(r"(?i)\bbasic\s+(?=[A-Za-z0-9+/]*(?:[0-9+]|=))[A-Za-z0-9+/]{8,}={0,2}")          # `Basic <base64>` (it holds a digit, a plus or a padding character, which an English word, or a word pair like input/output, does not)
+_USERINFO = re.compile(r"(?i)[a-z][a-z0-9+.-]*://[^/\s:@]+:[^/\s@]+@")                          # a password in the front of an address
+_HOSTUSER = re.compile(r"[^\s/@:]+:[^/\s@]+@")                                                  # the same in a host field, which has no scheme
+_QUERY = re.compile(r"(?i)[?&](?:key|apikey|api_key|sig|signature|token|password|secret|x-amz-signature|x-amz-credential|x-goog-signature)=[^&\s]{4,}")
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*")
+_AWS = re.compile(r"\b(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA)[A-Z0-9]{16}\b")
+WITHHELD = "the text was withheld"
 _LONG = re.compile(r"[A-Za-z0-9_+/=-]{40,}")
 _HEX = re.compile(r"[0-9a-fA-F]+")
 
@@ -88,14 +99,27 @@ class Log:
         if not isinstance(value, str):
             raise KbError(f"the log's {field} is text")
         squeezed = "".join(textutil.clean(value, len(value) + 1).split()).casefold()
-        for secret in self._secrets:
+        for secret in self._secrets:                                      # a named secret is looked for in the whole text, wherever it is (a plain substring search, linear)
             if secret in squeezed or secret in "".join(value.split()).casefold():
                 raise KbError(f"the log's {field} holds a value that must not be logged")
         shown = textutil.clean(value, LIMITS[field])
-        probe = textutil.clean(value, len(value) + 1)
-        if _HEADER.search(probe) or _BEARER.search(probe) or (field != "host" and any(not _HEX.fullmatch(run) for run in _LONG.findall(probe))):
-            raise KbError(f"the log's {field} looks like a credential and is not logged")
+        # The shapes are looked for in what will be logged and in a little past it, never in the whole of a text a page chose the length of (the patterns can cost the square of the text), and in the cut text
+        # itself, so that what `safe` gives back is what `write` takes.
+        for probe in (shown, textutil.clean(value, LIMITS[field] + MARGIN)):
+            shaped = any(pattern.search(probe) for pattern in (_HEADER, _BEARER, _BASIC, _USERINFO, _QUERY, _JWT, _AWS))
+            if shaped or (field == "host" and _HOSTUSER.search(probe)) or (field != "host" and any(not _HEX.fullmatch(run) for run in _LONG.findall(probe))):
+                raise KbError(f"the log's {field} looks like a credential and is not logged")
         return shown or None
+
+    def safe(self, value, field="reason"):
+        """`value` as the log would take it for `field`, or, if the log would refuse it (text that looks like a credential, a secret of the run, something that is not text), the fixed `WITHHELD`: for the steps,
+        so that what a hostile page said can be logged without a refusal ending the run. `None` and empty text give `None`."""
+        if field not in LIMITS:
+            raise KbError("the log's text fields are " + ", ".join(sorted(LIMITS)))
+        try:
+            return self._text(value, field)
+        except KbError:
+            return WITHHELD
 
     @staticmethod
     def _count(value, field):
@@ -146,11 +170,14 @@ class Log:
         except OSError as e:
             raise KbError(f"the crawl log file cannot be examined ({e.strerror})") from None
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+            fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
         except OSError as e:
             raise KbError(f"the crawl log cannot be opened ({e.strerror})") from None
         try:
+            size = os.fstat(fd).st_size
             _check_file(os.fstat(fd))
+            if size > 0 and os.pread(fd, 1, size - 1) != b"\n":       # a torn earlier write left no line end: this record starts a line of its own, in the same single write
+                data = b"\n" + data
             if os.write(fd, data) != len(data):
                 raise KbError("the crawl log line was not written whole")
         except OSError as e:

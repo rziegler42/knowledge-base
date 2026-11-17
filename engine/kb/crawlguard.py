@@ -6,7 +6,7 @@ Each guard is a small function that a run calls in the spec's order and a test c
   writes nothing, so the holder's line stands). The lock is the kernel's, so a run that dies leaves none. It differs from `catalog.lock` (which waits up to a time limit for a writer and writes nothing into the file) in being
   its own file, non-blocking, and in carrying the line. A lock file that is a link, a folder, a pipe, not ours or writable by others is refused.
 - **The stop file** `<index root>/crawl.stop`: `stop_requested` is true if the name is there, whatever it is and whatever it holds, or if it cannot be examined.
-- **The breaker** `<index root>/crawl/breaker.json`: `read_breaker` reads it strictly; a file that is missing, cannot be examined or read in its form, or says `"tripped": true` reads as **tripped**. `write_breaker` writes it
+- **The breaker** `<index root>/crawl/breaker.json`: `read_breaker` reads it strictly; a file that is missing, cannot be examined or read in its form, or says `"tripped": true` reads as **tripped**. `_write_breaker` (private) writes it
   whole or not at all. `trip` records a trip (the first cause stands while it is tripped). `clear` is `crawl-clear`: it changes nothing without `--yes` and without a terminal, and it starts the guard state afresh.
 - **The rules that trip it**, with a small state kept in `crawl/guard.json`: `record_fetch` (failures in a row, a failure share over a full window), `note_model` (the model server down longer than `model_down_minutes`),
   `bound_trip` (a stage that hits a bound).
@@ -257,8 +257,9 @@ def read_breaker(index_root):
     return record
 
 
-def write_breaker(index_root, tripped, reason, kind, run, now=None):
-    """Write the breaker whole or not at all, in the form of the plan's interface; returns the record."""
+def _write_breaker(index_root, tripped, reason, kind, run, now=None):
+    """Write the breaker whole or not at all, in the form of the plan's interface; returns the record. **Private on purpose**: the only public ways to change the file are `trip` (to tripped) and `clear` (to not
+    tripped, with `--yes` at a terminal), so that no step can make a tripped breaker good again (finding F5 of the security review)."""
     if not isinstance(tripped, bool):
         raise KbError("the breaker is tripped or not")
     if not isinstance(reason, str):
@@ -272,8 +273,9 @@ def write_breaker(index_root, tripped, reason, kind, run, now=None):
     return record
 
 
-def trip(index_root, kind, reason, run, now=None, log=None):
-    """Trip the breaker. While it is tripped, the first cause stands. With a `crawllog.Log`, the trip is logged. Returns the record that stands."""
+def trip(index_root, kind, reason, run, now=None, log=None, secrets=()):
+    """Trip the breaker. While it is tripped, the first cause stands. With a `crawllog.Log`, the trip is logged and the reason is screened with that log's secrets; without one, with `secrets`. Returns the record that
+    stands."""
     if kind not in KINDS:
         raise KbError("the breaker's kind is one of " + ", ".join(KINDS))
     record, _why = _read_breaker(index_root)
@@ -281,10 +283,10 @@ def trip(index_root, kind, reason, run, now=None, log=None):
         return record
     now = now if now is not None else _utc_now()
     try:                                  # a reason that looks like a credential is not kept: the trip is what matters
-        screened = crawllog.Log(index_root, "screen")._text(reason, "reason") or ""
+        screened = (log if log is not None else crawllog.Log(index_root, "screen", secrets=secrets))._text(reason, "reason") or ""
     except KbError:
         screened = WITHHELD
-    record = write_breaker(index_root, True, screened, kind, run, now=now)
+    record = _write_breaker(index_root, True, screened, kind, run, now=now)
     if log is not None:
         try:
             log.write("breaker", "tripped", reason=record["reason"], now=now)
@@ -304,7 +306,7 @@ def clear(index_root, yes, is_tty=None, now=None, run=None):
     name = run if run is not None else crawllog.new_run_id(now)
     crawllog.Log(index_root, name).write("breaker", "ok", reason="cleared by the owner", now=now)
     save_state(index_root, fresh_state())     # a clear is a fresh start: the first failure after it must not trip the breaker again at once
-    return write_breaker(index_root, False, "", "", "", now=now)
+    return _write_breaker(index_root, False, "", "", "", now=now)
 
 
 # ---- the rules that trip it

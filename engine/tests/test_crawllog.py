@@ -2,6 +2,7 @@
 
 One JSON line per action in `<index root>/crawl/log/crawl-YYYY-MM-DD.jsonl` (the UTC day of the line), written with one `O_APPEND` write, in the spec's fields, steps and outcomes. Every test uses a temporary index root.
 Run them with `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawllog`."""
+import contextlib
 import datetime
 import json
 import math
@@ -188,6 +189,196 @@ class Secrets(Case):
             guarded.write("fail", "failed", now=NOW, reason="s3cr3t\u200b-value")
         with self.assertRaises(KbError):
             guarded.write("fail", "failed", now=NOW, reason="s3cr3t\n-value")
+
+
+class Shapes(Case):
+    """Finding F7: credential shapes the security review found in the log's net, and ordinary text that must not be caught."""
+
+    REFUSED = ("https://s3.example.org/f?X-Amz-Signature=abcdef0123456789abcdef", "https://c.example.org/f?X-Goog-Signature=abcdef0123456789", "https://s3.example.org/f?x-amz-security-token=abcdefgh",
+               "secret_key=abc123def", "SECRET-KEY: abc", "AWS_SECRET_ACCESS_KEY=abcdef", "access_key=abcd", "access-key: abcd", "private_key=abcd", "client_secret=abcd", "pwd=hunter2",
+               "auth_token=abcd1234", "access_token: abcd1234", "refresh_token=abcd1234", "Basic dXNlcjpwYXNzd29yZA==", "basic QWxhZGRpbjpvcGVuIHNlc2FtZQ", "https://user:pass@example.org/x",
+               "ftp://admin:s3cret@host/", "https://example.org/a?key=abcd1234", "https://example.org/a?x=1&sig=abcdef", "https://example.org/a?signature=abcdef12", "https://example.org/a?access_token=abcd",
+               "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r", "AKIAIOSFODNN7EXAMPLE", "ASIAIOSFODNN7EXAMPLE", "see " + "Q1b2C3d4" * 6)
+    ALLOWED = ("basic input/output system", "basic client/server model", "basic read/write access", "https://example.org/a?auth=true", "the secret key of the table", "access key to the building", "a private key exchange protocol", "basic understanding of the methods", "the basic idea", "a page about the sig of a document",
+               "see https://example.org/path?page=2&sort=asc", "https://example.org/a/b.html", "the key is under the mat", "user@example.org wrote", "a secret garden", "token of thanks", "AKIA is a prefix",
+               "eyJ is how json starts in base64", "the tag eyJab.cd.ef is short", "digest " + "0" * 40)
+
+    def test_each_shape_the_review_found_is_refused_in_the_reason_and_the_book_and_never_quoted(self):
+        for text in self.REFUSED:
+            for field in ("reason", "book"):
+                with self.subTest(text=text[:24], field=field):
+                    with self.assertRaises(KbError) as caught:
+                        self.log.write("fail", "failed", now=NOW, **{field: text})
+                    self.assertNotIn(text[:10], str(caught.exception))
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_the_same_words_in_ordinary_text_are_taken(self):
+        for text in self.ALLOWED:
+            self.log.write("fail", "failed", now=NOW, reason=text)
+        self.assertEqual(len(self.lines()), len(self.ALLOWED))
+
+    def test_a_host_field_is_checked_for_the_shapes_that_make_sense_there_and_a_long_label_is_still_taken(self):
+        for text in ("user:pass@example.org", "secret_key=abc"):
+            with self.assertRaises(KbError):
+                self.log.write("fetch", "ok", now=NOW, host=text)
+        self.log.write("fetch", "ok", now=NOW, host="a" * 63 + ".example.org")
+        self.log.write("fetch", "ok", now=NOW, host="me@example.org")                    # an address with no password in it is not one
+
+    def test_safe_gives_the_text_cleaned_or_a_fixed_reason_and_never_raises_for_what_a_page_said(self):
+        guarded = crawllog.Log(self.index, "run-1", secrets=["hunter22"])
+        self.assertEqual(guarded.safe("a plain\x1b[0m reason"), "a plain[0m reason")
+        self.assertEqual(guarded.safe(None), None)
+        for hostile in ("Authorization: Bearer abcdefgh12345", "see hunter22 here", "https://u:p@example.org/", "k" * 50, "secret_key=abc"):
+            self.assertEqual(guarded.safe(hostile), crawllog.WITHHELD, hostile)
+        self.assertEqual(guarded.safe("y " * 400), ("y " * 400)[:crawllog.LIMITS["reason"]].rstrip())
+        for bad in (5, b"x", ["a"]):
+            self.assertEqual(guarded.safe(bad), crawllog.WITHHELD)
+        guarded.write("fail", "failed", now=NOW, reason=guarded.safe("Authorization: Bearer abcdefgh12345"))
+        self.assertEqual(self.lines()[0]["reason"], "the text was withheld")
+        self.assertEqual(guarded.safe("see hunter22 here", "book"), crawllog.WITHHELD)
+
+    def test_safe_checks_the_field_it_is_asked_about(self):
+        self.assertEqual(self.log.safe("a" * 600, "book"), "a" * crawllog.LIMITS["book"])
+        with self.assertRaises(KbError):
+            self.log.safe("x", "n")
+
+
+class Cost(Case):
+    """The reviewer's blocking finding: a hostile text must cost time in proportion to what is logged, not to what the page sent."""
+
+    def test_200_kilobytes_of_near_matches_are_screened_in_well_under_a_second_in_every_text_field(self):
+        import time
+        hostile = {"letters": "a" * 200_000, "dashes": "eyJ-" * 50_000, "dots": "a." * 100_000, "colons": "a:" * 100_000, "ats": "a@" * 100_000, "base": "Basic " + "A" * 200_000,
+                   "mixed": "x" * 100_000 + "://" + "y" * 100_000}
+        for field in ("reason", "book", "host"):
+            for name, text in hostile.items():
+                started = time.perf_counter()
+                try:
+                    self.log._text(text, field)
+                except KbError:
+                    pass
+                took = time.perf_counter() - started
+                self.assertLess(took, 1.0, f"{field} {name} took {took:.2f}s")
+
+    def test_the_patterns_never_see_more_than_the_field_limit_and_a_margin(self):
+        seen = []
+
+        class Spy:
+            def __init__(self, real):
+                self.real = real
+
+            def search(self, text):
+                seen.append(len(text))
+                return self.real.search(text)
+
+            def findall(self, text):
+                seen.append(len(text))
+                return self.real.findall(text)
+
+        patterns = ("_HEADER", "_BEARER", "_BASIC", "_USERINFO", "_QUERY", "_JWT", "_AWS", "_HOSTUSER", "_LONG")
+        with contextlib.ExitStack() as stack:
+            for name in patterns:
+                stack.enter_context(mock.patch.object(crawllog, name, Spy(getattr(crawllog, name))))
+            for field in ("reason", "book", "host"):
+                try:
+                    self.log._text("w " * 400_000, field)
+                except KbError:
+                    pass
+                self.assertLessEqual(max(seen), crawllog.LIMITS[field] + crawllog.MARGIN, field)
+                seen.clear()
+
+    def test_a_secret_far_beyond_the_cut_is_still_found_in_the_whole_text(self):
+        guarded = crawllog.Log(self.index, "run-1", secrets=["hunter22"])
+        with self.assertRaises(KbError):
+            guarded.write("fail", "failed", now=NOW, reason="x " * 5000 + "hunter22")
+        self.assertEqual(guarded.safe("x " * 5000 + "hunter22"), crawllog.WITHHELD)
+
+    def test_a_credential_shape_that_starts_a_little_past_the_cut_is_seen_by_the_margin(self):
+        text = "x " * 245 + "Authorization: Bearer abcdefgh12345"                     # starts at 490, the cut is at 500
+        with self.assertRaises(KbError):
+            self.log.write("fail", "failed", now=NOW, reason=text)
+        self.assertEqual(self.log.safe(text), crawllog.WITHHELD)
+
+    def test_what_safe_returns_is_always_taken_by_write_even_when_the_cut_makes_a_shape(self):
+        edge = "x " * 240 + "AKIA" + "B" * 16 + "CCC"                              # the cut at 500 ends right after the key id, which makes it look whole
+        with self.assertRaises(KbError):
+            self.log.write("fail", "failed", now=NOW, reason=edge)
+        shown = self.log.safe(edge)
+        self.assertEqual(shown, crawllog.WITHHELD)
+        self.log.write("fail", "failed", now=NOW, reason=shown)
+        for text in ("y " * 400 + "token: abcdef", "k" * 495 + " and more " * 10, "Basic " + "A1" * 400, "a" * 495 + "AKIAIOSFODNN7EXAMPLE"):
+            out = self.log.safe(text)
+            self.log.write("fail", "failed", now=NOW, reason=out)                    # never raises, whatever safe gave back
+
+
+class Repair(Case):
+    """Finding F6: a log file that does not end in a line feed (a torn write) must not be fused with the next record."""
+
+    def raw(self):
+        return open(self.path(), "rb").read()
+
+    def test_a_record_after_an_unfinished_line_starts_on_a_line_of_its_own_in_one_write(self):
+        self.log.write("run_start", "ok", now=NOW)
+        with open(self.path(), "ab") as f:
+            f.write(b'{"ts":"2026-11-16T12:00:00Z","run":"run-1","step":"fet')                 # a torn write: no line feed
+        writes = []
+        real = os.write
+        with mock.patch.object(crawllog.os, "write", lambda fd, data: (writes.append(bytes(data)), real(fd, data))[1]):
+            self.log.write("fetch", "ok", now=NOW, n=7)
+        self.assertEqual(len(writes), 1)
+        self.assertTrue(writes[0].startswith(b"\n{"))
+        lines = self.raw().split(b"\n")
+        self.assertEqual(lines[-1], b"")
+        self.assertEqual(json.loads(lines[-2])["n"], 7)                                         # the new record is whole
+        self.assertEqual(json.loads(lines[0])["step"], "run_start")
+        with self.assertRaises(ValueError):
+            json.loads(lines[1])                                                                # the stub stays a line of its own, which a reader skips
+
+    def test_no_line_feed_is_added_to_an_empty_file_or_to_one_that_ends_in_one(self):
+        writes = []
+        real = os.write
+        with mock.patch.object(crawllog.os, "write", lambda fd, data: (writes.append(bytes(data)), real(fd, data))[1]):
+            self.log.write("run_start", "ok", now=NOW)
+            self.log.write("fetch", "ok", now=NOW)
+        self.assertEqual([w[:1] for w in writes], [b"{", b"{"])
+        self.assertNotIn(b"\n\n", self.raw())
+
+    def test_after_a_short_write_the_next_record_repairs_the_line(self):
+        real = os.write
+        with mock.patch.object(crawllog.os, "write", lambda fd, data: real(fd, bytes(data)[:20])):
+            with self.assertRaises(KbError):
+                self.log.write("fetch", "ok", now=NOW, n=1)
+        self.assertFalse(self.raw().endswith(b"\n"))
+        self.log.write("fetch", "ok", now=NOW, n=2)
+        self.assertEqual(self.lines_skipping_bad(), [2])
+
+    def lines_skipping_bad(self):
+        out = []
+        for line in self.raw().split(b"\n"):
+            try:
+                out.append(json.loads(line)["n"])
+            except (ValueError, KeyError):
+                pass
+        return out
+
+    def test_the_file_is_still_refused_when_it_cannot_be_read_for_the_last_byte(self):
+        self.log.write("run_start", "ok", now=NOW)
+        with mock.patch.object(crawllog.os, "pread", side_effect=OSError(5, "io")):
+            with self.assertRaises(KbError):
+                self.log.write("fetch", "ok", now=NOW)
+        self.assertEqual(len(self.lines()), 1)
+
+    def test_descriptors_are_not_left_open_by_the_repair(self):
+        self.log.write("run_start", "ok", now=NOW)
+        with open(self.path(), "ab") as f:
+            f.write(b"stub")
+        before = len(os.listdir("/dev/fd"))
+        for _ in range(5):
+            self.log.write("fetch", "ok", now=NOW)
+        with mock.patch.object(crawllog.os, "pread", side_effect=OSError(5, "io")):
+            with self.assertRaises(KbError):
+                self.log.write("fetch", "ok", now=NOW)
+        self.assertEqual(len(os.listdir("/dev/fd")), before)
 
 
 class Writing(Case):
