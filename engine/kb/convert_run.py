@@ -11,8 +11,10 @@ files with plain names within limits, read back, and filed as a derived payload 
 interrupted run leaves nothing half filed. A tool cannot hide data from the limits by locking its own folders: a folder
 that cannot be listed stops the run, and removal restores the modes first.
 
-`sandbox-exec` is marked deprecated by Apple but ships with macOS. Memory is not limited, because macOS does not
-enforce address-space limits. The profile allows reading file metadata everywhere, because the system loader needs it,
+`sandbox-exec` is marked deprecated by Apple but ships with macOS. macOS does not enforce address-space limits, so
+**memory is limited only when a caller asks for it** (`rss_limit_mb`): the resident memory of the tool's process group is
+looked at every quarter of a second (`read_group_rss`) and a tool above the limit is killed with its group; a run that
+cannot read the memory does not start the tool. With no limit asked for, memory is not limited. The profile allows reading file metadata everywhere, because the system loader needs it,
 so a tool can learn whether a path exists, not what is in it."""
 import itertools
 import os
@@ -36,6 +38,8 @@ MAX_DIRS = 100
 MAX_DEPTH = 8
 STDERR_CAP = 65536
 POLL = 0.05
+RSS_POLL = 0.25          # seconds between two looks at the memory of a tool that has a limit of memory
+MAX_RSS_MB = 1_000_000   # the largest limit that is taken for one
 _NAME = re.compile(r"[A-Za-z0-9._-]{1,100}")
 
 
@@ -185,11 +189,38 @@ def _clean(text, limit):
     return textutil.clean(text, limit, tail=True)
 
 
-def run(entry, input_dir, output_dir, cfg=None):
+def read_group_rss(pgid):
+    """The resident memory, in kilobytes, of all the processes of the process group `pgid` together: 0 when there is none (the group is gone). `ps -axo pgid=,rss=` is the same on macOS and on Linux. Raises `OSError`
+    (or `subprocess.SubprocessError`, `ValueError`) when the numbers cannot be had: the caller then does not run a tool that has a limit of memory."""
+    done = subprocess.run(["ps", "-axo", "pgid=,rss="], capture_output=True, text=True, timeout=5, check=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"})
+    total, rows = 0, 0
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            continue
+        rows += 1
+        if int(parts[0]) == pgid:
+            total += int(parts[1])
+    if rows == 0:
+        raise ValueError("ps gave no rows")
+    return total
+
+
+def _rss_limit_kb(megabytes):
+    """A limit of memory in megabytes, as kilobytes: a number from 1 to a million, and not a flag."""
+    if isinstance(megabytes, bool) or not isinstance(megabytes, (int, float)) or megabytes != megabytes or not 1 <= megabytes <= MAX_RSS_MB:
+        raise KbError(f"the memory limit of a tool is a number of megabytes from 1 to {MAX_RSS_MB}")
+    return int(megabytes * 1024)
+
+
+def run(entry, input_dir, output_dir, cfg=None, rss_limit_mb=None, rss_reader=None):
     """Run an approved tool on `input_dir`, writing into the empty folder `output_dir`. Returns the files it made.
 
     Refuses a tool whose files changed since it was approved, or whose readable folders reach the config or the
-    library. Raises ToolError for a failure, an overrun or an unacceptable output."""
+    library. Raises ToolError for a failure, an overrun or an unacceptable output.
+
+    **`rss_limit_mb`, a limit of resident memory:** the memory of the tool's whole process group is looked at every quarter of a second, and a tool that goes past the limit is killed with its group. With a limit, the
+    tool does not run at all unless the memory can be read here (`rss_reader` is `read_group_rss`; tests give another). With none, nothing is looked at and the tool runs as it always has."""
     entry = approvals.validate_entry(entry)
     cfg = config.load() if cfg is None else cfg
     approvals.check_pins(entry)
@@ -205,6 +236,13 @@ def run(entry, input_dir, output_dir, cfg=None):
     timeout, limit = float(entry["timeout"]), int(entry["max_output"])
     env = {"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8", "TMPDIR": output_dir}
     label = f"{entry['name']} {entry['version']}"
+    rss_kb = None if rss_limit_mb is None else _rss_limit_kb(rss_limit_mb)
+    reader = rss_reader or read_group_rss
+    if rss_kb is not None:
+        try:
+            reader(os.getpgrp())                       # a reader that cannot read the memory of a group that exists: the limit could not be enforced, and the tool is not run
+        except Exception:
+            raise ToolError(f"{label} was not run: its limit of memory could not be enforced here") from None
 
     def limits():
         resource.setrlimit(resource.RLIMIT_FSIZE, (limit + 1, limit + 1))
@@ -238,7 +276,7 @@ def run(entry, input_dir, output_dir, cfg=None):
         dog.stdout.close()
         if line != b"ready\n":
             raise ToolError(f"{label} was stopped: its watchdog did not start")
-        last_walk = 0.0
+        last_walk = last_look = 0.0
         while proc.poll() is None:
             now = time.monotonic()
             if now - started > timeout:
@@ -251,6 +289,14 @@ def run(entry, input_dir, output_dir, cfg=None):
                     _inventory(output_dir, limit)
                 except ToolError as e:
                     raise ToolError(f"{label}: {e}") from None
+            if rss_kb is not None and now - last_look >= RSS_POLL:
+                last_look = now
+                try:
+                    used = reader(proc.pid)            # the tool's group: it was started in a session of its own
+                except Exception:
+                    raise ToolError(f"{label} was stopped: its memory could not be read") from None
+                if used > rss_kb:
+                    raise ToolError(f"{label} used more memory than its limit of {rss_limit_mb:g} MB and was stopped")
             time.sleep(POLL)
     finally:
         if proc.poll() is None:  # still ours: nothing it started may outlive it. (A reaped group id could be reused.)
@@ -288,7 +334,7 @@ def run(entry, input_dir, output_dir, cfg=None):
         raise ToolError(f"{label}: {e}") from None
 
 
-def run_to_payload(store, book_id, version_id, entry, payload_name, input_payload="original"):
+def run_to_payload(store, book_id, version_id, entry, payload_name, input_payload="original", rss_limit_mb=None):
     """Run an approved tool on a payload of a version and file its output as a derived payload, marked untrusted.
 
     The tool writes into a scratch folder in the incoming area; that folder is removed whatever happens, and the
@@ -299,7 +345,7 @@ def run_to_payload(store, book_id, version_id, entry, payload_name, input_payloa
         raise KbError(f"there is no {input_payload} payload to run the tool on")
     scratch = incoming.make_dir(store.bulk)
     try:
-        result = run(entry, input_dir, scratch)
+        result = run(entry, input_dir, scratch, rss_limit_mb=rss_limit_mb)
     finally:
         force_remove(scratch)
     if not result.files:

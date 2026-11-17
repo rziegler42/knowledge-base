@@ -58,6 +58,11 @@ class SandboxCase(StoreCase):
     def observed(self, result):
         return json.loads(result.files["observe.json"].decode())
 
+    def run_with_limit(self, limit_mb, mode, *args, reader=None, **kw):
+        shutil.rmtree(self.out, ignore_errors=True)
+        os.makedirs(self.out)
+        return convert_run.run(self.entry(mode, *args, **kw), self.inp, self.out, rss_limit_mb=limit_mb, rss_reader=reader)
+
 
 class RunnerTest(SandboxCase):
     def test_a_tool_runs_reads_its_input_and_its_output_is_collected(self):
@@ -160,6 +165,142 @@ class RunnerTest(SandboxCase):
             time.sleep(0.1)
         else:
             self.fail("the tool is still running")
+
+    def test_a_tool_that_allocates_past_the_memory_limit_is_killed_within_a_second_or_two_and_nothing_of_it_is_left(self):
+        started = time.monotonic()
+        with self.assertRaises(convert_run.ToolError) as cm:
+            self.run_with_limit(60, "allocate", 1200, 30)
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertIn("more memory than its limit of 60 MB", str(cm.exception))
+        with open(os.path.join(self.out, "pid.txt")) as f:
+            pid = int(f.read())
+        for _ in range(40):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("the tool is still running")
+
+    def test_a_tool_under_the_memory_limit_runs_as_before_and_its_output_is_collected(self):
+        result = self.run_with_limit(400, "allocate", 24, 0.6)
+        self.assertEqual(result.files["result.txt"], b"held 24 MB")
+
+    def test_a_tool_with_no_limit_asked_is_never_looked_at_and_runs_as_before(self):
+        with mock.patch.object(convert_run, "read_group_rss", side_effect=AssertionError("looked at the memory")):
+            result = self.run_tool("allocate", 24, 0.2)
+        self.assertEqual(result.files["result.txt"], b"held 24 MB")
+
+    def test_where_the_memory_cannot_be_read_the_tool_is_not_run_at_all(self):
+        def broken(pgid):
+            raise OSError("no ps here")
+
+        with self.assertRaises(convert_run.ToolError) as cm:
+            self.run_with_limit(400, "allocate", 8, 0.1, reader=broken)
+        self.assertIn("could not be enforced", str(cm.exception))
+        self.assertEqual(os.listdir(self.out), [])                                              # it never started: it left nothing
+
+    def test_a_reader_that_fails_during_the_run_stops_the_tool(self):
+        calls = []
+
+        def breaks_later(pgid):
+            calls.append(pgid)
+            if len(calls) > 1:
+                raise OSError("gone")
+            return 0
+
+        started = time.monotonic()
+        with self.assertRaises(convert_run.ToolError) as cm:
+            self.run_with_limit(400, "allocate", 8, 30, reader=breaks_later)
+        self.assertLess(time.monotonic() - started, 8)
+        self.assertIn("memory could not be read", str(cm.exception))
+
+    def test_the_reader_is_asked_about_the_tools_own_group_and_the_error_holds_nothing_the_tool_said(self):
+        asked = []
+
+        def over(pgid):
+            asked.append(pgid)
+            return 10 * 1024 * 1024 if len(asked) > 1 else 0                                    # the first look is the probe of the reader
+
+        with self.assertRaises(convert_run.ToolError) as cm:
+            self.run_with_limit(100, "allocate", 8, 30, reader=over)
+        self.assertEqual(asked[0], os.getpgrp())
+        self.assertNotEqual(asked[1], os.getpgrp())                                             # the tool's own group, not ours
+        self.assertNotIn("allocate", str(cm.exception))
+
+    def test_a_limit_that_is_not_a_number_of_megabytes_from_one_is_refused_before_anything_runs(self):
+        for bad in (0, -5, 0.5, True, False, "100", float("nan"), float("inf"), 10**9):
+            with self.subTest(repr(bad)), self.assertRaises(KbError) as cm:
+                self.run_with_limit(bad, "allocate", 8, 0.1)
+            self.assertIn("a number of megabytes from 1", str(cm.exception))                       # the refusal of the limit itself, not a tool that was killed
+            self.assertNotIsInstance(cm.exception, convert_run.ToolError)
+        self.assertEqual(os.listdir(self.out), [])
+
+    def test_the_real_reader_sees_the_memory_of_a_process_group_and_none_for_a_group_that_is_gone(self):
+        child = subprocess.Popen([sys.executable, "-c", "import time; b = bytearray(b'x') * (40 << 20); time.sleep(5)"], start_new_session=True)
+        try:
+            for _ in range(60):
+                used = convert_run.read_group_rss(child.pid)
+                if used >= 30 * 1024:
+                    break
+                time.sleep(0.1)
+            self.assertGreaterEqual(used, 30 * 1024)                                           # kilobytes
+            self.assertGreater(convert_run.read_group_rss(os.getpgrp()), 0)
+        finally:
+            child.kill()
+            child.wait()
+        self.assertEqual(convert_run.read_group_rss(child.pid), 0)
+
+    def test_a_tool_with_a_limit_is_looked_at_a_few_times_a_second_and_not_at_every_turn_of_the_loop(self):
+        looks = []
+
+        def count(pgid):
+            looks.append(time.monotonic())
+            return 0
+
+        self.run_with_limit(400, "allocate", 8, 1.5, reader=count)
+        self.assertGreaterEqual(len(looks), 3)
+        self.assertLessEqual(len(looks), 12)                                                     # a quarter of a second apart, plus the first look: not every 0.05 seconds
+        self.assertGreaterEqual(min(b - a for a, b in zip(looks[2:], looks[3:])), 0.2)
+
+    def test_the_real_reader_adds_up_every_process_of_the_group(self):
+        script = "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; b = bytearray(b\"x\") * (40 << 20); time.sleep(6)']); b = bytearray(b'x') * (40 << 20); time.sleep(6)"
+        child = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
+        try:
+            for _ in range(80):
+                used = convert_run.read_group_rss(child.pid)
+                if used >= 70 * 1024:
+                    break
+                time.sleep(0.1)
+            self.assertGreaterEqual(used, 70 * 1024)                                           # two processes of about 40 MB each
+        finally:
+            os.killpg(child.pid, 9)
+            child.wait()
+
+    def test_the_reader_skips_a_line_that_is_not_two_numbers_and_refuses_an_answer_with_no_rows(self):
+        def ps(text):
+            return subprocess.CompletedProcess([], 0, stdout=text, stderr="")
+
+        with mock.patch.object(convert_run.subprocess, "run", return_value=ps("  100  2000\nweird line\n abc 5\n 100 300\n 7 9 9\n 200 50\n")):
+            self.assertEqual(convert_run.read_group_rss(100), 2300)
+            self.assertEqual(convert_run.read_group_rss(999), 0)
+        for empty in ("", "\n", "weird line\n"):
+            with self.subTest(repr(empty)), mock.patch.object(convert_run.subprocess, "run", return_value=ps(empty)), self.assertRaises(ValueError):
+                convert_run.read_group_rss(100)
+
+    def test_run_to_payload_passes_the_limit_to_the_tool(self):
+        seen = {}
+
+        def fake_run(entry, input_dir, output_dir, cfg=None, rss_limit_mb=None, rss_reader=None):
+            seen["limit"] = rss_limit_mb
+            raise convert_run.ToolError("stop here")
+
+        book = self.store.create_book(title="A book", kind="preprint")
+        version = self.store.add_version(book, label="v1")
+        with mock.patch.object(convert_run, "run", fake_run), mock.patch.object(self.store, "payload_dir", return_value=self.inp), self.assertRaises(convert_run.ToolError):
+            convert_run.run_to_payload(self.store, book, version, {"name": "x", "version": "1"}, "derived/x", input_payload="original", rss_limit_mb=300)
+        self.assertEqual(seen["limit"], 300)
 
     def test_a_tool_that_writes_more_than_the_output_limit_is_stopped(self):
         with self.assertRaises(convert_run.ToolError) as cm:

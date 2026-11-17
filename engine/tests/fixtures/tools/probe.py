@@ -68,6 +68,13 @@ elif mode == "leave_symlink":
     write_text(os.path.join(out, "result.txt"), "fine")
 elif mode == "env":
     write_text(os.path.join(out, "env.json"), json.dumps(sorted(os.environ)))
+elif mode == "allocate":                      # allocate (and touch) MB megabytes in steps of 8, hold them for SECONDS, then finish normally
+    write_text(os.path.join(out, "pid.txt"), str(os.getpid()))
+    held = []
+    for _ in range(int(args[0]) // 8):
+        held.append(bytearray(b"x") * (8 << 20))
+    time.sleep(float(args[1]))
+    write_text(os.path.join(out, "result.txt"), f"held {len(held) * 8} MB")
 elif mode == "sleep":
     write_text(os.path.join(out, "pid.txt"), str(os.getpid()))
     time.sleep(float(args[0]))
