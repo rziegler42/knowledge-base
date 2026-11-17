@@ -4,7 +4,7 @@ Each step has its own tests. These tests run the steps **together**, as `crawlru
 server of `test_webclient` through the real shared client and the real capture, the lists from the fake downloader of `test_crawllists`, the scan, the converter and the index are fakes that file what the real ones
 file, the embedding and chat models are the fake hooks of `test_placement`, and the clock and the free space are injected. The scan, the convert, the index, the judgement, the proposal and the move are the real
 steps; **the card step is a small fake step** (`Chain.card_step`) that files a card the way `test_placement` does, because the real card queue runs its own launcher and models, which cannot be put in the same library
-with the placement hooks (a test shows that the registry uses `crawlcards.step` for the cards, and calls it with the books that were judged in). Nothing here makes a request or a model call, reads the owner's config,
+with the placement hooks (a test shows that the registry uses `crawlcards.step` for the cards, and calls it with the books that were judged in). No request leaves the machine (the tests dial a loopback server) and no model call is made; nothing reads the owner's config,
 plan, key, library or shelves, or sleeps. Run them with
 `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlchain`."""
 import contextlib
@@ -339,10 +339,12 @@ class Chain(PlaceCase, Net):
                 self.assertIn("crawl_found", names, f"an active crawl book with no crawl_found: {names}")
             else:
                 self.assertTrue({"crawl_rejected", "crawl_held", "capture_failed"} & set(names), f"a weeded book with no reason: {names}")
-                self.assertNotEqual(rows.get(book, {}).get("status"), "kept", "a weeded book with a kept row")
+                if "crawl_rejected" in names:                                       # a held book keeps its row `kept` (a book exists: spec, the queue's statuses); a rejected one does not
+                    self.assertNotEqual(rows.get(book, {}).get("status"), "kept", "a rejected book with a kept row")
         for row in self.rows():
             if row["status"] == "kept":
-                self.assertEqual(self.store.read_book(row["book_id"])["state"], "active")
+                names = self.names(row["book_id"])
+                self.assertTrue(self.store.read_book(row["book_id"])["state"] == "active" or "crawl_held" in names, f"a kept row of a weeded book that is not held: {names}")
     def lines(self):
         folder = os.path.join(self.index, "crawl", "log")
         out = []
@@ -702,7 +704,6 @@ class TheBreaker(Chain):
     def test_a_stage_that_hits_a_bound_trips_it_with_the_books_parked_and_a_run_goes_again_after_the_clear(self):
         self.set_plan(PLAN_TEXT.replace("retries = 3", "retries = 1"))                  # one failed try parks a book, so three of them in one run are a bound
         ids = [self.add(f"/p{n}")[0] for n in range(4)]
-        self.once("convert", lambda book: None)
         died = []
 
         def broken(book):
@@ -948,7 +949,7 @@ class TheOtherMachinesReaders(Mixed):
         breaker = read_json(os.path.join(self.index, "crawl", "breaker.json"))
         self.assertEqual((sorted(breaker), breaker["tripped"]), (["at", "kind", "reason", "run", "tripped"], False))
         state = read_json(os.path.join(self.index, "crawl", "guard.json"))
-        self.assertEqual(sorted(state), ["history", "model_down_since"])
+        self.assertTrue({"history", "model_down_since"} <= set(state))                 # (the file may hold more keys: the entries found down)
         for line in self.lines():
             self.assertEqual(list(line), list(crawllog.FIELDS))
             self.assertIn(line["step"], crawllog.STEPS)

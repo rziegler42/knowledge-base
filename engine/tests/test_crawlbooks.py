@@ -325,7 +325,7 @@ class Weeding(Case):
         owner = self.book(auto_filed=False)
         self.store.append_event(owner, "crawl_rejected", reason="forged", score=None, stage="judge")
         plain = self.found()
-        self.assertEqual(crawlbooks.finish_weeds(self.store), [mine, held])
+        self.assertEqual(sorted(crawlbooks.finish_weeds(self.store)), sorted([mine, held]))          # (books found in the same second come in the order of their ids, which are made in the same millisecond)
         self.assertEqual([self.store.read_book(i)["state"] for i in (mine, held, owner, plain)], ["weeded", "weeded", "active", "active"])
 
     def test_weed_does_not_overwrite_a_state_that_is_not_active(self):
