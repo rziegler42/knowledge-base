@@ -10,7 +10,7 @@ root and the engine folder are given as arguments, as text, and nothing is looke
 code, as `crawlrun.prefix_problem` requires), are the owner's acts; the text says so in a comment before the property list, and the README's checklist of the supervised run says so again.
 
 A path is refused, with a plain reason that never shows the path, when it is not text, is empty or only slashes, has a control character or a line break, has a character that cannot be seen (a direction mark, a zero
-width space), is not a full path, or has two hyphens in a row (which cannot stand in an XML comment); the index root must also leave the engine folder and the bytecode folder apart, since the bytecode folder must be
+width space), is not a full path, or has two hyphens in a row (which cannot stand in an XML comment), or has a part that is `.` or `..` (a path that is not in its plain form, which the check of the bytecode folder at run time would read otherwise); the index root must also leave the engine folder and the bytecode folder apart, since the bytecode folder must be
 outside the engine's code. A value is escaped for the property list format before it is printed."""
 import unicodedata
 
@@ -40,6 +40,8 @@ def _checked(value, what):
         raise KbError(f"the {what} is not a full path: it starts with a slash")
     if "--" in value:
         raise KbError(f"the {what} has two hyphens in a row, which the text cannot show")
+    if {".", ".."} & set(value.split("/")):
+        raise KbError(f"the {what} has a part that is '.' or '..': give the full path as it is, without them")
     return value
 
 

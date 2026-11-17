@@ -144,6 +144,23 @@ class Refusals(unittest.TestCase):
                 crawlschedule.text(INDEX, bad)
             self.assertIn("engine folder", str(caught.exception))
 
+    def test_a_path_with_a_dot_or_dot_dot_part_is_refused_for_each_path_and_the_reason_does_not_show_it(self):
+        for bad in ("/a/../b", "/a/./b", "/..", "/a/..", "/./a", "/a/b/../../c"):
+            for args, what in (((bad, ENGINE), "index root"), ((INDEX, bad), "engine folder")):
+                with self.subTest(args), self.assertRaises(KbError) as caught:
+                    crawlschedule.text(*args)
+                self.assertIn(what, str(caught.exception))
+                self.assertIn("'..'", str(caught.exception))
+                self.assertNotIn("/a", str(caught.exception))
+        with self.assertRaises(KbError) as caught:
+            crawlschedule.text(INDEX, ENGINE, "/usr/../bin/python3")
+        self.assertIn("python program", str(caught.exception))
+
+    def test_names_that_only_look_like_dots_are_kept(self):
+        for good in ("/a/.hidden/b", "/a/..b/c", "/a/b../c", "/a/...", "/a/b.c/d"):
+            with self.subTest(good):
+                self.assertEqual(parsed(crawlschedule.text(good, ENGINE))["StandardOutPath"], good + "/crawl-agent.log")
+
     def test_a_refusal_says_why_and_never_shows_the_path(self):
         for bad in ("/secret-marker\nx", "relative-marker/x", "/secret-marker\x00x", "/secret-marker\u202ex", "/secret-marker--x"):
             for args in ((bad, ENGINE), (INDEX, bad)):
@@ -293,6 +310,15 @@ class TheCommand(StoreCase):
         self.assertEqual(agent["ProgramArguments"][2], "pycache_prefix=" + os.path.join(self.index, "crawl-pycache"))
         self.assertEqual(self.tree(), before)
         self.assertFalse(os.path.exists(os.path.join(self.index, "crawl-pycache")))
+
+    def test_the_engine_folder_is_the_real_one_when_the_engine_is_reached_through_a_link(self):
+        link = os.path.join(self.base, "engine-link")
+        os.symlink(ENGINE_DIR, link)
+        with mock.patch.object(kb_main, "__file__", os.path.join(link, "kb", "__main__.py")):
+            code, out, err = self.run_main("crawl-schedule-text")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(parsed(out)["WorkingDirectory"], os.path.realpath(ENGINE_DIR))
+        self.assertNotIn("engine-link", out)
 
     def test_a_python_may_be_named_by_its_full_path(self):
         code, out, err = self.run_main("crawl-schedule-text", "--python", "/usr/bin/python3")

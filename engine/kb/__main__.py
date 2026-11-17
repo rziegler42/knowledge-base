@@ -444,7 +444,7 @@ def main(argv=None):
             print("the circuit breaker is cleared; the stop file and any site stopped for the day are as they were")
             return 0
         if args.command == "crawl-schedule-text":
-            sys.stdout.write(crawlschedule.text(config.load()["index_root"], os.path.dirname(os.path.dirname(os.path.abspath(__file__))), args.python))
+            sys.stdout.write(crawlschedule.text(config.load()["index_root"], os.path.dirname(os.path.dirname(os.path.realpath(__file__))), args.python))
             return 0
         if args.command in ("crawl-status", "crawl-report"):
             import datetime
