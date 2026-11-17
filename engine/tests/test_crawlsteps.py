@@ -845,5 +845,345 @@ class ConvertWiring(ConvertCase):
         self.assertTrue(callable(crawlsteps.convert_step))
 
 
+# ---- Increment J: the judgement step
+
+class FakeJudge:
+    """`crawljudge.judge_book`, with the result each book is told to give (default: kept), and a note of each call."""
+
+    def __init__(self, results=None, default="kept", error=None):
+        self.results, self.default, self.error, self.calls = results or {}, default, error, []
+
+    def __call__(self, store, conn, cfg, plan, book_id, version_id, run, now, embed=None):
+        self.calls.append({"book": book_id, "version": version_id, "run": run, "now": now, "embed": embed, "plan": plan, "cfg": cfg})
+        if self.error is not None:
+            raise self.error
+        outcome = self.results.get(book_id, self.default)
+        nodoc = outcome == "nodoc"                                    # a text that is not a document: rejected, with no score and no call of the model
+        outcome = "rejected" if nodoc else outcome
+        shelf = "pid" if outcome in ("kept", "rejected") and not nodoc else None
+        score = 0.7 if outcome in ("kept", "rejected") and not nodoc else None
+        return {"outcome": outcome, "ok": outcome == "kept", "score": score, "shelf": shelf, "reason": "CANARY-reason" if outcome != "kept" else None}
+
+
+class JudgeCase(ConvertCase):
+    def setUp(self):
+        super().setUp()
+        self.plan["threshold"] = 0.4
+        self.judge = FakeJudge()
+        self.probes = []
+        self.up = True
+
+    def probe(self, cfg):
+        self.probes.append(1)
+        return self.up
+
+    def ready(self, **kw):
+        """A crawl book that is scanned, converted and indexed: the books the judgement takes."""
+        book = self.scanned_book(**kw)
+        version = self.version(book)
+        FakeConvert()(self.store, book, version)
+        FakeIndex()(self.store, book, version)
+        return book
+
+    def run_judge(self, ctx=None, judge=None, statvfs=roomy, **kw):
+        ctx = ctx or self.ctx()
+        kw.setdefault("probe", self.probe)
+        crawlsteps.make_judge_step(judge=judge or self.judge, statvfs=statvfs, **kw)(ctx)
+        return ctx
+
+    def clock_state(self):
+        return crawlguard.load_state(self.index)[0]["model_down_since"]
+
+
+class JudgingOrder(JudgeCase):
+    def test_every_scanned_converted_and_indexed_book_is_judged_oldest_first_with_the_version_of_its_own_record(self):
+        a, b, c = self.ready(), self.ready(), self.ready()
+        embed = object()
+        ctx = self.run_judge(embed=embed)
+        self.assertEqual([x["book"] for x in self.judge.calls], [a, b, c])
+        first = self.judge.calls[0]
+        self.assertEqual((first["version"], first["run"], first["now"], first["embed"], first["plan"] is self.plan, first["cfg"] is ctx.cfg), (self.version(a), "run-1", NOW, embed, True, True))
+        self.assertEqual(ctx.judge_report, {"kept": 3, "rejected": 0, "retry": 0, "parked": 0, "ended": "all the books are judged"})
+
+    def test_only_a_book_that_has_been_through_the_earlier_steps_and_is_not_final_is_judged(self):
+        unscanned = self.scanned_book(scanned=False)
+        unconverted = self.scanned_book()
+        unindexed = self.scanned_book()
+        FakeConvert()(self.store, unindexed, self.version(unindexed))
+        held = self.ready()
+        crawlbooks.record_held(self.store, held, ["encrypted"])
+        kept = self.ready()
+        crawlbooks.record_judged(self.store, kept, 0.8, "pid", True)
+        stranger = self.ready(digest="f" * 32)
+        owner = self.book(auto_filed=False)
+        mine = self.ready()
+        self.run_judge()
+        self.assertEqual([x["book"] for x in self.judge.calls], [mine])
+        for book in (unscanned, unconverted, unindexed):
+            self.assertEqual(self.names(book).count("crawl_judged"), 0)
+        self.assertEqual(self.events(owner), [])
+
+    def test_a_judged_book_is_not_judged_again_and_a_second_run_writes_nothing(self):
+        book = self.ready()
+        crawlbooks.record_judged(self.store, book, 0.8, "pid", True)
+        before = len(self.lines())
+        self.run_judge()
+        self.assertEqual((self.judge.calls, len(self.lines())), ([], before))
+
+    def test_an_empty_threshold_refuses_the_step_before_any_call(self):
+        self.ready()
+        self.plan["threshold"] = None
+        with self.assertRaises(crawlrun.StepRefused):
+            self.run_judge()
+        self.assertEqual(self.judge.calls, [])
+
+
+class JudgingEligibility(JudgeCase):
+    def test_a_book_whose_scan_did_not_finish_well_is_not_judged_even_if_it_was_converted_and_indexed(self):
+        book = self.scanned_book(scanned=False)
+        version = self.version(book)
+        stages.mark(self.store, book, version, "scanned", "failed", reason="the tool failed", tool=scan.TOOL_LABEL)
+        FakeConvert()(self.store, book, version)
+        FakeIndex()(self.store, book, version)
+        self.run_judge()
+        self.assertEqual(self.judge.calls, [])
+
+    def test_a_book_with_a_verdict_of_no_that_was_not_weeded_yet_is_given_to_the_judge_to_finish(self):
+        book = self.ready()
+        crawlbooks.record_judged(self.store, book, 0.1, "pid", False)
+        self.run_judge()
+        self.assertEqual([x["book"] for x in self.judge.calls], [book])
+
+    def test_a_book_whose_stage_file_cannot_be_read_is_left_out_and_the_others_go_on(self):
+        bad, good = self.ready(), self.ready()
+        real = stages.read
+
+        def read(store, book, version):
+            if book == bad:
+                raise KbError("unreadable")
+            return real(store, book, version)
+
+        with mock.patch.object(crawlsteps.stages, "read", read):
+            self.run_judge()
+        self.assertEqual([x["book"] for x in self.judge.calls], [good])
+
+    def test_a_half_finished_rejection_is_finished_at_the_start_and_takes_the_book_out_of_the_index(self):
+        book = self.ready()
+        crawlbooks.record_rejected(self.store, book, "the judge said no", 0.1, "judge")
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            self.run_judge()
+        self.assertEqual((self.row(book)[0], self.store.read_book(book)["state"], forget.call_count, self.judge.calls), ("rejected", "weeded", 1, []))
+
+
+class JudgingRefusals(JudgeCase):
+    def test_the_stop_file_and_the_disk_floors_are_looked_at_before_each_call(self):
+        first, second = self.ready(), self.ready()
+        asked = []
+
+        def reading(path):
+            asked.append(path)
+            return roomy(path)
+
+        def stopping(store, conn, cfg, plan, book, version, run, now, embed=None):
+            out = self.judge(store, conn, cfg, plan, book, version, run, now, embed=embed)
+            open(os.path.join(self.index, "crawl.stop"), "w").close()
+            return out
+
+        self.run_judge(judge=stopping, statvfs=reading)
+        self.assertEqual(([x["book"] for x in self.judge.calls], len(asked)), ([first], 2))
+        last = self.lines()[-1]
+        self.assertEqual((last["step"], last["outcome"], last["reason"]), ("judge", "skipped", "the stop file is present"))
+        self.assertEqual((self.names(second).count("crawl_step_failed"), self.names(first).count("crawl_step_failed")), (0, 0))
+
+    def test_a_disk_floor_ends_the_step_quietly_with_no_failed_try(self):
+        book = self.ready()
+        full = lambda path: types.SimpleNamespace(f_bavail=1, f_frsize=4096)    # noqa: E731
+        ctx = self.run_judge(statvfs=full)
+        self.assertEqual((self.judge.calls, self.names(book).count("crawl_step_failed"), ctx.tripped), ([], 0, False))
+        self.assertIn("floor", self.lines()[-1]["reason"])
+
+
+class JudgingFailures(JudgeCase):
+    def test_a_kept_verdict_clears_the_down_clock_and_asks_nothing_of_the_probe(self):
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:55:00Z", "history": []})
+        self.ready()
+        self.run_judge()
+        self.assertEqual((self.clock_state(), self.probes), (None, []))
+
+    def test_a_failed_try_asks_the_probe_and_a_server_that_does_not_answer_starts_the_clock_and_ends_the_step(self):
+        a, b = self.ready(), self.ready()
+        self.judge.results[a] = "retry"
+        self.up = False
+        ctx = self.run_judge()
+        self.assertEqual(([x["book"] for x in self.judge.calls], len(self.probes), self.clock_state()), ([a], 1, "2026-11-16T12:00:00Z"))
+        self.assertEqual((self.lines()[-1]["step"], self.lines()[-1]["outcome"], self.lines()[-1]["reason"]), ("judge", "failed", "the model server did not answer"))
+        self.assertEqual((ctx.tripped, ctx.judge_report["retry"], ctx.judge_report["ended"]), (False, 1, "the model server did not answer"))
+
+    def test_a_probe_that_raises_is_a_server_that_does_not_answer(self):
+        for error in (KbError("refused"), OSError("no route")):
+            with self.subTest(type(error).__name__):
+                crawlguard.save_state(self.index, {"model_down_since": None, "history": []})
+                book = self.ready()
+                self.judge.results[book] = "retry"
+
+                def probe(cfg, error=error):
+                    raise error
+
+                self.run_judge(probe=probe)
+                self.assertIsNotNone(self.clock_state())
+                self.judge.results.clear()
+                self.run_judge()                                              # the book is still waiting: judge it kept, so the next case starts clean
+                self.assertIsNone(self.clock_state())
+
+    def test_a_text_that_is_not_a_document_asks_no_model_and_neither_clears_the_clock_nor_ends_a_run_of_failures(self):
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T11:55:00Z", "history": []})
+        book = self.ready()
+        self.judge.results[book] = "nodoc"
+        self.run_judge()
+        self.assertEqual(self.clock_state(), "2026-11-16T11:55:00Z")
+        self.plan["consecutive_failures"] = 3
+        books = [self.ready() for _ in range(4)]
+        for n, kind in enumerate(("retry", "retry", "nodoc", "retry")):
+            self.judge.results[books[n]] = kind
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.run_judge()
+        self.assertEqual(self.tripped[0][0], "stage_bound")                   # a book that needs no model says nothing of the model: it leaves the run of failures as it was
+
+    def test_a_server_found_down_after_an_answer_stays_down_in_the_clock(self):
+        kept, failing = self.ready(), self.ready()
+        self.judge.results[failing] = "retry"
+        self.up = False
+        self.run_judge()
+        self.assertEqual(self.clock_state(), "2026-11-16T12:00:00Z")
+
+    def test_stored_conversions_that_cannot_be_read_book_after_book_trip_the_breaker_as_a_stage_bound(self):
+        self.plan["consecutive_failures"] = 2
+        books = [self.ready() for _ in range(3)]
+        bad = FakeJudge(error=KbError("the conversion cannot be read"))
+        with mock.patch.object(crawlsteps.crawljudge, "converted_text", side_effect=KbError("the conversion cannot be read")), self.assertRaises(crawlrun.BreakerTripped):
+            self.run_judge(judge=bad)
+        self.assertEqual((len(bad.calls), self.tripped[0][0]), (2, "stage_bound"))
+
+    def test_a_server_that_has_been_down_for_longer_than_the_limit_trips_the_breaker_as_model_down(self):
+        crawlguard.save_state(self.index, {"model_down_since": "2026-11-16T10:00:00Z", "history": []})
+        book = self.ready()
+        self.judge.results[book] = "retry"
+        self.up = False
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.run_judge()
+        self.assertEqual(self.tripped[0][0], "model_down")
+
+    def test_a_server_that_answers_but_fails_book_after_book_trips_the_breaker_as_a_stage_bound(self):
+        self.plan["consecutive_failures"] = 3
+        books = [self.ready() for _ in range(5)]
+        self.judge.default = "retry"
+        ctx = self.ctx()
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.run_judge(ctx=ctx)
+        self.assertEqual(([x["book"] for x in self.judge.calls], self.tripped[0][0]), (books[:3], "stage_bound"))
+        self.assertEqual(ctx.judge_report["ended"], "the circuit breaker was tripped")
+
+    def test_a_good_verdict_between_failures_starts_the_count_again(self):
+        self.plan["consecutive_failures"] = 3
+        books = [self.ready() for _ in range(6)]
+        for n in (0, 1, 3, 4):
+            self.judge.results[books[n]] = "retry"
+        self.run_judge()
+        self.assertEqual(len(self.judge.calls), 6)
+        self.assertEqual(self.tripped, [])
+
+    def test_a_parked_book_counts_as_a_failure_too(self):
+        self.plan["consecutive_failures"] = 2
+        books = [self.ready() for _ in range(3)]
+        self.judge.default = "parked"
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.run_judge()
+        self.assertEqual(len(self.judge.calls), 2)
+
+    def test_a_book_whose_stored_conversion_cannot_be_read_is_a_failed_try_and_at_retries_is_parked(self):
+        book = self.ready()
+        self.plan["retries"] = 2
+        bad = FakeJudge(error=KbError("the conversion cannot be read"))
+        with mock.patch.object(crawlsteps.crawljudge, "converted_text", side_effect=KbError("the conversion cannot be read")):
+            self.run_judge(judge=bad)
+            self.assertIsNone(self.parked(book))
+            self.run_judge(judge=bad)
+        self.assertEqual((self.parked(book)["stage"], self.row(book)[0]), ("judge", "rejected"))
+        self.assertEqual([e["step"] for e in self.events(book) if e["event"] == "crawl_step_failed"], ["judge", "judge"])
+
+    def test_an_error_that_is_not_a_kb_error_is_the_books_fault_and_a_failed_try_and_never_a_crash_of_the_step(self):
+        book, other = self.ready(), self.ready()
+        self.plan["retries"] = 2
+        odd = FakeJudge(error=KeyError("a malformed record"))
+        for patched in (mock.patch.object(crawlsteps.crawljudge, "converted_text", return_value=("A page", "text")),
+                        mock.patch.object(crawlsteps.crawljudge, "converted_text", side_effect=TypeError("odd"))):
+            with patched:
+                self.run_judge(judge=odd)
+        self.assertEqual((self.parked(book)["stage"], self.parked(other)["stage"], self.row(book)[0]), ("judge", "judge", "rejected"))
+
+    def test_a_stored_conversion_that_fails_in_any_way_when_it_is_read_again_is_the_books_fault(self):
+        book = self.ready()
+        with mock.patch.object(crawlsteps.crawljudge, "converted_text", side_effect=TypeError("odd")):
+            self.run_judge(judge=FakeJudge(error=KbError("could not judge")))
+        self.assertEqual(self.names(book).count("crawl_step_failed"), 1)
+
+    def test_a_refusal_that_is_not_the_books_ends_the_run_and_marks_no_book(self):
+        book = self.ready()
+        before = self.events(book)
+        bad = FakeJudge(error=KbError("the shelf vectors are not there"))
+        with mock.patch.object(crawlsteps.crawljudge, "converted_text", return_value=("A page", "text")), self.assertRaises(crawlrun.StepRefused):
+            self.run_judge(judge=bad)
+        self.assertEqual(self.events(book), before)
+
+
+class JudgingRecords(JudgeCase):
+    def test_a_rejection_or_a_parked_book_takes_its_index_rows_out_in_the_same_run_and_a_kept_one_does_not(self):
+        keep, out = self.ready(), self.ready()
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            self.run_judge()
+        self.assertEqual(forget.call_count, 0)
+        self.judge.results[out] = "rejected"
+        again = self.ready()
+        self.judge.results[again] = "rejected"
+        with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+            self.run_judge(judge=FakeJudge({again: "rejected"}))
+        self.assertEqual(forget.call_count, 1)
+
+    def test_a_rejected_book_alone_or_a_parked_book_alone_takes_the_index_rows_out(self):
+        for kind in ("rejected", "parked"):
+            with self.subTest(kind):
+                book = self.ready()
+                with mock.patch.object(crawlsteps.index_stage, "forget_inactive") as forget:
+                    self.run_judge(judge=FakeJudge({book: kind}, default="already_kept"))
+                self.assertEqual(forget.call_count, 1)
+
+    def test_the_report_counts_each_kind_of_outcome(self):
+        books = [self.ready() for _ in range(5)]
+        results = dict(zip(books, ("kept", "rejected", "retry", "parked", "already_kept")))
+        ctx = self.run_judge(judge=FakeJudge(results))
+        self.assertEqual(ctx.judge_report, {"kept": 1, "rejected": 1, "retry": 1, "parked": 1, "ended": "all the books are judged"})
+
+    def test_what_the_judge_returns_as_a_reason_is_never_written_by_the_step(self):
+        books = [self.ready() for _ in range(2)]
+        self.run_judge(judge=FakeJudge({books[0]: "rejected", books[1]: "retry"}))
+        self.assertNotIn("CANARY", json.dumps([self.lines(), [self.events(b) for b in books]]))
+
+    def test_the_real_judgement_keeps_a_document_and_weeds_one_that_is_not_and_asks_the_model_once_for_each(self):
+        from engine.tests.test_crawljudge import FakeEmbed, document, shelves
+        good, bad = self.ready(), self.ready()
+        texts = {good: ("A page", document("pid", 0.8)), bad: ("A page", "short")}
+        embed = FakeEmbed()
+        with shelves(), mock.patch.object(crawlsteps.crawljudge, "converted_text", side_effect=lambda store, book, version: texts[book]):
+            crawlsteps.make_judge_step(embed=embed, statvfs=roomy, probe=self.probe)(self.ctx())
+            crawlsteps.make_judge_step(embed=embed, statvfs=roomy, probe=self.probe)(self.ctx())
+        self.assertEqual((len(embed.calls), self.names(good).count("crawl_judged"), self.parked(bad)["stage"], self.row(bad)[0], self.row(good)[0]), (1, 1, "judge", "rejected", "kept"))
+        self.assertEqual(self.store.read_book(bad)["state"], "weeded")
+
+
+class JudgeWiring(JudgeCase):
+    def test_the_module_has_a_default_judgement_step(self):
+        self.assertTrue(callable(crawlsteps.judge_step))
+
+
 if __name__ == "__main__":
     unittest.main()

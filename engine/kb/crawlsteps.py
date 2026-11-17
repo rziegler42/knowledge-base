@@ -16,7 +16,7 @@ What reaches an event or a log line is a kind from a fixed list and a fixed reas
 (filed by the crawl under an approved digest, with no terminal event). It makes no request and no model call, reads no environment variable and starts no program of its own; the tool runner does."""
 import os
 
-from . import KbError, convert as convert_stage, crawlbooks, crawlguard, crawlrun, crawlstate, index as index_stage, scan as scan_stage, stages
+from . import KbError, convert as convert_stage, crawlbooks, crawlguard, crawljudge, crawlrun, crawlstate, index as index_stage, scan as scan_stage, stages
 from . import store as library_store
 
 NEVER_HOLD = frozenset({"script_elements", "event_handlers", "pattern_in_binary_data"})
@@ -296,3 +296,117 @@ def make_convert_step(convert=None, index=None, open_store=None, statvfs=None):
 
 
 convert_step = make_convert_step()
+
+
+# ---- the judgement
+
+JUDGED = "all the books are judged"
+JUDGE_DOWN = "the model server did not answer"
+JUDGE_FAILED = "the stored conversion cannot be read"
+JUDGE_SETTINGS = "the judgement cannot be made: the embedding entry or the shelf vectors are not set up"
+JUDGE_THRESHOLD = "the judgement has no threshold: it is set in the supervised run, and no book is judged until it is"
+_RAN = ("scanned", "indexed")                 # (`indexed` is only ever done after `converted`)
+
+
+def _ready_for_the_judge(library, book_id):
+    """The version of a crawl book that has been scanned, converted and indexed and has no verdict of yes, taken from the book's own record, or `None`."""
+    try:
+        if any(isinstance(e, dict) and e.get("event") == "crawl_judged" and e.get("ok") is True for e in library.read_events(book_id)):
+            return None
+        version = library.read_book(book_id).get("current_version")
+        state = stages.read(library, book_id, version)["stages"] if version else None
+    except KbError:
+        return None
+    if state is None or any(state[name]["status"] != "done" for name in _RAN):
+        return None
+    return version
+
+
+def _model_answers(ctx, probe):
+    try:
+        return bool((probe or crawlguard.probe_model)(ctx.cfg))
+    except (KbError, OSError):
+        return False
+
+
+def _note_model(ctx, ok):
+    """Note the sighting of the model server in the down clock; a trip of the clock ends the run."""
+    state, _restarted = crawlguard.load_state(ctx.index_root)
+    tripped = crawlguard.note_model(state, ok, ctx.clock(), ctx.plan)
+    crawlguard.save_state(ctx.index_root, state)
+    if tripped is not None:
+        ctx.trip(*tripped)
+        raise crawlrun.BreakerTripped()
+
+
+def make_judge_step(judge=None, embed=None, open_store=None, statvfs=None, probe=None):
+    """The function that judges every crawl book that has been scanned, converted and indexed, oldest first, once each (`crawljudge.judge_book` does the judgement and its record). `judge`, `embed`, `open_store`,
+    `statvfs` and `probe` replace the real ones (tests). The stop file and the disk floors are looked at before each call of the model. **A failed try asks the run's probe of the model server:** one that does not
+    answer starts or goes on with the down clock (and trips on its rule) and ends the step; and `consecutive_failures` books in a row that fail with the server answering (a failed try, a parked book, or a stored conversion
+    that cannot be read) trip the breaker as a `stage_bound`, so that a fault of the model or of the books is not paid for by every book. A book whose stored conversion cannot be read is a failed try of its own; a
+    refusal that is not the book's (the entry or the shelf vectors) ends the run, and nothing is recorded for the book. The rows of a book that was weeded leave the index in the same run."""
+
+    def step(ctx):
+        if ctx.plan.get("threshold") is None:
+            raise crawlrun.StepRefused(JUDGE_THRESHOLD)
+        library = (open_store or library_store.Store.open)()
+        finished = _finish_rejections(ctx, library)
+        approved = crawlbooks.approved_digests(ctx.index_root)
+        listed = crawlbooks.crawl_books(library, approved, crawlbooks.scan_crawl_books(library))
+        report, ended, streak, answered = {"kept": 0, "rejected": 0, "retry": 0, "parked": 0}, JUDGED, 0, False
+        try:
+            for book_id in listed:
+                version = _ready_for_the_judge(library, book_id)
+                if version is None:
+                    continue
+                why = _refusal(ctx, statvfs or os.statvfs, "a judgement")
+                if why:
+                    ended = why
+                    ctx.log.write("judge", "skipped", reason=ctx.log.safe(why), now=ctx.clock())
+                    break
+                try:
+                    result = (judge or crawljudge.judge_book)(library, ctx.conn, ctx.cfg, ctx.plan, book_id, version, ctx.run, ctx.clock(), embed=embed)
+                except Exception as error:                                   # (anything a damaged book does to the judgement is that book's failed try, and never a crash that the next run would meet again at the same book)
+                    book_fault = not isinstance(error, KbError)
+                    if not book_fault:
+                        try:
+                            crawljudge.converted_text(library, book_id, version)
+                        except Exception:
+                            book_fault = True
+                    if book_fault:                                           # the book's own fault: a failed try of its own
+                        outcome = "retry" if _failed_try(ctx, library, book_id, "judge", JUDGE_FAILED) != "parked" else "parked"
+                        report[outcome] += 1
+                        streak += 1
+                        if streak >= ctx.plan["consecutive_failures"]:
+                            ended = TRIPPED
+                            ctx.trip(*crawlguard.bound_trip("judge", f"{streak} books in a row could not be judged"))
+                            raise crawlrun.BreakerTripped()
+                        continue
+                    raise crawlrun.StepRefused(JUDGE_SETTINGS) from None
+                outcome = result.get("outcome")
+                if outcome in ("kept", "rejected", "retry", "parked"):
+                    report[outcome] += 1
+                if outcome in ("retry", "parked"):
+                    streak += 1
+                    if not _model_answers(ctx, probe):
+                        ended = JUDGE_DOWN
+                        ctx.log.write("judge", "failed", reason=JUDGE_DOWN, now=ctx.clock())
+                        _note_model(ctx, False)
+                        break
+                    if streak >= ctx.plan["consecutive_failures"]:
+                        ended = TRIPPED
+                        ctx.trip(*crawlguard.bound_trip("judge", f"{streak} books in a row failed with the model server answering"))
+                        raise crawlrun.BreakerTripped()
+                elif outcome in ("kept", "rejected") and result.get("score") is not None:
+                    streak, answered = 0, True                              # the model gave an answer for this book (a text that is not a document asks none, says nothing of the model and leaves the run of failures as it is)
+            if answered and ended != JUDGE_DOWN:
+                _note_model(ctx, True)                                       # the model answered in this run: its down clock is cleared
+        finally:
+            if report["rejected"] or report["parked"] or finished:
+                index_stage.forget_inactive(library)
+            ctx.judge_report = dict(report, ended=ended)
+
+    return step
+
+
+judge_step = make_judge_step()
