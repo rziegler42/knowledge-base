@@ -130,6 +130,28 @@ supervised run, in order. Run every command from the `engine` folder (`cd engine
    The computer and the model server must be up for a run to work; the log says when one cannot.
 8. **Stopping the agent.** `launchctl bootout gui/$(id -u)/local.knowledge-base.crawl-run` stops it from starting runs, and removing its file from `~/Library/LaunchAgents` keeps it from coming back. A run that is going stops at its next look when the stop file is there.
 
+### Before the first run
+
+- **The models.** Model calls need the models switched on and these tasks set in the config: `card-embed`, `place-embed`, `card-notes`, `card`, `card-check` and `place` (`card-more` is optional), and `model_pick` on in the plan if the books are to be moved. `python3 -m kb models` lists the entries, the tasks, the switch and whether the `wb` launcher is found; it makes no call. The model server answers on your network and the calls travel in the clear, so check that it is up (`wb run ask-ollama check`) before the first run: a run that cannot reach it is refused at its start (exit 3).
+- **The same `wb` under the agent.** The agent's text sets no environment, so launchd gives it its default `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`) and the engine may not find `wb` there ("the workbench launcher (wb) was not found"), which looks like a model that is down. Before step 7, check where `wb` is (`command -v wb`); if it is outside that path, add a `PATH` entry to the text you save, or make `wb` reachable in the way you prefer. This is not yet tried under launchd.
+- **A small first run, by hand, with you watching** (step 3), and the dry run first (step 2). Keep the ceilings low until the report reads well.
+
+### What to look at in the first runs
+
+- **`crawl-report`** compares what the log says with what the queue says: kept (the books filed that no rejection names, against the queue's rows that say kept; a held book's row says kept), rejected and failed. A row that says DIFFERENT is worth reading; a healthy run says the same. It compares counts, not books, and a book filed on one day and rejected on the next differs on the first day.
+- **Books that need your eye.** The report lists every book filed, by address; the books the scan held (kept as weeded, with the kinds), the books judged out (kept as weeded, with the reason and score), the books left on `default` (the model said none fits) and the books moved by the model's pick, with their shelves. Nothing is deleted; every book is `auto_filed`, the mark that you have not reviewed it.
+- **Signs of a model that is down.** `propose` or `card` lines that say `failed`, a book parked after failed tries, or a breaker tripped as `model_down`. The run asks the model entry that failed before it charges a book a try, so a model that is down should cost no book a try; if books are parked, read the log before clearing the breaker.
+- **Signs of a run that is stuck.** `crawl-status` shows the lock, the counters against their ceilings and the last run; a run that ends by its time budget says so.
+
+### Known limits of the first version
+
+- **Leftovers of old captures** in the incoming folder are not swept: a capture that died after fetching can leave files there, and nothing removes them yet.
+- **The card pass looks at the stop file between passes**, not inside one: a stop file can wait for the pass that is running to end.
+- **A card step cut short by the time budget in every run** would give a book a card unit each run and no failed try; the daily card ceiling bounds it. It has not been seen.
+- **The start of a run asks the model entries that an earlier run found down**, one short call each, before the time budget begins; a model server that hangs can hold the run for the entry's timeout.
+- **Pages are converted without a memory limit** (up to the size limit of a capture); a hostile page can use a lot of memory for a while.
+- **The run does not check the permissions of the index folder**: keep it yours.
+
 ## Where the work stands
 
 | Plan | What it covers | State |
