@@ -76,6 +76,7 @@ class Case(unittest.TestCase):
         return self.conn.execute("SELECT * FROM candidates ORDER BY id").fetchall(), self.conn.execute("SELECT * FROM counters ORDER BY day, key").fetchall()
 
     def reserve(self, now=NOW, run="run-1", **kw):
+        kw.setdefault("filed", 0)
         return crawlstate.reserve(self.conn, self.plan, now, run, **kw)
 
 
@@ -211,14 +212,14 @@ class Reserve(Case):
         self.add("a")
         before = self.table()
         with self.assertRaises(KbError):
-            crawlstate.reserve(self.conn, self.plan, datetime.datetime(2026, 11, 16, 12), "r")
+            crawlstate.reserve(self.conn, self.plan, datetime.datetime(2026, 11, 16, 12), "r", 0)
         for run in ("", "a b", None, 5, "x" * 65):
             with self.assertRaises(KbError):
-                crawlstate.reserve(self.conn, self.plan, NOW, run)
+                crawlstate.reserve(self.conn, self.plan, NOW, run, 0)
         for bad in (None, {}, [], dict(self.plan, batch="8"), dict(self.plan, batch=True), dict(self.plan, batch=0), dict(self.plan, fetches_per_day=-1), dict(self.plan, timezone=5)):
             with self.assertRaises(KbError):
-                crawlstate.reserve(self.conn, bad, NOW, "r")
-        for filed in (-1, True, "5", 1.5):
+                crawlstate.reserve(self.conn, bad, NOW, "r", 0)
+        for filed in (None, -1, True, "5", 1.5):
             with self.assertRaises(KbError):
                 crawlstate.reserve(self.conn, self.plan, NOW, "r", filed=filed)
         self.assertEqual(self.table(), before)
@@ -229,7 +230,7 @@ class Reserve(Case):
         self.add("b", domain="b.example")
         before = self.table()
         probe = Failing(self.conn, 10**6)
-        self.assertIsNotNone(crawlstate.reserve(probe, self.plan, NOW, "r")[0])
+        self.assertIsNotNone(crawlstate.reserve(probe, self.plan, NOW, "r", 0)[0])
         statements = probe.calls
         self.assertGreaterEqual(statements, 5)
         self.conn.execute("UPDATE candidates SET status = 'queued', tries = 0, run_id = NULL, updated = added")
@@ -239,18 +240,18 @@ class Reserve(Case):
             failing = Failing(self.conn, n)
             with self.subTest(statement=n):
                 with self.assertRaises(sqlite3.OperationalError):
-                    crawlstate.reserve(failing, self.plan, NOW, "r")
+                    crawlstate.reserve(failing, self.plan, NOW, "r", 0)
                 self.assertFalse(self.conn.in_transaction)
                 self.assertEqual(self.table(), before)
         done = Failing(self.conn, 10**6)
-        self.assertIsNotNone(crawlstate.reserve(done, self.plan, NOW, "r")[0])
+        self.assertIsNotNone(crawlstate.reserve(done, self.plan, NOW, "r", 0)[0])
         self.assertEqual(self.counters(), {("2026-11-16", "fetch"): 1, ("2026-11-16", "fetch:a.example"): 1})
 
     def test_two_connections_racing_for_one_row_get_it_once(self):
         self.add("only")
         second = self.other()
         first_row, _ = self.reserve(run="r1")
-        again, why = crawlstate.reserve(second, self.plan, NOW, "r2")
+        again, why = crawlstate.reserve(second, self.plan, NOW, "r2", 0)
         self.assertIsNotNone(first_row)
         self.assertEqual((again, why), (None, "nothing_queued"))
         self.assertEqual(self.counters()[("2026-11-16", "fetch")], 1)
@@ -266,7 +267,7 @@ class Reserve(Case):
             try:
                 barrier.wait()
                 while True:
-                    row, why = crawlstate.reserve(conn, self.plan, NOW, name)
+                    row, why = crawlstate.reserve(conn, self.plan, NOW, name, 0)
                     if row is None:
                         break
                     results.append(row["id"])

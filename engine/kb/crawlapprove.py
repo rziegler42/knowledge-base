@@ -396,6 +396,51 @@ def _strict_read(path, limit):
         os.close(fd)
 
 
+def _read_folder(approved, digest):
+    """One stored approval, read as strictly as a run reads it, without comparing it with the code now: `(folder, the plan's bytes, the stored fingerprint)`, or `NotApproved` for a link, a loose mode, an extra or
+    missing file, a changed byte (the digest covers the three copies and the stored fingerprint) or a malformed name."""
+    if not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
+        raise NotApproved(UNTRUSTED)
+    folder = os.path.join(approved, digest)
+    try:
+        _check_dir(folder)
+        names = sorted(os.listdir(folder))
+    except (KbError, OSError):
+        raise NotApproved(UNTRUSTED) from None
+    if names != sorted(NAMES):
+        raise NotApproved(UNTRUSTED)
+    plan_b = _strict_read(os.path.join(folder, "plan.txt"), MAX_SMALL)
+    topics_b = _strict_read(os.path.join(folder, "topics.txt"), MAX_FILE)
+    allow_b = _strict_read(os.path.join(folder, "allow.txt"), MAX_FILE)
+    stored = _strict_read(os.path.join(folder, "fingerprint"), 65)
+    _strict_read(os.path.join(folder, "summary.txt"), MAX_FILE)
+    if len(stored) != 65 or stored[-1:] != b"\n" or not _FINGERPRINT.fullmatch(stored[:-1].decode("ascii", "replace")):
+        raise NotApproved(UNTRUSTED)
+    if digest_of(plan_b, topics_b, allow_b, stored[:-1].decode("ascii")) != digest:
+        raise NotApproved(UNTRUSTED)
+    return folder, plan_b, stored[:-1].decode("ascii")
+
+
+def stored_digests(index_root):
+    """The digests of every stored approval that reads strictly (see `_read_folder`), whether or not it is the current one and whether or not the code has changed since: a book found under it was found by an
+    approved run. An empty set if there is none."""
+    approved = os.path.join(os.fspath(index_root), "crawl", "approved")
+    try:
+        _check_dir(os.path.join(os.fspath(index_root), "crawl"))
+        _check_dir(approved)
+        names = os.listdir(approved)
+    except (KbError, OSError):
+        return set()
+    found = set()
+    for name in names:
+        try:
+            _read_folder(approved, name)               # a name that is not a digest is refused by it
+        except NotApproved:
+            continue
+        found.add(name)
+    return found
+
+
 def load_approved(index_root, cfg, kb_root=None):
     """The approved plan, or `NotApproved`. Returns `{"plan", "digest", "fingerprint", "plan_path", "topics_path", "allow_path", "folder"}`; the paths are those of the approved copies."""
     crawl = os.path.join(index_root, "crawl")
@@ -417,28 +462,12 @@ def load_approved(index_root, cfg, kb_root=None):
     if len(line) != 33 or line[-1:] != b"\n" or not _DIGEST.fullmatch(line[:-1].decode("ascii", "replace")):
         raise NotApproved(UNTRUSTED)
     digest = line[:-1].decode("ascii")
-    folder = os.path.join(approved, digest)
-    try:
-        _check_dir(folder)
-        names = sorted(os.listdir(folder))
-    except (KbError, OSError):
-        raise NotApproved(UNTRUSTED) from None
-    if names != sorted(NAMES):
-        raise NotApproved(UNTRUSTED)
-    plan_b = _strict_read(os.path.join(folder, "plan.txt"), MAX_SMALL)
-    topics_b = _strict_read(os.path.join(folder, "topics.txt"), MAX_FILE)
-    allow_b = _strict_read(os.path.join(folder, "allow.txt"), MAX_FILE)
-    stored = _strict_read(os.path.join(folder, "fingerprint"), 65)
-    _strict_read(os.path.join(folder, "summary.txt"), MAX_FILE)
-    if len(stored) != 65 or stored[-1:] != b"\n" or not _FINGERPRINT.fullmatch(stored[:-1].decode("ascii", "replace")):
-        raise NotApproved(UNTRUSTED)
-    if digest_of(plan_b, topics_b, allow_b, stored[:-1].decode("ascii")) != digest:
-        raise NotApproved(UNTRUSTED)
+    folder, plan_b, stored_fingerprint = _read_folder(approved, digest)
     try:
         now_fingerprint = fingerprint(cfg, kb_root)[0]
     except KbError:
         raise NotApproved(CHANGED) from None
-    if now_fingerprint != stored[:-1].decode("ascii"):
+    if now_fingerprint != stored_fingerprint:
         raise NotApproved(CHANGED)
     try:
         plan = crawlplan.parse_plan(plan_b.decode("utf-8"))

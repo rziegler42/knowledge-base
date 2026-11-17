@@ -11,6 +11,7 @@ The transitions it makes, by the spec's statuses (`queued`, `fetching`, `kept`, 
   when it is `failed` and final. (The spec words that last step as `rejected: failed 3 times`; the approved plan says `failed`, and the reason says how many times.)
 - `requeue_stale`: a `fetching` row not touched for over 30 minutes goes back to `queued` as a try (its day's count stays), or, at `retries` tries, to `failed`.
 - `block`: `queued` to `blocked`.
+- `reject_kept`: `kept` to `rejected` (a candidate whose book was made and was then judged out).
 - Counters: `fetch`, `fetch:<site>`, `card`, `refusal:<site>`, each by the plan's `timezone` day (`crawlplan.day_of`). `reserve_card` and `note_refusal` write the last two; `ceilings` reads.
 
 `filed_total` is not a counter: `filed_total(events_by_book)` counts the books with a `crawl_found` event in the events it is given (this module reads no store). This module makes no request and reads no environment variable."""
@@ -95,23 +96,23 @@ def _row(conn, ident):
     return dict(zip(names, found)) if found else None
 
 
-def reserve(conn, plan, now, run, filed=None):
+def reserve(conn, plan, now, run, filed):
     """Take the next queued candidate for `run`: `(row, "")`, or `(None, why)` with `why` one of `fetches_per_day`, `filed_total`, `batch`, `nothing_queued`.
 
     The order is the higher weight first (a wandered candidate counts as 0), then the oldest, then the lower depth. A row waits for its `next_try`; a row of a site at `per_domain_per_day` for the day, or one that
     `crawlguard.site_stopped` says is stopped for the day, is skipped (it stays queued), and other sites' rows are still taken; a row with no site cannot be paced and is not taken. `filed` is the number of books filed so far
-    (`filed_total`), if the caller knows it."""
+    (`filed_total`): **required**, so that a caller cannot leave that ceiling unchecked by forgetting it."""
     _plan_numbers(plan, "fetches_per_day", "per_domain_per_day", "batch", "filed_total", "domain_refusals")
     stamp = _stamp(now)
     if not isinstance(run, str) or not _RUN.fullmatch(run):
         raise KbError("a run name is 1 to 64 letters, digits or . _ : -")
-    if filed is not None and (isinstance(filed, bool) or not isinstance(filed, int) or filed < 0):
+    if isinstance(filed, bool) or not isinstance(filed, int) or filed < 0:
         raise KbError("the number of books filed is a whole number from 0")
     day = crawlplan.day_of(now, plan["timezone"])
     with _transaction(conn):
         if _count(conn, day, "fetch") >= plan["fetches_per_day"]:
             return None, "fetches_per_day"
-        if filed is not None and filed >= plan["filed_total"]:
+        if filed >= plan["filed_total"]:
             return None, "filed_total"
         if conn.execute("SELECT COUNT(*) FROM candidates WHERE run_id = ?", (run,)).fetchone()[0] >= plan["batch"]:
             return None, "batch"
@@ -190,6 +191,18 @@ def requeue_stale(conn, plan, now):
                              (_later(now, _wait(tries)), stamp, ident))
                 out["requeued"] += 1
     return out
+
+
+def reject_kept(conn, plan, ident, reason, now):
+    """`kept` to `rejected`, with the reason: a candidate whose book was made and was then judged out. It is the only way a `kept` row changes, and it changes nothing else."""
+    _plan_numbers(plan, "retries")
+    ident = _id(ident)
+    stamp = _stamp(now)
+    text = _reason(reason)
+    with _transaction(conn):
+        moved = conn.execute("UPDATE candidates SET status = 'rejected', reason = ?, updated = ? WHERE id = ? AND status = 'kept'", (text, stamp, ident))
+        if moved.rowcount != 1:
+            raise KbError("only a kept candidate can be rejected after its book was made")
 
 
 def block(conn, ident, reason, now):
