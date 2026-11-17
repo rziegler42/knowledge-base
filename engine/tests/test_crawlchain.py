@@ -888,6 +888,31 @@ class Mixed(Chain):
         return {name: self.book_of(ident) for name, ident in (("good", self.good), ("held", self.held), ("weak", self.weak_id), ("none", self.none))}
 
 
+class EmptyCardInTheChain(Mixed):
+    """The library of `Mixed` with a page whose card has no summary: the real rule of `crawlcards` judges it out after the (fake) card step, and the report compares the same on every row."""
+
+    def card_step(self, ctx):
+        super().card_step(ctx)
+        library = store.Store.open()
+        book = self.book_of(self.none)
+        if book is not None and card.generations(library, book, library.read_book(book)["current_version"]) and not self.events(book, "crawl_rejected"):
+            version = library.read_book(book)["current_version"]
+            card.file(library, card.make(library, book, version, model=None, records=[]))          # the newest card of this one has no model part, so no summary
+        crawlcards.judge_out_empty_cards(ctx, library, roomy, crawlbooks.approved_digests(ctx.index_root))
+
+    def test_the_page_with_an_empty_card_is_judged_out_and_the_log_and_the_queue_still_compare_the_same(self):
+        self.assertEqual(self.go(), 0)
+        books = self.books()
+        empty = books["none"]
+        self.assertEqual((self.store.read_book(empty)["state"], [e["stage"] for e in self.events(empty, "crawl_rejected")]), ("weeded", ["card"]))
+        self.assertEqual(self.row(self.none)["status"], "rejected")
+        self.assertEqual(self.store.read_book(books["good"])["state"], "active")                      # a book with a summary is moved on its way, as before
+        data = crawlreport.build(self.index, datetime.date(2026, 11, 16), "UTC", self.now, store=store.Store.open(write=False))
+        self.assertEqual([(c["what"], c["log"], c["queue"], c["same"]) for c in data["compare"]], [("kept", 2, 2, True), ("rejected", 2, 2, True), ("failed", 0, 0, True)])
+        self.assertEqual(sorted(b["book"] for b in data["books"]["rejected"]), sorted([books["weak"], empty]))
+        self.assertEqual(self.events(empty, "reshelved"), [])
+
+
 class TheOtherMachinesReaders(Mixed):
     """The files a whole run leaves, read the way `crawlstatus` and `crawlreport` read them (the forms of the plan's R1 'Interfaces')."""
 

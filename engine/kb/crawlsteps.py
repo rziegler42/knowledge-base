@@ -175,6 +175,12 @@ def _reject(ctx, library, book_id, reason, stage):
     return "rejected"
 
 
+def reject_book(ctx, library, book_id, reason, stage):
+    """Weed a crawl book for a reason of its own (fixed text) at `stage`, reject its queue row and write one `reject` line: what a step that judges a book out calls (`crawlbooks.weed` refuses a book that the crawl
+    did not file, and writes the event first)."""
+    return _reject(ctx, library, book_id, reason, stage)
+
+
 def _failed_try(ctx, library, book_id, stage, reason):
     """One failed try of `stage`; at the plan's `retries` the book is parked (weeded, its row rejected)."""
     result = crawlbooks.fail_step(library, ctx.plan, book_id, stage, reason, ctx.run)

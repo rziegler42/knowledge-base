@@ -24,8 +24,12 @@ What this step guards:
   entry starts or goes on with its own down clock (`crawlguard.record_entry`, saved in the guard state before any trip is written), costs no book a try, ends the step with one `failed` line, and trips the breaker
   (`model_down`) once it has been down for longer than `model_down_minutes`; each entry that answers has its clock cleared. **The stop file and the time budget are looked at between the probes**: a step that is stopped
   there ends quietly with one `skipped` line and charges no book a try, because it has not shown that the entries answer. A pass with no failed call makes no probe.
-- **What a model, a card or a page says is data.** The step reads no card and no page text; what it writes (an event, a reason, a log line) is a fixed sentence, a number or a book's id, never a word of the queue's
-  report. A card is the book's, filed by the queue as it files every card; the book stays `auto_filed`, which is the mark that the owner has not reviewed it, and nothing in a card changes what a step does.
+- **What a model, a card or a page says is data.** The step reads no page text, and **of a card it reads one fact** (`has_sentences`: whether the newest card holds any sentence, below); what it writes (an event, a reason,
+  a log line) is a fixed sentence, a number or a book's id, never a word of the queue's report or of a card. A card is the book's, filed by the queue as it files every card; the book stays `auto_filed`, which is the mark
+  that the owner has not reviewed it, and nothing else in a card changes what a step does.
+- **A page with nothing in it is judged out after its card** (`judge_out_empty_cards`, at the end of every step, whether or not it made a card): a crawl book that is judged in and whose newest card has **no sentence at all** in its six written parts
+  (a repository record with only metadata, whose title matched a shelf; a card that lost only its summary to the checks is kept) is weeded at the stage `card` with a fixed reason, kept with its files, its row `rejected`, one `reject` line, out of the index; it looks at the stop file
+  and the disk floors first, and skips a card that cannot be read. A book with any summary is untouched.
 
 One `card` line is written for each book that ends in this run (`ok`, `failed` for a try that will be repeated, `rejected` for a book that was parked), and one line when the step ends early or has nothing to do
 (`skipped`). The step is idempotent: a book that has its card is not planned again, and a run with nothing to do takes no unit, asks no model and writes one `skipped` line.
@@ -33,7 +37,8 @@ One `card` line is written for each book that ends in this run (`ok`, `failed` f
 The step is not attached to `crawl-run` here (Increment M assembles the steps). The module makes no request and reads no environment variable; the queue makes the calls through the configured entries."""
 import os
 
-from . import KbError, card, cardqueue, cardstate, crawlbooks, crawlguard, crawlrun, crawlstate
+from . import KbError, card, cardqueue, cardstate, crawlbooks, crawlguard, crawlrun, crawlstate, crawlsteps
+from . import index as index_stage
 from . import store as library_store
 
 STOPPED = "the stop file is present"
@@ -47,6 +52,7 @@ DROPPED = "the card queue dropped the book"
 NOT_PLANNED = "the book could not be planned for a card"
 PARKED = "the book is parked after failed tries"
 CATALOG = "the catalog was not rebuilt"
+EMPTY_CARD = "the card has no sentence at all (no summary, problem, approach, needs, provides or limits): the page holds nothing of its own to keep"
 SPENT = "the time budget of the run is spent"
 CARD_TASKS = ("card-embed", "card-notes", "card", "card-check", "card-more")           # the tasks whose entries a card calls, in the order they are asked
 SETTINGS = "the models for cards are not set up"
@@ -106,6 +112,49 @@ def _answers(ctx, probe, answered):
     return "ok"
 
 
+def has_sentences(doc):
+    """Whether a card holds any sentence at all in its six written parts (`card.SENTENCE_FIELDS`: the summary, the problem, the approach, the needs, the provides and the limits). A card with grounded sentences has one if
+    any part kept a sentence after the checks; a card of the earlier form, if any of those parts is not blank; a card with no model part has none. Anything that is not a card has none. **A card that lost only its summary
+    to the checks still has sentences and is kept**: the rule is for a page that holds nothing (a record with only metadata), and not for a card whose checks were strict. This is the one fact the step reads of a card,
+    and no word of the card is copied anywhere."""
+    model = doc.get("model") if isinstance(doc, dict) else None
+    if not isinstance(model, dict):
+        return False
+    grounding = doc.get("grounding")
+    sentences = grounding.get("sentences") if isinstance(grounding, dict) else None
+    if isinstance(sentences, dict):
+        return any(isinstance(sentences.get(field), dict) and bool(sentences[field].get("kept")) for field in card.SENTENCE_FIELDS)
+    return any(isinstance(model.get(field), str) and bool(model[field].strip()) for field in card.SENTENCE_FIELDS)
+
+
+def judge_out_empty_cards(ctx, library, read_space, approved):
+    """Judge out each crawl book that is judged in and has a card whose newest generation has no sentence at all (a record page with only metadata: its title matched a shelf, its card says nothing): the book is weeded at
+    the stage `card` with a fixed reason (kept, with its files; its row is `rejected`, one `reject` line names it, and it leaves the index). It looks at the stop file and the disk floors first, as the rest of the step
+    does, and does nothing then. Only books the crawl filed under an approved plan are looked at (`crawlbooks.crawl_books`), and a card that cannot be read is skipped. Returns the books it judged out."""
+    if _refusal(ctx, read_space):
+        return []
+    scan = crawlbooks.scan_crawl_books(library)
+    judged = {e["id"]: any(isinstance(x, dict) and x.get("event") == "crawl_judged" and x.get("ok") is True for x in e["events"]) for e in scan.entries}
+    out = []
+    for book in crawlbooks.crawl_books(library, approved, scan):
+        if not judged.get(book):
+            continue
+        version = library.read_book(book).get("current_version")
+        if not version or not card.generations(library, book, version):
+            continue
+        try:
+            _number, doc = card.read(library, book, version)
+        except KbError:
+            continue
+        if has_sentences(doc):
+            continue
+        crawlsteps.reject_book(ctx, library, book, EMPTY_CARD, "card")
+        out.append(book)
+    if out:
+        index_stage.forget_inactive(library)                    # a book put away leaves the search now
+    return out
+
+
 def _say(ctx, outcome, reason, book=None):
     ctx.log.write("card", outcome, book=book, reason=reason, now=ctx.clock())
 
@@ -126,8 +175,13 @@ def make_step(open_store=None, statvfs=None, approved=None, probe=None, launcher
 
     def step(ctx):
         library = (open_store or library_store.Store.open)()
+        digests = (approved or crawlbooks.approved_digests)(ctx.index_root)
+        _work(ctx, library, digests)
+        judge_out_empty_cards(ctx, library, read_space, digests)               # (a refusal or a trip above ends the step before this)
+
+    def _work(ctx, library, digests):
         scan = crawlbooks.scan_crawl_books(library)
-        todo = _waiting(library, scan, (approved or crawlbooks.approved_digests)(ctx.index_root))
+        todo = _waiting(library, scan, digests)
         chosen, limit = [], None
         for book in todo:
             if len(chosen) >= cardstate.MAX_ITEMS:
