@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import types
+import unicodedata
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -28,7 +29,7 @@ from unittest import mock
 from engine.tests import ENGINE_DIR
 from engine.tests.test_store import StoreCase
 
-from kb import KbError, crawlqueue, crawlstatus as cs
+from kb import KbError, crawlqueue, crawlstatus as cs, textutil
 
 REPO = Path(ENGINE_DIR).parent
 SPEC = REPO / "docs" / "specs" / "population.md"
@@ -760,6 +761,11 @@ class StateBase(Base):
     def good_breaker(self):
         shutil.copy(FIX / "state" / "breaker-not-tripped.json", self.crawl() / "breaker.json")
 
+    def put_log(self, date, *records):
+        folder = self.tmp / "crawl" / "log"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / f"crawl-{date}.jsonl").write_bytes(b"".join(raw(**r) + b"\n" for r in records))
+
     def no_root_powers(self):
         if os.getuid() == 0:
             self.skipTest("the superuser is not stopped by a folder's permissions")
@@ -1152,6 +1158,13 @@ class ApprovedPlanTest(StateBase):
         r = cs.approved_plan(self.tmp, lambda path: {"fetches_per_day": 5})
         self.assertEqual(r["values"], {"fetches_per_day": 5})
 
+    def test_a_number_that_is_not_finite_is_dropped_and_the_answer_stays_plain_data(self):
+        self.approve()
+        r = cs.approved_plan(self.tmp, lambda path: {"fetches_per_day": float("nan"), "per_domain_per_day": float("inf"), "cards_per_day": -float("inf"),
+                                                     "bulk_floor_gb": 1.5, "filed_total": 7})
+        self.assertEqual(r["values"], {"bulk_floor_gb": 1.5, "filed_total": 7})
+        self.assertEqual(json.loads(json.dumps(r, allow_nan=False)), r)
+
     def test_a_value_of_another_kind_is_dropped(self):
         self.approve()
         r = cs.approved_plan(self.tmp, lambda path: {"fetches_per_day": [5], "timezone": {"a": 1}, "filed_total": None, "cards_per_day": 7})
@@ -1316,11 +1329,6 @@ class DiskTest(Base):
 
 class RunsTest(StateBase):
     NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
-
-    def put_log(self, date, *records):
-        folder = self.tmp / "crawl" / "log"
-        folder.mkdir(parents=True, exist_ok=True)
-        (folder / f"crawl-{date}.jsonl").write_bytes(b"".join(raw(**r) + b"\n" for r in records))
 
     def run_lines(self, with_refusals):
         lines = [dict(ts="2026-11-16T05:00:00Z", run="r1", step="run_start"), dict(ts="2026-11-16T05:10:00Z", run="r1", step="run_end", n=3),
@@ -2257,6 +2265,873 @@ class CrawlBooksTest(StoreCase):
     def test_the_text_of_an_event_is_never_in_the_result(self):
         self.book(events=[("note", {"text": "Cookie: sid=1" + RLO})])
         self.assertNotIn("sid=1", repr(self.count()))
+
+
+class ListsBase(StateBase):
+    NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
+    DATA = b"a.example\nb.example\nc.example\n"
+    ON = {"phishing_domains": True, "urlhaus_recent": True}
+
+    def lists_dir(self):
+        folder = self.tmp / "crawl" / "lists"
+        folder.mkdir(parents=True, exist_ok=True)
+        os.chmod(folder, 0o700)
+        return folder
+
+    def put_list(self, name="phishing_domains", ext="txt", data=None, **over):
+        data = self.DATA if data is None else data
+        sha = hashlib.sha256(data).hexdigest()
+        fname = f"{name}.{sha[:16]}.{ext}"
+        folder = self.lists_dir()
+        (folder / fname).write_bytes(data)
+        meta = {"source": "https://example.org/list.txt", "retrieved": "2026-11-16T06:00:00Z", "checked": "2026-11-16T09:00:00Z", "sha256": sha,
+                "bytes": len(data), "entries": 3, "etag": None, "last_modified": None, "file": fname}
+        meta.update(over)
+        (folder / f"{name}.meta.json").write_text(json.dumps(meta))
+        return meta, fname
+
+
+class PublicListsTest(ListsBase):
+    def report(self, values=None):
+        return cs.public_lists(self.tmp, self.ON if values is None else values, self.NOW)
+
+    def by_name(self, got):
+        return {e["name"]: e for e in got["lists"]}
+
+    def test_the_constants_are_the_list_modules(self):
+        from kb import weblists
+        self.assertEqual(cs.MAX_META_BYTES, weblists.MAX_META_BYTES)
+        self.assertEqual(cs.MAX_STORED_BYTES, weblists.MAX_STORED_BYTES)
+        self.assertEqual(tuple((n, weblists.EXTENSIONS[n], req) for n, _k, _u, req in weblists.LISTS), cs.PUBLIC_LISTS)
+
+    def test_a_good_record_gives_its_times_ages_counts_and_the_start_of_its_hash(self):
+        meta, _ = self.put_list()
+        got = self.by_name(self.report())["phishing_domains"]
+        self.assertEqual(got, {"name": "phishing_domains", "on": True, "required": True, "status": "ok", "reason": None,
+                               "checked": "2026-11-16T09:00:00Z", "retrieved": "2026-11-16T06:00:00Z", "age_hours": 3.0, "retrieved_age_hours": 6.0,
+                               "entries": 3, "bytes": len(self.DATA), "sha256_12": meta["sha256"][:12], "data": "ok"})
+
+    def test_both_lists_are_given_in_order_and_the_suffix_list_is_always_on(self):
+        self.put_list("public_suffix", "dat")
+        got = self.report({"phishing_domains": False})
+        self.assertEqual([e["name"] for e in got["lists"]], ["phishing_domains", "public_suffix"])
+        names = self.by_name(got)
+        self.assertEqual((names["phishing_domains"]["status"], names["phishing_domains"]["on"]), ("off", False))
+        self.assertEqual((names["public_suffix"]["status"], names["public_suffix"]["on"], names["public_suffix"]["required"]), ("ok", True, False))
+
+    def test_a_list_that_is_off_is_not_read(self):
+        self.put_list()
+        opened = []
+        real = os.open
+
+        def spy(path, *a, **k):
+            opened.append(str(path))
+            return real(path, *a, **k)
+
+        with mock.patch.object(os, "open", spy):
+            got = self.by_name(self.report({"phishing_domains": False}))["phishing_domains"]
+        self.assertEqual((got["status"], got["checked"], got["entries"]), ("off", None, None))
+        self.assertFalse([p for p in opened if "phishing_domains" in p])
+
+    def test_a_list_that_has_no_copy_says_what_the_runner_does_about_it(self):
+        got = self.by_name(self.report())
+        self.assertEqual((got["phishing_domains"]["status"], got["public_suffix"]["status"]), ("no_copy", "no_copy"))
+        self.assertIn("the runner would stop", got["phishing_domains"]["reason"])
+        self.assertIn("optional", got["public_suffix"]["reason"])
+        self.assertNotIn("stop", got["public_suffix"]["reason"])
+
+    def test_a_plan_that_does_not_say_is_read_all_the_same_and_the_state_is_unknown(self):
+        self.put_list()
+        got = self.by_name(self.report({}))["phishing_domains"]
+        self.assertEqual((got["on"], got["status"]), (None, "ok"))
+
+    def test_a_record_that_cannot_be_read_is_a_bad_record_and_says_no_more(self):
+        meta, _ = self.put_list()
+        good = json.dumps(meta)
+        sha = meta["sha256"]
+        cases = [b"", b"not json", b"[]", b'"text"', b"null", b"{", b"\xff\xfe" + good.encode(), good.encode() + b" " * cs.MAX_META_BYTES,
+                 json.dumps({**meta, "sha256": sha.upper()}).encode(), json.dumps({**meta, "sha256": sha[:63]}).encode(),
+                 json.dumps({**meta, "sha256": sha.upper(), "file": meta["file"].replace(sha[:16], sha[:16].upper())}).encode(),
+                 json.dumps({k: v for k, v in meta.items() if k != "sha256"}).encode(), json.dumps({**meta, "checked": "yesterday"}).encode(),
+                 json.dumps({k: v for k, v in meta.items() if k != "checked"}).encode(), json.dumps({**meta, "file": "other.txt"}).encode(),
+                 json.dumps({**meta, "file": 5}).encode(), json.dumps({k: v for k, v in meta.items() if k != "file"}).encode(),
+                 json.dumps({**meta, "file": "../" + meta["file"]}).encode(),
+                 b'{"sha256": "%s", "sha256": "%s", "checked": "2026-11-16T09:00:00Z", "file": "%s"}' % (sha.encode(), sha.encode(), meta["file"].encode()),
+                 good.replace('"bytes"', '"bytes": NaN, "x"').encode()]
+        for data in cases:
+            with self.subTest(data=data[:50]):
+                (self.tmp / "crawl" / "lists" / "phishing_domains.meta.json").write_bytes(data)
+                got = self.by_name(self.report())["phishing_domains"]
+                self.assertEqual((got["status"], got["checked"], got["entries"], got["sha256_12"]), ("bad_record", None, None, None))
+                self.assertNotIn("SECRET", repr(got))
+
+    def test_a_record_that_is_a_link_a_folder_or_a_pipe_is_not_read(self):
+        folder = self.lists_dir()
+        (self.tmp / "real.json").write_text(json.dumps(self.put_list()[0]))
+        for make in (lambda p: os.symlink(self.tmp / "real.json", p), lambda p: p.mkdir(), lambda p: os.mkfifo(p)):
+            path = folder / "phishing_domains.meta.json"
+            path.unlink()
+            make(path)
+            got = self.within(lambda: self.by_name(self.report())["phishing_domains"])
+            self.assertEqual(got["status"], "bad_record")
+            if path.is_dir() and not path.is_symlink():
+                path.rmdir()
+            else:
+                path.unlink()
+            path.write_text("{}")
+
+    def test_a_data_file_that_is_missing_of_another_size_or_not_a_plain_file_is_bad_data(self):
+        meta, fname = self.put_list()
+        data = self.lists_dir() / fname
+        data.write_bytes(self.DATA + b"x")
+        self.assertEqual(self.by_name(self.report())["phishing_domains"]["data"], "size_differs")
+        data.unlink()
+        self.assertEqual(self.by_name(self.report())["phishing_domains"]["data"], "missing")
+        os.symlink(self.tmp / "nowhere", data)
+        self.assertEqual(self.by_name(self.report())["phishing_domains"]["data"], "not_a_plain_file")
+        data.unlink()
+        data.mkdir()
+        got = self.by_name(self.report())["phishing_domains"]
+        self.assertEqual((got["status"], got["data"]), ("bad_data", "not_a_plain_file"))
+        self.assertEqual((got["checked"], got["entries"]), ("2026-11-16T09:00:00Z", 3))
+
+    def test_a_data_file_over_the_size_the_matcher_reads_is_bad_data_whatever_the_record_says(self):
+        self.put_list()
+        with mock.patch.object(cs, "MAX_STORED_BYTES", len(self.DATA) - 1):
+            got = self.by_name(self.report())["phishing_domains"]
+        self.assertEqual((got["status"], got["data"]), ("bad_data", "too_large"))
+        with mock.patch.object(cs, "MAX_STORED_BYTES", len(self.DATA)):
+            self.assertEqual(self.by_name(self.report())["phishing_domains"]["status"], "ok")
+
+    def test_the_data_file_is_not_read_and_nothing_of_the_list_is_in_the_answer(self):
+        data = b"SECRETHOST.example\nother.example\n"
+        _, fname = self.put_list(data=data)
+        opened = []
+        real = os.open
+
+        def spy(path, *a, **k):
+            opened.append(os.path.basename(str(path)))
+            return real(path, *a, **k)
+
+        with mock.patch.object(os, "open", spy):
+            got = self.report()
+        self.assertNotIn(fname, opened)
+        self.assertNotIn("SECRETHOST", json.dumps(got))
+
+    def test_the_ages_come_from_the_record_and_a_time_in_the_future_has_no_age(self):
+        self.put_list(checked="2026-11-16T11:30:00Z", retrieved="2026-11-13T12:00:00Z")
+        got = self.by_name(self.report())["phishing_domains"]
+        self.assertEqual((got["age_hours"], got["retrieved_age_hours"]), (0.5, 72.0))
+        self.put_list(checked="2026-11-16T13:00:00Z", retrieved="2026-11-16T14:00:00Z")
+        got = self.by_name(self.report())["phishing_domains"]
+        self.assertEqual((got["age_hours"], got["retrieved_age_hours"]), (None, None))
+
+    def test_a_count_or_size_that_is_not_a_whole_number_is_unknown_and_does_not_make_the_record_bad(self):
+        for entries, size in (("many", -5), (True, False), (1.5, [3]), (None, {"a": 1})):
+            with self.subTest(entries=entries, size=size):
+                self.put_list(entries=entries, bytes=size, retrieved="soon")
+                got = self.by_name(self.report())["phishing_domains"]
+                self.assertEqual((got["status"], got["entries"], got["bytes"], got["retrieved"], got["data"]), ("ok", None, None, None, "ok"))
+
+    def test_a_lists_folder_that_is_a_link_or_not_the_owners_or_under_a_crawl_that_is_a_link_is_not_read(self):
+        real = self.tmp / "elsewhere"
+        real.mkdir()
+        self.put_list()
+        shutil.move(str(self.tmp / "crawl" / "lists"), str(real / "lists"))
+        os.symlink(real / "lists", self.tmp / "crawl" / "lists")
+        got = self.report()
+        self.assertTrue(got["problem"])
+        self.assertEqual({e["status"] for e in got["lists"]}, {"bad_folder"})
+        os.unlink(self.tmp / "crawl" / "lists")
+        shutil.move(str(real / "lists"), str(self.tmp / "crawl" / "lists"))
+        with mock.patch.object(cs, "_me", return_value=os.getuid() + 1):
+            self.assertTrue(self.report()["problem"])
+        shutil.move(str(self.tmp / "crawl"), str(real / "crawl"))
+        os.symlink(real / "crawl", self.tmp / "crawl")
+        got = self.report()
+        self.assertTrue(got["problem"])
+        self.assertEqual({e["status"] for e in got["lists"]}, {"bad_folder"})
+
+    def test_no_crawl_folder_is_no_copy_and_no_problem(self):
+        got = self.report()
+        self.assertEqual((got["problem"], {e["status"] for e in got["lists"]}), (None, {"no_copy"}))
+
+    def test_a_list_made_by_the_real_updater_is_read_in_the_form_it_wrote(self):
+        from kb import weblists
+        body = "".join(f"h{i}.example\n" for i in range(100_500)).encode()
+        suffixes = "".join(f"s{i}\n" for i in range(6_000)).encode()
+
+        def get(url, *args, **kwargs):
+            return 200, {"etag": '"v1"'}, (suffixes if "suffix" in url else body)
+
+        matcher = weblists.Matcher(self.tmp / "black.txt", self.tmp / "allow.txt", self.lists_dir(), ["openalex.org"])
+        made = matcher.update(get, self.NOW - datetime.timedelta(hours=2), {})
+        self.assertEqual(made["lists"]["phishing_domains"]["status"], "updated", made)
+        got = self.by_name(self.report())
+        self.assertEqual((got["phishing_domains"]["status"], got["phishing_domains"]["data"]), ("ok", "ok"))
+        self.assertEqual((got["phishing_domains"]["entries"], got["phishing_domains"]["bytes"], got["phishing_domains"]["age_hours"]), (100_500, len(body), 2.0))
+        self.assertEqual((got["public_suffix"]["status"], got["public_suffix"]["bytes"]), ("ok", len(suffixes)))
+
+    def test_nothing_is_written(self):
+        self.put_list()
+        before = sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode, p.stat().st_size) for p in self.tmp.rglob("*"))
+        self.report()
+        self.assertEqual(sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode, p.stat().st_size) for p in self.tmp.rglob("*")), before)
+
+
+class UrlhausStateTest(ListsBase):
+    def put_state(self, **over):
+        path = self.lists_dir() / "urlhaus.json"
+        shutil.copy(FIX / "lists" / "urlhaus.json", path)
+        os.chmod(path, 0o600)
+        if over:
+            obj = json.loads(path.read_text())
+            for key, value in over.items():
+                if value is cs:
+                    obj.pop(key, None)
+                else:
+                    obj[key] = value
+            path.write_text(json.dumps(obj))
+        return path
+
+    def report(self, values=None):
+        return cs.urlhaus_state(self.tmp, self.ON if values is None else values, self.NOW)
+
+    def test_the_constants_are_the_modules(self):
+        from kb import urlhaus
+        self.assertEqual(cs.URLHAUS_STATE, urlhaus.STATE_FILE)
+
+    def test_off_in_the_plan_is_off_and_the_file_is_not_read(self):
+        self.put_state()
+        opened = []
+        real = os.open
+
+        def spy(path, *a, **k):
+            opened.append(os.path.basename(str(path)))
+            return real(path, *a, **k)
+
+        with mock.patch.object(os, "open", spy):
+            got = self.report({"urlhaus_recent": False})
+        self.assertEqual((got["on"], got["state"]), (False, "off"))
+        self.assertNotIn("urlhaus.json", opened)
+
+    def test_on_with_no_state_file_has_made_no_request_yet(self):
+        got = self.report()
+        self.assertEqual((got["on"], got["state"], got["kept_urls"]), (True, "no_state_file", None))
+
+    def test_a_good_state_gives_the_time_of_the_last_request_and_its_age_and_the_kept_urls_as_a_number(self):
+        self.put_state()
+        got = self.report()
+        self.assertEqual((got["state"], got["last_request"], got["age_s"], got["off_day"], got["off_for_the_day"]),
+                         ("ok", "2026-11-16T11:30:00Z", 1800, None, False))
+        self.assertEqual((got["kept_urls"], got["newest_kept"]), (3, "2026-11-16"))
+        self.assertNotIn("example", json.dumps(got))
+
+    def test_the_source_is_off_for_the_day_only_when_its_off_day_is_the_utc_day_of_now(self):
+        self.put_state(off_day="2026-11-16")
+        self.assertEqual((self.report()["off_day"], self.report()["off_for_the_day"]), ("2026-11-16", True))
+        self.put_state(off_day="2026-11-15")
+        self.assertEqual((self.report()["off_day"], self.report()["off_for_the_day"]), ("2026-11-15", False))
+
+    def test_a_last_request_in_the_future_has_no_age(self):
+        self.put_state(last="2026-11-16T13:00:00Z")
+        got = self.report()
+        self.assertEqual((got["state"], got["last_request"], got["age_s"]), ("ok", "2026-11-16T13:00:00Z", None))
+
+    def test_the_off_day_is_compared_with_the_utc_day_whatever_the_zone_of_now(self):
+        self.put_state(off_day="2026-11-16")
+        new_york = datetime.timezone(datetime.timedelta(hours=-5))
+        now = datetime.datetime(2026, 11, 15, 22, 0, 0, tzinfo=new_york)  # 2026-11-16T03:00:00Z
+        self.assertEqual(cs.urlhaus_state(self.tmp, self.ON, now)["off_for_the_day"], True)
+        now = datetime.datetime(2026, 11, 16, 20, 0, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=-5)))  # 2026-11-17T01:00:00Z
+        self.assertEqual(cs.urlhaus_state(self.tmp, self.ON, now)["off_for_the_day"], False)
+
+    def test_a_state_with_no_last_request_or_no_version_is_taken_as_urlhaus_takes_it(self):
+        self.put_state(last=None, version=cs)
+        got = self.report()
+        self.assertEqual((got["state"], got["last_request"], got["age_s"]), ("ok", None, None))
+
+    def test_entries_that_are_not_a_url_and_a_date_are_not_counted(self):
+        self.put_state(entries={"https://a.example/x": "2026-11-10", "https://b.example/y": "not a date", 5: "2026-11-11", "https://c.example/z": 7,
+                                "https://d.example/" + "x" * 2000: "2026-11-12"})
+        got = self.report()
+        self.assertEqual((got["kept_urls"], got["newest_kept"]), (1, "2026-11-10"))
+
+    def test_a_state_that_cannot_be_trusted_is_damaged_and_says_the_source_makes_no_request(self):
+        good = json.loads((FIX / "lists" / "urlhaus.json").read_text())
+        cases = [b"", b"not json", b"[]", b"null", b'{"entries": []}', json.dumps({**good, "entries": ["a"]}).encode(),
+                 json.dumps({k: v for k, v in good.items() if k != "entries"}).encode(), json.dumps({**good, "version": 2}).encode(),
+                 json.dumps({**good, "version": True}).encode(), json.dumps({**good, "version": "1"}).encode(),
+                 json.dumps({**good, "last": "yesterday"}).encode(), json.dumps({**good, "last": 5}).encode(),
+                 json.dumps({**good, "off_day": "2026-13-40"}).encode(), json.dumps({**good, "off_day": 5}).encode(),
+                 b'{"entries": {}, "version": 1, "version": 1}', b'{"entries": {}, "last": NaN}', b"\xff\xfe" + json.dumps(good).encode()]
+        for data in cases:
+            with self.subTest(data=data[:50]):
+                path = self.put_state()
+                path.write_bytes(data)
+                got = self.report()
+                self.assertEqual((got["state"], got["kept_urls"], got["last_request"]), ("damaged", None, None))
+                self.assertIn("the source makes no request today", got["detail"])
+                self.assertNotIn("SECRET", repr(got))
+
+    def test_a_state_that_is_a_link_a_folder_a_pipe_loose_or_of_another_owner_is_damaged_and_not_read(self):
+        folder = self.lists_dir()
+        shutil.copy(FIX / "lists" / "urlhaus.json", self.tmp / "real.json")
+        for name, make in {"link": lambda p: os.symlink(self.tmp / "real.json", p), "folder": lambda p: p.mkdir(), "pipe": lambda p: os.mkfifo(p),
+                           "loose": lambda p: (shutil.copy(self.tmp / "real.json", p), os.chmod(p, 0o644)),
+                           "group": lambda p: (shutil.copy(self.tmp / "real.json", p), os.chmod(p, 0o640))}.items():
+            with self.subTest(case=name):
+                path = folder / "urlhaus.json"
+                make(path)
+                got = self.within(lambda: self.report())
+                self.assertEqual((got["state"], got["kept_urls"]), ("damaged", None))
+                if path.is_dir() and not path.is_symlink():
+                    path.rmdir()
+                else:
+                    path.unlink()
+        self.put_state()
+        with mock.patch.object(cs, "_me", return_value=os.getuid() + 1):
+            self.assertEqual(self.report()["state"], "damaged")
+
+    def test_a_state_over_the_size_is_not_read_and_its_size_is_said(self):
+        path = self.put_state()
+        size = path.stat().st_size
+        reads = []
+        real = os.pread
+
+        def spy(fd, n, offset):
+            reads.append(n)
+            return real(fd, n, offset)
+
+        with mock.patch.object(cs, "MAX_URLHAUS_BYTES", size - 1), mock.patch.object(os, "pread", spy):
+            got = self.report()
+        self.assertEqual((got["state"], got["size_bytes"], got["kept_urls"], got["last_request"]), ("too_large", size, None, None))
+        self.assertEqual(reads, [])
+        with mock.patch.object(cs, "MAX_URLHAUS_BYTES", size):
+            self.assertEqual(self.report()["state"], "ok")
+
+    def test_the_key_file_is_never_opened_and_its_path_is_never_looked_at(self):
+        self.put_state()
+        (self.tmp / "urlhaus.key").write_text("K" * 40)
+        (self.tmp / "urlhaus.key").chmod(0o600)
+        seen = []
+        real_open, real_lstat = os.open, os.lstat
+
+        def spy_open(path, *a, **k):
+            seen.append(str(path))
+            return real_open(path, *a, **k)
+
+        def spy_lstat(path, *a, **k):
+            seen.append(str(path))
+            return real_lstat(path, *a, **k)
+
+        with mock.patch.object(os, "open", spy_open), mock.patch.object(os, "lstat", spy_lstat), mock.patch("builtins.open", side_effect=AssertionError):
+            self.report()
+        self.assertFalse([p for p in seen if p.endswith(".key")])
+
+    def test_a_lists_folder_that_is_a_link_gives_a_state_that_cannot_be_read(self):
+        real = self.tmp / "elsewhere"
+        real.mkdir()
+        shutil.copy(FIX / "lists" / "urlhaus.json", real / "urlhaus.json")
+        (self.tmp / "crawl").mkdir()
+        os.symlink(real, self.tmp / "crawl" / "lists")
+        got = self.report()
+        self.assertEqual((got["state"], got["kept_urls"]), ("damaged", None))
+
+    def test_nothing_is_written(self):
+        self.put_state()
+        before = sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode, p.stat().st_size) for p in self.tmp.rglob("*"))
+        self.report()
+        self.assertEqual(sorted((str(p), p.stat().st_mtime_ns, p.stat().st_mode, p.stat().st_size) for p in self.tmp.rglob("*")), before)
+
+
+class ReasonsTest(QueueBase):
+    def rows(self, conn, status, count, reason="r", start=0):
+        for i in range(count):
+            self.put(conn, f"{status}{start + i:03d}", status, f"2026-11-{10 + (start + i) // 24:02d}T{(start + i) % 24:02d}:00:00Z", reason=f"{reason}{start + i}")
+
+    def test_the_ten_most_recent_rows_of_each_status_newest_first(self):
+        w = self.make_queue()
+        self.rows(w, "failed", 12)
+        self.rows(w, "rejected", 3)
+        self.rows(w, "queued", 5)
+        got = cs.queue_reasons(self.opened().conn)
+        self.assertEqual(set(got), {"rejected", "failed", "blocked"})
+        recent = got["failed"]["recent"]
+        self.assertEqual(len(recent), 10)
+        self.assertEqual([r["reason"] for r in recent], [f"r{i}" for i in range(11, 1, -1)])
+        self.assertEqual((len(got["rejected"]["recent"]), got["blocked"]["recent"]), (3, []))
+
+    def test_a_row_shows_its_address_source_reason_tries_and_time(self):
+        w = self.make_queue()
+        self.put(w, "a", "failed", "2026-11-16T10:00:00Z", reason="HTTP 503")
+        w.execute("UPDATE candidates SET tries = 2 WHERE identity_key = 'a'")
+        got = cs.queue_reasons(self.opened().conn)["failed"]["recent"]
+        self.assertEqual(got, [{"address": "https://example.org/a", "source": "arxiv", "reason": "HTTP 503", "tries": 2, "updated": "2026-11-16T10:00:00Z"}])
+
+    def test_a_row_with_no_reason_shows_none_and_a_row_with_an_empty_one_shows_the_empty_text(self):
+        w = self.make_queue()
+        self.put(w, "a", "failed", "2026-11-16T10:00:00Z", reason=None)
+        self.put(w, "b", "failed", "2026-11-16T09:00:00Z", reason="")
+        got = cs.queue_reasons(self.opened().conn)["failed"]["recent"]
+        self.assertEqual([r["reason"] for r in got], [None, ""])
+
+    def test_rows_with_the_same_time_are_newest_id_first(self):
+        w = self.make_queue()
+        for key in ("first", "second", "third"):
+            self.put(w, key, "failed", "2026-11-16T10:00:00Z", reason=key)
+        got = cs.queue_reasons(self.opened().conn)["failed"]["recent"]
+        self.assertEqual([r["reason"] for r in got], ["third", "second", "first"])
+
+    def test_the_commonest_reasons_with_their_counts_merged_after_cleaning(self):
+        w = self.make_queue()
+        for i, reason in enumerate(["HTTP 503"] * 4 + ["HTTP" + ZWSP + " 503"] * 2 + ["timeout"] * 3 + [None, ""]):
+            self.put(w, f"k{i}", "failed", reason=reason)
+        for i in range(12):
+            self.put(w, f"u{i}", "failed", reason=f"unique {i:02d}")
+        got = cs.queue_reasons(self.opened().conn)["failed"]["commonest"]
+        self.assertEqual(len(got), 10)
+        self.assertEqual(got[0], {"reason": "HTTP 503", "n": 6})
+        self.assertEqual(got[1], {"reason": "timeout", "n": 3})
+        self.assertEqual(got[2], {"reason": "(no reason)", "n": 2})
+        self.assertEqual([g["n"] for g in got[3:]], [1] * 7)
+
+    def test_text_from_a_row_is_redacted_cleaned_and_cut(self):
+        w = self.make_queue()
+        self.put(w, "a", "rejected", reason="Cookie: sid=1" + RLO)
+        self.put(w, "b", "rejected", reason="x" * 5000)
+        self.put(w, "c", "rejected", reason="a" + chr(0x1b) + "[31m" + ZWSP + "b\nc")
+        w.execute("UPDATE candidates SET address = ? WHERE identity_key = 'a'", ("https://user:pw@example.org/p?token=ABC&a=1" + "y" * 400,))
+        w.execute("UPDATE candidates SET source = ? WHERE identity_key = 'b'", ("s" * 100,))
+        got = cs.queue_reasons(self.opened().conn)["rejected"]["recent"]
+        by = {r["address"].split("/")[-1][:1]: r for r in got}
+        text = json.dumps(got)
+        self.assertNotIn("sid=1", text)
+        self.assertNotIn("ABC", text)
+        self.assertNotIn("user:pw", text)
+        self.assertIn(cs.WITHHELD, text)
+        reasons = sorted(r["reason"] for r in got)
+        self.assertIn("a[31mb c", reasons)
+        self.assertTrue(all(len(r["address"]) <= 200 and len(r["reason"]) <= 300 and len(r["source"]) <= 20 for r in got))
+        self.assertEqual(len(by), len(got))
+
+    def test_a_row_with_odd_types_is_shown_cleanly_and_does_not_stop_the_rest(self):
+        w = self.make_queue()
+        self.put(w, "a", "failed")
+        w.execute("UPDATE candidates SET tries = 'many', reason = x'414243', updated = 5 WHERE identity_key = 'a'")
+        self.put(w, "b", "failed", reason="fine")
+        got = cs.queue_reasons(self.opened().conn)["failed"]["recent"]
+        self.assertEqual(len(got), 2)
+        odd = [r for r in got if r["reason"] != "fine"][0]
+        self.assertIsNone(odd["tries"])
+        self.assertEqual(odd["updated"], "5")
+
+    def test_a_time_with_hostile_text_is_cleaned(self):
+        w = self.make_queue()
+        self.put(w, "a", "failed", "2026-11-16T10:00:00Z" + RLO + chr(0x1b) + "[31m" + "x" * 50)
+        got = cs.queue_reasons(self.opened().conn)["failed"]["recent"]
+        self.assertNotIn(RLO, got[0]["updated"])
+        self.assertNotIn(chr(0x1b), got[0]["updated"])
+        self.assertLessEqual(len(got[0]["updated"]), 20)
+
+    def test_only_selects_are_made(self):
+        self.make_queue().close()
+        before = self.main_state()
+        cs.queue_reasons(self.opened().conn)
+        self.assertEqual(self.main_state(), before)
+
+
+class HoldsTest(StateBase):
+    def hold(self, ts, **kw):
+        return dict(ts=ts, run="r1", step="hold", outcome="held", **kw)
+
+    def test_the_ten_newest_holds_across_the_newest_files_with_their_reason_book_and_host(self):
+        for day in (13, 14, 15):
+            self.put_log(f"2026-11-{day}", *[self.hold(f"2026-11-{day}T0{i}:00:00Z", book=f"b{day}-{i}", host=f"h{i}.example", reason=f"javascript {i}") for i in range(5)])
+        got = cs.recent_holds(self.tmp)
+        self.assertEqual(len(got["holds"]), 10)
+        self.assertEqual(got["holds"][0], {"ts": "2026-11-15T04:00:00Z", "book": "b15-4", "host": "h4.example", "reason": "javascript 4"})
+        self.assertEqual(got["holds"][-1]["ts"], "2026-11-14T00:00:00Z")
+        self.assertEqual((got["files_read"], got["problem"]), (2, None))
+
+    def test_holds_with_the_same_time_are_newest_line_first_and_across_files_bad_lines_add_up(self):
+        self.put_log("2026-11-15", self.hold("2026-11-15T05:00:00Z", book="old-1"), self.hold("2026-11-15T05:00:00Z", book="old-2"))
+        self.put_log("2026-11-16", self.hold("2026-11-16T05:00:00Z", book="new-1"), self.hold("2026-11-16T05:00:00Z", book="new-2"))
+        for day in ("15", "16"):
+            with open(self.tmp / "crawl" / "log" / f"crawl-2026-11-{day}.jsonl", "ab") as f:
+                f.write(b"junk\n")
+        got = cs.recent_holds(self.tmp)
+        self.assertEqual([h["book"] for h in got["holds"]], ["new-2", "new-1", "old-2", "old-1"])
+        self.assertEqual(got["bad"], {"not_json": 2})
+
+    def test_a_log_file_that_cannot_be_read_is_not_counted_among_the_files_read_and_the_others_are_still_searched(self):
+        self.no_root_powers()
+        self.put_log("2026-11-14", self.hold("2026-11-14T05:00:00Z", book="older"))
+        self.put_log("2026-11-15", self.hold("2026-11-15T05:00:00Z", book="newer"))
+        path = self.tmp / "crawl" / "log" / "crawl-2026-11-15.jsonl"
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o600)
+        got = cs.recent_holds(self.tmp)
+        self.assertEqual(([h["book"] for h in got["holds"]], got["searched_files"], got["files_read"]), (["older"], 2, 1))
+
+    def test_other_steps_and_refusals_are_not_holds(self):
+        self.put_log("2026-11-16", self.hold("2026-11-16T05:00:00Z", book="b1", reason="encrypted"),
+                     dict(ts="2026-11-16T06:00:00Z", run="", step="refuse", outcome="refused", reason="the stop file exists"),
+                     dict(ts="2026-11-16T07:00:00Z", run="r1", step="reject", outcome="rejected", reason="not a document"),
+                     dict(ts="2026-11-16T08:00:00Z", run="r1", step="scan", outcome="held", reason="scan failed"))
+        got = cs.recent_holds(self.tmp)["holds"]
+        self.assertEqual([h["book"] for h in got], ["b1"])
+
+    def test_the_search_goes_back_only_as_far_as_it_must_and_no_further_than_the_bound(self):
+        for day in range(1, 8):
+            self.put_log(f"2026-11-{day:02d}", self.hold(f"2026-11-{day:02d}T05:00:00Z", book=f"b{day}"))
+        got = cs.recent_holds(self.tmp)
+        self.assertEqual((len(got["holds"]), got["searched_files"]), (5, 5))
+        self.assertEqual(got["holds"][0]["book"], "b7")
+        got = cs.recent_holds(self.tmp, max_files=2, limit=1)
+        self.assertEqual(([h["book"] for h in got["holds"]], got["searched_files"]), (["b7"], 1))
+
+    def test_text_is_redacted_and_cleaned(self):
+        self.put_log("2026-11-16", self.hold("2026-11-16T05:00:00Z", book="b" + RLO + "1", host="h" + chr(0x1b) + ".example", reason="Auth-Key: abc"))
+        got = cs.recent_holds(self.tmp)["holds"][0]
+        self.assertEqual((got["book"], got["host"], got["reason"]), ("b1", "h.example", cs.WITHHELD))
+
+    def test_a_hold_with_no_reason_book_or_host_is_shown_with_none(self):
+        self.put_log("2026-11-16", self.hold("2026-11-16T05:00:00Z"))
+        self.assertEqual(cs.recent_holds(self.tmp)["holds"], [{"ts": "2026-11-16T05:00:00Z", "book": None, "host": None, "reason": None}])
+
+    def test_bad_lines_and_a_cut_are_passed_on_and_no_log_is_no_holds(self):
+        self.assertEqual(cs.recent_holds(self.tmp)["holds"], [])
+        folder = self.tmp / "crawl" / "log"
+        folder.mkdir(parents=True)
+        lines = [raw(**self.hold(f"2026-11-16T05:{i:02d}:00Z", book=f"b{i}")) for i in range(40)]
+        (folder / "crawl-2026-11-16.jsonl").write_bytes(b"\n".join(lines) + b"\njunk\n")
+        got = cs.recent_holds(self.tmp, limit=3, per_file_limit=1500)
+        self.assertEqual((got["cut"], got["bad"], len(got["holds"])), (True, {"not_json": 1}, 3))
+        self.assertEqual([h["book"] for h in got["holds"]], ["b39", "b38", "b37"])
+
+    def test_bounds_are_whole_numbers_of_at_least_one(self):
+        for name in ("max_files", "limit", "per_file_limit"):
+            for bad in (0, -1, 1.5, "3", None, True):
+                with self.subTest(name=name, value=bad), self.assertRaises(KbError):
+                    cs.recent_holds(self.tmp, **{name: bad})
+
+
+class StatusTest(StoreCase):
+    within = Base.within
+    NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
+    VALUES = {"fetches_per_day": 5, "per_domain_per_day": 3, "cards_per_day": 30, "filed_total": 2, "timezone": "UTC", "bulk_floor_gb": 1,
+              "index_floor_gb": 1, "domain_refusals": 3, "phishing_domains": True, "urlhaus_recent": True}
+
+    def setUp(self):
+        super().setUp()
+        self.root = Path(self.index)
+        (self.root / "crawl").mkdir(exist_ok=True)
+
+    def vfs(self, path):
+        return types.SimpleNamespace(f_bavail=50 * 1024 * 1024, f_frsize=4096)
+
+    def reader(self, values=None):
+        return lambda path: dict(self.VALUES if values is None else values)
+
+    def approve(self):
+        shutil.copytree(FIX / "approved", self.root / "crawl" / "approved")
+
+    def breaker_ok(self):
+        shutil.copy(FIX / "state" / "breaker-not-tripped.json", self.root / "crawl" / "breaker.json")
+
+    def queue(self):
+        conn = crawlqueue.connect(self.root)
+        self.addCleanup(conn.close)
+        return conn
+
+    def put(self, conn, key, status, updated="2026-11-16T05:00:00Z", reason=None):
+        conn.execute("INSERT INTO candidates (identity_key, address, source, status, domain, reason, added, updated) VALUES (?,?,?,?,?,?,?,?)",
+                     (key, f"https://example.org/{key}", "arxiv", status, "example.org", reason, updated, updated))
+
+    def status(self, read_plan=None, **kw):
+        return cs.status(self.index, self.bulk, read_plan=read_plan or self.reader(), store=self.store, now=kw.pop("now", self.NOW),
+                         statvfs=kw.pop("statvfs", self.vfs), **kw)
+
+    def strings(self, obj):
+        if isinstance(obj, str):
+            yield obj
+        elif isinstance(obj, dict):
+            for key, value in obj.items():
+                yield from self.strings(key)
+                yield from self.strings(value)
+        elif isinstance(obj, (list, tuple)):
+            for item in obj:
+                yield from self.strings(item)
+
+    def test_every_part_is_there_and_the_whole_is_plain_data(self):
+        self.approve()
+        self.breaker_ok()
+        got = self.status()
+        for key in ("generated", "notes", "plan", "state", "queue", "books", "last_run", "runs_today", "disk", "lists", "holds", "log"):
+            self.assertIn(key, got)
+        self.assertEqual(json.loads(json.dumps(got)), got)
+        self.assertEqual(got["generated"], "2026-11-16T12:00:00Z")
+
+    def test_an_approved_plan_shows_its_zone_ceilings_and_floors_and_no_defaults(self):
+        self.approve()
+        self.breaker_ok()
+        w = self.queue()
+        self.put(w, "a", "failed", reason="HTTP 503")
+        w.execute("INSERT INTO counters (day, key, n) VALUES ('2026-11-16', 'fetch', 5)")
+        got = self.status()
+        self.assertEqual((got["plan"]["status"], got["plan"]["zone"], got["plan"]["zone_problem"], got["plan"]["defaults_used"]), ("approved", "UTC", None, False))
+        self.assertEqual(got["plan"]["digest"], "0123456789ab")
+        self.assertEqual(got["queue"]["status"], "ok")
+        self.assertEqual(got["queue"]["counters"]["fetch"], {"n": 5, "limit": 5, "at_or_over": True})
+        self.assertEqual(got["queue"]["counts"]["all"]["failed"], 1)
+        self.assertEqual(got["queue"]["reasons"]["failed"]["recent"][0]["reason"], "HTTP 503")
+        self.assertEqual(got["disk"]["bulk"]["floor_bytes"], 1024 ** 3)
+        self.assertEqual(got["state"]["state"], "idle")
+        self.assertEqual(got["notes"], [])
+
+    def test_no_approved_plan_says_so_shows_the_counters_without_ceilings_and_uses_the_defaults_and_says_it(self):
+        self.breaker_ok()
+        w = self.queue()
+        w.execute("INSERT INTO counters (day, key, n) VALUES (?, 'fetch', 5)", (self.NOW.date().isoformat(),))
+        got = self.status()
+        self.assertEqual((got["plan"]["status"], got["plan"]["defaults_used"], got["plan"]["zone"]), ("none", True, "local"))
+        self.assertEqual(got["queue"]["counters"]["fetch"], {"n": 5, "limit": None, "at_or_over": None})
+        self.assertFalse(got["queue"]["counters"]["ceilings_known"])
+        self.assertTrue(got["notes"][0].startswith("no approved plan"))
+        self.assertEqual((got["disk"]["bulk"]["floor_bytes"], got["disk"]["index"]["floor_bytes"]), (50 * 1024 ** 3, 10 * 1024 ** 3))
+        self.assertTrue(any("no approved plan" in n for n in got["notes"]))
+        self.assertEqual(got["books"]["filed"]["limit"], None)
+        names = {e["name"]: e for e in got["lists"]["public"]["lists"]}
+        self.assertEqual((names["phishing_domains"]["on"], got["lists"]["urlhaus"]["on"]), (True, False))
+
+    def test_a_plan_that_cannot_be_read_says_why_and_the_other_parts_go_on(self):
+        self.approve()
+        self.breaker_ok()
+        got = self.status(read_plan=mock.Mock(side_effect=KbError("the crawl plan: line 3: bad value")))
+        self.assertEqual(got["plan"]["status"], "unreadable")
+        self.assertIn("line 3", got["plan"]["reason"])
+        self.assertEqual(got["plan"]["zone"], "local")
+        self.assertTrue(got["plan"]["zone_problem"])
+        self.assertTrue(got["plan"]["defaults_used"])
+        self.assertTrue(got["notes"][0].startswith("the approved plan cannot be read"))
+        self.assertEqual(got["state"]["state"], "idle")
+
+    def test_a_zone_the_system_lacks_is_local_with_its_problem_shown(self):
+        self.approve()
+        self.breaker_ok()
+        got = self.status(read_plan=self.reader({**self.VALUES, "timezone": "Mars/Olympus"}))
+        self.assertEqual(got["plan"]["zone"], "local")
+        self.assertIn("not one the system knows", got["plan"]["zone_problem"])
+        self.assertIn(got["plan"]["zone_problem"], got["notes"])
+
+    def test_the_text_values_of_the_plan_are_cleaned_when_they_are_shown(self):
+        self.approve()
+        self.breaker_ok()
+        got = self.status(read_plan=self.reader({**self.VALUES, "timezone": "Mars" + RLO + chr(0x1b) + "[31m/" + "x" * 300}))
+        shown = got["plan"]["values"]["timezone"]
+        self.assertNotIn(RLO, shown)
+        self.assertNotIn(chr(0x1b), shown)
+        self.assertLessEqual(len(shown), 100)
+
+    def test_a_plan_part_that_itself_fails_is_an_unreadable_plan_and_the_rest_stands(self):
+        self.approve()
+        self.breaker_ok()
+        with mock.patch.object(cs, "approved_plan", side_effect=RuntimeError("it broke: Cookie: sid=1")):
+            got = self.status()
+        self.assertEqual((got["plan"]["status"], got["plan"]["reason"], got["plan"]["defaults_used"]), ("unreadable", cs.WITHHELD, True))
+        self.assertEqual(got["state"]["state"], "idle")
+
+    def test_the_queue_is_closed_when_the_parts_are_made_and_when_one_of_them_fails(self):
+        self.approve()
+        self.breaker_ok()
+        conn = mock.Mock()
+        with mock.patch.object(cs, "open_queue", return_value=cs.QueueOpen(conn, "ok", None)), \
+                mock.patch.object(cs, "queue_counts", side_effect=sqlite3.DatabaseError("malformed")), \
+                mock.patch.object(cs, "counters_report", return_value={}), mock.patch.object(cs, "queue_reasons", return_value={}):
+            self.status()
+        conn.close.assert_called_once_with()
+
+    def test_a_queue_that_cannot_even_be_opened_is_bad_and_the_rest_stands(self):
+        self.approve()
+        self.breaker_ok()
+        with mock.patch.object(cs, "open_queue", side_effect=RuntimeError("it broke: Cookie: sid=1")):
+            got = self.status()["queue"]
+        self.assertEqual((got["status"], got["reason"], got["counts"]), ("bad", cs.WITHHELD, None))
+
+    def test_the_bad_lines_of_the_files_the_last_run_and_the_holds_read_are_shown_apart_from_the_days(self):
+        self.approve()
+        self.breaker_ok()
+        folder = self.root / "crawl" / "log"
+        folder.mkdir()
+        (folder / "crawl-2026-11-15.jsonl").write_bytes(
+            b"junk\n" + raw(ts="2026-11-15T05:00:00Z", run="r0", step="run_start") + b"\n" +
+            raw(ts="2026-11-15T06:00:00Z", run="r0", step="hold", outcome="held", book="b") + b"\n[1]\n")
+        got = self.status()["log"]
+        self.assertEqual((got["bad_lines"], got["by_kind"], got["cut"]), (0, {}, False))
+        self.assertEqual(got["last_run_files"], {"bad": {"not_json": 1, "not_object": 1}, "cut": False})
+        self.assertEqual(got["hold_files"], {"bad": {"not_json": 1, "not_object": 1}, "cut": False})
+
+    def test_the_cut_of_the_files_the_holds_and_the_last_run_read_is_said(self):
+        self.approve()
+        self.breaker_ok()
+        parts = {"found": False, "searched_files": 1, "files_read": 1, "bytes_read": 1, "stopped_by": "no_more_files", "bad": {}, "cut": True,
+                 "problem": None}
+        holds = {"holds": [], "searched_files": 1, "files_read": 1, "bad": {}, "cut": True, "problem": None}
+        with mock.patch.object(cs, "last_run", return_value=parts), mock.patch.object(cs, "recent_holds", return_value=holds):
+            got = self.status()["log"]
+        self.assertEqual((got["last_run_files"]["cut"], got["hold_files"]["cut"], got["cut"]), (True, True, False))
+
+    def test_the_cut_of_the_days_log_is_said(self):
+        self.approve()
+        self.breaker_ok()
+        cut = {"day": "2026-11-16", "started": 0, "ended": 0, "ended_by_outcome": {}, "refused": 0, "refused_by_reason": {}, "bad": {}, "cut": True,
+               "unreadable": 0, "problem": None, "first": None, "last": None}
+        with mock.patch.object(cs, "run_counts", return_value=cut):
+            self.assertTrue(self.status()["log"]["cut"])
+        self.assertFalse(self.status()["log"]["cut"])
+
+    def test_the_time_generated_is_the_utc_time_whatever_the_zone_of_now(self):
+        self.approve()
+        self.breaker_ok()
+        now = datetime.datetime(2026, 11, 16, 7, 0, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=-5)))
+        self.assertEqual(self.status(now=now)["generated"], "2026-11-16T12:00:00Z")
+
+    def test_the_day_is_the_plans_day_in_its_zone(self):
+        self.approve()
+        self.breaker_ok()
+        w = self.queue()
+        self.put(w, "in", "queued", "2026-11-16T05:00:00Z")
+        self.put(w, "out", "queued", "2026-11-16T04:59:59Z")
+        got = self.status(read_plan=self.reader({**self.VALUES, "timezone": "America/New_York"}))
+        self.assertEqual(got["queue"]["counts"]["today"]["queued"], 1)
+        self.assertEqual(got["queue"]["counters"]["day"], "2026-11-16")
+        got = self.status(read_plan=self.reader({**self.VALUES, "timezone": "America/New_York"}), now=datetime.datetime(2026, 11, 17, 3, 0, 0, tzinfo=UTC))
+        self.assertEqual(got["queue"]["counters"]["day"], "2026-11-16")
+        self.assertEqual(got["queue"]["counters"]["discovery"]["day"], "2026-11-17")
+
+    def test_the_filings_are_shown_against_the_ceiling_with_what_the_count_could_not_read(self):
+        self.approve()
+        self.breaker_ok()
+        for _ in range(2):
+            book = self.store.create_book(title="A", kind="preprint", auto_filed=True)
+            self.store.append_event(book, "crawl_found", candidate="x")
+        got = self.status()["books"]
+        self.assertEqual((got["filed"], got["unreviewed"], got["unreadable"], got["cut"], got["stopped_by"]),
+                         ({"n": 2, "limit": 2, "at_or_over": True}, 2, 0, False, "no_more_books"))
+
+    def test_a_missing_queue_is_said_and_the_other_parts_go_on(self):
+        self.approve()
+        self.breaker_ok()
+        got = self.status()
+        self.assertEqual((got["queue"]["status"], got["queue"]["counts"], got["queue"]["counters"], got["queue"]["reasons"]), ("missing", None, None, None))
+        self.assertEqual(got["state"]["state"], "idle")
+        self.assertIn("filed", got["books"])
+
+    def test_a_queue_that_is_busy_or_bad_is_said_with_its_reason_and_the_other_parts_go_on(self):
+        self.approve()
+        self.breaker_ok()
+        for status in ("busy", "bad"):
+            with self.subTest(status=status), mock.patch.object(cs, "open_queue", return_value=cs.QueueOpen(None, status, "the queue is " + status)):
+                got = self.status()
+                self.assertEqual((got["queue"]["status"], got["queue"]["reason"], got["queue"]["counts"]), (status, "the queue is " + status, None))
+                self.assertIn("disk", got)
+
+    def test_a_queue_that_fails_after_it_was_opened_is_a_fault_of_that_part_and_the_rest_stand(self):
+        self.approve()
+        self.breaker_ok()
+        w = self.queue()
+        self.put(w, "a", "failed")
+        for name in ("queue_counts", "counters_report", "queue_reasons"):
+            with self.subTest(part=name), mock.patch.object(cs, name, side_effect=sqlite3.DatabaseError("database disk image is malformed")):
+                got = self.status()["queue"]
+                self.assertEqual(got["status"], "ok")
+                failed = {"queue_counts": "counts", "counters_report": "counters", "queue_reasons": "reasons"}[name]
+                self.assertIn("error", got[failed])
+                others = {"counts", "counters", "reasons"} - {failed}
+                self.assertTrue(all("error" not in got[o] for o in others))
+
+    def test_every_other_part_that_fails_is_a_fault_of_that_part_alone(self):
+        self.approve()
+        self.breaker_ok()
+        for name, key in (("disk", "disk"), ("last_run", "last_run"), ("run_counts", "runs_today"), ("crawl_books", "books"), ("public_lists", None),
+                          ("urlhaus_state", None), ("recent_holds", "holds"), ("state", "state")):
+            with self.subTest(part=name), mock.patch.object(cs, name, side_effect=RuntimeError("it broke: Cookie: sid=1")):
+                got = self.status()
+                self.assertEqual(json.loads(json.dumps(got)), got)
+                if key:
+                    self.assertEqual(set(got[key]), {"error"})
+                    self.assertEqual(got[key]["error"], cs.WITHHELD)
+                self.assertNotIn("sid=1", json.dumps(got))
+                self.assertEqual(got["plan"]["status"], "approved")
+
+    def test_a_log_that_is_a_link_is_a_problem_of_the_log_parts_and_not_of_the_others(self):
+        self.approve()
+        self.breaker_ok()
+        real = self.root / "elsewhere"
+        real.mkdir()
+        os.symlink(real, self.root / "crawl" / "log")
+        got = self.status()
+        self.assertTrue(got["last_run"]["problem"])
+        self.assertTrue(got["runs_today"]["problem"])
+        self.assertTrue(got["holds"]["problem"])
+        self.assertEqual(got["state"]["state"], "idle")
+
+    def test_the_bad_lines_of_the_days_log_are_counted(self):
+        self.approve()
+        self.breaker_ok()
+        folder = self.root / "crawl" / "log"
+        folder.mkdir()
+        (folder / "crawl-2026-11-16.jsonl").write_bytes(b"junk\n" + raw(ts="2026-11-16T05:00:00Z", step="run_start") + b"\nmore junk\n[1]\n")
+        got = self.status()
+        self.assertEqual((got["log"]["bad_lines"], got["log"]["by_kind"]), (3, {"not_json": 2, "not_object": 1}))
+        self.assertEqual(got["runs_today"]["started"], 1)
+
+    def test_every_text_is_cleaned_and_no_planted_secret_is_in_the_answer(self):
+        self.approve()
+        evil = "evil" + RLO + chr(0x1b) + "[31m" + ZWSP
+        (self.root / "crawl" / "breaker.json").write_text(json.dumps({"tripped": True, "reason": "Cookie: sid=SECRET1 " + evil, "kind": "stage_bound",
+                                                                       "at": "2026-11-16T05:00:00Z", "run": "r" + evil}))
+        w = self.queue()
+        self.put(w, "a", "failed", reason="Auth-Key: SECRET2 " + evil)
+        w.execute("UPDATE candidates SET address = ? WHERE identity_key = 'a'", ("https://user:SECRET3@example.org/p?token=SECRET4&x=" + evil,))
+        w.execute("INSERT INTO counters (day, key, n) VALUES ('2026-11-16', ?, 3)", ("fetch:" + evil + "Authorization: Bearer SECRET5SECRET5",))
+        folder = self.root / "crawl" / "log"
+        folder.mkdir()
+        (folder / "crawl-2026-11-16.jsonl").write_bytes(
+            raw(ts="2026-11-16T05:00:00Z", run="r" + evil, step="run_start") + b"\n" +
+            raw(ts="2026-11-16T05:30:00Z", run="r" + evil, step="hold", outcome="held", book="b" + evil, host="h" + evil, reason="javascript X-Api-Key: SECRET6 " + evil) + b"\n")
+        got = self.status(read_plan=mock.Mock(side_effect=KbError("bad Cookie: SECRET7")))
+        text = json.dumps(got)
+        for n in range(1, 8):
+            self.assertNotIn(f"SECRET{n}", text)
+        for value in self.strings(got):
+            for char in value:
+                self.assertFalse(textutil._hidden(char) or unicodedata.category(char) in ("Cc", "Zl", "Zp"), repr(value))
+
+    def test_nothing_is_written_beyond_the_side_files_of_the_queue_and_no_socket_is_opened(self):
+        self.approve()
+        self.breaker_ok()
+        self.queue().close()
+        folder = self.root / "crawl" / "log"
+        folder.mkdir()
+        (folder / "crawl-2026-11-16.jsonl").write_bytes(raw(ts="2026-11-16T05:00:00Z", step="run_start") + b"\n")
+
+        def listing():
+            return {str(p): (p.stat().st_mtime_ns, p.stat().st_mode, p.stat().st_size) for p in self.root.rglob("*")}
+
+        before = listing()
+        with mock.patch("socket.socket.connect", side_effect=AssertionError("a socket was used")):
+            self.status()
+        after = listing()
+        added = set(after) - set(before)
+        self.assertEqual({os.path.basename(p) for p in added}, SIDE_FILES)
+        self.assertEqual({k: v for k, v in after.items() if k in before}, before)
+
+    def test_the_time_must_be_a_time_with_a_zone(self):
+        for bad in (datetime.datetime(2026, 11, 16, 12, 0, 0), "2026-11-16T12:00:00Z", None):
+            with self.subTest(now=bad), self.assertRaises(KbError):
+                self.status(now=bad)
 
 
 if __name__ == "__main__":

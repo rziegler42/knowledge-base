@@ -57,6 +57,17 @@ MAX_EVENTS_READ = 4 * 1024 * 1024  # the most of a book's events log that is rea
 MAX_BOOKS = 200_000               # the most books whose records are read to count the books the crawl filed
 MAX_TOTAL_EVENTS = 256 * 1024 * 1024  # and the most bytes of their events logs, in all
 PERMANENT_DAY = "permanent"       # the day discovery gives the counters that are never reset (`walked:`); a test compares it with discovery's
+LISTS_FOLDER = "lists"            # `<index root>/crawl/lists/`: where the runner plan keeps the stored copies of the lists and the state of URLhaus
+PUBLIC_LISTS = (("phishing_domains", "txt", True), ("public_suffix", "dat", False))  # name, extension of its data file, whether a run needs a copy
+URLHAUS_STATE = "urlhaus.json"    # the state file of URLhaus recent mode (a test compares it with `urlhaus.py`)
+MAX_META_BYTES = 64 * 1024        # a list's record (a test compares it with `weblists.py`)
+MAX_STORED_BYTES = 256 * 1024 * 1024  # the most of a stored list that the matcher reads back (a test compares it with `weblists.py`)
+MAX_URLHAUS_BYTES = 64 * 1024 * 1024  # the most of URLhaus's state file that is read; a larger one is named and not read
+REASON_ROWS = 10                  # the most recent rows of each status that are shown, and the commonest reasons
+HOLD_FILES = 5                    # the most log files looked through for holds
+HOLD_LIMIT = 10                   # and the most holds shown
+# What the plan says when there is no approved plan to say it: the spec's defaults (the ceilings have none: they are shown as not known).
+DEFAULT_VALUES = {"bulk_floor_gb": 50, "index_floor_gb": 10, "phishing_domains": True, "urlhaus_recent": False}
 MAX_RUN_FILES = 60                # the most log files `last_run` looks through for a run (it stops at the newest file that has one)
 MAX_RUN_BYTES = 128 * 1024 * 1024  # and the most bytes it reads in all
 GIB = 1024 ** 3                   # a floor of the plan is in gigabytes; read here as 2**30 bytes (to be checked against the runner's guard)
@@ -606,7 +617,8 @@ def approved_plan(index_root, read_plan):
         return {"status": "unreadable", "digest": digest, "values": None, "reason": clean(str(e) or type(e).__name__, 200)}
     if type(plan) is not dict:
         return {"status": "unreadable", "digest": digest, "values": None, "reason": "the reader gave no plan"}
-    values = {key: plan[key] for key in PLAN_VALUES if key in plan and type(plan[key]) in (int, float, str, bool)}
+    values = {key: plan[key] for key in PLAN_VALUES
+              if key in plan and type(plan[key]) in (int, float, str, bool) and (type(plan[key]) is not float or math.isfinite(plan[key]))}
     return {"status": "approved", "digest": digest, "values": values, "reason": None}
 
 
@@ -961,3 +973,302 @@ def crawl_books(store, *, max_books=MAX_BOOKS, max_events_bytes=MAX_EVENTS_READ,
         if _has_event(events.data, "crawl_found"):
             out["filed_total"] += 1
     return out
+
+
+# --- the lists, the reasons, the holds ----------------------------------------------------------------------------------------------------------
+
+_SHA = re.compile(r"[0-9a-f]{64}")
+_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _parse_ts(text):
+    """The aware UTC time of a time written `YYYY-MM-DDTHH:MM:SSZ`, or None."""
+    if not isinstance(text, str) or not _TS.fullmatch(text):
+        return None
+    try:
+        return datetime.datetime.strptime(text, _TS_FORMAT).replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return None
+
+
+def _valid_day(text):
+    if not isinstance(text, str) or not _DAY.fullmatch(text):
+        return False
+    try:
+        datetime.date.fromisoformat(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _age_hours(text, now):
+    when = _parse_ts(text)
+    if when is None:
+        return None
+    hours = (now - when).total_seconds() / 3600
+    return round(hours, 1) if hours >= 0 else None
+
+
+def _count(value):
+    return value if type(value) is int and value >= 0 else None
+
+
+def _lists_folder(index_root):
+    """`(folder, problem)`: the folder of the stored lists, or None with nothing wrong (it is not there) or with a problem (the `crawl` folder or this
+    one is a link or not the owner's, so nothing is read from it)."""
+    crawl = Path(index_root) / "crawl"
+    state = _folder_state(crawl)
+    if state == "missing":
+        return None, None
+    if state == "bad":
+        return None, "the crawl folder is not a plain folder of the owner's, so no copy of a list is read"
+    folder = crawl / LISTS_FOLDER
+    state = _folder_state(folder)
+    if state == "missing":
+        return None, None
+    if state == "bad":
+        return None, "the lists folder is not a plain folder of the owner's, so no copy of a list is read"
+    return folder, None
+
+
+def _data_state(path, size):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "not_a_plain_file"
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != _me():
+        return "not_a_plain_file"
+    if info.st_size > MAX_STORED_BYTES:
+        return "too_large"
+    if size is not None and info.st_size != size:
+        return "size_differs"
+    return "ok"
+
+
+def _list_entry(name, required, on):
+    return {"name": name, "on": on, "required": required, "status": None, "reason": None, "checked": None, "retrieved": None, "age_hours": None,
+            "retrieved_age_hours": None, "entries": None, "bytes": None, "sha256_12": None, "data": None}
+
+
+def public_lists(index_root, values, now):
+    """The two public lists (the Phishing.Database list and the Public Suffix List) as their stored records say: whether the plan has each on, the
+    record's times and their ages in hours, the entries and bytes it names, the first 12 characters of its hash, and whether the data file it names is
+    there as a plain file of the size the record gives. **Only the small record is read, never the list: no entry and no host of a list is read or
+    printed, and the hash is not recomputed** (the matcher does that when it uses a copy). `status`: `ok`, `off`, `no_copy` (a required list with none
+    says that the runner would stop), `bad_record`, `bad_data` or `bad_folder`. **`ok` means the record is in the form the matcher reads and its data
+    file is there, a plain file of the owner's, of the size the record gives and within the size the matcher reads back; it does not say the matcher
+    will accept the copy** (the hash is its to check, and a record with no size is not compared). `{"lists": [...], "problem": text or None}`."""
+    folder, problem = _lists_folder(index_root)
+    out = []
+    for name, extension, required in PUBLIC_LISTS:
+        planned = values.get(name) if isinstance(values, dict) else None
+        on = True if name == "public_suffix" else (planned if type(planned) is bool else None)
+        entry = _list_entry(name, required, on)
+        out.append(entry)
+        if on is False:
+            entry["status"] = "off"
+            continue
+        if problem:
+            entry.update(status="bad_folder", reason=problem)
+            continue
+        read = read_small(folder / f"{name}.meta.json", MAX_META_BYTES) if folder is not None else None
+        if read is None or read.status == "missing":
+            entry.update(status="no_copy", reason="no copy: the runner would stop" if required else
+                         "no copy (optional): the runner uses the last two labels of a name and halves its caps")
+            continue
+        info = _object(read.data) if read.status == "ok" else None
+        sha = info.get("sha256") if info else None
+        if (info is None or not isinstance(sha, str) or not _SHA.fullmatch(sha) or _parse_ts(info.get("checked")) is None
+                or info.get("file") != f"{name}.{sha[:16]}.{extension}"):
+            entry.update(status="bad_record", reason="the list's record cannot be read")
+            continue
+        retrieved = info.get("retrieved") if _parse_ts(info.get("retrieved")) else None
+        size = _count(info.get("bytes"))
+        entry.update(checked=info["checked"], retrieved=retrieved, age_hours=_age_hours(info["checked"], now),
+                     retrieved_age_hours=_age_hours(retrieved, now), entries=_count(info.get("entries")), bytes=size, sha256_12=sha[:12],
+                     data=_data_state(folder / info["file"], size))
+        entry["status"] = "ok" if entry["data"] == "ok" else "bad_data"
+        if entry["status"] == "bad_data":
+            entry["reason"] = f"the data file is not usable ({entry['data']})"
+    return {"lists": out, "problem": problem}
+
+
+def urlhaus_state(index_root, values, now):
+    """URLhaus recent mode as its state file says (`urlhaus.json` in the lists folder; the file `urlhaus.py` keeps): whether the plan has it on, the time of
+    the last request and its age, whether the source is **off for the day** (its `off_day` is the UTC day of `now`), and the number and the newest date
+    of the URLs kept. **No URL is printed, the key file is never opened and its path never looked at.** A state that cannot be trusted (not a plain
+    private file of the owner's, not JSON, another version, a bad time or day) is `damaged`, and the source then makes no request that day, as
+    `urlhaus.py` says; one over 64 MiB (a quarter of the source's own limit) is `too_large` and is not read; the kept URLs are those with an http or
+    https address of at most 1,024 characters and a date. **The reading is at most as lenient as the source's**: a hand-edited state in a form that only
+    the source accepts (a time with unpadded fields, a repeated key, a number that is not finite) is shown `damaged` here, which is the safe side."""
+    planned = values.get("urlhaus_recent") if isinstance(values, dict) else None
+    on = planned if type(planned) is bool else None
+    out = {"on": on, "state": None, "detail": None, "last_request": None, "age_s": None, "off_day": None, "off_for_the_day": None,
+           "kept_urls": None, "newest_kept": None, "size_bytes": None}
+    if on is False:
+        out["state"] = "off"
+        return out
+    damaged = "the source makes no request today"
+    folder, problem = _lists_folder(index_root)
+    if problem:
+        out.update(state="damaged", detail=f"{problem}; {damaged}")
+        return out
+    path = folder / URLHAUS_STATE if folder is not None else None
+    try:
+        info = os.lstat(path) if path is not None else None
+    except FileNotFoundError:
+        info = None
+    except OSError as e:
+        out.update(state="damaged", detail=f"the state cannot be looked at ({_why(e)}); {damaged}")
+        return out
+    if info is None:
+        out.update(state="no_state_file", detail="no request has been made yet")
+        return out
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != _me() or stat.S_IMODE(info.st_mode) & 0o077:
+        out.update(state="damaged", detail=f"the state is not a plain private file of the owner's; {damaged}")
+        return out
+    if info.st_size > MAX_URLHAUS_BYTES:
+        out.update(state="too_large", size_bytes=info.st_size, detail="the state is larger than is read here, so its fields are not known")
+        return out
+    read = read_file(path, MAX_URLHAUS_BYTES)
+    state = _object(read.data) if read.status == "ok" and not read.cut else None
+    last, off_day = (state.get("last"), state.get("off_day")) if state else (None, None)
+    entries = state.get("entries") if state else None
+    if (state is None or type(entries) is not dict or state.get("version", 1) != 1 or type(state.get("version", 1)) is not int
+            or (last is not None and _parse_ts(last) is None) or (off_day is not None and not _valid_day(off_day))):
+        out.update(state="damaged", detail=f"the state cannot be trusted; {damaged}")
+        return out
+    kept = [date for url, date in entries.items() if isinstance(url, str) and len(url) <= 1024 and url.startswith(("http://", "https://"))
+            and _valid_day(date)]
+    age = int((now - _parse_ts(last)).total_seconds()) if last is not None else None
+    out.update(state="ok", last_request=last, age_s=age if age is not None and age >= 0 else None, off_day=off_day,
+               off_for_the_day=off_day == now.astimezone(datetime.timezone.utc).date().isoformat() if off_day is not None else False,
+               kept_urls=len(kept), newest_kept=max(kept) if kept else None)
+    return out
+
+
+def queue_reasons(conn):
+    """For each of `rejected`, `failed` and `blocked`: the ten most recent rows (`updated`, then newest first) with their address, source, reason, tries
+    and time, and the ten commonest reasons with their counts (reasons that clean to the same text are merged; none is `(no reason)`). Every text is
+    redacted, cleaned and cut (an address to 200 characters, a reason to 300)."""
+    out = {}
+    for status in ("rejected", "failed", "blocked"):
+        recent = [{"address": clean(address, 200), "source": clean(source, 20), "reason": None if reason is None else clean(reason, 300),
+                   "tries": _count(tries), "updated": clean(updated, 20)}
+                  for address, source, reason, tries, updated in conn.execute(
+                      "SELECT address, source, reason, tries, updated FROM candidates WHERE status = ? ORDER BY updated DESC, id DESC LIMIT ?",
+                      (status, REASON_ROWS))]
+        counts = {}
+        for reason, n in conn.execute("SELECT reason, COUNT(*) AS c FROM candidates WHERE status = ? GROUP BY reason ORDER BY c DESC LIMIT 200", (status,)):
+            why = clean(reason, 100) or "(no reason)"
+            counts[why] = counts.get(why, 0) + n
+        commonest = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:REASON_ROWS]
+        out[status] = {"recent": recent, "commonest": [{"reason": why, "n": n} for why, n in commonest]}
+    return out
+
+
+def recent_holds(index_root, *, max_files=HOLD_FILES, limit=HOLD_LIMIT, per_file_limit=MAX_LOG_BYTES):
+    """The most recent `hold` lines of the log, newest first (the files are searched from the newest back, to `max_files` of them, and no further once
+    `limit` holds are found), with their time, book, host and reason redacted and cleaned. Other steps, a `refuse` line among them, are not holds."""
+    for bound in (max_files, limit, per_file_limit):
+        if type(bound) is not int or bound < 1:
+            raise _refuse("a bound of the search for holds is a whole number of at least 1")
+    found, problem = log_files(index_root, newest_first=True)
+    out = {"holds": [], "searched_files": 0, "files_read": 0, "bad": {}, "cut": False, "problem": problem}
+    holds = []
+    for _date, path in found:
+        if out["searched_files"] >= max_files or len(holds) >= limit:
+            break
+        out["searched_files"] += 1
+        read = read_log(path, limit=per_file_limit, tail=True)
+        if read["status"] != "ok":
+            continue
+        out["files_read"] += 1
+        out["cut"] = out["cut"] or read["cut"]
+        for kind, count in read["bad"].items():
+            out["bad"][kind] = out["bad"].get(kind, 0) + count
+        holds.extend(reversed([r for r in read["lines"] if r["step"] == "hold"]))  # the newest line of a file first
+    holds.sort(key=lambda r: r["ts"], reverse=True)  # stable: lines with one time stay newest first
+    out["holds"] = [{"ts": r["ts"], "book": None if r["book"] is None else clean(r["book"], 100), "host": None if r["host"] is None else clean(r["host"], 100),
+                     "reason": None if r["reason"] is None else clean(r["reason"], 300)} for r in holds[:limit]]
+    return out
+
+
+# --- the whole status -----------------------------------------------------------------------------------------------------------------------------
+
+def _part(fn, *args):
+    """The answer of one part of the status, or its fault: a part that fails is that part's answer (`{"error": text}`, cleaned), never the whole
+    command's."""
+    try:
+        return fn(*args)
+    except Exception as e:  # the boundary of a part: what it raised is shown cleaned and the other parts go on
+        return {"error": clean(str(e) or type(e).__name__, 200)}
+
+
+def _queue_part(index_root, plan_day, utc_day, bounds, values):
+    opened = _part(open_queue, index_root)
+    if isinstance(opened, dict):
+        return {"status": "bad", "reason": opened["error"], "counts": None, "counters": None, "reasons": None}
+    if opened.status != "ok":
+        return {"status": opened.status, "reason": opened.reason, "counts": None, "counters": None, "reasons": None}
+    try:
+        return {"status": "ok", "reason": None, "counts": _part(queue_counts, opened.conn, bounds),
+                "counters": _part(counters_report, opened.conn, plan_day, utc_day, values), "reasons": _part(queue_reasons, opened.conn)}
+    finally:
+        opened.conn.close()
+
+
+def _bad_of(part):
+    """The bad lines of a part that read the log, by kind (none if the part failed)."""
+    return dict(part.get("bad") or {}) if isinstance(part, dict) else {}
+
+
+def status(index_root, bulk_root, *, read_plan, store, now, statvfs=os.statvfs):
+    """Everything `crawl-status` prints, as plain data: the plan (approved or not, its zone and any problem with it), the state and the facts behind it,
+    the queue (its counts for the plan's day and in all, the counters against the ceilings, the reasons of the recent rejections, failures and blocks),
+    the books the crawl filed against its ceiling, the last run and the runs of today, the disk against the floors, the lists and URLhaus, the recent
+    holds and the bad lines of the log. **A part that fails puts its own error in its place and the others stand.** With no approved plan the ceilings
+    are not known and the spec's defaults are used for the floors, the lists and the zone, and `notes` says so. `read_plan` is the reader of the
+    approved plan (the runner plan's `crawlplan.read_plan`); `now` is a time with a zone. Reads only."""
+    if not isinstance(now, datetime.datetime) or now.tzinfo is None:
+        raise _refuse("now is a time with a zone")
+    plan = _part(approved_plan, index_root, read_plan)
+    if "error" in plan:
+        plan = {"status": "unreadable", "digest": None, "values": None, "reason": plan["error"]}
+    zone, zone_problem = zone_of(plan)
+    values = plan["values"] if plan["status"] == "approved" else None
+    effective = values if values is not None else DEFAULT_VALUES
+    today = today_in_zone(now, zone)
+    plan_day, utc_day = today.isoformat(), now.astimezone(datetime.timezone.utc).date().isoformat()
+    bounds = day_bounds(today, zone)
+    notes = []
+    if values is None:
+        notes.append(("no approved plan" if plan["status"] == "none" else "the approved plan cannot be read")
+                     + ": the ceilings are not known, and the spec's defaults are used for the floors, the lists and the time zone")
+    if zone_problem:
+        notes.append(zone_problem)
+    books = _part(crawl_books, store)
+    if "error" not in books:
+        books["filed"] = _against(books["filed_total"], _limit(values, "filed_total"))
+    runs = _part(run_counts, index_root, today, zone)
+    last = _part(last_run, index_root, now)
+    holds = _part(recent_holds, index_root)
+    return {
+        "generated": now.astimezone(datetime.timezone.utc).strftime(_TS_FORMAT), "notes": notes,
+        "plan": {"status": plan["status"], "digest": plan["digest"][:12] if plan["digest"] else None, "reason": plan["reason"], "zone": zone,
+                 "zone_problem": zone_problem, "defaults_used": values is None,
+                 "values": {k: (clean(v, 100) if isinstance(v, str) else v) for k, v in (values or {}).items()}},
+        "state": _part(state, index_root),
+        "queue": _queue_part(index_root, plan_day, utc_day, bounds, values),
+        "books": books,
+        "last_run": last,
+        "runs_today": runs,
+        "disk": _part(disk, bulk_root, index_root, {k: effective.get(k) for k in ("bulk_floor_gb", "index_floor_gb")}, statvfs),
+        "lists": {"public": _part(public_lists, index_root, effective, now), "urlhaus": _part(urlhaus_state, index_root, effective, now)},
+        "holds": holds,
+        "log": {"bad_lines": sum(_bad_of(runs).values()), "by_kind": _bad_of(runs), "cut": bool(isinstance(runs, dict) and runs.get("cut")),
+                "last_run_files": {"bad": _bad_of(last), "cut": bool(isinstance(last, dict) and last.get("cut"))},
+                "hold_files": {"bad": _bad_of(holds), "cut": bool(isinstance(holds, dict) and holds.get("cut"))}},
+    }

@@ -237,6 +237,22 @@ Recorded, not changed:
 - **`queue_counts` and `counters_report` catch no SQLite error** (finding 7): a queue damaged past the shape check raises out of them. **Increment D's `status()` must catch `sqlite3.Error`** so that a fault of the queue never stops the other parts. (`today` in `queue_counts` has no `other` count; rows of another status updated today are left out, harmlessly.)
 - **A `crawl_found` line written with the name escaped differently is missed** by the text search (the store writes it plainly): not changed.
 
+**Increment D.** The project's `reviewer` agent, read only (it ran nothing; it did not read the fixture or the bodies of the tests of the lists, URLhaus, reasons and holds), **one round, one exchange**. Recommendation: no blocking findings; six findings. It found no exploitable security issue: reads are `O_NOFOLLOW` and `O_NONBLOCK` with owner checks, paths come from constants or from names checked against the record's hash, URLhaus is read for counts and dates only and its key is never touched. It checked that a part's fault is its own, that the plan's text values are cleaned and that the zone's problem is shown; **it did not separately confirm the other items that B and C left to D** (`sqlite3.Error` caught around the queue functions, `unreadable`, `cut` and `stopped_by` beside `filed_total`, `at_or_under_floor` printed), which the tests of D cover.
+
+Applied (test first, each shown to fail before the change):
+
+- **A number that is not finite in the plan's values** (finding 3), `NaN` or infinity from the reader, would have reached the output and made `json.dumps` write a non-standard `NaN`: such a value is dropped.
+- **A data file over the size the matcher reads back** (finding 4) was `ok` when its record said so: it is now `bad_data` (`too_large`), with the constant checked against `weblists.py` by a test; and the docstring says what `ok` means (**the record is in the form the matcher reads and its data file is a plain file of the owner's of the size the record gives; not that the matcher will accept the copy**, whose hash is its to check, and a record with no size is not compared).
+- **`log.bad_lines` counted only the day's log** (finding 6): the bad lines and the cut of the files that the last-run search and the holds search read are now shown apart (`log.last_run_files`, `log.hold_files`).
+- **The URLhaus reading is at most as lenient as the source's** (finding 1: a time with unpadded fields, a repeated key or a number that is not finite is `damaged` here and not for `urlhaus.py`): the docstring says it, and the answer is on the safe side.
+
+Recorded, not changed:
+
+- **The 64 MiB cap on URLhaus's state** (finding 2) is the plan's, and a quarter of the source's own (256 MiB); a full state with long URLs can be shown `too_large` with its size and with its fields not known. The count of kept URLs is looser than the source's (it does not canonicalise each address): an address of http or https, at most 1,024 characters, with a date.
+- **`queue_reasons` is bounded in what it prints and not in what it scans** (finding 5): the queue is the owner's own, and the output is at most ten rows and 200 groups for each of three statuses.
+
+Also, from my own first run of the breaks of D: 16 of 108 mutants survived, of which seven were real gaps in my tests (an upper-case hash with an upper-case file name, a `True` as a count, a hostile `updated`, a failing plan reader at the top level, the zone problem in the notes, uncleaned plan text values, an unclosed queue, and others), each closed with a test, and four were equivalent. One test of mine had planted a bare key where the rule is documented not to catch one, and is corrected.
+
 ## Deferred work
 
 - A second reader for the runner's own counters, once the runner names more of them than `fetch`, `fetch:<domain>`, `card` and `refusal:<domain>`.
@@ -310,7 +326,7 @@ Recorded, not changed:
 
 **Open:** the to-do items already named. Increment D must print `at_or_under_floor` as what the runner would refuse on, pass the plan's text values through `clean`, and show `zone_of`'s problem.
 
-### Increment C — The queue, the counters against the ceilings, and the books filed (not yet committed)
+### Increment C — The queue, the counters against the ceilings, and the books filed (committed as `ec715e5`)
 
 **Measured first (step 1), on this machine** (a throwaway script in the scratchpad; Linux, SQLite 3.46.1, Python 3.14.4; **macOS not measured**): a read-only connection (`file:...?mode=ro`) to a queue in WAL mode sees every committed row and none that is not committed, and cannot write ("attempt to write a readonly database"); with a writer's connection open it creates no file; **with no connection open and no side files it creates `candidates.sqlite-shm` (32,768 bytes) and an empty `candidates.sqlite-wal` (mode 600 both), which stay after it closes, and the queue file is unchanged in hash, mtime and size**; after a writer was killed without closing, the reader saw the committed row and created nothing; `immutable=1` saw 0 of 7 committed rows (it ignores the WAL), so it is not used. **The permitted side effect of criterion 4 is therefore exactly those two files**, which the tests name.
 
@@ -343,3 +359,34 @@ No new fixture file: the tests make the queue with `crawlqueue.connect` in a tem
 **Not run:** anything on macOS (the read-only URI with a quoted path, the side files that SQLite makes, `O_NOFOLLOW` on the book files); a real queue, library or runner; the other tests of the repository (nothing imports the module yet). **Known limits:** a file swapped for a pipe between the check and the open of the queue is not guarded against (SQLite opens the path itself); each statement waits up to two seconds, and the wait is not two seconds in all; a book whose root file or events log cannot be read is not counted as filed, so `filed_total` is then a least number and `unreadable` says how many.
 
 **Open:** the to-do items already named. Increment D must catch `sqlite3.Error` around `queue_counts` and `counters_report`, print `unreadable`, `cut` and `stopped_by` beside `filed_total`, and show the queue's `status` (`missing`, `bad`, `busy`) with its reason.
+
+### Increment D — The lists, the reasons, and `status()` (not yet committed)
+
+**Done.** On the branch `crawl-status`, from `ec715e5`. Linux, Python 3.14. The module is still read only (the guard test still passes: no write, create, remove, network or subprocess call, one `mode=ro` connection, `SELECT` only).
+
+| file | lines | sha256 |
+|---|---|---|
+| `engine/kb/crawlstatus.py` (changed since C) | 1274 | `9ec0c8e5a93fb3461450292d97c414ea99933471e982f1da161398312cfdd9d7` |
+| `engine/tests/test_crawlstatus.py` (changed since C) | 3138 | `969a404858a5212af24afdf7a8514b84ee1901d5e07448f01425b336dd5853a9` |
+| `engine/tests/fixtures/crawlstatus/lists/urlhaus.json` (new) | 1 | `cec47f29e240696c05c55f3124add8a89f02b1263ff7c77a1f59ab86309f6f01` |
+
+- `public_lists(index_root, values, now)`: for the Phishing.Database list and the Public Suffix List, whether the plan has it on, `status` (`ok`, `off`, `no_copy` with the words that a required list's absence stops a run and an optional one's does not, `bad_record`, `bad_data`, `bad_folder`), the record's `checked` and `retrieved` times and their ages in hours, `entries`, `bytes`, the first 12 characters of the hash and the state of the data file. **Only the small record is read; the data file is looked at with `lstat` and never opened, so no entry or host of a list can reach the answer;** the data file's name must be the one the record's hash gives, so no path in a record leads anywhere.
+- `urlhaus_state(index_root, values, now)`: off in the plan (the file is not read), no state file, a good state (the time of the last request and its age, the `off_day` and whether it is today's UTC day, the number of kept URLs and the newest date; **no URL**), `damaged` (with the words that the source makes no request that day) and `too_large` (its size and nothing more). **The key's path is never looked at.**
+- `queue_reasons(conn)`: for `rejected`, `failed` and `blocked`, the ten most recent rows (address, source, reason, tries, time) and the ten commonest reasons, all redacted, cleaned and cut.
+- `recent_holds(index_root)`: the newest `hold` lines of the log (up to ten, in up to five files), their time, book, host and reason redacted and cleaned.
+- `status(index_root, bulk_root, *, read_plan, store, now, statvfs)`: the plan (status, digest's first 12 characters, reason, zone and its problem, whether defaults are used, its text values cleaned), the state and its facts, the queue (status and reason; counts, counters and reasons, each a part), the books (with `filed` against the ceiling, and `unreadable`, `cut` and `stopped_by`), the last run, the runs of today, the disk, the lists, the holds, the log's bad lines and cuts, and `notes`. **A part that fails (an exception of any kind) is `{"error": <cleaned text>}` in its place and the others stand.** With no approved plan, or one that cannot be read, the ceilings are not known and the spec's defaults are used for the floors, the lists and the zone, and a note says so. The whole answer is plain data with no control or hidden character in any string (a test walks every string).
+
+**Verification as run:**
+
+- `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlstatus`: **311 tests, OK**, three runs in a row; `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlqueue`: **68 tests, OK**. One test makes the lists with **the real `weblists.Matcher.update`** (a fake download of 100,500 hosts and 6,000 suffix rules) and reads them back, so the reading is tested against the form the runner's own code writes. Each new test was seen to fail first (the functions did not exist; later, the tests for the review's findings failed on the code before the change).
+- **Deliberate breaks** (each compile-checked, the cache removed, the file restored byte for byte and the hash compared), against the final text: the code of D **116 of 120 killed**, of C **109 of 109**, of B **118 of 119**, of A **123 of 126**. The survivors are equivalent: the three of A and the one of B as before, and four of D: dropping the `S_ISREG` test of URLhaus's state file (the read that follows refuses a file that is not plain), dropping `state is None or` before the test of the entries (the next test gives the same answer), dropping the first check of `now` in `status()` (`today_in_zone` raises the same refusal a line later), and taking the values of a plan whose status is not approved (an unreadable plan has none).
+- No control, invisible or direction character in the files. `wb run code-work check`: 55 plans, no problems. `wb plan-status`: `approved`. No helper process left; the one run that shows files changed lists only the queue's two side files.
+- Review: one round of the `reviewer` agent (see the Review record).
+
+**Departures from the plan's wording, for the owner:** none beyond those of B and C already recorded. The `log` summary gives the day's bad lines as `bad_lines` and `by_kind` and the other two readings of the log apart, as `last_run_files` and `hold_files`.
+
+**Fields that can only be checked against fixtures:** the folder `<index root>/crawl/lists/` and the place of `urlhaus.json` in it (this plan's assumption 10: the runner decides, and the plan's constant changes in one place); the log's `hold` line with its `book`, `host` and `reason` (the spec's log has these fields; no runner writes a `hold` yet); the state file of URLhaus is a hand-made fixture in the form `urlhaus.py` reads (its `_load`), and was not made by `urlhaus.Source`; the shape of the dict that the real `crawlplan.read_plan` returns (still an injected function here).
+
+**Not run:** anything on macOS; the real runner, lists, URLhaus state and key; the real `crawlplan.read_plan`; the other tests of the repository (nothing imports the module yet). **Known limits:** `ok` for a list does not say the matcher accepts it (the hash is its to check); a URLhaus state over 64 MiB is named and not read; the count of kept URLs is looser than the source's; `queue_reasons` scans the table; a hand-edited URLhaus state in a form only the source accepts is shown `damaged`.
+
+**Open:** the to-do items already named. Increments E and F build the report on the same readers; Increment G registers the two commands and wires the real reader (`crawlplan.read_plan`), after merging `main`, and must check the shape of its dict, the unit of a floor against the runner's guard, and that `status()`'s plan keys exist in it.
