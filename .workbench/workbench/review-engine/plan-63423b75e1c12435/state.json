@@ -42,10 +42,24 @@
       "earlier": [],
       "finding": "R3-F1",
       "reason": "Verified in cardstate.lock: a non-blocking flock that refuses a second holder in the same process, so the window own lock from round 2 would have refused every run. The plan now gives the lock one owner, themerun.run, maps its refusal to locked and tests the real path."
+    },
+    {
+      "at": "2026-11-18T20:34:15Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R4-F1",
+      "reason": "Right: increment B tests only the version in use, so a conversion tool change would have made the window theme the whole library again. Increment C now corrects the eligibility to no themes of any version, with a regression test."
+    },
+    {
+      "at": "2026-11-18T20:34:16Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R4-F2",
+      "reason": "Right: one embedding call can carry 3906 texts, about 25 minutes, so a stop would never be looked at. The step now passes calls of 40 texts, about 19 seconds, and an integration test shows the stop between calls."
     }
   ],
   "format": 1,
-  "generation": 10,
+  "generation": 14,
   "kind": "plan",
   "path": "docs/plans/2026-11-18-use-the-idle-time-of-the-loop-for-themes-and-the-weave.md",
   "rounds": [
@@ -147,11 +161,44 @@
         "total_tokens": null
       },
       "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-18T20:33:38Z",
+      "bridge": "ask-codex",
+      "document_sha256": "0b2d246ac3be81ebdbac139c52b500ef44ac1ea60d9ff4c410bf8cda6ac9490a",
+      "file": "round-4.json",
+      "findings": [
+        {
+          "id": "R4-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R4-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 4,
+      "profile": "second-opinion",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "70e565fa45fb5345c201d6607a059012bb21bdfbcd65c303987e8c3b5ecca5ae",
+      "usage": {
+        "input_tokens": 181879,
+        "output_tokens": 707,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
     }
   ],
-  "seal": "bfb21b8c58f8a85882bd45469886e61d1ae528a36fafc499d371994ba94c19e2",
+  "seal": "3776564e59391c4dfed4c0bfd92d4300a2d4918b4d20a057b3357df94e1877e2",
   "window": {
-    "bound": 3,
+    "bound": 4,
     "first": 1
   }
 }

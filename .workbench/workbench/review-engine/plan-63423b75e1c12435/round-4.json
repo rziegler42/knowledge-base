@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R4-F1",
+      "location": "docs/plans/2026-11-18-use-the-idle-time-of-the-loop-for-themes-and-the-weave.md:155",
+      "problem": "The recorded implementation treats a book with themes for an older conversion as eligible again. This contradicts completion criterion 2 and Increment B's explicit exclusion of books with themes of any version, and drifts from population.md's requirement of no themes at all. The new Result therefore undermines the eligibility correction accepted in round 2.",
+      "severity": "major",
+      "suggestion": "Require the eligibility check and its regression test to exclude a reconverted book that has an older theme generation. Alternatively, obtain approval for the changed eligibility rule and reconcile the spec, criteria and tests."
+    },
+    {
+      "id": "R4-F2",
+      "location": "docs/plans/2026-11-18-use-the-idle-time-of-the-loop-for-themes-and-the-weave.md:87",
+      "problem": "Increment C adds and tests a group argument but never requires the idle caller to supply a bounded group size. population.md requires embedding calls small enough to check the stop about every 20 seconds. Bounding the total window batch alone can still leave one embedding call running for minutes.",
+      "severity": "major",
+      "suggestion": "Specify the idle caller's embedding group limit using the measured timings, and require an integration test showing that a multi-group batch checks the stop between calls at that bound."
+    }
+  ],
+  "format": 1,
+  "round": 4,
+  "summary": "Two gaps remain: the recorded eligibility behavior contradicts the plan and spec, and the idle embedding caller lacks the required per-call bound.",
+  "verdict": "changes_needed"
+}
