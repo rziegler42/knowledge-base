@@ -44,7 +44,7 @@ PARAM_WITHHELD = "[withheld]"
 
 # The steps and outcomes of the spec's log, in its order (a test reads the spec's own text and compares).
 STEPS = ("run_start", "refuse", "list_update", "discover", "enqueue", "block", "fetch", "capture", "scan", "hold", "convert", "index", "judge",
-         "reject", "card", "propose", "move", "fail", "breaker", "stop", "run_end", "report")
+         "reject", "card", "propose", "move", "idle", "themes", "theme_vectors", "weave", "fail", "breaker", "stop", "run_end", "report")
 OUTCOMES = ("ok", "skipped", "rejected", "failed", "blocked", "held", "refused", "tripped")
 FIELDS = ("ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds")
 BREAKER_KINDS = ("consecutive_failures", "failure_share", "model_down", "stage_bound")  # the runner plan's contract for `crawl/breaker.json`

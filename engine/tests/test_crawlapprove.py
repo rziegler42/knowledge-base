@@ -977,6 +977,32 @@ class Hardening(Case):
         self.assertIn("PDF files: taken up to 20 MB each, scanned before any conversion (a file with a finding in the hold list above is held), and converted in a tool that is killed above 1536 MB of memory", text)
         self.assertNotIn("none are taken", text)
 
+    def test_the_summary_says_how_long_the_idle_window_is_and_what_it_makes_and_that_zero_is_off(self):
+        self.set_plan()
+        text, _ = self.approve()
+        line = next(x for x in text.splitlines() if x.startswith("Idle window:"))
+        self.assertIn("600 seconds", line)
+        self.assertIn("themes", line)
+        self.assertIn("never longer than the run's own time", line)
+        self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_s = 90\n")
+        text, _ = self.approve()
+        self.assertIn("90 seconds", next(x for x in text.splitlines() if x.startswith("Idle window:")))
+        self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_s = 0\n")
+        text, _ = self.approve()
+        line = next(x for x in text.splitlines() if x.startswith("Idle window:"))
+        self.assertIn("none", line)
+        self.assertIn("themes_window_s is 0", line)
+        self.assertNotIn("seconds", line)
+
+    def test_a_change_of_the_window_changes_the_digest(self):
+        self.set_plan()
+        _, first = self.approve()
+        self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_s = 601\n")
+        _, second = self.approve()
+        self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_s = 0\n")
+        _, third = self.approve()
+        self.assertEqual(len({first, second, third}), 3)
+
     def test_a_change_of_the_pdf_keys_changes_the_digest(self):
         self.set_plan()
         _, first = self.approve()

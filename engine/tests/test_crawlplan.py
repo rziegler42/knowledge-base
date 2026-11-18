@@ -71,7 +71,7 @@ class Defaults(Files):
             "gap_openalex_s": 1, "gap_arxiv_s": 3, "gap_wikipedia_s": 1, "gap_web_search_s": 30, "web_search_per_day": 20,
             "phishing_domains": True, "urlhaus_recent": False, "phishing_domains_format": "domains", "refresh_hours": 12, "list_max_mb": 50, "list_min_share": 0.5, "list_max_change": 0.3,
             "urlhaus_keep_days": 30, "pinned_hosts": ["openalex.org", "arxiv.org", "wikipedia.org", "api.langsearch.com"],
-            "threshold": None, "min_chars": 400, "model_pick": True, "pdf_max_mb": 0, "tool_rss_mb": 2048,
+            "threshold": None, "min_chars": 400, "model_pick": True, "pdf_max_mb": 0, "tool_rss_mb": 2048, "themes_window_s": 600,
             "topics": home + "crawl-topics.txt", "blacklist": home + "crawl-blacklist.txt", "allow": home + "crawl-allow.txt",
         }
         for key, value in expected.items():
@@ -169,6 +169,19 @@ topics = ~/somewhere/topics.txt
                          ("tool_rss_mb", "100001"), ("tool_rss_mb", "1.5"), ("tool_rss_mb", "x")):
             with self.subTest(f"{key}={bad}"):
                 self.refused(f"[pdf]\n{key} = {bad}\n", "line 2")
+
+    def test_the_window_of_the_idle_time_is_600_seconds_by_default_and_a_whole_number_from_0_to_3600(self):
+        self.assertEqual(self.read("")["themes_window_s"], 600)
+        for good in (0, 1, 600, 3600):
+            self.assertEqual(self.read(f"[idle]\nthemes_window_s = {good}\n")["themes_window_s"], good)
+        for bad in ("-1", "3601", "100000", "2.5", "abc", "", "1e3", "600s", "0x10"):
+            with self.subTest(bad):
+                self.refused(f"[idle]\nthemes_window_s = {bad}\n", "line 2")
+
+    def test_the_window_key_belongs_to_the_idle_section_and_nowhere_else(self):
+        for section in ("limits", "pdf", "files", "judge"):
+            with self.subTest(section):
+                self.refused(f"[{section}]\nthemes_window_s = 60\n", "line 2")
 
     def test_the_two_pdf_keys_belong_to_their_own_section_and_nowhere_else(self):
         for text in ("[limits]\npdf_max_mb = 5\n", "[files]\ntool_rss_mb = 128\n"):

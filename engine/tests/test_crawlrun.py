@@ -26,7 +26,7 @@ from kb import KbError, crawlapprove, crawlguard, crawllists, crawllog, crawlpla
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
 CHECKS = ("lock", "approved", "stop", "breaker", "disk", "ceilings", "model")
-POINTS = ("lists", "earlier_work", "refill", "fetch")
+POINTS = ("lists", "earlier_work", "refill", "fetch", "idle")
 PLAN_TEXT = "[limits]\nbatch = 4\nfetches_per_day = 3\n[judge]\nthreshold = 0.4\n"
 TOPICS = "[core weight=10]\nverification\n"
 
@@ -1078,7 +1078,7 @@ class DryRun(Case):
         self.assertIn("would exit 3 (refused)", text)
 
 
-PARTS = ("stale", "lists", "reconcile", "scan", "convert", "judge", "cards", "move", "refill", "fetch")
+PARTS = ("stale", "lists", "reconcile", "scan", "convert", "judge", "cards", "move", "refill", "fetch", "idle")
 ONE_CHAIN = ["scan", "convert", "judge", "cards", "move"]
 
 
@@ -1105,12 +1105,12 @@ class Assembly(Case):
     def test_one_run_takes_the_stale_rows_the_lists_the_earlier_work_the_refill_and_the_fetch_and_then_the_new_books_through_the_chain_again(self):
         order = []
         self.assertEqual(self.run_assembled(order), 0)
-        self.assertEqual(order, ["stale", "lists", "reconcile"] + ONE_CHAIN + ["refill", "fetch"] + ONE_CHAIN)
+        self.assertEqual(order, ["stale", "lists", "reconcile"] + ONE_CHAIN + ["refill", "fetch"] + ONE_CHAIN + ["idle"])
 
     def test_the_scan_comes_before_the_convert_in_every_pass_of_the_chain(self):
         order = []
         self.run_assembled(order)
-        for start in (order.index("scan"), len(order) - len(ONE_CHAIN)):
+        for start in (order.index("scan"), len(order) - 1 - len(ONE_CHAIN)):        # the last step of a run is the idle window
             self.assertEqual(order[start:start + len(ONE_CHAIN)], ONE_CHAIN)
 
     def test_the_stop_file_made_between_two_steps_of_the_chain_prevents_the_next_step_and_the_run_ends_at_the_next_point(self):
@@ -1125,6 +1125,35 @@ class Assembly(Case):
         lines = self.log_lines()
         self.assertEqual([l["outcome"] for l in lines if l["step"] == "stop"][-1], "refused")
         self.assertEqual([(l["outcome"], l["reason"]) for l in lines if l["step"] == "run_end"], [("ok", "stopped by the stop file at refill")])
+
+    def test_a_stop_file_made_by_the_fetch_prevents_the_idle_window(self):
+        order = []
+
+        def fetch(ctx):
+            order.append("fetch")
+            open(os.path.join(self.index, "crawl.stop"), "w").close()
+
+        self.assertEqual(self.run_assembled(order, fetch=fetch), 0)
+        self.assertEqual(order[-1], "fetch")
+        self.assertNotIn("idle", order)
+        self.assertEqual([(l["outcome"], l["reason"]) for l in self.log_lines() if l["step"] == "run_end"], [("ok", "stopped by the stop file at idle")])
+
+    def test_a_time_budget_that_the_fetch_spends_prevents_the_idle_window(self):
+        order = []
+
+        def fetch(ctx):
+            order.append("fetch")
+            ctx.deadline = ctx.clock()
+
+        self.assertEqual(self.run_assembled(order, fetch=fetch), 0)
+        self.assertNotIn("idle", order)
+        self.assertEqual([(l["outcome"], l["reason"]) for l in self.log_lines() if l["step"] == "run_end"], [("ok", "stopped by the time budget at idle")])
+
+    def test_a_run_that_reaches_its_end_in_the_normal_way_calls_the_idle_window_last(self):
+        order = []
+        self.assertEqual(self.run_assembled(order), 0)
+        self.assertEqual(order[-1], "idle")
+        self.assertEqual(order.count("idle"), 1)
 
     def test_a_time_budget_that_is_spent_between_two_steps_of_the_chain_prevents_the_next_step_and_ends_the_run_with_a_line_that_says_so(self):
         order = []

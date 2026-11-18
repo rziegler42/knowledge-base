@@ -10,7 +10,7 @@
 7. the model server (the card embedding must answer one short embedding: a failure is a refusal, 3, and counts toward `model_down_minutes`; and each model entry that an earlier run found down is asked one short call: once the
    server, or an entry, has been down longer than that, the breaker trips and the run exits 4).
 
-A run that passes logs `run_start`, then calls, in the order of the spec's steps, the **points** where the later plan attaches its steps (`lists`, `earlier_work`, `refill`, `fetch`). At each point `attach_point` looks at the stop file (a
+A run that passes logs `run_start`, then calls, in the order of the spec's steps, the **points** where the later plan attaches its steps (`lists`, `earlier_work`, `refill`, `fetch`, and last `idle`, the window that makes themes, which `crawlidle` guards). At each point `attach_point` looks at the stop file (a
 stop ends the run at that point, with exit 0 and a `stop` line) and then calls the step registered for it, if any. A run ends with `run_end` and exits 0 (done), or 4 if a step trips the breaker. Nothing else is done yet:
 no fetch and no change to a candidate row (rows are changed only through `crawlstate`, which a step uses). The requests a passing run makes are the probe of the model server (one short embedding) and one short call for each model entry that an earlier run found down, check 7.
 
@@ -26,7 +26,7 @@ from types import SimpleNamespace
 from . import KbError, crawlapprove, crawlguard, crawllog, crawlqueue, crawlstate
 
 CHECKS = ("lock", "approved", "stop", "breaker", "disk", "ceilings", "model")
-POINTS = ("lists", "earlier_work", "refill", "fetch")
+POINTS = ("lists", "earlier_work", "refill", "fetch", "idle")
 RUN_SECONDS = 3600                     # the time budget of one run: when it is spent, no step is begun and no book is begun in the scan, the convert, the judge and the fetch (a book that is going is finished), and the run ends at the next point; the card queue's pass and the move are not cut (see their steps)
 EXIT_DONE, EXIT_REFUSED, EXIT_BREAKER = 0, 3, 4
 WORDS = {EXIT_DONE: "0 (done)", EXIT_REFUSED: "3 (refused)", EXIT_BREAKER: "4 (the circuit breaker is tripped)"}
@@ -338,13 +338,13 @@ def default_steps(parts=None):
     """The registry of a real run, for `run(steps=...)`. In the spec's order: at `lists`, the stalled rows and then the lists (which make the matcher the later steps need); at `earlier_work`, the books of a plan that is
     not approved are named and then every unfinished crawl book is taken through the steps it has not finished: scan and hold, convert and index, judge, cards, proposal and move (each step takes the books oldest
     first, each looks at the stop file and the disk floors itself); at `refill`, discovery; at `fetch`, up to `batch` new candidates and then **the same chain again**, so that each new book goes through the steps in the
-    same run. Between two steps of the chain the stop file and the time budget are looked at, and a step does not begin after either. The scan comes before the conversion in every pass. `parts` replaces a
-    step by name (`stale`, `lists`, `reconcile`, `scan`, `convert`, `judge`, `cards`, `move`, `refill`, `fetch`: tests, with the steps given their own fakes); the steps are made when this is called and none is run."""
-    from . import crawlcards, crawlfetch, crawllists, crawlmove, crawlrefill, crawlsteps
+    same run. Between two steps of the chain the stop file and the time budget are looked at, and a step does not begin after either. The scan comes before the conversion in every pass. At `idle`, last, the window of `themes_window_s` seconds makes themes for the books that have none (`crawlidle`). `parts` replaces a
+    step by name (`stale`, `lists`, `reconcile`, `scan`, `convert`, `judge`, `cards`, `move`, `refill`, `fetch`, `idle`: tests, with the steps given their own fakes); the steps are made when this is called and none is run."""
+    from . import crawlcards, crawlfetch, crawlidle, crawllists, crawlmove, crawlrefill, crawlsteps
     given = dict(parts or {})
-    unknown = sorted(set(given) - {"stale", "lists", "reconcile", "scan", "convert", "judge", "cards", "move", "refill", "fetch"})
+    unknown = sorted(set(given) - {"stale", "lists", "reconcile", "scan", "convert", "judge", "cards", "move", "refill", "fetch", "idle"})
     if unknown:
-        raise KbError("a part of the assembly is one of: stale, lists, reconcile, scan, convert, judge, cards, move, refill, fetch")
+        raise KbError("a part of the assembly is one of: stale, lists, reconcile, scan, convert, judge, cards, move, refill, fetch, idle")
 
     def part(name, real):
         return given[name] if name in given else real
@@ -353,6 +353,7 @@ def default_steps(parts=None):
              ("cards", part("cards", crawlcards.step)), ("move", part("move", crawlmove.step))]
     stale, lists, reconcile = part("stale", _requeue_stale), part("lists", crawllists.step), part("reconcile", _reconcile)
     refill, fetch = part("refill", crawlrefill.step), part("fetch", crawlfetch.step)
+    idle = part("idle", crawlidle.step)
 
     def run_chain(ctx):
         for _name, step in chain:
@@ -372,7 +373,7 @@ def default_steps(parts=None):
         fetch(ctx)
         run_chain(ctx)
 
-    return {"lists": first, "earlier_work": earlier_work, "refill": refill, "fetch": new_books}
+    return {"lists": first, "earlier_work": earlier_work, "refill": refill, "fetch": new_books, "idle": idle}
 
 
 def run_unattended(cfg, dry_run=False):
@@ -433,7 +434,10 @@ def _dry_run(cfg, now, say, kb_root, statvfs, prefix):
                 show(check, f"would refuse: {r.reason}")
     if outcome is None:
         say("then a real run would: requeue the stalled rows; refresh the lists; finish the earlier work (reconcile the books of a plan that is not approved; scan and hold; convert and index; judge; cards; proposal and move); "
-            f"refill the queue; fetch up to {plan['batch']} new candidates and take each new book through the same steps, at each point looking at the stop file and at the time budget")
+            f"refill the queue; fetch up to {plan['batch']} new candidates and take each new book through the same steps; "
+            + (f"then use up to {plan['themes_window_s']} seconds of an idle window to make themes, the vectors of the themes and a repair of the weave; " if plan["themes_window_s"]
+               else "then no idle window (themes_window_s is 0); ")
+            + "at each point looking at the stop file and at the time budget")
     code, reason = outcome if outcome is not None else (EXIT_DONE, "")
     say(f"a real run would exit {WORDS[code]}" + (f": {reason}" if reason else "") + ("" if outcome is not None else ", if the checks a dry run cannot make (the lock, the model server, the state files) also pass"))
     return EXIT_DONE

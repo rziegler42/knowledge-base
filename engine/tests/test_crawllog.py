@@ -22,7 +22,7 @@ from kb import KbError, crawllog
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 16, 12, 30, 5, tzinfo=UTC)
 FIELDS = ["ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds"]
-SPEC_STEPS = ["run_start", "refuse", "list_update", "discover", "enqueue", "block", "fetch", "capture", "scan", "hold", "convert", "index", "judge", "reject", "card", "propose", "move", "fail",
+SPEC_STEPS = ["run_start", "refuse", "list_update", "discover", "enqueue", "block", "fetch", "capture", "scan", "hold", "convert", "index", "judge", "reject", "card", "propose", "move", "idle", "themes", "theme_vectors", "weave", "fail",
               "breaker", "stop", "run_end", "report"]
 SPEC_OUTCOMES = ["ok", "skipped", "rejected", "failed", "blocked", "held", "refused", "tripped"]
 

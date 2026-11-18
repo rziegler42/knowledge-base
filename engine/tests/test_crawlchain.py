@@ -26,7 +26,7 @@ from engine.tests.test_discover import Source
 from engine.tests.test_placement import LONG, PlaceCase
 from engine.tests.test_webclient import Net, reply
 
-from kb import card, crawlapprove, crawlplan, crawlreport, crawlstatus, crawlbooks, crawlcards, crawlguard, crawllists, crawllog, crawlmove, crawlqueue, crawlrefill, crawlrun, crawlstate, crawlsteps, crawlfetch, stages, store, weblists
+from kb import card, crawlapprove, crawlplan, crawlreport, crawlstatus, crawlbooks, crawlcards, crawlguard, crawllists, crawllog, crawlmove, crawlqueue, crawlrefill, crawlrun, crawlstate, crawlsteps, crawlfetch, crawlidle, stages, store, weblists
 from kb import capture_url
 
 UTC = datetime.timezone.utc
@@ -155,6 +155,7 @@ class Chain(PlaceCase, Net):
             "judge": crawlsteps.make_judge_step(embed=self.embed_hooked, statvfs=roomy, probe=self.probe),
             "cards": self.card_step,
             "move": crawlmove.make_step(statvfs=roomy, probe=self.probe, embed=self.embed_hooked, call=self.call_hooked, schema_path=self.schema_path),
+            "idle": crawlidle.make_step(statvfs=roomy),
         }
         real_lists = parts["lists"]
 
@@ -446,7 +447,8 @@ class WholeChain(Chain):
         self.assertEqual([l["step"] for l in lines if l["book"] == book and l["step"] in CHAIN_STEPS], ["capture", "fetch", "scan", "convert", "index", "judge", "card", "propose", "move"])
         self.assertEqual([l["outcome"] for l in lines if l["book"] == book and l["step"] in CHAIN_STEPS], ["ok"] * 9)
         points = [l["reason"] for l in lines if l["step"] == "stop"]
-        self.assertEqual(points, ["no stop file at lists", "no stop file at earlier_work", "no stop file at refill", "no stop file at fetch"])
+        self.assertEqual(points, ["no stop file at lists", "no stop file at earlier_work", "no stop file at refill", "no stop file at fetch", "no stop file at idle"])
+        self.assertEqual([(l["outcome"], l["reason"]) for l in lines if l["step"] == "idle"], [("skipped", "settings")])   # this library has no model set for themes: the window ends quietly
         self.assertEqual((lines[0]["step"], lines[-1]["step"], lines[-1]["outcome"], lines[-1]["reason"]), ("run_start", "run_end", "ok", "done"))
         self.assertEqual({l["run"] for l in lines}, {lines[0]["run"]})
 
