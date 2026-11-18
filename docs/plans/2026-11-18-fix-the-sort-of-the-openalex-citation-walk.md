@@ -90,7 +90,7 @@ Increment A, independent `reviewer` (one exchange): no blocking finding, no conc
 
 ## Result
 
-### Increment A (working tree on `bf6b878`, not yet committed)
+### Increment A (committed as `43e37e7`, on `bf6b878`; pushed to `origin/main`; the stale comment named under Deferred was corrected in `fd18668`, and the owner approved the crawl plan again afterwards)
 
 - **Changed:** `engine/kb/srcopenalex.py` (the `sort` tuple of the request for citing works, now `("sort", "cited_by_count:desc", ":")`, and the docstring count, now two to five); `engine/tests/test_srcopenalex.py` (the pinned parameters changed to the new value, the parameter names of the batch request pinned, a test of the raw address, and a test of a fake server that answers 400 to the old form).
 - **Seen failing first:** against the old code three tests failed, two on the old `-cited_by_count` and the new 400 test with `SourceRefused: OpenAlex: status 400`.
