@@ -18,9 +18,9 @@ and one a minute after, are made); the outages are run every 15 minutes because 
 the lists downloader (`test_crawllists.Fetch`); the sources of the refill (`Feed`: every search finds new addresses whose pages the fake server serves; the queue rows of the flood and of the hop are put in by SQL through
 `Chain.add`, with a weight of 999,999 that takes the first turns of the day); the scan, the converter and the index (`test_crawlsteps`); the embedding and the chat models (the hooks of `test_placement`: the chat model is never asked, the
 moves being off); **a model failure is a `KbError` ("the embedding model does not answer") raised by the embedding hook, and the entry probes and the card-embedding probe are injected functions**, so nothing shows how the real bridge fails;
-**a network outage is an empty name table (no name resolves)**, so nothing shows a refused connection or a timeout; **the card step is the small fake of `test_crawlchain`**, not `crawlcards.step`; the free space is
+**a network outage is an empty name table (no name resolves)**; **`scan_kinds` makes the scan hold some pages (a finding that the real scan would report), `weak` makes the embedding of some titles far from every shelf (so the judge rejects them), and `FLAKY` makes some pages answer 500 for ever**, the three at fixed places in the order of the pages found; so nothing shows a refused connection or a timeout; **the card step is the small fake of `test_crawlchain`**, not `crawlcards.step`; the free space is
 injected; `shelfvectors.DEFAULT_SCHEMA` is patched and `weblists.MIN_ENTRIES` is lowered; **`os.fsync` does nothing** (a death here is an exception in the process, so what a disk keeps after a power cut is not shown; the writes of the
-library, the guard files and the log are not synced, and on a disk where a sync is slow they were most of the run's system time). The visits of redirects to one site are made with the real `crawlstate.charge_hop`, and the books of the earlier weeks of `TheFiledTotal` are made with the real
+library, the guard files and the log are not synced, and on a disk where a sync is slow they were most of the run's system time). The 150-hop count of one site is pre-charged with the real `crawlstate.charge_hop` (redirects did not make it; the test shows the limit is enforced), and the books of the earlier weeks of `TheFiledTotal` are made with the real
 `crawlbooks` functions. **The timestamps that the store puts on a book and its events come from the fixture's tick counter (seconds after 2026-11-16 12:00 UTC, counting calls), not from the simulated days**; the log lines, the queue rows, the
 counters, the guard files and the breaker use the simulated clock, and nothing here shows what a book's own timestamps say. No request leaves the machine, no model is called, nothing reads the owner's config, plan, key, library or
 shelves, and nothing sleeps.
@@ -28,7 +28,7 @@ shelves, and nothing sleeps.
 **Two rules that the plan's numbers order.** With `failure_share 0.8` of a `window` of 40 (32), a full window of earlier successes trips the breaker at the **32nd** failure in a row, as `failure_share`, before `consecutive_failures 40` can: the run of
 40 trips first only when the history is not full (a library at the start, or just after `crawlguard.clear`, which makes it empty). `TheNetwork` shows both, and a run of 30 that trips neither.
 
-**What this file does not cover.** The first download of the public lists (a run with no copy is refused: `test_crawlchain`); the stop file and the run's time budget (`test_crawlchain`); a site's refusals (`test_crawldays`); a death before a page's payload is filed.
+**What this file does not cover.** The first download of the public lists (a run with no copy is refused: `test_crawlchain`); the stop file and the run's time budget (`test_crawlchain`); a site's refusals (`test_crawldays`); a death before a page's payload is filed, and **a death between reserving a row and the capture** (the row is left `fetching` with no book: only a death after the capture is made here).
 **The numbers of `TheLongSpan` (the sizes, the thresholds of the topics' share) were measured on this data on one machine and are fitted to it**; they are bounds with a margin, and a change of the fakes or of the plan's numbers moves them.
 
 Run it with `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlsoak` (the other two files need the shell's umask to be 022, and this one does not)."""
@@ -384,8 +384,8 @@ class Soak(days.Days):
 
 class TheCeilings(Soak):
     def test_a_day_of_96_runs_reaches_the_ceilings_and_passes_none_and_a_finished_days_counters_never_change(self):
-        """The real agent's day: a run every 15 minutes. The day's fetches, the site's own fetches (one site with more candidates than its limit) and the visits to a site by redirects reach their ceilings and are not passed;
-        the cards stay within theirs; a day that is over keeps its counters when the next day's runs go on."""
+        """The real agent's day: a run every 15 minutes. The day's fetches, the site's own fetches (one site with more candidates than its limit) reach their ceilings and are not passed; the 150-hop count of a site is **pre-charged** with the real `charge_hop` (redirects did not make it), and
+        the test shows that it is **enforced**: the redirect to that site is put off, never followed, and the count stays at 150; the cards stay within theirs; a day that is over keeps its counters when the next day's runs go on."""
         self.flood()
         self.hopper_and_charge()
         for now in self.every(1, (0, 0), (24, 0)):
@@ -547,7 +547,7 @@ class TheNetwork(Soak):
         breaker = self.breaker()
         self.assertEqual((breaker["tripped"], breaker["kind"]), (True, "failure_share"))
         self.assertIn("32 of the last 40 fetches failed", breaker["reason"])
-        self.assertIn(self.failed_fetches() - before, (31, 32))                                              # (a failed page of the earlier runs may still be in the window)
+        self.assertEqual(self.failed_fetches() - before, 32)                                                 # (no page of this library fails but in the outage, `FLAKY` being 0 here: the window holds 8 successes and 32 failures)
         self.assertTrue(all(code == 4 for code in codes[5:]))                                                # and every later run was refused
         self.set_outage(False)
         self.refused_runs_change_nothing(self.every(1, (4, 0), (4, 30)), 4)
@@ -581,25 +581,21 @@ class TheKills(Soak):
         self.quiet(1, hours=(0,))
         for n, point in enumerate(self.KILLS):
             self.die_at(point)
-            then = at(1, 2 + n, 0)
+            then = at(1, 2 + 3 * n, 0)
             with self.assertRaises(chain.Boom):
                 self.go(now=then)
             self.after(None)
             crawlguard.acquire_run_lock(self.index, now=then).release()                                      # the lock was let go
             dead = [r["id"] for r in self.rows() if r["status"] == "fetching"]                              # the row of a fetch that was going when the run died is left `fetching`
             self.assertEqual(len(dead), 1 if point == "capture" else 0, point)
-            self.assertEqual(self.play(at(1, 2 + n, 31)), 0, point)
-            if n < self.KILLS.index("capture"):                                                             # (from the dead capture on, its book is an active orphan until its row is tried again after its wait: see the end, and `TheStalledAndThePutOffHop`)
-                self.assert_nothing_half_made()
+            self.assertEqual(self.play(at(1, 2 + 3 * n, 31)), 0, point)
+            for later in (1, 2):                                                                             # the dead capture's book is an active orphan until its row is tried again, an hour after the sweep: in one of these runs
+                if point == "capture" and [b for b in self.crawl_books_all() if "crawl_found" not in self.names(b) and self.store.read_book(b)["state"] == "active"]:
+                    self.assertEqual(self.play(at(1, 2 + 3 * n + later, 31)), 0, point)
+            self.assert_nothing_half_made()                                                                 # after each kill and its finishing run, and not only at the end
             self.assertEqual(self.unjudged(), [], point)
             self.no_duplicate_fetch()
             self.assertFalse(self.breaker()["tripped"])
-        for n in range(10):                                                                                  # the row of the dead capture is tried again, and then nothing is half made
-            if not [b for b in self.crawl_books_all() if "crawl_found" not in self.names(b) and self.store.read_book(b)["state"] == "active"]:
-                break
-            self.assertEqual(self.play(at(1, 12 + n, 31)), 0)
-        self.assert_nothing_half_made()
-        self.assertEqual(self.unjudged(), [])
         scan = self.crawl_scan()
         again = [c for c, n in collections.Counter(e["found"]["candidate"] for e in scan.entries).items() if n > 1]
         self.assertEqual(again, [])                                                                          # no candidate was filed as two books
@@ -735,8 +731,23 @@ class TheLongSpan(Soak):
         self.audit_the_topics()
         self.audit_the_sizes()
         self.audit_the_books(owners, before)
+        self.audit_the_flaky_pages()
         self.assert_nothing_half_made()
         self.no_duplicate_fetch()
+
+    def audit_the_flaky_pages(self):
+        """The pages that always answer 500 (`FLAKY`): no row of one has more tries than the plan's `retries`, its page was asked for no more often than that, and the rows that used every try were failed, with the count in the reason."""
+        rows = {urlsplit(r["address"]).path: r for r in self.rows()}
+        asked = collections.Counter(self.requests())
+        tried = {path: rows[path] for path in self.flaky if path in rows and rows[path]["tries"] > 0}
+        self.assertGreater(len(tried), 5)
+        for path, row in tried.items():
+            self.assertLessEqual(row["tries"], self.plan["retries"], path)
+            self.assertLessEqual(asked[path], self.plan["retries"], path)
+        failed = [row for row in tried.values() if row["status"] == "failed"]
+        self.assertGreaterEqual(len(failed), 1)
+        for row in failed:
+            self.assertEqual((row["tries"], row["reason"]), (self.plan["retries"], "failed 3 times: HTTP 500"))
 
     def audit_the_topics(self):
         """The turns follow the weights. **The thresholds are fitted to one measured run** (alpha to delta 170 tries a topic, echo to golf 85, hotel and india 17, out of 252 fetches a day for four days; what was left in the queue was in the same proportion): each topic's tries per unit of weight is within 10% of the mean of the others', a topic of weight 10 and one of weight 5 are between 1.9 to 1 and 2.1 to 1, and no topic has more than twice (and 3

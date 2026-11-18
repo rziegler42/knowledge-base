@@ -201,6 +201,8 @@ python3 -W error::ResourceWarning -m unittest engine.tests.test_card engine.test
 KB_WORKBENCH_CHECKOUT=/path/to/a/workbench/checkout python3 -m unittest engine.tests.test_package   # skipped without the variable
 ```
 
+The soak of the unattended crawl (simulated days on temporary libraries, with no network and no model) is `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlsoak`: it takes about 2 minutes on Linux, the long-span method alone about 67 seconds.
+
 The documents and plans are checked with the workbench:
 
 ```sh
