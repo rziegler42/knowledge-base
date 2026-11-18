@@ -3,9 +3,9 @@
 This file is a rendering of state.json for people. It is never read back.
 
 - Kind: plan
-- Rounds in this window: 4 of 4 rounds (ceiling 5)
-- Rounds in all: 4
-- Decisions recorded: 8
+- Rounds in this window: 5 of 5 rounds (ceiling 5)
+- Rounds in all: 5
+- Decisions recorded: 9
 - Closed: no
 
 ## Rounds
@@ -14,6 +14,7 @@ This file is a rendering of state.json for people. It is never read back.
 - Round 2, 2026-11-18T19:34:15Z: the reviewer said changes_needed, the engine read changes_needed, 2 findings, model gpt-5.6-terra
 - Round 3, 2026-11-18T19:34:54Z: the reviewer said changes_needed, the engine read changes_needed, 1 findings, model gpt-6.1-sol
 - Round 4, 2026-11-18T20:33:38Z: the reviewer said changes_needed, the engine read changes_needed, 2 findings, model gpt-6.1-sol
+- Round 5, 2026-11-18T20:50:42Z: the reviewer said changes_needed, the engine read changes_needed, 1 findings, model gpt-6.1-sol
 
 ## Decisions
 
@@ -25,3 +26,4 @@ This file is a rendering of state.json for people. It is never read back.
 - R3-F1: applied on 2026-11-18T19:35:12Z: Verified in cardstate.lock: a non-blocking flock that refuses a second holder in the same process, so the window own lock from round 2 would have refused every run. The plan now gives the lock one ...
 - R4-F1: applied on 2026-11-18T20:34:15Z: Right: increment B tests only the version in use, so a conversion tool change would have made the window theme the whole library again. Increment C now corrects the eligibility to no themes of any ...
 - R4-F2: applied on 2026-11-18T20:34:16Z: Right: one embedding call can carry 3906 texts, about 25 minutes, so a stop would never be looked at. The step now passes calls of 40 texts, about 19 seconds, and an integration test shows the stop...
+- R5-F1: applied on 2026-11-18T20:50:54Z: Right: as written a final backlog under 20 texts would never be embedded. The minimum now applies only when the time left limits the batch while more are waiting, and a final backlog is embedded wh...

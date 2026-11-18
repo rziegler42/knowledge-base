@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R5-F1",
+      "location": "Increment C, step 2; completion criterion 3",
+      "problem": "The rule that a batch of fewer than 20 texts is not begun can permanently strand a small backlog. For example, if the final unembedded theme has six texts, even a longer window still produces a batch of six, so its vectors are never made. This contradicts the goal of working off the backlog across windows.",
+      "severity": "major",
+      "suggestion": "Apply the minimum only when insufficient time limits the batch. Allow a smaller batch when it contains all remaining eligible texts, and test a final backlog below 20 texts. Align the corresponding spec passage."
+    }
+  ],
+  "format": 1,
+  "round": 5,
+  "summary": "One remaining batching rule can permanently leave the final themes without vectors.",
+  "verdict": "changes_needed"
+}
