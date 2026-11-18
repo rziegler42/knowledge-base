@@ -36,14 +36,14 @@ def candidate(address, source="openalex", **kw):
 class Source:
     """A fake source: `search` answers from a function of the query, and every call is kept."""
 
-    def __init__(self, name, rows=None, refuse=None):
-        self.name, self.rows, self.refuse = name, rows or (lambda q: []), refuse
+    def __init__(self, name, rows=None, refuse=None, for_day=True):
+        self.name, self.rows, self.refuse, self.for_day = name, rows or (lambda q: []), refuse, for_day
         self.searches, self.wanders = [], []
 
     def search(self, query, get, limit, *more):
         self.searches.append((query, limit))
         if self.refuse:
-            raise srcopenalex.SourceRefused(self.refuse)
+            raise srcopenalex.SourceRefused(self.refuse, for_day=self.for_day)
         return {"candidates": [dict(c, found_from=query) for c in self.rows(query)], "rejected": []}
 
     def wander(self, kept, get, per_work, max_depth, seen=()):
@@ -812,6 +812,25 @@ class RefusalTest(Case):
         self.assertEqual(self.log.of("discover", "refused")[0]["source"], "arxiv")
         self.assertEqual(self.log.of("discover", "refused")[0]["reason"], "status 429")
 
+    def test_a_refusal_for_this_refill_only_stops_the_source_for_the_refill_and_writes_no_count_of_the_day(self):
+        sources = self.sources(arxiv=Source("arxiv", refuse="status 429 (remaining 5, retry-after 2)", for_day=False))
+        got = self.fill({"discover_target": 20, "wander_share": 0.0, "queue_low": 10**5}, sources=sources)
+        self.assertEqual(len(sources["arxiv"].searches), 1)  # asked once, refused, not asked again in this refill
+        self.assertGreater(len(sources["openalex"].searches), 1)
+        self.assertGreater(len(sources["wikipedia"].searches), 1)
+        self.assertEqual(got["refused"], {"arxiv": "status 429 (remaining 5, retry-after 2)"})
+        self.assertEqual(got["off"], ["arxiv"])
+        self.assertNotIn(("2026-11-16", "source_off:arxiv"), self.counters())
+        line, = self.log.of("discover", "refused")
+        self.assertEqual((line["source"], line["reason"]), ("arxiv", "status 429 (remaining 5, retry-after 2)"))
+
+    def test_a_source_refused_for_one_refill_is_asked_again_by_the_next_refill_of_the_same_day(self):
+        self.fill({"discover_target": 5, "wander_share": 0.0, "queue_low": 10**5}, sources=self.sources(arxiv=Source("arxiv", refuse="status 429", for_day=False)))
+        later = self.sources()
+        self.fill({"discover_target": 5, "wander_share": 0.0, "queue_low": 10**5}, sources=later)
+        self.assertGreater(len(later["arxiv"].searches), 0)
+        self.assertNotIn("arxiv", [f["source"] for f in self.log.of("discover", "skipped") if f.get("source")])
+
     def test_a_refusal_on_each_of_two_days_is_counted_for_each_day_alone(self):
         for now in (NOW, LATER):
             self.fill({"discover_target": 5, "wander_share": 0.0, "queue_low": 10**5}, sources=self.sources(arxiv=Source("arxiv", refuse="status 429")),
@@ -864,6 +883,21 @@ class RefusalTest(Case):
                                     sleep=self.clock.sleep, **KW)
                 self.assertEqual(list(got["refused"]), [name])
                 self.assertTrue(got["refused"][name].startswith("status 429"))
+
+    def test_a_429_with_budget_left_ends_only_the_refill_of_openalex_through_the_real_modules_and_of_no_other_source(self):
+        for name in ("openalex", "arxiv", "wikipedia"):
+            with self.subTest(source=name):
+                self.setUp()
+                get = lambda url, headers=None, timeout=None: (429, {"x-ratelimit-remaining": "5", "retry-after": "2"}, b"")  # noqa: E731
+                sources = {"openalex": srcopenalex, "arxiv": srcarxiv, "wikipedia": __import__("kb.srcwikipedia", fromlist=["x"])}
+                got = discover.fill(self.conn, {"wander_share": 0.0, "openalex": name == "openalex", "arxiv": name == "arxiv",
+                                                "wikipedia": name == "wikipedia"}, TOPICS, now=NOW, get=get, sources=sources, clock=self.clock,
+                                    sleep=self.clock.sleep, **KW)
+                self.assertEqual(list(got["refused"]), [name])
+                counted = ("2026-11-16", f"source_off:{name}") in self.counters()
+                self.assertEqual(counted, name != "openalex")  # OpenAlex's is written for no day; the others stay for the day whatever the header says
+                if name == "openalex":
+                    self.assertEqual(got["refused"][name], "status 429 (remaining 5, retry-after 2)")
 
 
 class WanderTest(Case):
@@ -947,6 +981,23 @@ class WanderTest(Case):
         self.assertEqual(got["refused"], {"openalex": "status 429"})
         self.assertNotIn(("permanent", "walked:W1"), self.counters())
         self.assertIn(("2026-11-16", "source_off:openalex"), self.counters())
+
+    def test_a_refusal_for_this_refill_during_a_walk_keeps_the_rows_leaves_the_work_to_walk_again_and_writes_no_count_of_the_day(self):
+        self.keep(1)
+        partial = {"candidates": [candidate("https://w.example.org/q", found_from="openalex:W1", depth=1)], "rejected": []}
+        source = Source("openalex")
+
+        def wander(kept, get, per_work, max_depth, seen=()):
+            error = srcopenalex.SourceRefused("status 429 (remaining 4, retry-after none)", for_day=False)
+            error.partial = partial
+            raise error
+
+        source.wander = wander
+        got = self.fill({"discover_target": 50, "wander_share": 1.0, "queue_low": 10**5}, sources=self.sources(openalex=source))
+        self.assertEqual(got["added"], 1)
+        self.assertEqual(got["refused"], {"openalex": "status 429 (remaining 4, retry-after none)"})
+        self.assertNotIn(("permanent", "walked:W1"), self.counters())
+        self.assertNotIn(("2026-11-16", "source_off:openalex"), self.counters())
 
     def test_the_walk_is_counted_as_a_request_and_said_in_the_log(self):
         self.keep(1)

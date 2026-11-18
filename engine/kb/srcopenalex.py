@@ -9,7 +9,10 @@ What was read and what follows from it:
 
 - Basic queries need no key and no contact address; a free key gives ten times the daily budget and is needed only for paging past the
   first page, which nothing here does. So no key and no address is sent, and the agent is honest and generic. Without a key the day's
-  budget is $0.10: a search costs $0.001, a filter-only list $0.0001, so about 100 searches a day. Over it the API answers 429.
+  budget is $0.10: a search costs $0.001, a filter-only list $0.0001, so about 100 searches a day. Over it the API answers 429, and it also answers
+  429 for a pace or a load limit (read on 2026-11-18 from `help.openalex.org/api/errors/`). The client keeps no body for a status other than 200,
+  so a 429 is told by the header `X-RateLimit-Remaining`: a plain number above zero is a refusal for this refill only (`for_day` is False), and
+  zero, no header or anything else is a refusal for the day.
 - The answers are data. The size is capped, the JSON is read strictly (no repeated key, no NaN, nothing deeper than the parser takes), and
   every address in it is checked before it is used. An answer that is not what was expected is a refusal of the source for the day
   (`SourceRefused`), with the reason and not a word of what the server sent.
@@ -38,6 +41,7 @@ import ipaddress
 import json
 import re
 import unicodedata
+from collections.abc import Mapping
 from urllib.parse import quote, urlsplit
 
 from . import KbError, capture_arxiv, textutil
@@ -53,6 +57,7 @@ INCOMING_MARGIN = 10  # works asked for beyond `per_work` when asking who cites 
 _WORK_ID = re.compile(r"https://openalex\.org/(W[0-9]{1,12})")
 _SOURCE_ID = re.compile(r"openalex:(W[0-9]{1,12})")
 _CONTROL = ("Cc",)
+_PLAIN_NUMBER = re.compile(r"[0-9]{1,15}(?:\.[0-9]{1,15})?")  # ASCII digits and at most one point: no sign, no exponent, no `NaN`
 # A host written as numbers in a form that a browser or a resolver may read as an address (`2130706433`, `127.1`, `0x7f.1`): no real host
 # name is all numbers, since the last label of a name is never one.
 _NUMBER_HOST = re.compile(r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*", re.IGNORECASE)
@@ -60,12 +65,14 @@ _NUMBER_HOST = re.compile(r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*"
 
 class SourceRefused(KbError):
     """OpenAlex refused, answered something that is not what was expected, or could not be asked. The source is off for the rest of the
-    day (the caller records it). `reason` is a short cleaned text and never the server's words; `partial` holds what was found before
-    the refusal, in the form `search` and `wander` return, for the caller to keep."""
+    day (the caller records it), unless `for_day` is False: then it is off for the rest of this refill only (a 429 that shows budget left).
+    `reason` is a short cleaned text and never the server's words; `partial` holds what was found before the refusal, in the form `search`
+    and `wander` return, for the caller to keep."""
 
-    def __init__(self, reason, partial=None):
+    def __init__(self, reason, partial=None, for_day=True):
         self.reason = textutil.clean(reason, 200)
         self.partial = partial if partial is not None else {"candidates": [], "rejected": []}
+        self.for_day = for_day
         super().__init__(f"OpenAlex: {self.reason}")
 
 
@@ -100,6 +107,18 @@ def _url(path, params):
     return BASE + path + "?" + "&".join(f"{key}={quote(value, safe=safe)}" for key, value, safe in params)
 
 
+def _plain_number(headers, name):
+    """The plain number (at most 20 characters) that the header `name` holds, as written, or None: the header is absent, is given more than once
+    (the client joins two values with a comma), or holds anything else. The header is read in any case; nothing else of it is ever used."""
+    if not isinstance(headers, Mapping):
+        return None
+    found = [value for key, value in headers.items() if isinstance(key, str) and key.lower() == name and isinstance(value, str)]
+    if len(found) != 1:
+        return None
+    value = found[0].strip()
+    return value if len(value) <= 20 and _PLAIN_NUMBER.fullmatch(value) else None
+
+
 def _fetch(get, url):
     """The JSON object that the answer to `url` holds, or a `SourceRefused`."""
     try:
@@ -110,6 +129,12 @@ def _fetch(get, url):
         raise SourceRefused("the request was refused or failed") from None
     if type(status) is not int:
         raise SourceRefused("the status is not a number")
+    if status == 429:
+        # The client keeps no body for a status other than 200, so the headers decide, and only as plain numbers: budget left (`X-RateLimit-Remaining`
+        # above zero) means a pace or a load answer, which ends this refill only; zero, absent or anything odd ends the day, as every refusal does.
+        remaining, retry = _plain_number(headers, "x-ratelimit-remaining"), _plain_number(headers, "retry-after")
+        raise SourceRefused(f"status 429 (remaining {remaining or 'none'}, retry-after {retry or 'none'})",
+                            for_day=not (remaining is not None and float(remaining) > 0))
     if status != 200:
         raise SourceRefused(f"status {status}")
     if not isinstance(body, bytes):

@@ -267,6 +267,11 @@ class RefusalTest(unittest.TestCase):
             search(reply, fake=fake, **kw)
         return cm.exception, fake
 
+    def test_a_429_that_shows_budget_left_is_still_a_refusal_for_the_day_here(self):
+        """Only OpenAlex's own requests are told by `X-RateLimit-Remaining`; this source's refusal is for the day whatever the header says."""
+        error, _ = self.refused((429, {"x-ratelimit-remaining": "9"}, b""))
+        self.assertTrue(error.for_day)
+
     def test_the_refusal_is_the_one_every_source_raises_and_it_names_the_engine(self):
         error, _ = self.refused(ok(b"", 429))
         self.assertIsInstance(error, srcopenalex.SourceRefused)

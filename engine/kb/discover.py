@@ -6,7 +6,8 @@ only if the owner's plan switches it on, a web search engine) for candidates, by
 and puts what they return in the queue through `crawlqueue`: within the plan's caps, in the shares the plan gives, at the pace of each
 source. It holds no state of its own beyond what it writes in the queue's `counters` table:
 
-- `source_off:<name>`, by day: a source that refused today is not asked again that day (a day is a UTC day, as OpenAlex's budget is);
+- `source_off:<name>`, by day: a source that refused today is not asked again that day (a day is a UTC day, as OpenAlex's budget is), except that a
+  refusal that says `for_day` is False (an OpenAlex 429 that shows budget left) leaves the source alone for the rest of that refill only and writes nothing here;
 - `walked:<work>`, under the day `permanent`: a kept work whose citations have been walked is not walked again;
 - `web_search_queries`, by day: the queries made to a search engine today.
 
@@ -217,7 +218,7 @@ def fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cac
     the queue (which ends the refill; a registrable domain at its own cap only leaves that row): `1 - wander_share` of them from queries made from the topics (the
     topics' picks for the day, one query a pick, asked of each source that is on in the order OpenAlex, arXiv, Wikipedia), and `wander_share`
     from the citation links of kept works (at most `wander_part // wander_per_work` kept works, never one twice). A source that refuses
-    (`srcopenalex.SourceRefused`) is off for the rest of the day and the others go on.
+    (`srcopenalex.SourceRefused`) is off for the rest of the day, or for the rest of this refill when the refusal says so (`for_day` is False), and the others go on.
 
     `conn` is a `crawlqueue` connection; `plan` the dictionary of `PLAN`; `topics` what `crawltopics.read_topics` gives; `now` a UTC time
     (`2026-11-16T10:00:00Z`; its date is the day); `get(url, headers=None, timeout=None) -> (status, headers, body)` the shared web client.
@@ -327,7 +328,8 @@ def fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cac
     def refused(name, error):
         result["refused"][name] = error.reason
         off.add(name)
-        _bump(conn, key_day, f"source_off:{name}")
+        if error.for_day is not False:  # a refusal for this refill only (a 429 with budget left) is not written for the day: the next refill asks again
+            _bump(conn, key_day, f"source_off:{name}")
         note("discover", "refused", source=name, reason=error.reason)
 
     def ask(name, query):

@@ -389,6 +389,84 @@ class RefusalTest(unittest.TestCase):
         self.assertEqual(error.partial, {"candidates": [], "rejected": []})
 
 
+class RateLimitTest(unittest.TestCase):
+    """A 429 is a refusal for the rest of the day unless its `X-RateLimit-Remaining` header says that budget is left, and then it is a refusal
+    for this refill only. The web client keeps no body for a status other than 200, so only the headers decide, and only as plain numbers."""
+
+    def limited(self, remaining=None, retry=None, status=429, name="x-ratelimit-remaining"):
+        headers = {"content-type": "application/json"}
+        if remaining is not None:
+            headers[name] = remaining
+        if retry is not None:
+            headers["retry-after"] = retry
+        return Fake((status, headers, b""))
+
+    def refused(self, fake):
+        with self.assertRaises(srcopenalex.SourceRefused) as cm:
+            srcopenalex.search("control theory", fake, 5)
+        return cm.exception
+
+    def test_a_refusal_is_for_the_day_unless_it_says_otherwise(self):
+        self.assertTrue(srcopenalex.SourceRefused("status 500").for_day)
+        self.assertFalse(srcopenalex.SourceRefused("status 429", for_day=False).for_day)
+
+    def test_a_429_with_budget_left_is_a_refusal_for_this_refill_only(self):
+        for remaining in ("0.07", "12", "3.5", "0.0001", "00012", " 7 "):
+            with self.subTest(remaining=remaining):
+                fake = self.limited(remaining)
+                error = self.refused(fake)
+                self.assertFalse(error.for_day)
+                self.assertEqual(len(fake.calls), 1)  # nothing more is asked of it
+                self.assertIn("429", str(error))
+
+    def test_a_429_that_does_not_show_budget_left_is_a_refusal_for_the_day(self):
+        for remaining in ("0", "0.0", "0.000", "", "-1", "-0.5", "abc", "1e3", "1,5", "3, 4", "1.", ".5", "5 5", "9, 9", "+3", "1" * 21, "123456789012345.12345", "0x10", "NaN", "inf", "１２"):
+            with self.subTest(remaining=remaining):
+                self.assertTrue(self.refused(self.limited(remaining)).for_day)
+        self.assertTrue(self.refused(self.limited(None)).for_day)  # no such header
+
+    def test_the_headers_are_read_in_any_case(self):
+        self.assertFalse(self.refused(self.limited("4", name="X-RateLimit-Remaining")).for_day)
+        self.assertFalse(self.refused(self.limited("4", name="X-RATELIMIT-REMAINING")).for_day)
+
+    def test_a_header_given_twice_under_two_spellings_is_not_believed(self):
+        fake = Fake((429, {"x-ratelimit-remaining": "9", "X-RateLimit-Remaining": "9"}, b""))
+        self.assertTrue(self.refused(fake).for_day)
+
+    def test_only_a_429_is_read_for_its_header(self):
+        for status in (400, 401, 403, 404, 500, 503, 301, 204):
+            with self.subTest(status=status):
+                error = self.refused(self.limited("12", status=status))
+                self.assertTrue(error.for_day)
+                self.assertEqual(str(error), f"OpenAlex: status {status}")
+
+    def test_the_reason_holds_the_two_plain_numbers_and_no_other_text_of_a_header(self):
+        error = self.refused(self.limited("5", "2"))
+        self.assertEqual(error.reason, "status 429 (remaining 5, retry-after 2)")
+        error = self.refused(self.limited("0", "30"))
+        self.assertEqual(error.reason, "status 429 (remaining 0, retry-after 30)")
+        error = self.refused(self.limited("3", "Wed, 21 Oct 2026 07:28:00 GMT"))
+        self.assertEqual(error.reason, "status 429 (remaining 3, retry-after none)")
+        error = self.refused(self.limited("SECRET-TOKEN-123", "SECRET-TOKEN-456"))
+        self.assertEqual(error.reason, "status 429 (remaining none, retry-after none)")
+        self.assertNotIn("SECRET", str(error))
+        self.assertEqual(self.refused(self.limited()).reason, "status 429 (remaining none, retry-after none)")
+
+    def test_a_wander_that_is_limited_is_a_refusal_for_this_refill_and_keeps_what_was_found(self):
+        inner = WanderTest().router().reply
+
+        def route(url):
+            base, params = query(url)
+            if "cites:" in params.get("filter", ""):
+                return 429, {"content-type": "application/json", "x-ratelimit-remaining": "9"}, b""
+            return inner(url)
+
+        with self.assertRaises(srcopenalex.SourceRefused) as cm:
+            srcopenalex.wander([("openalex:W1000001", 0), ("openalex:W1000002", 0)], Fake(route), 3, 2)
+        self.assertFalse(cm.exception.for_day)
+        self.assertEqual([c["source_id"] for c in cm.exception.partial["candidates"]], ["openalex:W2000001", "openalex:W2000003"])
+
+
 class WanderTest(unittest.TestCase):
     def router(self, refs=None, batch=None, citing=None):
         batch = batch if batch is not None else ok(fixture("openalex_refs_batch.json"))
