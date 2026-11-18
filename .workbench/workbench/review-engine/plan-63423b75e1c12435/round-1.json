@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Candidate line",
+      "problem": "The plan declares this substantial four-increment crawler and theme/weave integration as `Candidate: none`. Project plan rules reserve that form for work too small to need roadmap direction; this changes the unattended crawler and advances theme/weave maintenance.",
+      "severity": "major",
+      "suggestion": "Add an owner-authorized roadmap candidate with the matching finish line, then cite it here; otherwise document why this scope qualifies as an exception."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment C, steps 1–2 and completion criterion 3",
+      "problem": "The plan does not require a stop/deadline guard for `themevectors.build`. That function performs embedding model calls, so a stop file or expired window can still start another embedding request, contrary to the spec's idle-window safeguard.",
+      "severity": "major",
+      "suggestion": "Pass the same stop-aware launcher (or an explicit stop callback) into vector building, check it before every embedding batch, and add injected-clock/stop-file tests for the vector phase."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Scope (`crawllog.py`) and Increments B/D",
+      "problem": "The plan requires a distinct window-summary log line, but only proposes the `themes`, `theme_vectors`, and `weave` log steps. The current log rejects unlisted steps, and the population spec's enumerated log steps likewise has no `idle`/window step.",
+      "severity": "major",
+      "suggestion": "Specify a dedicated valid log step for the window, add it to the log schema and population spec, and test that status/report identify its seconds, end reason, and books made."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan needs roadmap provenance and concrete handling for vector-phase interruption and the required window-summary log record.",
+  "verdict": "changes_needed"
+}

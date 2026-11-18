@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Increment B, steps 2–3; Completion criterion 2",
+      "problem": "The plan never requires the idle step to take and respect the card-step lock. Population acceptance criterion 20 explicitly requires this, but the tests only cover stop/refusal/breaker behavior; reading `crawlcards.make_step` does not make lock acquisition or a held-lock refusal a required implementation or verification outcome.",
+      "severity": "major",
+      "suggestion": "Require the idle themes pass to acquire the same card-step lock before planning or running themes, and add a failing test showing a held card lock prevents the themes work without running the window's model calls."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Increment B, step 2; Completion criterion 2",
+      "problem": "The plan selects only by absence of themes (and oldest order). The population spec limits the first idle action to active books that have both a card and a conversion as well as no themes. The proposed tests do not verify those eligibility conditions, so implementation could plan incomplete or inactive books and drift from the spec.",
+      "severity": "major",
+      "suggestion": "State the complete eligibility predicate in the outcome and implementation steps, and test that inactive books and books without a card or conversion are excluded while eligible books are processed in order."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan matches the updated idle-window direction overall, but it omits two explicit population-spec safeguards from required implementation and tests: card-lock respect and complete book eligibility.",
+  "verdict": "changes_needed"
+}
