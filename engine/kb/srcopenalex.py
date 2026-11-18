@@ -339,9 +339,9 @@ def wander(kept, get, per_work, max_depth, seen=()):
     From each kept work at most `per_work` works are taken in all (the spec's `wander_per_work`, "works taken from one kept work"): the
     most cited first, one level deeper, with `found_from` the kept work, up to half of them (the odd place included) from the works it
     cites and the rest from the works that cite it, and a place that one side cannot fill passes to the other. A work whose only full
-    text is a PDF takes a place and is returned as `rejected`. Three requests are made for a kept work (the work itself, a batch of its
-    references, and who cites it), and more if it has over 100 references: the first 300 in the order OpenAlex lists them are looked at,
-    and the strongest are chosen among those. A refusal is a `SourceRefused` whose `partial` holds what was found before it."""
+    text is a PDF takes a place and is returned as `rejected`. Two to five requests are made for a kept work (the work itself, none to
+    three batches of its references, one for each 100 of the first 300 in the order OpenAlex lists them, and last who cites it, most
+    cited first), and the strongest are chosen among the works looked at. A refusal is a `SourceRefused` whose `partial` holds what was found before it."""
     if not isinstance(kept, (list, tuple)) or not all(isinstance(k, (list, tuple)) and len(k) == 2 and type(k[1]) is int and k[1] >= 0
                                                        for k in kept):
         raise _refuse("kept is a list of (source_id, depth)")
@@ -371,7 +371,7 @@ def wander(kept, get, per_work, max_depth, seen=()):
             first = cited[: (per_work + 1) // 2]
             _keep(first, found, taken, origin, depth + 1)  # kept at once, so that a refusal on the next request still carries them
             asked = min(BATCH, per_work + INCOMING_MARGIN)
-            url = _url("/works", [("filter", f"cites:{number},open_access.is_oa:true", ":,|"), ("sort", "-cited_by_count", ""),
+            url = _url("/works", [("filter", f"cites:{number},open_access.is_oa:true", ":,|"), ("sort", "cited_by_count:desc", ":"),
                                   ("per_page", str(asked), ""), ("select", SELECT, ",")])
             second = _ranked(_resolved(_results(_fetch(get, url), asked), known | taken))[: per_work - len(first)]
             _keep(second, found, taken, origin, depth + 1)

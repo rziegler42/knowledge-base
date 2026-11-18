@@ -81,6 +81,8 @@ Reviewer: `ask-codex` (model `gpt-5.6-terra`), through `review-engine`, 2 rounds
 - Round 2, one minor finding applied: the citing request is named by what it asks, not as the third.
 - Rejected: none. Left for the owner: nothing from the review.
 
+Increment A, independent `reviewer` (one exchange): no blocking finding, no concrete security risk. Two findings, not blocking: (1) a comment in `engine/tests/test_discover.py` still says "three requests each", outside the plan's Scope, so not changed and put on the owner's todo list; (2) the 400 test alone would not catch `asc` or `%3A`, which the neighbouring tests (the decoded parameters and the raw address) and the six deliberate changes do catch, so no change. The reviewer could not run the tests or read the diff; those results are mine.
+
 ## Deferred work
 
 - A refusal of the walk could end the walk only and not the day of OpenAlex's search; today every refusal of a source is for the day.
@@ -88,4 +90,12 @@ Reviewer: `ask-codex` (model `gpt-5.6-terra`), through `review-engine`, 2 rounds
 
 ## Result
 
-Empty until work starts.
+### Increment A (working tree on `bf6b878`, not yet committed)
+
+- **Changed:** `engine/kb/srcopenalex.py` (the `sort` tuple of the request for citing works, now `("sort", "cited_by_count:desc", ":")`, and the docstring count, now two to five); `engine/tests/test_srcopenalex.py` (the pinned parameters changed to the new value, the parameter names of the batch request pinned, a test of the raw address, and a test of a fake server that answers 400 to the old form).
+- **Seen failing first:** against the old code three tests failed, two on the old `-cited_by_count` and the new 400 test with `SourceRefused: OpenAlex: status 400`.
+- **Verification run:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_srcopenalex engine.tests.test_discover engine.tests.test_crawlrefill`: 332 tests, OK (Python 3.15.0). Six deliberate single changes (the old form back, the sort dropped, `asc` for `desc`, the colon percent-encoded, a different field, no direction) were each caught by `engine.tests.test_srcopenalex`, each change compile-checked, and the file was restored byte for byte. `wb run code-work check` and `git diff --check` pass.
+- **Not run:** the full suite, any live request after the change (the 200 was read before it, in the table above), and a security review (the owner did not ask for one; the change is one constant string, and `_url` still encodes every other value).
+- **Review:** see the review record. No recommendation was declined.
+- **Deferred:** the stale comment "three requests each" at `engine/tests/test_discover.py` line 1632 (a comment only).
+- **For the owner:** the change voids the approval of the crawl plan after the commit, so `crawl-approve` is needed again; the first walk is then looked at in the log (criterion 5).

@@ -501,10 +501,30 @@ class WanderTest(unittest.TestCase):
         self.assertEqual(base, "https://api.openalex.org/works")
         self.assertEqual(params["filter"], "openalex:W2000001|W2000002|W2000003|W2000004|W2000005|W2000006,open_access.is_oa:true")
         self.assertEqual((params["per_page"], params["select"]), ("100", SELECT))
+        self.assertEqual(sorted(params), ["filter", "per_page", "select"])
         base, params = query(fake.urls[2])
         self.assertEqual(base, "https://api.openalex.org/works")
-        self.assertEqual(params, {"filter": "cites:W1000001,open_access.is_oa:true", "sort": "-cited_by_count", "per_page": "12",
+        self.assertEqual(params, {"filter": "cites:W1000001,open_access.is_oa:true", "sort": "cited_by_count:desc", "per_page": "12",
                                   "select": SELECT})
+
+    def test_the_request_for_the_works_that_cite_a_work_carries_the_sort_as_it_stands_on_the_wire_with_the_colon_as_it_is(self):
+        fake, _ = self.wander()
+        raw = fake.urls[2]
+        self.assertIn("&sort=cited_by_count:desc&", raw)  # not %3A: the decoded parameters cannot tell the two apart
+        self.assertNotIn("-cited_by_count", raw)
+        self.assertNotIn("%3A", raw.split("?", 1)[1].split("sort=", 1)[1].split("&", 1)[0])
+
+    def test_a_server_that_refuses_the_old_form_of_the_sort_as_openalex_does_leaves_the_walk_complete(self):
+        inner = self.router().reply
+
+        def route(url):
+            if "sort=-cited_by_count" in url:  # what OpenAlex answers on 2026-11-18: 400, "_cited_by_count is not a valid field"
+                return 400, {"content-type": "application/json"}, b'{"error":"Invalid query parameters error.","message":"_cited_by_count is not a valid field."}'
+            return inner(url)
+
+        fake, found = self.wander(Fake(route), per_work=6)
+        self.assertEqual(len(fake.calls), 3)
+        self.assertTrue([c for c in found["candidates"] if c["source_id"].startswith("openalex:W3")])  # the citing works came
 
     def test_the_works_it_cites_are_ranked_by_how_much_they_are_cited_then_by_id_and_the_strongest_are_taken(self):
         _, found = self.wander(per_work=6)
