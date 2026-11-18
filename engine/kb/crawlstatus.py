@@ -781,6 +781,55 @@ def count_runs(found):
             "first": found["first"], "last": found["last"]}
 
 
+MAX_NUMBER = 10 ** 9   # what the writer of the log allows a count or seconds to be; the reader takes larger numbers, and a sum of those could overflow or be too long to print
+
+
+def _number(value):
+    """A count or seconds of a log line as a number, at most `MAX_NUMBER`, or 0 for a line that has none (a line is read whole by `parse_line`, so what is here is a number or None)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return min(value, MAX_NUMBER)
+    return 0
+
+
+def idle_counts(index_root, day, zone):
+    """The idle windows of a day of `zone`: what each did, from the `idle` lines (one for each window, with its seconds, the books made and why it ended), and what their parts
+    did, from the `themes`, `theme_vectors` and `weave` lines. `last` is the newest window (the later line if two are equal)."""
+    return count_idle(lines_of_day(index_root, day, zone))
+
+
+def count_idle(found):
+    """`idle_counts` over the answer of `lines_of_day` that the caller already has (so that a report that needs the day's lines for other things does not read the files twice)."""
+    windows = seconds = books = themes_failed = vector_texts = vectors_failed = weave_repairs = weave_added = weave_failed = 0
+    reasons, last = {}, None
+    for record in found["lines"]:
+        step, outcome = record["step"], record["outcome"]
+        if step == "idle":
+            windows += 1
+            seconds += _number(record["seconds"])
+            books += _number(record["n"])
+            why = clean(record["reason"], 100) or "(no reason)"
+            reasons[why] = reasons.get(why, 0) + 1
+            if last is None or record["ts"] >= last["ts"]:
+                last = {"ts": record["ts"], "run": clean(record["run"], 200), "outcome": outcome, "reason": why if record["reason"] is not None else None,
+                        "books_made": _number(record["n"]), "seconds": _number(record["seconds"])}
+        elif step == "themes" and outcome == "failed":
+            themes_failed += 1
+        elif step == "theme_vectors":
+            if outcome == "ok":
+                vector_texts += _number(record["n"])
+            elif outcome == "failed":
+                vectors_failed += 1
+        elif step == "weave":
+            if outcome == "ok":
+                weave_repairs += 1
+                weave_added += _number(record["n"])
+            elif outcome == "failed":
+                weave_failed += 1
+    return {"day": found["day"], "windows": windows, "seconds": int(seconds), "books_made": int(books), "by_reason": dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0]))),
+            "last": last, "themes_failed": themes_failed, "vector_texts": int(vector_texts), "vectors_failed": vectors_failed, "weave_repairs": weave_repairs,
+            "weave_themes_added": int(weave_added), "weave_failed": weave_failed, "bad": found["bad"], "cut": found["cut"], "unreadable": found["unreadable"], "problem": found["problem"]}
+
+
 # --- the queue, the counters, the books --------------------------------------------------------------------------------------------------------
 
 QueueOpen = namedtuple("QueueOpen", "conn status reason")  # status: ok | missing | bad | busy; the caller closes `conn`
@@ -1262,7 +1311,7 @@ def _bad_of(part):
 def status(index_root, bulk_root, *, read_plan, store, now, statvfs=os.statvfs):
     """Everything `crawl-status` prints, as plain data: the plan (approved or not, its zone and any problem with it), the state and the facts behind it,
     the queue (its counts for the plan's day and in all, the counters against the ceilings, the reasons of the recent rejections, failures and blocks),
-    the books the crawl filed against its ceiling, the last run and the runs of today, the disk against the floors, the lists and URLhaus, the recent
+    the books the crawl filed against its ceiling, the last run and the runs of today, the idle windows of today (what they made), the disk against the floors, the lists and URLhaus, the recent
     holds and the bad lines of the log. **A part that fails puts its own error in its place and the others stand.** With no approved plan the ceilings
     are not known and the spec's defaults are used for the floors, the lists and the zone, and `notes` says so. `read_plan` is the reader of the
     approved plan (the runner plan's `crawlplan.read_plan`); `now` is a time with a zone. Reads only."""
@@ -1287,6 +1336,7 @@ def status(index_root, bulk_root, *, read_plan, store, now, statvfs=os.statvfs):
     if "error" not in books:
         books["filed"] = _against(books["filed_total"], _limit(values, "filed_total"))
     runs = _part(run_counts, index_root, today, zone)
+    idle = _part(idle_counts, index_root, today, zone)
     last = _part(last_run, index_root, now)
     holds = _part(recent_holds, index_root)
     return {
@@ -1299,6 +1349,7 @@ def status(index_root, bulk_root, *, read_plan, store, now, statvfs=os.statvfs):
         "books": books,
         "last_run": last,
         "runs_today": runs,
+        "idle_today": idle,
         "disk": _part(disk, bulk_root, index_root, {k: effective.get(k) for k in ("bulk_floor_gb", "index_floor_gb")}, statvfs),
         "lists": {"public": _part(public_lists, index_root, effective, now), "urlhaus": _part(urlhaus_state, index_root, effective, now)},
         "holds": holds,

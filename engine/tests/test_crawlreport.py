@@ -94,6 +94,19 @@ class BuildTest(ReportBase):
         self.assertEqual({k: got["log"][k] for k in ("lines", "first", "last", "bad", "cut", "problem")},
                          {"lines": 42, "first": "2026-11-18T05:00:00Z", "last": "2026-11-18T09:00:00Z", "bad": {}, "cut": False, "problem": None})
 
+    def test_the_idle_windows_of_the_day_are_counted_from_the_log(self):
+        self.full_day()
+        idle = self.build()["idle"]
+        self.assertEqual((idle["windows"], idle["seconds"], idle["books_made"], idle["by_reason"]), (1, 600, 1, {"deadline": 1}))
+        self.assertEqual((idle["vector_texts"], idle["weave_repairs"], idle["weave_themes_added"], idle["themes_failed"]), (20, 1, 14, 0))
+        self.assertEqual(idle["last"]["run"], "r2")
+
+    def test_a_log_that_cannot_be_read_is_the_fault_of_the_idle_part_too(self):
+        self.full_day()
+        with mock.patch.object(cr.cs, "lines_of_day", side_effect=RuntimeError("it broke")):
+            idle = cr.build(self.tmp, DAY, "UTC", NOW)["idle"]
+        self.assertEqual(set(idle), {"error"})
+
     def test_the_lines_by_step_and_outcome(self):
         self.full_day()
         steps = self.build()["steps"]
@@ -581,12 +594,28 @@ class RenderTest(ReportBase):
         self.full_day()
         text = self.text()
         headings = [line for line in text.splitlines() if line.startswith("#")]
-        self.assertEqual(headings, ["# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## The log and the queue compared", "## Books filed", "## What the books' own records say", "## Books not reviewed by the owner",
+        self.assertEqual(headings, ["# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## Idle windows", "## The log and the queue compared", "## Books filed", "## What the books' own records say", "## Books not reviewed by the owner",
                                     "## Works rejected for their type", "## Pauses of the circuit breaker", "## Lists that could not be refreshed",
                                     "## Failures by reason", "## The log"])
         for line in ("- Fetched: 3", "- Fetches that failed: 2", "- Judged in: 1", "- Rejected: 1", "- Failed: 2 candidates, 4 fail lines", "- Started: 2",
                      "- Ended: 2", "- Refused firings, which are not runs: 3"):
             self.assertIn(line, text)
+
+    def test_the_idle_windows_are_printed_with_their_numbers_and_the_last_one(self):
+        self.full_day()
+        text = self.text()
+        section = text.split("## Idle windows", 1)[1].split("\n## ", 1)[0]
+        for line in ("- Windows: 1, using 600 seconds in all; the themes of 1 books were made; 0 tries failed",
+                     "- Ended by: `deadline` x 1", "- Vectors: 20 texts embedded; 0 steps failed", "- Weave: 1 repairs, 14 themes added; 0 failed"):
+            self.assertIn(line, section)
+        self.assertRegex(section, r"- Last window: `2026-11-18T07:00:28Z` run `r2`: `ok`, `deadline`, 1 books, 600 seconds")
+
+    def test_a_day_with_no_window_says_none_in_the_log(self):
+        self.put_day_log()
+        self.good_breaker()
+        text = cr.render({**self.build(), "idle": cr.cs.count_idle({"day": DAY, "lines": [], "bad": {}, "cut": False, "unreadable": 0, "problem": None})})
+        section = text.split("## Idle windows", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("- None in the log of this day.", section)
 
     def test_a_difference_between_the_log_and_the_queue_is_printed_with_both_numbers(self):
         self.full_day()
@@ -670,7 +699,7 @@ class RenderTest(ReportBase):
         self.assertTrue(spans)
         for span in spans:
             self.assertFalse(set(span) & set("`|<>"), span)
-        own = {"# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## The log and the queue compared", "## Books filed", "## What the books' own records say", "## Books not reviewed by the owner",
+        own = {"# Crawl report for 2026-11-18", "## The day in numbers", "## Runs", "## Idle windows", "## The log and the queue compared", "## Books filed", "## What the books' own records say", "## Books not reviewed by the owner",
                "## Works rejected for their type", "## Pauses of the circuit breaker", "## Lists that could not be refreshed", "## Failures by reason", "## The log"}
         self.assertEqual({line for line in text.splitlines() if line.startswith("#")}, own)
         self.assertFalse([line for line in outside.splitlines() if line.strip() and set(line.strip()) <= set("-*_= ")])

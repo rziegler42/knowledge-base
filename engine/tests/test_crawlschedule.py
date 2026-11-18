@@ -87,6 +87,15 @@ class TheText(unittest.TestCase):
         for word in ("night", "away", "vacation", "holiday", "weekend", "overnight", "sleep", "asleep", "hours a day", "all day"):
             self.assertNotIn(word, text)
 
+    def test_the_text_says_to_use_the_projects_own_python_for_the_weave_and_why_and_leaves_the_default_as_it_was(self):
+        text = crawlschedule.text(INDEX, ENGINE)
+        self.assertIn("engine/.venv/bin/python", text)
+        self.assertIn("numpy", text)
+        self.assertIn("idle window", text)
+        self.assertEqual(parsed(text)["ProgramArguments"][0], "python3")                       # the comment is advice: the program is what was given
+        given = crawlschedule.text(INDEX, ENGINE, ENGINE + "/.venv/bin/python")
+        self.assertEqual(parsed(given)["ProgramArguments"][0], ENGINE + "/.venv/bin/python")
+
     def test_the_text_is_the_same_for_the_same_arguments(self):
         self.assertEqual(crawlschedule.text(INDEX, ENGINE), crawlschedule.text(INDEX, ENGINE))
 

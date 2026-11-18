@@ -373,6 +373,7 @@ def build(index_root, day, zone, now, store=None):
     data["counts"] = from_lines(_counts, lines)
     data["steps"] = from_lines(_steps, lines)
     data["runs"] = from_lines(_runs, found)
+    data["idle"] = from_lines(cs.count_idle, found)
     data["breaker"] = {"pauses": from_lines(_pauses, lines), "now": cs.guarded(_breaker_now, index_root)}
     data["lists_failed"] = from_lines(_lists_failed, lines)
     log_reasons = from_lines(_log_reasons, lines)
@@ -448,6 +449,24 @@ def _render_unreviewed(got):
     return out
 
 
+def _render_idle(idle):
+    """The lines of the section of the idle windows: what the windows of the day made, why they ended, and what the last did. Every text from the log is in a code span."""
+    if idle is None or _broken(idle):
+        return [_unreadable(idle)] if idle is not None else ["- Not known."]
+    if not idle["windows"]:
+        return ["- None in the log of this day."]
+    out = [f"- Windows: {number(idle['windows'])}, using {number(idle['seconds'])} seconds in all; the themes of {number(idle['books_made'])} books were made; {number(idle['themes_failed'])} tries failed"]
+    if idle["by_reason"]:
+        out.append("- Ended by: " + ", ".join(f"{code(why, 100)} x {number(n)}" for why, n in idle["by_reason"].items()))
+    last = idle["last"]
+    if last is not None:
+        reason = f", {code(last['reason'], 100)}" if last["reason"] else ""
+        out.append(f"- Last window: {code(last['ts'])} run {code(last['run'], 100)}: {code(last['outcome'], 20)}{reason}, {number(last['books_made'])} books, {number(last['seconds'])} seconds")
+    out.append(f"- Vectors: {number(idle['vector_texts'])} texts embedded; {number(idle['vectors_failed'])} steps failed")
+    out.append(f"- Weave: {number(idle['weave_repairs'])} repairs, {number(idle['weave_themes_added'])} themes added; {number(idle['weave_failed'])} failed")
+    return out
+
+
 def render(data):
     """The Markdown of a day's facts. Every text from outside is in a code span (see `code`); the words around it are fixed here and have no character that a
     viewer would read as markup beyond a heading mark, a bullet and a colon."""
@@ -473,6 +492,7 @@ def render(data):
         out += [f"- Started: {number(runs['started'])}", f"- Ended: {number(runs['ended'])}" + (f" ({ends})" if ends else ""),
                 f"- Refused firings, which are not runs: {number(runs['refused'])}"]
         out += [f"- Refused: {code(why, 100)} x {number(n)}" for why, n in runs["refused_by_reason"].items()]
+    out += ["", "## Idle windows", ""] + _render_idle(data.get("idle"))
     queue = data["queue"]
     out += ["", "## The log and the queue compared", ""]
     if data["compare"] is None:

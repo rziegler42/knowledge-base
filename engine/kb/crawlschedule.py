@@ -102,6 +102,7 @@ def text(index_root, engine_dir, python=PYTHON, wb_dir=None):
         "    " + prefix,
         "  The agent's own output goes to this file, which is outside the crawl's log:",
         "    " + output,
+        "  Give the option called python the project's own interpreter, engine/.venv/bin/python (as a full path), and not the system one: the repair of the weave in the idle window needs numpy, which only the project's own python has. Without it the weave is skipped, and the themes and their vectors are made all the same.",
     ]
     if wb is None:
         lines += ["  wb was not found when this text was made. Model calls need it, and launchd gives a run only /usr/bin:/bin:/usr/sbin:/sbin. Print this text again, giving the option called path the folder that holds wb, before installing it."]

@@ -1347,6 +1347,83 @@ class DiskTest(Base):
         self.assertGreater(r["bulk"]["free_bytes"], 0)
 
 
+class IdleWindowTest(StateBase):
+    """What the idle windows of a day did, from the `idle`, `themes`, `theme_vectors` and `weave` lines only."""
+    DAY = datetime.date(2026, 11, 16)
+
+    def window_lines(self):
+        return [dict(ts="2026-11-16T05:05:00Z", run="r1", step="idle", outcome="ok", reason="deadline", n=9, seconds=300),
+                dict(ts="2026-11-16T05:05:00Z", run="r1", step="themes", outcome="ok", book="01ARZ3NDEKTSV4RRFFQ69G5FAV", n=12, seconds=34),
+                dict(ts="2026-11-16T05:05:00Z", run="r1", step="themes", outcome="failed", book="01ARZ3NDEKTSV4RRFFQ69G5FAW", reason="refused"),
+                dict(ts="2026-11-16T05:05:00Z", run="r1", step="theme_vectors", outcome="ok", n=120, seconds=60),
+                dict(ts="2026-11-16T05:05:00Z", run="r1", step="weave", outcome="skipped", reason="not due", n=40),
+                dict(ts="2026-11-16T06:10:00Z", run="r2", step="idle", outcome="skipped", reason="nothing to do", n=0, seconds=4),
+                dict(ts="2026-11-16T07:15:00Z", run="r3", step="idle", outcome="ok", reason="nothing to do", n=3, seconds=95),
+                dict(ts="2026-11-16T07:15:00Z", run="r3", step="theme_vectors", outcome="ok", n=18, seconds=14),
+                dict(ts="2026-11-16T07:15:00Z", run="r3", step="weave", outcome="ok", n=22, seconds=6)]
+
+    def test_a_huge_number_in_a_line_cannot_break_the_sums_or_the_printing_of_the_part(self):
+        # a line may hold any whole number or finite float that the reader takes; two of 3,000 digits sum past what `str` and `json` write, and two of 1e308 sum to infinity
+        self.put_log("2026-11-16", dict(ts="2026-11-16T05:00:00Z", run="r1", step="idle", outcome="ok", reason="deadline", n=1, seconds=10 ** 3000),
+                     dict(ts="2026-11-16T06:00:00Z", run="r2", step="idle", outcome="ok", reason="deadline", n=1, seconds=10 ** 3000),
+                     dict(ts="2026-11-16T07:00:00Z", run="r3", step="idle", outcome="ok", reason="deadline", n=1, seconds=1e308),
+                     dict(ts="2026-11-16T08:00:00Z", run="r4", step="idle", outcome="ok", reason="deadline", n=1, seconds=1e308))
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual((got["windows"], got["books_made"]), (4, 4))
+        self.assertLessEqual(got["seconds"], 4 * cs.MAX_NUMBER)                # each line counts for at most a number that any real window is far under
+        self.assertEqual(json.loads(json.dumps(got)), got)
+        self.assertLessEqual(got["last"]["seconds"], cs.MAX_NUMBER)
+
+    def test_the_windows_of_the_day_are_counted_with_their_seconds_books_and_reasons(self):
+        self.put_log("2026-11-16", *self.window_lines())
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual((got["windows"], got["seconds"], got["books_made"]), (3, 399, 12))
+        self.assertEqual(got["by_reason"], {"deadline": 1, "nothing to do": 2})
+        self.assertEqual(got["themes_failed"], 1)
+        self.assertEqual((got["vector_texts"], got["vectors_failed"]), (138, 0))
+        self.assertEqual((got["weave_repairs"], got["weave_themes_added"]), (1, 22))
+
+    def test_the_last_window_is_the_newest_with_its_run_outcome_reason_books_and_seconds(self):
+        self.put_log("2026-11-16", *self.window_lines())
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual(got["last"], {"ts": "2026-11-16T07:15:00Z", "run": "r3", "outcome": "ok", "reason": "nothing to do", "books_made": 3, "seconds": 95})
+
+    def test_a_day_with_no_window_says_so_and_has_no_last_window(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T05:00:00Z", run="r1", step="run_start"))
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual((got["windows"], got["seconds"], got["books_made"], got["last"], got["by_reason"]), (0, 0, 0, None, {}))
+
+    def test_the_lines_of_another_day_are_not_counted(self):
+        self.put_log("2026-11-16", *self.window_lines())
+        self.put_log("2026-11-15", dict(ts="2026-11-15T23:00:00Z", run="r0", step="idle", outcome="ok", reason="deadline", n=50, seconds=600))
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual((got["windows"], got["books_made"]), (3, 12))
+
+    def test_a_failed_vector_step_and_a_failed_repair_are_counted_apart(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T05:05:00Z", run="r1", step="theme_vectors", outcome="failed", reason="the vectors could not be made"),
+                     dict(ts="2026-11-16T05:05:00Z", run="r1", step="weave", outcome="failed", reason="the repair was refused"))
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual((got["vectors_failed"], got["vector_texts"], got["weave_failed"], got["weave_repairs"]), (1, 0, 1, 0))
+
+    def test_a_reason_is_cleaned_and_a_window_with_no_reason_is_named(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T05:05:00Z", run="r1", step="idle", outcome="ok", reason="dead" + ZWSP + "line", n=1, seconds=1),
+                     dict(ts="2026-11-16T06:05:00Z", run="r2", step="idle", outcome="ok", n=1, seconds=1))
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual(got["by_reason"], {"deadline": 1, "(no reason)": 1})
+
+    def test_the_bad_lines_and_a_log_that_is_a_link_are_reported_as_the_other_parts_report_them(self):
+        folder = self.tmp / "crawl" / "log"
+        folder.mkdir(parents=True)
+        (folder / "crawl-2026-11-16.jsonl").write_bytes(b"junk\n" + raw(**self.window_lines()[0]) + b"\n")
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual((got["windows"], got["bad"]), (1, {"not_json": 1}))
+
+    def test_the_answer_is_plain_data(self):
+        self.put_log("2026-11-16", *self.window_lines())
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual(json.loads(json.dumps(got)), got)
+
+
 class RunsTest(StateBase):
     NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
 
@@ -2909,7 +2986,7 @@ class StatusTest(StoreCase):
         self.approve()
         self.breaker_ok()
         got = self.status()
-        for key in ("generated", "notes", "plan", "state", "queue", "books", "last_run", "runs_today", "disk", "lists", "holds", "log"):
+        for key in ("generated", "notes", "plan", "state", "queue", "books", "last_run", "runs_today", "idle_today", "disk", "lists", "holds", "log"):
             self.assertIn(key, got)
         self.assertEqual(json.loads(json.dumps(got)), got)
         self.assertEqual(got["generated"], "2026-11-16T12:00:00Z")
@@ -3095,7 +3172,7 @@ class StatusTest(StoreCase):
     def test_every_other_part_that_fails_is_a_fault_of_that_part_alone(self):
         self.approve()
         self.breaker_ok()
-        for name, key in (("disk", "disk"), ("last_run", "last_run"), ("run_counts", "runs_today"), ("crawl_books", "books"), ("public_lists", None),
+        for name, key in (("disk", "disk"), ("last_run", "last_run"), ("run_counts", "runs_today"), ("idle_counts", "idle_today"), ("crawl_books", "books"), ("public_lists", None),
                           ("urlhaus_state", None), ("recent_holds", "holds"), ("state", "state")):
             with self.subTest(part=name), mock.patch.object(cs, name, side_effect=RuntimeError("it broke: Cookie: sid=1")):
                 got = self.status()
