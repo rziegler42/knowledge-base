@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Increment B, Steps 2–3",
+      "problem": "The specified behavior contradicts itself. Step 2 and completion criterion 4 require an unknown 429 reason to disable OpenAlex for the UTC day, but Step 3 lists a deliberate change that reads an unknown form as a refill-only refusal. That test/change would approve the unsafe opposite behavior.",
+      "severity": "major",
+      "suggestion": "Make Step 3 match the completion criterion: unknown, absent, malformed, oversized, or unrecognized reasons must be day-long refusals; only explicitly enumerated recognized per-second/pacing reasons may be refill-only."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment B, Steps 2–3; Completion criterion 4",
+      "problem": "The plan never defines the complete fixed set of accepted 429 `reason` values or maps each value to daily versus refill-only handling. Phrases such as “the other known forms” and “new-account pacing reason” leave the implementation and its tests unable to establish the intended fail-closed classification.",
+      "severity": "major",
+      "suggestion": "Name every accepted reason string and its duration in the plan, with fixtures for each. Treat every other body/reason form as a day-long refusal."
+    },
+    {
+      "id": "R1-F3",
+      "location": "Goal, OpenAlex evidence paragraph",
+      "problem": "The plan relies on changing external OpenAlex pricing/rate-limit claims to justify credential handling and refusal semantics, but explicitly records that no content hash was taken. This does not meet the project’s required provenance for external evidence and leaves no stable evidence for the claimed reason values or budget behavior.",
+      "severity": "major",
+      "suggestion": "Record the source URL, retrieval date, content hash, relevant observed response fixtures/headers, tool/version and commit provenance, then tie the accepted reason mapping and trial expectations to that evidence."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan has a direct contradiction in 429 handling, lacks an implementable reason allowlist, and does not preserve required provenance for the external claims driving the change.",
+  "verdict": "changes_needed"
+}
