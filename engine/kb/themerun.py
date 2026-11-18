@@ -32,6 +32,7 @@ CHECKS_PER_PIECE = (2.0, 2.5)     # the calls to the check for each piece in the
 RUNS_READ = 20                    # the records of earlier runs read to see what check a book was made with
 RETRIES = 1                       # a book that fails is tried once more, after the last book
 STOP_AFTER = 3                    # books in a row that fail for a reason that is not a refused answer stop the run
+STOPPED = "stopped at the caller's request: the books not finished stay waiting and keep the pieces they have answered"
 # What an item says of why it did not finish: a fixed kind, never a title or a piece of a reply or of an error message.
 REASON_KINDS = {"refused": "an answer of a model was refused and kept aside", "failed": "a call or a step failed",
                 "no_longer_active": "the book is no longer active or has another current version",
@@ -369,9 +370,10 @@ def _kept(index_root, item):
         return 0
 
 
-def _serve(store, cfg, rec, item, frequencies, launcher, root):
-    """Make, check and file the themes of one book, and say what became of it in the item. Returns "done", "dropped", "refused", "failed" or
-    "unexpected". A reason is a fixed kind (`REASON_KINDS`) or the name of the kind of an unexpected error, never a message."""
+def _serve(store, cfg, rec, item, frequencies, launcher, root, stop=None):
+    """Make, check and file the themes of one book, and say what became of it in the item. Returns "done", "dropped", "refused", "failed",
+    "unexpected" or "cut" (the `stop` was true before a model call: the item is left as it was, no try is charged and the journal keeps the
+    pieces answered). A reason is a fixed kind (`REASON_KINDS`) or the name of the kind of an unexpected error, never a message."""
     def fail(kind, reason):
         item["attempts"] += 1
         item["reason"] = reason
@@ -395,7 +397,7 @@ def _serve(store, cfg, rec, item, frequencies, launcher, root):
         # the pieces already answered, from a go that failed or was stopped, are not asked for again; a book that fails keeps them
         journal = themeextract.PieceJournal.for_book(index_root, book_id, version_id)
         got = themecheck.make_and_check_for_version(store, cfg, book_id, version_id, launcher=launcher, root=root, frequencies=frequencies,
-                                                    journal=journal)
+                                                    journal=journal, stop=stop)
         made, stats = _how_made(got, rec), _stats_of(got, time.monotonic() - started)
         done = {"status": "done", "generation": 1, "reason": "", "made": made, "stats": stats}
         _check_item({**item, **done})   # what the record will say is checked before anything is filed, so that a book is not filed and then failed
@@ -403,6 +405,8 @@ def _serve(store, cfg, rec, item, frequencies, launcher, root):
         item.update(done)
         _forget(index_root, book_id, version_id)   # the pieces are in the generation now
         return "done"
+    except themeextract.Cut:
+        return "cut"
     except themeextract.ThemeRefused:
         return fail("refused", "refused")
     except KbError:
@@ -429,7 +433,7 @@ def _report(rec, passes, stopped, elapsed=None):
     return out
 
 
-def run(store, cfg, run_id, launcher=None, root=None):
+def run(store, cfg, run_id, launcher=None, root=None, stop=None):
     """Run a planned run: each book that waits is made, checked and filed as a new generation of themes as soon as it is made, and what became
     of it is saved in the record. A book that fails does not end the run; the books that failed are tried once more after the last (RETRIES);
     STOP_AFTER books in a row that fail for a reason that is not a refused answer stop it (a server that is down would fail every book), and
@@ -437,7 +441,9 @@ def run(store, cfg, run_id, launcher=None, root=None):
     reported. A run that is stopped at any point and run again repeats no finished book. One window is accepted: a book whose generation was
     filed and whose record was not yet saved when the program was killed is made again, as a new generation (the newest valid generation is the
     one a reader gets, so the extra one is harmless, and at most one book is made twice). Returns the report; the models and prompt versions
-    must be those of the plan."""
+    must be those of the plan. With a `stop` (a function that says true when the caller wants no more work) it is looked at before each book
+    and before each model call; when it says true the run ends with `stopped` set, the books not finished stay waiting with no try charged
+    (a book cut in the middle keeps the pieces it has answered), and the run is not counted as failing. With no `stop` the run is as it was."""
     index_root = store.cfg["index_root"]
     _, _, extraction, check = _current(cfg)
     if read_record(index_root, run_id) is None:
@@ -452,10 +458,16 @@ def run(store, cfg, run_id, launcher=None, root=None):
             for item in rec["items"]:
                 if item["status"] != "waiting":
                     continue
+                if stop is not None and stop():
+                    stopped = STOPPED
+                    break
                 if frequencies is None:
                     frequencies = themecheck.library_frequencies(store)   # the library is counted once for the whole run
-                outcome = _serve(store, cfg, rec, item, frequencies, launcher, root)
+                outcome = _serve(store, cfg, rec, item, frequencies, launcher, root, stop)
                 write_record(index_root, rec)
+                if outcome == "cut":
+                    stopped = STOPPED
+                    break
                 if outcome in ("failed", "unexpected"):
                     in_a_row += 1
                     if in_a_row >= STOP_AFTER:

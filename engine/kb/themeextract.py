@@ -305,10 +305,22 @@ def _merge(drafts):
     return kept, dropped
 
 
-def _ask(cfg, name, prompt, launcher, root, on_refused, job=THEME_JOB):
+class Cut(Exception):
+    """The caller's `stop` said to stop before a model call. It is not a failure of the book (it is not a `KbError`, so no path that charges
+    a try catches it): the book is left as it was, with the answers it already has in its journal."""
+
+
+def _stop_if_asked(stop):
+    if stop is not None and stop():
+        raise Cut()
+
+
+def _ask(cfg, name, prompt, launcher, root, on_refused, job=THEME_JOB, stop=None):
     """One call for a job (the extraction, unless another is given). An answer refused for its shape is asked once more with the reason,
     and the first refusal is given to `on_refused` (an error in it is ignored). A runaway is not asked again, and it, like a second
-    refusal, is raised."""
+    refusal, is raised. With a `stop` (a function that says true when the caller wants no more calls) it is looked at before each of the
+    two calls, and a stop raises `Cut` with the call not made."""
+    _stop_if_asked(stop)
     try:
         return models.run_job(cfg, name, prompt, job, launcher=launcher, root=root)
     except models.AnswerRefused as refusal:
@@ -319,6 +331,7 @@ def _ask(cfg, name, prompt, launcher, root, on_refused, job=THEME_JOB):
                 on_refused(refusal)
             except Exception:   # keeping the answer is for the owner to read: it must not stop the extraction or hide the refusal
                 pass
+        _stop_if_asked(stop)
         return models.run_job(cfg, name, cardmake.retry_prompt(prompt, str(refusal)), job, launcher=launcher, root=root)
 
 
@@ -373,7 +386,7 @@ def _saved_answer(saved, key, entry_name, model):
     return {"values": checked, "record": copy.deepcopy(record)}
 
 
-def extract(cfg, book_id, version_id, ref, conversion, title, launcher=None, root=None, on_refused=None, avoid=(), journal=None):
+def extract(cfg, book_id, version_id, ref, conversion, title, launcher=None, root=None, on_refused=None, avoid=(), journal=None, stop=None):
     """The themes of a converted book. `ref` names the conversion (tool, version, generation). Returns `{"themes", "dropped", "records",
     "pieces", "calls"}`: themes in the form of `theme.py` (ids t1, t2 and so on), the themes that were dropped with the piece, the title
     as given and the reason, the record of each call, and the number of pieces and of calls. The model is the one the config sets for
@@ -400,7 +413,7 @@ def extract(cfg, book_id, version_id, ref, conversion, title, launcher=None, roo
                 if out is None:
                     journal.drop_from(number - 1)
         if out is None:
-            out = _ask(cfg, name, theme_prompt(title, piece["text"], number, len(found), avoid), launcher, root, on_refused)
+            out = _ask(cfg, name, theme_prompt(title, piece["text"], number, len(found), avoid), launcher, root, on_refused, stop=stop)
             if journal is not None:
                 journal.add(key, out)
         record = {**out["record"], "task": THEME_JOB.name}

@@ -780,13 +780,11 @@ class JournalRunTest(RunCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def run_j(self, run, script):
+    def run_j(self, run, script, **kw):
         fake = scripted(*script, fake_class=JournalFake)
+        self.fake = fake   # seen by a `stop` that looks at the calls made so far
         with unittest.mock.patch.object(models, "run_job", fake):
-            try:
-                return themerun.run(self.store, config(), run)
-            finally:
-                self.fake = fake
+            return themerun.run(self.store, config(), run, **kw)
 
     def journal(self, book):
         return themejournal.read(self.index_root(), book, self.store.read_book(book)["current_version"])
@@ -830,6 +828,79 @@ class JournalRunTest(RunCase):
         self.assertEqual(report["counts"]["done"], 1)
         self.assertEqual(len(self.fake.calls), 4)
         self.assertIsNone(self.journal(ids[0]))
+
+    # ---- a stop: the caller can end a run before a book and before each model call
+
+    def test_a_stop_that_is_asked_for_before_the_first_book_starts_no_book_and_makes_no_call(self):
+        run, ids = self.planned(2)
+        with unittest.mock.patch.object(themecheck, "library_frequencies", wraps=themecheck.library_frequencies) as counted:
+            report = self.run_j(run, [], stop=lambda: True)
+        self.assertEqual(counted.call_count, 0)                          # the library is not even counted for a book that is not begun
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual((report["counts"], report["passes"]), ({"waiting": 2, "done": 0, "failed": 0, "dropped": 0}, 1))
+        self.assertIn("stop", report["stopped"])
+        self.assertEqual([self.items(run)[b]["attempts"] for b in ids], [0, 0])
+
+    def test_a_stop_between_two_calls_of_one_book_cuts_it_before_the_next_call_and_keeps_its_pieces_and_charges_no_try(self):
+        run, ids = self.planned(1)
+        report = self.run_j(run, [reply(1), reply(2), reply(3)], stop=lambda: len(self.fake.calls) >= 2)
+        self.assertEqual(len(self.fake.calls), 2)                       # the third call was not made
+        self.assertIn("stop", report["stopped"])
+        got = self.items(run)[ids[0]]
+        self.assertEqual((got["status"], got["attempts"], got["reason"]), ("waiting", 0, ""))
+        self.assertEqual(report["counts"]["failed"], 0)
+        self.assertEqual([e["piece"] for e in self.journal(ids[0])], [1, 2])
+        self.assertEqual(themerun.status(self.store, run)["items"][0]["kept"], 2)
+
+    def test_a_book_that_was_cut_is_finished_by_a_later_run_that_asks_only_for_what_it_has_not_got(self):
+        run, ids = self.planned(1)
+        self.run_j(run, [reply(1), reply(2)], stop=lambda: len(self.fake.calls) >= 2)
+        report = self.run_j(run, [reply(3), SAYS, SAYS, SAYS])
+        self.assertEqual((report["stopped"], report["counts"]["done"], len(self.fake.calls)), (None, 1, 4))
+        self.assertIn("piece 3 of 3", self.fake.calls[0]["prompt"])
+        self.assertIsNone(self.journal(ids[0]))
+        self.assertEqual(self.items(run)[ids[0]]["attempts"], 0)
+
+    def test_a_stop_in_the_checks_after_the_pieces_cuts_the_book_and_its_pieces_are_kept(self):
+        run, ids = self.planned(1)
+        self.run_j(run, THREE, stop=lambda: len(self.fake.calls) >= 4)   # three pieces and the first check were made
+        self.assertEqual(len(self.fake.calls), 4)
+        self.assertEqual(self.items(run)[ids[0]]["status"], "waiting")
+        self.assertEqual([e["piece"] for e in self.journal(ids[0])], [1, 2, 3])
+        report = self.run_j(run, [SAYS, SAYS, SAYS])                     # no piece is asked for again: the three checks are
+        self.assertEqual((report["counts"]["done"], len(self.fake.calls)), (1, 3))
+
+    def test_the_second_ask_after_a_refused_answer_is_a_call_the_stop_looks_at_too(self):
+        run, ids = self.planned(1)
+        self.run_j(run, [uneven(), reply(1)], stop=lambda: len(self.fake.calls) >= 1)
+        self.assertEqual(len(self.fake.calls), 1)                        # the refused answer was not asked for again
+        self.assertEqual((self.items(run)[ids[0]]["status"], self.items(run)[ids[0]]["attempts"]), ("waiting", 0))
+
+    def test_a_book_that_is_cut_again_and_again_is_charged_no_try_and_never_fails(self):
+        run, ids = self.planned(4)
+        for _ in range(4):                                               # four windows, each cut before its first call
+            report = self.run_j(run, [], stop=lambda: True)
+        self.assertEqual(report["counts"]["failed"], 0)
+        self.assertEqual([self.items(run)[b]["attempts"] for b in ids], [0, 0, 0, 0])
+
+    def test_a_cut_ends_the_run_even_when_the_stop_does_not_say_stop_again(self):
+        run, ids = self.planned(2)
+        said = []
+
+        def once():                                                      # true at the second call of the first book only
+            if len(self.fake.calls) == 2 and not said:
+                said.append(1)
+                return True
+            return False
+        report = self.run_j(run, [reply(1), reply(2), *THREE], stop=once)
+        self.assertEqual(len(self.fake.calls), 2)                        # the second book was not begun
+        self.assertIn("stop", report["stopped"])
+        self.assertEqual([self.items(run)[b]["status"] for b in ids], ["waiting", "waiting"])
+
+    def test_a_run_with_no_stop_is_as_before_and_a_stop_that_never_fires_changes_nothing(self):
+        run, ids = self.planned(1)
+        report = self.run_j(run, THREE, stop=lambda: False)
+        self.assertEqual((report["stopped"], report["counts"]["done"], len(self.fake.calls)), (None, 1, 6))
 
     def interrupted(self):
         """A run of one book killed after its second piece: the run and the book."""

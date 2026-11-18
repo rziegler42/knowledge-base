@@ -143,7 +143,7 @@ def check_prompt(excerpt, parts):
     return cardmake._prompt(rules, [("EXCERPT", excerpt), ("PARTS", body)])
 
 
-def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=None, on_refused=None):
+def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=None, on_refused=None, stop=None):
     """Check themes of the conversion `ref` names. Returns `{"themes", "dropped", "records", "calls"}`: the themes with their parts marked
     and their flags added (the others in the order given), the themes that were dropped as `unchecked` with the reason, the record of
     each call and the number of calls. One call is made for each theme that has a part with text. The model is the one the config sets for
@@ -165,7 +165,7 @@ def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=N
             flags.append({"kind": "no_description", "detail": "the model gave no part of a description"})
         else:
             try:
-                out = themeextract._ask(cfg, name, check_prompt(excerpt, asked), launcher, root, on_refused, job=check_job(len(asked)))
+                out = themeextract._ask(cfg, name, check_prompt(excerpt, asked), launcher, root, on_refused, job=check_job(len(asked)), stop=stop)
             except models.AnswerRefused as refusal:
                 if on_refused is not None:
                     try:
@@ -190,7 +190,7 @@ def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=N
     return {"themes": kept, "dropped": dropped, "records": records, "calls": len(records)}
 
 
-def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None, frequencies=None, journal=None):
+def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None, frequencies=None, journal=None, stop=None):
     """The themes of one version (the current one, if none is named), made and checked but not filed: the result of `check_themes` and
     of the extraction put together, and under `generation` the generation for `theme.file`. Both models are found before anything is
     sent. `frequencies` is `(document frequencies, number of books)` of the library, counted from the store when it is not given. A
@@ -207,8 +207,8 @@ def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=No
     keep = lambda refusal: themeextract._keep(store, refusal, book_id, version_id)
     try:
         made = themeextract.extract(cfg, book_id, version_id, ref, conversion, current["title"], launcher=launcher, root=root, on_refused=keep,
-                                    avoid=avoid, journal=journal)
-        checked = check_themes(cfg, ref, conversion, made["themes"], vocabulary, launcher=launcher, root=root, on_refused=keep)
+                                    avoid=avoid, journal=journal, stop=stop)
+        checked = check_themes(cfg, ref, conversion, made["themes"], vocabulary, launcher=launcher, root=root, on_refused=keep, stop=stop)
     except models.AnswerRefused as refusal:
         kept, note = themeextract._keep(store, refusal, book_id, version_id)
         raise themeextract.ThemeRefused(str(refusal), kept, note) from None
