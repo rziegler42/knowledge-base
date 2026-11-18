@@ -283,5 +283,182 @@ class RemoveTest(Base):
         self.assertEqual(len(themejournal.read(self.root, OTHER, "v1")), 1)
 
 
+# ---- the answers of the checks of a book: a second journal, in a folder of its own
+
+CHECK_RECORD = dict(RECORD, registry="checker", model="phi4:latest", prompt_version="v1")
+
+
+def check_entry(n):
+    return {"key": f"{n:064x}", "values": {"verdicts": ["supports", "partly", "no", "supports"]}, "record": dict(CHECK_RECORD)}
+
+
+class ChecksBase(Base):
+    def check_path(self, book=BOOK, version="v1"):
+        return os.path.join(self.root, cardstate.FOLDER, themejournal.RUN_CHECKS, f"{book}-{version}.json")
+
+    def write_checks(self, count=2, book=BOOK):
+        themejournal.write_checks(self.root, book, "v1", [check_entry(n) for n in range(1, count + 1)])
+
+    def check_doc(self, entries=None):
+        return {"format": 1, "book_id": BOOK, "version_id": "v1", "entries": entries if entries is not None else [check_entry(1), check_entry(2)]}
+
+    def raw_checks(self, doc, mode=0o600):
+        for folder in (os.path.join(self.root, cardstate.FOLDER), os.path.dirname(self.check_path())):
+            if not os.path.isdir(folder):
+                os.mkdir(folder, 0o700)
+                os.chmod(folder, 0o700)
+        with open(self.check_path(), "w") as f:
+            f.write(doc if isinstance(doc, str) else json.dumps(doc))
+        os.chmod(self.check_path(), mode)
+
+    def refused_checks(self, doc, mode=0o600):
+        self.raw_checks(doc, mode)
+        with self.assertRaises(KbError):
+            themejournal.read_checks(self.root, BOOK, "v1")
+
+
+class ChecksRoundTripTest(ChecksBase):
+    def test_the_checks_are_written_and_read_back_the_same_in_any_order(self):
+        themejournal.write_checks(self.root, BOOK, "v1", [check_entry(3), check_entry(1), check_entry(2)])
+        self.assertEqual(themejournal.read_checks(self.root, BOOK, "v1"), [check_entry(3), check_entry(1), check_entry(2)])
+
+    def test_a_book_with_no_checks_kept_reads_as_none_and_so_does_another_book_or_version(self):
+        self.assertIsNone(themejournal.read_checks(self.root, BOOK, "v1"))
+        self.write_checks()
+        self.assertIsNone(themejournal.read_checks(self.root, OTHER, "v1"))
+        self.assertIsNone(themejournal.read_checks(self.root, BOOK, "v2"))
+
+    def test_the_file_is_private_and_in_a_folder_of_its_own_beside_the_pieces_journal(self):
+        self.write()
+        self.write_checks()
+        self.assertEqual(stat.S_IMODE(os.stat(self.check_path()).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(os.path.dirname(self.check_path())).st_mode), 0o700)
+        self.assertEqual(os.listdir(os.path.dirname(self.check_path())), [f"{BOOK}-v1.json"])
+        self.assertNotEqual(themejournal.RUN, themejournal.RUN_CHECKS)
+        self.assertEqual(len(themejournal.read(self.root, BOOK, "v1")), 2)                    # the pieces' journal is as it was
+        self.assertRegex(themejournal.RUN_CHECKS, cardstate._RUN.pattern)
+
+    def test_writing_again_replaces_the_file_whole_and_an_empty_one_can_be_kept(self):
+        self.write_checks(1)
+        self.write_checks(3)
+        self.assertEqual(len(themejournal.read_checks(self.root, BOOK, "v1")), 3)
+        themejournal.write_checks(self.root, BOOK, "v1", [])
+        self.assertEqual(themejournal.read_checks(self.root, BOOK, "v1"), [])
+
+    def test_the_limit_is_stated_and_exactly_the_limit_is_accepted(self):
+        self.assertGreaterEqual(themejournal.MAX_CHECKS, 1000)
+        themejournal.write_checks(self.root, BOOK, "v1", [check_entry(n) for n in range(1, themejournal.MAX_CHECKS + 1)])
+        self.assertEqual(len(themejournal.read_checks(self.root, BOOK, "v1")), themejournal.MAX_CHECKS)
+
+
+class ChecksWriteRefusalTest(ChecksBase):
+    def refuses(self, entries, book=BOOK, version="v1"):
+        with self.assertRaises(KbError):
+            themejournal.write_checks(self.root, book, version, entries)
+        self.assertFalse(os.path.exists(self.check_path(book, version)))
+
+    def test_a_key_that_is_not_64_hex_digits_is_refused(self):
+        for key in ("", "x" * 64, "A" * 64, "a" * 63, "a" * 65, 7, None):
+            bad = check_entry(1)
+            bad["key"] = key
+            self.refuses([bad])
+
+    def test_a_key_that_is_there_twice_is_refused(self):
+        self.refuses([check_entry(1), check_entry(2), check_entry(1)])
+
+    def test_more_than_the_limit_are_refused(self):
+        self.refuses([check_entry(n) for n in range(1, themejournal.MAX_CHECKS + 2)])
+
+    def test_an_entry_with_a_key_missing_or_added_is_refused(self):
+        for change in ("key", "values", "record"):
+            bad = check_entry(1)
+            del bad[change]
+            self.refuses([bad])
+        bad = check_entry(1)
+        bad["piece"] = 1                                                                      # the pieces' entries have a number; a check's has none
+        self.refuses([bad])
+
+    def test_values_that_are_not_plain_data_and_a_record_that_is_not_valid_are_refused(self):
+        bad = check_entry(1)
+        bad["values"] = {"verdicts": [object()]}
+        self.refuses([bad])
+        bad = check_entry(1)
+        bad["values"] = ["not", "a", "dict"]
+        self.refuses([bad])
+        bad = check_entry(1)
+        bad["record"] = {"model": "x"}
+        self.refuses([bad])
+
+    def test_the_values_of_a_check_are_the_verdicts_and_nothing_else(self):
+        for values in ({"verdicts": "supports"}, {"verdicts": [1]}, {"verdicts": ["x" * 41]}, {"verdicts": ["a"] * 65}, {"verdicts": [], "extra": 1},
+                       {"other": ["a"]}, {}, {"verdicts": [["nested"]]}, {"verdicts": [{"a": 1}]}):
+            with self.subTest(str(values)[:40]):
+                bad = check_entry(1)
+                bad["values"] = values
+                self.refuses([bad])
+        ok = check_entry(1)
+        ok["values"] = {"verdicts": []}
+        themejournal.write_checks(self.root, BOOK, "v1", [ok])               # none asked is a list of none
+        self.assertEqual(themejournal.read_checks(self.root, BOOK, "v1"), [ok])
+
+    def test_a_list_that_is_not_a_list_and_a_bad_book_or_version_are_refused(self):
+        self.refuses({"a": 1})
+        self.refuses([check_entry(1)], book="../x")
+        self.refuses([check_entry(1)], version="v1/../v2")
+
+
+class ChecksReadRefusalTest(ChecksBase):
+    def test_a_file_that_is_not_as_described_is_refused(self):
+        self.refused_checks("not json")
+        self.refused_checks(dict(self.check_doc(), format=2))
+        self.refused_checks(dict(self.check_doc(), extra=1))
+        self.refused_checks(dict(self.check_doc(), book_id=OTHER))
+        self.refused_checks(dict(self.check_doc(), version_id="v2"))
+        self.refused_checks(self.check_doc([check_entry(1), check_entry(1)]))
+
+    def test_a_file_whose_values_are_nested_far_deeper_than_any_verdict_is_refused_and_not_used(self):
+        deep = "[" * 100000 + "]" * 100000
+        text = '{"format": 1, "book_id": "%s", "version_id": "v1", "entries": [{"key": "%s", "values": {"verdicts": %s}, "record": %s}]}' % (
+            BOOK, "a" * 64, deep, json.dumps(CHECK_RECORD))
+        self.refused_checks(text)
+
+    def test_a_file_that_others_can_read_is_refused(self):
+        self.refused_checks(self.check_doc(), mode=0o644)
+
+    def test_a_file_that_is_a_link_is_refused(self):
+        self.write_checks()
+        target = os.path.join(self.base, "elsewhere.json")
+        os.rename(self.check_path(), target)
+        os.symlink(target, self.check_path())
+        with self.assertRaises(KbError):
+            themejournal.read_checks(self.root, BOOK, "v1")
+
+
+class ChecksRemoveTest(ChecksBase):
+    def test_remove_deletes_the_file_and_leaves_the_pieces_journal_and_other_books(self):
+        self.write()
+        self.write_checks()
+        self.write_checks(book=OTHER)
+        themejournal.remove_checks(self.root, BOOK, "v1")
+        self.assertFalse(os.path.exists(self.check_path()))
+        self.assertEqual(len(themejournal.read(self.root, BOOK, "v1")), 2)
+        self.assertEqual(len(themejournal.read_checks(self.root, OTHER, "v1")), 2)
+
+    def test_remove_when_there_is_nothing_is_quiet(self):
+        themejournal.remove_checks(self.root, BOOK, "v1")
+        self.write_checks()
+        themejournal.remove_checks(self.root, BOOK, "v1")
+        themejournal.remove_checks(self.root, BOOK, "v1")
+        self.assertIsNone(themejournal.read_checks(self.root, BOOK, "v1"))
+
+    def test_remove_takes_what_a_crash_left_beside_the_file(self):
+        self.write_checks()
+        leftover = os.path.join(os.path.dirname(self.check_path()), f".{BOOK}-v1.json.123.tmp")
+        with open(leftover, "w") as f:
+            f.write("x")
+        themejournal.remove_checks(self.root, BOOK, "v1")
+        self.assertEqual(os.listdir(os.path.dirname(self.check_path())), [])
+
+
 if __name__ == "__main__":
     unittest.main()

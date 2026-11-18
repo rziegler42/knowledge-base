@@ -867,8 +867,8 @@ class JournalRunTest(RunCase):
         self.assertEqual(len(self.fake.calls), 4)
         self.assertEqual(self.items(run)[ids[0]]["status"], "waiting")
         self.assertEqual([e["piece"] for e in self.journal(ids[0])], [1, 2, 3])
-        report = self.run_j(run, [SAYS, SAYS, SAYS])                     # no piece is asked for again: the three checks are
-        self.assertEqual((report["counts"]["done"], len(self.fake.calls)), (1, 3))
+        report = self.run_j(run, [SAYS, SAYS])                           # no piece is asked for again, and the check that was answered is not either: the other two are
+        self.assertEqual((report["counts"]["done"], len(self.fake.calls)), (1, 2))
 
     def test_the_second_ask_after_a_refused_answer_is_a_call_the_stop_looks_at_too(self):
         run, ids = self.planned(1)
@@ -882,6 +882,57 @@ class JournalRunTest(RunCase):
             report = self.run_j(run, [], stop=lambda: True)
         self.assertEqual(report["counts"]["failed"], 0)
         self.assertEqual([self.items(run)[b]["attempts"] for b in ids], [0, 0, 0, 0])
+
+    # ---- the checks of a book are kept as its pieces are
+
+    def check_journal(self, book):
+        return themejournal.read_checks(self.index_root(), book, self.store.read_book(book)["current_version"])
+
+    def test_a_book_cut_in_its_checks_keeps_them_and_the_next_run_asks_only_for_the_checks_it_has_not_got(self):
+        run, ids = self.planned(1)
+        self.run_j(run, THREE, stop=lambda: len(self.fake.calls) >= 5)       # three pieces and two of the three checks
+        self.assertEqual(len(self.fake.calls), 5)
+        self.assertEqual(len(self.check_journal(ids[0])), 2)
+        self.assertEqual([e["piece"] for e in self.journal(ids[0])], [1, 2, 3])
+        self.assertEqual(self.items(run)[ids[0]]["status"], "waiting")
+        report = self.run_j(run, [SAYS])
+        self.assertEqual((report["counts"]["done"], len(self.fake.calls)), (1, 1))     # the third check only
+        done = self.items(run)[ids[0]]
+        self.assertEqual((done["attempts"], done["stats"]["calls"], done["stats"]["themes"]), (0, 6, 3))   # the saved ones count as made, as the saved pieces do
+        self.assertEqual(len(theme.read(self.store, ids[0], self.store.read_book(ids[0])["current_version"])[1]["themes"]), 3)
+
+    def test_a_book_whose_calls_take_longer_than_any_one_run_is_finished_by_the_runs_that_follow(self):
+        run, ids = self.planned(1)
+        for part in (THREE[0:2], THREE[2:4], THREE[4:6]):                    # three runs, each allowed two calls: the six calls of the book never fit one
+            self.run_j(run, part, stop=lambda: len(self.fake.calls) >= 2)
+            self.assertEqual(len(self.fake.calls), 2)
+        self.assertEqual(self.items(run)[ids[0]]["status"], "done")
+        self.assertEqual(len(theme.read(self.store, ids[0], self.store.read_book(ids[0])["current_version"])[1]["themes"]), 3)
+
+    def test_the_journals_of_a_book_that_is_filed_are_removed_and_so_are_those_of_a_book_that_is_dropped(self):
+        run, ids = self.planned(1)
+        self.run_j(run, THREE, stop=lambda: len(self.fake.calls) >= 5)
+        self.assertIsNotNone(self.check_journal(ids[0]))
+        self.store.set_state(ids[0], "weeded")
+        report = self.run_j(run, [])
+        self.assertEqual(report["counts"]["dropped"], 1)
+        self.assertIsNone(self.check_journal(ids[0]))
+        self.assertIsNone(self.journal(ids[0]))
+        run, ids = self.planned(1)
+        self.run_j(run, THREE)
+        self.assertEqual((self.check_journal(ids[0]), self.journal(ids[0])), (None, None))   # a book that is done keeps neither
+
+    def test_the_folder_of_the_checks_is_not_taken_for_a_run(self):
+        run, ids = self.planned(1)
+        self.run_j(run, THREE, stop=lambda: len(self.fake.calls) >= 5)
+        self.assertIn(themejournal.RUN_CHECKS, self.written())
+        self.assertNotIn(themejournal.RUN_CHECKS, themerun._run_names(self.index_root()))
+        self.assertNotIn(themejournal.RUN, themerun._run_names(self.index_root()))
+
+    def test_a_book_that_is_not_cut_makes_the_same_calls_as_before_with_the_journals_in_use(self):
+        run, ids = self.planned(1)
+        report = self.run_j(run, THREE)
+        self.assertEqual((report["counts"]["done"], len(self.fake.calls)), (1, 6))
 
     def test_a_cut_ends_the_run_even_when_the_stop_does_not_say_stop_again(self):
         run, ids = self.planned(2)

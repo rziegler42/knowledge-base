@@ -156,7 +156,7 @@ def _run_names(index_root):
             os.close(fd)
     finally:
         os.close(root_fd)
-    return sorted((n for n in names if cardstate._RUN.fullmatch(n) and n != themejournal.RUN), reverse=True)   # the folder of the journals holds no run
+    return sorted((n for n in names if cardstate._RUN.fullmatch(n) and n not in (themejournal.RUN, themejournal.RUN_CHECKS)), reverse=True)   # the folders of the journals hold no run
 
 
 def _earlier_records(index_root):
@@ -351,12 +351,13 @@ def _items(rec):
 
 
 def _forget(index_root, book_id, version_id):
-    """Remove the journal of the pieces of a book, if it has one. A journal that cannot be removed is left: it is derived data, and a later go
-    finds it stale or uses it only for the same pieces."""
-    try:
-        themejournal.remove(index_root, book_id, version_id)
-    except (KbError, OSError):
-        pass
+    """Remove the journals of a book, the pieces' and the checks', if it has them. A journal that cannot be removed is left: it is derived data, and a later go
+    finds it stale or uses it only for the same pieces and the same checks."""
+    for remove in (themejournal.remove, themejournal.remove_checks):
+        try:
+            remove(index_root, book_id, version_id)
+        except (KbError, OSError):
+            pass
 
 
 def _kept(index_root, item):
@@ -396,8 +397,9 @@ def _serve(store, cfg, rec, item, frequencies, launcher, root, stop=None):
         started = time.monotonic()
         # the pieces already answered, from a go that failed or was stopped, are not asked for again; a book that fails keeps them
         journal = themeextract.PieceJournal.for_book(index_root, book_id, version_id)
+        checks = themecheck.CheckJournal.for_book(index_root, book_id, version_id)   # the answers of the checks are kept as those of the pieces are
         got = themecheck.make_and_check_for_version(store, cfg, book_id, version_id, launcher=launcher, root=root, frequencies=frequencies,
-                                                    journal=journal, stop=stop)
+                                                    journal=journal, stop=stop, check_journal=checks)
         made, stats = _how_made(got, rec), _stats_of(got, time.monotonic() - started)
         done = {"status": "done", "generation": 1, "reason": "", "made": made, "stats": stats}
         _check_item({**item, **done})   # what the record will say is checked before anything is filed, so that a book is not filed and then failed

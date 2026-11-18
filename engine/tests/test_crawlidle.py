@@ -12,11 +12,12 @@ import unittest
 from unittest import mock
 
 from engine.tests import ENGINE_DIR  # noqa: F401  (puts the engine folder on the import path)
+from engine.tests.test_models import embedding, fake_vector
 from engine.tests.test_themecheck import config
-from engine.tests.test_themeextract import JournalFake
+from engine.tests.test_themeextract import JournalFake, row, values
 from engine.tests.test_themerun import GOOD, REFUSED, SAYS, RunCase, scripted
 
-from kb import KbError, cardstate, crawlguard, crawlidle, crawllog, crawlplan, crawlrun, models, theme, themerun
+from kb import KbError, cardstate, catalog, crawlguard, crawlidle, crawllog, crawlplan, crawlrun, models, theme, themerun, themevectors
 
 NOW = datetime.datetime(2026, 11, 18, 12, 0, 0, tzinfo=datetime.timezone.utc)
 HOUR = datetime.timedelta(hours=1)
@@ -45,8 +46,12 @@ class IdleCase(RunCase):
 
     up = True
 
-    def crawl_cfg(self):
-        return {**config(), "bulk_root": self.store.cfg["bulk_root"], "index_root": self.index_root()}
+    def crawl_cfg(self, embedding_entry=True):
+        cfg = {**config(), "bulk_root": self.store.cfg["bulk_root"], "index_root": self.index_root()}
+        if embedding_entry:
+            cfg["models"] = {**cfg["models"], "emb": embedding()}
+            cfg["tasks"] = {**cfg["tasks"], "card-embed": "emb"}
+        return cfg
 
     def ctx(self, cfg=None, deadline=None):
         ctx = types.SimpleNamespace(cfg=cfg or self.crawl_cfg(), index_root=self.index_root(), plan=self.crawl_plan, log=self.log, clock=lambda: self.now, run="run-1",
@@ -78,13 +83,42 @@ class IdleCase(RunCase):
         call.calls = fake.calls
         return call
 
-    def idle(self, script=(), per_call=30, ctx=None, on_call=None, **kw):
+    def distinct(self, n):
+        """The script of the model for `n` books whose themes have texts that no other has (a theme and its check each), so that nothing is shared between their vectors."""
+        out = []
+        for i in range(n):
+            out += [values(row(title=f"Book {i} theme", summary=f"A summary of book {i}.", problem=f"problem of book {i}", method=f"method of book {i}", needs=f"needs of book {i}",
+                               provides=f"provides of book {i}")), GOOD[1]]
+        return out
+
+    def embedding_fake(self, per_call=5, on_call=None, fail=False):
+        """`models.embed` with a vector made from the text, which moves the clock `per_call` seconds on for each call and notes how many texts each call held."""
+        self.embedded = []
+
+        def embed(cfg, name, texts, launcher=None, root=None, kind="document"):
+            self.embedded.append(len(texts))
+            self.now += datetime.timedelta(seconds=per_call)
+            if on_call:
+                on_call(len(self.embedded))
+            if fail:
+                raise KbError("the bridge failed")
+            return {"model": "bge-m3:latest", "dimension": 4, "vectors": [fake_vector(t) for t in texts]}
+        return embed
+
+    def no_weave(self):
+        """A stand-in for `kb.weave` with numpy and no weave file: its status says there is no weave, as a library that has none says."""
+        def status(index_root, cfg, store, now=None):
+            raise KbError("there is no weave")
+        return types.SimpleNamespace(_np=lambda: None, status=status, repair=lambda *a, **k: self.fail("no repair was to be made"))
+
+    def idle(self, script=(), per_call=30, ctx=None, on_call=None, embed_per_call=5, embed_on_call=None, embed_fail=False, **kw):
         kw.setdefault("statvfs", roomy)
         kw.setdefault("probe", self.probe)
+        kw.setdefault("weave", self.no_weave())
         ctx = ctx or self.ctx()
         fake = self.clocked(script, per_call, on_call)
         self.fake = fake
-        with mock.patch.object(models, "run_job", fake):
+        with mock.patch.object(models, "run_job", fake), mock.patch.object(models, "embed", self.embedding_fake(embed_per_call, embed_on_call, embed_fail)):
             crawlidle.make_step(**kw)(ctx)
         return ctx
 
@@ -133,7 +167,7 @@ class WindowTest(IdleCase):
         self.assertTrue(all(self.themed(b) for b in books))
         end = self.ended()
         self.assertEqual((end["outcome"], end["reason"], end["n"]), ("ok", "nothing to do", 2))
-        self.assertEqual(end["seconds"], 120)                            # four calls of 30 seconds
+        self.assertEqual(end["seconds"], 125)                            # four calls of 30 seconds and the embedding of the vectors, one call of 5
         cardstate_lock = cardstate.lock(self.index_root(), "after")      # the card lock was released
         with cardstate_lock:
             pass
@@ -175,6 +209,19 @@ class WindowTest(IdleCase):
         self.assertEqual(len(self.fake.calls), 6)
         self.assertEqual(self.ended()["n"], 3)
 
+    def test_a_book_converted_again_whose_older_version_has_themes_is_not_planned_for_its_new_version(self):
+        reconverted, version = self.converted_book()
+        self.file_generation(reconverted, version)                       # the themes of v1
+        newer = self.store.add_version(reconverted, label="v2", source={"retrieved": "2026-11-02T00:00:00+00:00"})   # becomes the version in use
+        self.assertNotEqual(newer, version)
+        self.assertEqual(self.store.read_book(reconverted)["current_version"], newer)
+        self.assertFalse(self.themed(reconverted))                       # the version in use has none
+        with mock.patch.object(themerun, "_assess", return_value=("make", newer, 1, {})):   # whatever the plan would say of the new version
+            self.idle()
+        self.assertEqual((self.fake.calls, self.written()), ([], []))    # a change of the conversion tool must not have the window theme the library again
+        end = self.ended()
+        self.assertEqual((end["outcome"], end["reason"], end["n"]), ("skipped", "nothing to do", 0))
+
     def test_a_library_with_every_book_themed_plans_nothing_and_writes_one_line_and_no_record(self):
         self.books(1)
         book = self.store.list_books()[0]
@@ -198,8 +245,8 @@ class DeadlineTest(IdleCase):
     def test_the_window_ends_at_its_deadline_before_the_next_call_and_the_next_window_finishes_the_cut_book_from_its_pieces(self):
         self.books(2)
         first, second = sorted(self.store.list_books())
-        self.crawl_plan["themes_window_s"] = 250
-        self.idle(GOOD + GOOD, per_call=100)                              # book 1: 0 to 200 seconds; book 2: its piece at 200 to 300, then the deadline
+        self.crawl_plan["themes_window_s"] = 400                           # the themes get 60 percent of it: 240 seconds
+        self.idle(GOOD + GOOD, per_call=100)                              # book 1: 0 to 200 seconds; book 2: its piece at 200 to 300, then the share is spent
         self.assertEqual(len(self.fake.calls), 3)
         end = self.ended()
         self.assertEqual((end["outcome"], end["reason"], end["n"]), ("ok", "deadline", 1))
@@ -213,8 +260,8 @@ class DeadlineTest(IdleCase):
 
     def test_the_window_never_goes_past_the_time_budget_of_the_run(self):
         self.books(2)
-        self.idle(GOOD + GOOD, per_call=100, ctx=self.ctx(deadline=NOW + datetime.timedelta(seconds=150)))
-        self.assertEqual(len(self.fake.calls), 2)                         # calls at 0 and 100 seconds; at 200 the budget is spent
+        self.idle(GOOD + GOOD, per_call=100, ctx=self.ctx(deadline=NOW + datetime.timedelta(seconds=250)))
+        self.assertEqual(len(self.fake.calls), 2)                         # the themes get 150 seconds of the 250 the run has left: calls at 0 and 100, and at 200 their share is spent
         self.assertEqual(self.ended()["reason"], "deadline")
 
     def test_a_stop_file_that_appears_in_the_middle_ends_the_window_before_the_next_call(self):
@@ -290,6 +337,249 @@ class FailureTest(IdleCase):
         self.books(2)
         self.idle(GOOD + GOOD)
         self.assertEqual(self.probes, [])
+
+
+class VectorsTest(IdleCase):
+    """After the themes, the vectors of what was made, in a batch that fits the time left."""
+
+    def vector_lines(self):
+        return [(x["outcome"], x["reason"], x["n"]) for x in self.lines("theme_vectors")]
+
+    def waiting(self):
+        return themevectors.waiting_texts(self.store, self.crawl_cfg())
+
+    def test_the_vectors_of_the_books_made_are_built_after_the_themes_and_nothing_is_left_waiting(self):
+        self.books(2)
+        self.idle(self.distinct(2))
+        self.assertEqual(self.vector_lines(), [("ok", None, 12)])          # two books of one theme each, six texts each
+        self.assertEqual(self.embedded, [12])
+        self.assertEqual(self.waiting(), 0)
+        self.assertTrue(os.path.exists(themevectors.path_of(self.index_root())))
+        self.assertEqual(self.ended()["reason"], "nothing to do")
+
+    def test_the_themes_get_sixty_percent_of_the_window_while_more_books_wait_and_the_vectors_get_the_rest(self):
+        self.books(6)
+        self.crawl_plan["themes_window_s"] = 300
+        self.idle(self.distinct(6), per_call=30)                          # a book takes 60 seconds: the third ends at 180, the share of the themes
+        self.assertEqual(len(self.lines("themes")), 3)
+        self.assertEqual(self.vector_lines(), [("ok", None, 18)])         # the vectors of the three, after the themes
+        end = self.ended()
+        self.assertEqual((end["reason"], end["n"], end["seconds"]), ("deadline", 3, 185))     # 180 seconds of themes and one call of 5 seconds
+        self.assertEqual(len(self.run_records()[0]["items"]), 6)          # all six were planned; the share ended the run
+
+    def test_the_themes_use_the_whole_window_when_there_is_nothing_for_the_rest_to_do_with_the_books_that_are_left_to_make(self):
+        self.books(2)
+        self.crawl_plan["themes_window_s"] = 300
+        self.idle(GOOD + GOOD, per_call=30)                               # both books end at 120: before the share
+        self.assertEqual(len(self.lines("themes")), 2)
+
+    def test_a_batch_that_the_time_left_limits_takes_whole_themes_and_the_next_window_goes_on(self):
+        self.books(3)
+        self.crawl_plan["themes_window_s"] = 300
+        with mock.patch.multiple(crawlidle, SECONDS_A_TEXT=10.0, SECONDS_A_CALL=0.0, BUILD_OVERHEAD_S=0.0, MARGIN=1.0, MIN_BATCH=1, WEAVE_RESERVE_S=0.0):
+            self.idle(self.distinct(3), per_call=30)                            # the themes end at 180; 120 seconds are left, so 12 texts
+            self.assertEqual(self.vector_lines(), [("ok", None, 12)])
+            self.assertEqual(self.embedded, [12])
+            self.assertEqual(self.waiting(), 6)                           # a third theme, whole, waits
+            self.log = crawllog.Log(self.index_root(), "run-2", clock=lambda: self.now)
+            self.now += HOUR
+            self.idle([], per_call=30)                                    # no book is left to make; the six texts that waited fit
+        self.assertEqual(self.waiting(), 0)
+
+    def test_a_batch_that_the_time_limits_to_fewer_than_the_least_while_more_wait_is_not_begun(self):
+        self.books(3)
+        self.crawl_plan["themes_window_s"] = 200
+        with mock.patch.multiple(crawlidle, SECONDS_A_TEXT=10.0, SECONDS_A_CALL=0.0, BUILD_OVERHEAD_S=0.0, MARGIN=1.0, MIN_BATCH=20, WEAVE_RESERVE_S=0.0):
+            self.idle(self.distinct(3), per_call=30)                      # the themes end at 120 with two books made: 80 seconds are left, 8 texts of the 12 that wait
+        self.assertEqual(self.embedded, [])
+        self.assertEqual(self.vector_lines(), [("skipped", "waits for a longer window", None)])
+        self.assertEqual(self.waiting(), 12)
+
+    def test_a_final_backlog_of_fewer_than_the_least_is_embedded_whole_in_a_long_window(self):
+        self.books(1)
+        self.crawl_plan["themes_window_s"] = 100
+        with mock.patch.multiple(crawlidle, SECONDS_A_TEXT=4.0, SECONDS_A_CALL=0.0, BUILD_OVERHEAD_S=0.0, MARGIN=1.0, MIN_BATCH=20, WEAVE_RESERVE_S=0.0):
+            self.idle(GOOD, per_call=30)                                  # the theme ends at 60; 40 seconds are left: 10 texts, and 6 wait
+        self.assertEqual(self.embedded, [6])
+        self.assertEqual(self.waiting(), 0)
+
+    def test_a_backlog_that_would_need_more_than_the_time_left_but_is_below_the_least_waits_for_a_longer_window(self):
+        self.books(1)
+        self.crawl_plan["themes_window_s"] = 100
+        with mock.patch.multiple(crawlidle, SECONDS_A_TEXT=10.0, SECONDS_A_CALL=0.0, BUILD_OVERHEAD_S=0.0, MARGIN=1.0, MIN_BATCH=20, WEAVE_RESERVE_S=0.0):
+            self.idle(GOOD, per_call=30)                                  # 40 seconds are left: 4 texts of the 6 that wait
+        self.assertEqual(self.embedded, [])
+        self.assertEqual(self.waiting(), 6)
+
+    def test_the_fit_is_the_measured_cost_with_the_margin_and_never_below_zero(self):
+        # 100 seconds: a quarter kept back, 5 seconds for the build, then 0.35 a text and 5 seconds a call of 40 texts
+        self.assertEqual(crawlidle._fit(100), int((100 * 0.75 - 5) // (0.35 + 5 / 40)))
+        self.assertEqual(crawlidle._fit(100), 147)
+        self.assertEqual(crawlidle._fit(0), 0)
+        self.assertEqual(crawlidle._fit(-50), 0)
+        self.assertEqual(crawlidle._fit(6), 0)                            # under the fixed part of the build
+
+    def test_the_calls_hold_at_most_the_group_of_the_step_and_the_group_is_forty_texts(self):
+        self.assertEqual(crawlidle.EMBED_GROUP, 40)
+        self.books(3)
+        with mock.patch.object(crawlidle, "EMBED_GROUP", 7):
+            self.idle(self.distinct(3))
+        self.assertEqual(self.embedded, [7, 7, 4])
+
+    def test_a_stop_file_made_between_two_calls_ends_the_build_before_the_next_and_writes_no_file(self):
+        self.books(3)
+        with mock.patch.object(crawlidle, "EMBED_GROUP", 6):
+            self.idle(self.distinct(3), embed_on_call=lambda n: self.stop_file() if n == 1 else None)
+        self.assertEqual(self.embedded, [6])
+        self.assertFalse(os.path.exists(themevectors.path_of(self.index_root())))
+        self.assertEqual(self.vector_lines(), [("skipped", "stopped", None)])
+        self.assertEqual(self.ended()["reason"], "stopped")
+
+    def test_a_build_that_fails_is_a_failed_step_and_the_embedding_entry_is_asked_once(self):
+        self.books(1)
+        self.idle(GOOD, embed_fail=True)
+        self.assertEqual(self.vector_lines(), [("failed", "the vectors could not be made", None)])
+        self.assertEqual(self.probes, ["card-embed"])
+        self.assertEqual(self.ended()["reason"], "failed")
+
+    def test_an_embedding_entry_that_does_not_answer_runs_its_clock_and_trips_the_breaker_in_the_end(self):
+        self.books(1)
+        self.up_for = {"card-embed": False}
+        self.idle(GOOD, embed_fail=True)
+        self.assertEqual(self.tripped, [])
+        self.now += datetime.timedelta(minutes=31)
+        self.log = crawllog.Log(self.index_root(), "run-2", clock=lambda: self.now)
+        with self.assertRaises(crawlrun.BreakerTripped):
+            self.idle([], embed_fail=True)
+        self.assertEqual([k for k, _ in self.tripped], ["model_down"])
+
+    def test_a_vector_file_that_another_writer_holds_is_a_skipped_step_with_no_embedding_and_no_probe(self):
+        self.books(1)
+        with mock.patch.object(catalog, "LOCK_WAIT", 0.1), themevectors.lock(self.index_root()):
+            self.idle(GOOD)
+        self.assertEqual(self.embedded, [])                               # the lock is looked at before the work, so that the work is not lost
+        self.assertEqual(self.vector_lines(), [("skipped", "locked", None)])
+        self.assertEqual(self.probes, [])
+        self.assertEqual(self.waiting(), 6)                               # the themes were made and their vectors wait
+        self.assertEqual(self.ended()["reason"], "nothing to do")         # the window goes on to the weave
+
+    def test_the_step_looks_at_the_lock_without_waiting_and_lets_the_write_wait_a_few_seconds_at_most(self):
+        self.assertEqual((crawlidle.LOCK_LOOK_S, crawlidle.LOCK_WRITE_S), (0.0, 5.0))        # not the two minutes of the catalog, which no stop is looked at in
+        self.books(1)
+        with mock.patch.object(themevectors, "lock", wraps=themevectors.lock) as locked:
+            self.idle(GOOD)
+        self.assertEqual([c.kwargs.get("wait") for c in locked.call_args_list], [crawlidle.LOCK_LOOK_S, crawlidle.LOCK_WRITE_S])
+
+    def test_a_lock_that_is_taken_between_the_look_and_the_write_is_a_skipped_step_too_and_not_a_failed_one(self):
+        self.books(1)
+        with mock.patch.object(themevectors, "build", side_effect=themevectors.Busy("another writer")):
+            self.idle(GOOD)
+        self.assertEqual(self.vector_lines(), [("skipped", "locked", None)])
+        self.assertEqual(self.probes, [])
+
+    def test_the_refusal_of_the_lock_is_a_kb_error_as_it_was(self):
+        self.assertTrue(issubclass(themevectors.Busy, KbError))
+
+    def test_with_no_embedding_entry_set_the_step_is_skipped_for_want_of_settings_and_the_themes_are_made_all_the_same(self):
+        self.books(1)
+        self.idle(GOOD, ctx=self.ctx(cfg=self.crawl_cfg(embedding_entry=False)))
+        self.assertEqual(len(self.lines("themes")), 1)
+        self.assertEqual(self.vector_lines(), [("skipped", "settings", None)])
+        self.assertEqual(self.embedded, [])
+
+    def test_with_no_book_to_make_and_nothing_waiting_the_step_says_so_and_asks_no_model(self):
+        self.idle()
+        self.assertEqual(self.vector_lines(), [("skipped", "nothing waits", None)])
+        self.assertEqual(self.embedded, [])
+
+
+class WeaveTest(IdleCase):
+    """The repair of the weave, when it is due, with at least the least time left; never a full build."""
+
+    def weave_with(self, status=None, repair=None, np=None):
+        calls = {"status": 0, "repair": []}
+
+        def status_of(index_root, cfg, store, now=None):
+            calls["status"] += 1
+            if isinstance(status, Exception):
+                raise status
+            return status
+
+        def repair_of(index_root, cfg, store, now=None, force=False):
+            calls["repair"].append(force)
+            if isinstance(repair, Exception):
+                raise repair
+            return repair
+        return types.SimpleNamespace(_np=np or (lambda: None), status=status_of, repair=repair_of), calls
+
+    def weave_lines(self):
+        return [(x["outcome"], x["reason"], x["n"]) for x in self.lines("weave")]
+
+    def state(self, due=True, full=False, waiting=5):
+        return {"repair_due": due, "full_build_needed": full, "waiting": {"total": waiting, "new": waiting, "changed": 0}}
+
+    def test_a_repair_that_is_due_is_made_once_and_not_forced(self):
+        self.books(1)
+        weave, calls = self.weave_with(self.state(), {"themes_added": 7, "generation": 3})
+        self.idle(GOOD, weave=weave)
+        self.assertEqual(calls["repair"], [False])
+        self.assertEqual(self.weave_lines(), [("ok", None, 7)])
+
+    def test_a_repair_that_is_not_due_is_not_made_and_the_line_says_so(self):
+        weave, calls = self.weave_with(self.state(due=False))
+        self.idle(weave=weave)
+        self.assertEqual((calls["status"], calls["repair"]), (1, []))
+        self.assertEqual(self.weave_lines(), [("skipped", "not due", 5)])
+
+    def test_a_full_build_that_is_needed_is_the_owners_and_is_never_made_here(self):
+        weave, calls = self.weave_with(self.state(full=True))
+        self.idle(weave=weave)
+        self.assertEqual(calls["repair"], [])
+        self.assertEqual(self.weave_lines(), [("skipped", "a full build is needed", None)])
+
+    def test_a_library_with_no_weave_skips_it_and_numpy_missing_skips_it_before_the_file_is_read(self):
+        weave, calls = self.weave_with(KbError("there is no weave"))
+        self.idle(weave=weave)
+        self.assertEqual(self.weave_lines(), [("skipped", "no weave", None)])
+
+        def no_numpy():
+            raise KbError("needs numpy")
+        weave, calls = self.weave_with(self.state(), np=no_numpy)
+        self.log = crawllog.Log(self.index_root(), "run-2", clock=lambda: self.now)
+        self.idle(weave=weave)
+        self.assertEqual((calls["status"], calls["repair"]), (0, []))
+        self.assertEqual(self.weave_lines()[-1], ("skipped", "numpy is not installed", None))
+
+    def test_numpy_missing_leaves_the_themes_and_their_vectors_made(self):
+        self.books(1)
+
+        def no_numpy():
+            raise KbError("needs numpy")
+        weave, _ = self.weave_with(self.state(), np=no_numpy)
+        self.idle(GOOD, weave=weave)
+        self.assertEqual(len(self.lines("themes")), 1)
+        self.assertEqual(self.embedded, [6])
+
+    def test_a_repair_that_is_refused_is_a_failed_step_with_a_fixed_reason_and_not_the_text_of_the_refusal(self):
+        weave, calls = self.weave_with(self.state(), KbError("a secret path /x/y"))
+        self.idle(weave=weave)
+        self.assertEqual(self.weave_lines(), [("failed", "the repair was refused", None)])
+        self.assertNotIn("secret", json.dumps(self.lines("weave")))
+
+    def test_with_less_than_the_least_time_left_the_weave_is_not_looked_at(self):
+        self.books(1)
+        self.crawl_plan["themes_window_s"] = 70
+        weave, calls = self.weave_with(self.state())
+        self.idle(GOOD, weave=weave, embed_per_call=5)                    # themes to 60, the vectors to 65: five seconds are left
+        self.assertEqual((calls["status"], calls["repair"]), (0, []))
+        self.assertEqual(self.weave_lines(), [("skipped", "too little time", None)])
+
+    def test_the_repair_is_not_made_after_a_stop_file(self):
+        self.books(1)
+        weave, calls = self.weave_with(self.state())
+        self.idle(GOOD, weave=weave, on_call=lambda n: self.stop_file() if n == 2 else None)
+        self.assertEqual(calls["repair"], [])
+        self.assertEqual(self.ended()["reason"], "stopped")
 
 
 class EndTest(IdleCase):

@@ -427,6 +427,124 @@ class CutThemeCheckTest(unittest.TestCase):
         self.assertEqual(checked["themes"][0]["neutral"]["problem"]["mark"], "stated")
 
 
+class CheckJournalTest(unittest.TestCase):
+    """The accepted answers of the checks of a book, kept as the answers of its pieces are, so that a book cut in its checks is finished by a later run that asks
+    only for the checks it has not got."""
+
+    def setUp(self):
+        self.conversion = convert.build(ITEMS)
+        self.first = theme_over()
+        self.second = theme_over(blocks="3-4", title="Another theme")
+        self.good = verdicts("supports", "partly", "no", "supports")
+
+    def run_check(self, script, themes, journal, cfg=None, stop=None):
+        fake = JournalFake(*script)
+        self.fake = fake
+        with unittest.mock.patch.object(models, "run_job", fake):
+            return themecheck.check_themes(cfg or config(), REF, self.conversion, copy.deepcopy(themes), set(), journal=journal, stop=stop)
+
+    def test_an_accepted_answer_is_kept_and_a_later_check_of_the_same_theme_asks_no_model_and_gives_the_same_result(self):
+        journal = themecheck.CheckJournal()
+        got = self.run_check([self.good], [self.first], journal)
+        self.assertEqual((len(self.fake.calls), len(journal.entries)), (1, 1))
+        again = self.run_check([], [self.first], journal)              # an empty script: any call would fail
+        self.assertEqual(self.fake.calls, [])
+        self.assertEqual(again["themes"], got["themes"])
+        self.assertEqual((again["calls"], len(again["records"])), (1, 1))   # a saved answer counts as a made one, as the saved pieces do
+
+    def test_a_theme_whose_excerpt_or_parts_are_not_those_of_a_saved_answer_is_asked_for(self):
+        journal = themecheck.CheckJournal()
+        self.run_check([self.good], [self.first], journal)
+        self.run_check([self.good], [self.first, self.second], journal)
+        self.assertEqual(len(self.fake.calls), 1)                      # only the second
+        self.assertEqual(len(journal.entries), 2)
+
+    def test_a_theme_over_the_same_excerpt_whose_parts_are_other_words_is_asked_for(self):
+        journal = themecheck.CheckJournal()
+        self.run_check([self.good], [self.first], journal)
+        reworded = copy.deepcopy(self.first)
+        reworded["neutral"]["problem"]["text"] = "a quite other problem than the one that was checked"
+        self.run_check([self.good], [reworded], journal)
+        self.assertEqual(len(self.fake.calls), 1)                      # the excerpt is the same, the part asked about is not
+        self.assertEqual(len(journal.entries), 2)
+
+    def test_an_answer_made_by_another_model_or_prompt_version_or_entry_is_not_used(self):
+        for change in ({"model": "m9:latest"}, {"prompt_version": "v9"}, {"registry": "other"}):
+            with self.subTest(change):
+                journal = themecheck.CheckJournal()
+                self.run_check([self.good], [self.first], journal)
+                journal.entries[0]["record"].update(change)
+                self.run_check([self.good], [self.first], journal)
+                self.assertEqual(len(self.fake.calls), 1)
+
+    def test_a_saved_answer_whose_values_cannot_even_be_read_as_plain_data_is_not_used_and_raises_nothing(self):
+        journal = themecheck.CheckJournal()
+        self.run_check([self.good], [self.first], journal)
+        deep = {}
+        for _ in range(300000):
+            deep = {"verdicts": deep}
+        journal.entries[0]["values"] = deep                              # nested past the depth that json can write: it raises RecursionError, which is not a KbError
+        self.run_check([self.good], [self.first], journal)
+        self.assertEqual(len(self.fake.calls), 1)                        # asked for again, as a bad answer is
+
+    def test_a_saved_answer_whose_values_no_longer_pass_the_check_of_the_job_is_not_used(self):
+        journal = themecheck.CheckJournal()
+        self.run_check([self.good], [self.first], journal)
+        journal.entries[0]["values"] = verdicts("supports")            # four parts were asked about
+        self.run_check([self.good], [self.first], journal)
+        self.assertEqual(len(self.fake.calls), 1)
+
+    def test_a_refused_answer_is_not_kept(self):
+        journal = themecheck.CheckJournal()
+        got = self.run_check([verdicts("supports"), verdicts("supports")], [self.first], journal)    # refused, asked again, refused again
+        self.assertEqual(len(got["dropped"]), 1)
+        self.assertEqual(journal.entries, [])
+
+    def test_each_answer_is_saved_as_it_is_accepted_and_a_failure_to_save_is_raised(self):
+        saved = []
+        journal = themecheck.CheckJournal(save=lambda kept: saved.append(len(kept)))
+        self.run_check([self.good, self.good], [self.first, self.second], journal)
+        self.assertEqual(saved, [1, 2])
+
+        def refuse(kept):
+            raise KbError("no room")
+        with self.assertRaises(KbError):
+            self.run_check([self.good], [self.first], themecheck.CheckJournal(save=refuse))
+
+    def test_a_stop_between_two_checks_keeps_the_first_and_the_second_is_not_asked(self):
+        journal = themecheck.CheckJournal()
+        with self.assertRaises(themeextract.Cut):
+            self.run_check([self.good, self.good], [self.first, self.second], journal, stop=lambda: len(self.fake.calls) >= 1)
+        self.assertEqual((len(self.fake.calls), len(journal.entries)), (1, 1))
+        self.run_check([self.good], [self.first, self.second], journal)
+        self.assertEqual(len(self.fake.calls), 1)                      # only the second, then
+
+    def test_a_check_with_no_journal_is_as_it_was(self):
+        got = self.run_check([self.good], [self.first], None)
+        self.assertEqual((len(self.fake.calls), got["calls"]), (1, 1))
+
+    def test_the_journal_of_a_book_is_kept_in_its_file_and_a_file_that_cannot_be_read_is_not_used(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            root = os.path.join(os.path.realpath(folder), "index")
+            os.mkdir(root, 0o700)
+            journal = themecheck.CheckJournal.for_book(root, BOOK, "v1")
+            self.assertEqual(journal.entries, [])
+            self.run_check([self.good], [self.first], journal)
+            again = themecheck.CheckJournal.for_book(root, BOOK, "v1")
+            self.assertEqual(len(again.entries), 1)                    # read back from the file
+            self.run_check([], [self.first], again)
+            self.assertEqual(self.fake.calls, [])
+            path = os.path.join(root, "card-runs", "theme-check-journal", f"{BOOK}-v1.json")
+            with open(path, "w") as f:
+                f.write("not json")
+            os.chmod(path, 0o600)
+            broken = themecheck.CheckJournal.for_book(root, BOOK, "v1")
+            self.assertEqual(broken.entries, [])                       # not used, and replaced by the first answer added
+            self.run_check([self.good], [self.first], broken)
+            self.assertEqual(len(themecheck.CheckJournal.for_book(root, BOOK, "v1").entries), 1)
+
+
 class FrequenciesOfTheLibraryTest(VersionCase):
     def test_the_frequencies_are_counted_over_the_conversions_in_use(self):
         first, _ = self.converted_book()

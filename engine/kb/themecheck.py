@@ -19,9 +19,11 @@ check gives no valid answer (the answer is refused, asked once more with the rea
 The excerpt and the parts go to the model as data in sections of their own, between delimiters that hold a random token no input holds.
 Nothing here files anything."""
 import copy
+import hashlib
+import json
 from collections import Counter
 
-from . import KbError, cardmake, convert, models, textutil, theme, themeextract
+from . import KbError, cardmake, convert, models, textutil, theme, themeextract, themejournal
 
 FREQUENT_MIN = 5       # occurrences in the book's own text for a word to count as one of its words
 RARE_PERCENT = 15      # the most percent of the books of the library that may hold such a word
@@ -143,13 +145,69 @@ def check_prompt(excerpt, parts):
     return cardmake._prompt(rules, [("EXCERPT", excerpt), ("PARTS", body)])
 
 
-def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=None, on_refused=None, stop=None):
+def check_key(excerpt, asked):
+    """The key of a check in the journal: the hash of its inputs, the excerpt and the parts asked about (not of the prompt, which wraps the text of the book in markers that are new
+    for each call). The model and the prompt version are matched through the record of the saved answer."""
+    data = json.dumps({"excerpt": excerpt, "parts": [[part, text] for part, text in asked]}, sort_keys=True, ensure_ascii=True)
+    return hashlib.sha256(data.encode("ascii")).hexdigest()
+
+
+class CheckJournal:
+    """The accepted answers of the checks of one book, as `themejournal` keeps them (`write_checks`): `entries`, each `{"key", "values", "record"}`, the key being the hash of the
+    inputs of the check (`check_key`: the excerpt and the parts it asks about), so that an answer is used again only for the same check. `save`, if given, is called with the
+    entries each time an answer is added, so that it is kept before the next check is asked; an entry is in `entries` only once `save` has kept it. With no `save` the answers
+    are held in memory only."""
+
+    def __init__(self, entries=None, save=None):
+        self.entries = list(entries or [])
+        self._save = save
+
+    @classmethod
+    def for_book(cls, index_root, book_id, version_id):
+        """The journal of a book in the index root. A file that cannot be read is not used (the checks are asked for again, and the file is replaced when the first answer is added)."""
+        try:
+            entries = themejournal.read_checks(index_root, book_id, version_id) or []
+        except KbError:
+            entries = []
+        return cls(entries, save=lambda kept: themejournal.write_checks(index_root, book_id, version_id, kept))
+
+    def saved(self, key, entry_name, model, job):
+        """The saved answer (`values` and `record`) of the check under `key` if it was made by this entry of the registry with this model and this prompt version of the job, and its
+        values pass the check of the job; otherwise None."""
+        found = next((e for e in self.entries if e["key"] == key), None)
+        if found is None:
+            return None
+        record = found["record"]
+        if record["registry"] != entry_name or record["model"] != model or record["prompt_version"] != job.prompt_version:
+            return None
+        try:
+            checked = models._check_answer(json.dumps(found["values"]), job.shape)
+            if job.check is not None:
+                job.check(checked)
+        except (KbError, RecursionError, TypeError, ValueError):   # a saved answer that cannot be read as plain data is not used, and the check is asked for again
+            return None
+        return {"values": checked, "record": copy.deepcopy(record)}
+
+    def add(self, key, out):
+        """Keep the accepted answer `out` (`values` and `record`) of the check under `key`, in place of an earlier one under the same key. A failure to keep it is raised."""
+        entry = {"key": key, "values": copy.deepcopy(out["values"]), "record": copy.deepcopy(out["record"])}
+        kept = [e for e in self.entries if e["key"] != key] + [entry]
+        if self._save is not None:
+            try:
+                self._save(kept)
+            except KbError as e:
+                raise KbError("the answer of the check could not be kept: " + textutil.clean(str(e), 200)) from None
+        self.entries = kept
+
+
+def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=None, on_refused=None, stop=None, journal=None):
     """Check themes of the conversion `ref` names. Returns `{"themes", "dropped", "records", "calls"}`: the themes with their parts marked
     and their flags added (the others in the order given), the themes that were dropped as `unchecked` with the reason, the record of
     each call and the number of calls. One call is made for each theme that has a part with text. The model is the one the config sets for
     `theme-check`, and the anchor of every theme is checked against the text, both before anything is sent. A refusal that is asked again
     and given to `on_refused` is kept aside by the caller; a call that fails is raised."""
     name, _ = models.choose(cfg, "theme-check")
+    model = models.registry(cfg)[name]["model"]
     excerpts = []
     for t in themes:
         try:
@@ -165,7 +223,13 @@ def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=N
             flags.append({"kind": "no_description", "detail": "the model gave no part of a description"})
         else:
             try:
-                out = themeextract._ask(cfg, name, check_prompt(excerpt, asked), launcher, root, on_refused, job=check_job(len(asked)), stop=stop)
+                prompt, job = check_prompt(excerpt, asked), check_job(len(asked))
+                key = check_key(excerpt, asked)
+                out = journal.saved(key, name, model, job) if journal is not None else None
+                if out is None:
+                    out = themeextract._ask(cfg, name, prompt, launcher, root, on_refused, job=job, stop=stop)
+                    if journal is not None:
+                        journal.add(key, out)
             except models.AnswerRefused as refusal:
                 if on_refused is not None:
                     try:
@@ -190,7 +254,7 @@ def check_themes(cfg, ref, conversion, themes, vocabulary, launcher=None, root=N
     return {"themes": kept, "dropped": dropped, "records": records, "calls": len(records)}
 
 
-def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None, frequencies=None, journal=None, stop=None):
+def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=None, root=None, frequencies=None, journal=None, stop=None, check_journal=None):
     """The themes of one version (the current one, if none is named), made and checked but not filed: the result of `check_themes` and
     of the extraction put together, and under `generation` the generation for `theme.file`. Both models are found before anything is
     sent. `frequencies` is `(document frequencies, number of books)` of the library, counted from the store when it is not given. A
@@ -208,7 +272,7 @@ def make_and_check_for_version(store, cfg, book_id, version_id=None, launcher=No
     try:
         made = themeextract.extract(cfg, book_id, version_id, ref, conversion, current["title"], launcher=launcher, root=root, on_refused=keep,
                                     avoid=avoid, journal=journal, stop=stop)
-        checked = check_themes(cfg, ref, conversion, made["themes"], vocabulary, launcher=launcher, root=root, on_refused=keep, stop=stop)
+        checked = check_themes(cfg, ref, conversion, made["themes"], vocabulary, launcher=launcher, root=root, on_refused=keep, stop=stop, journal=check_journal)
     except models.AnswerRefused as refusal:
         kept, note = themeextract._keep(store, refusal, book_id, version_id)
         raise themeextract.ThemeRefused(str(refusal), kept, note) from None

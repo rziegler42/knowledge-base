@@ -3,6 +3,7 @@ import builtins
 import contextlib
 import copy
 import fcntl
+import hashlib
 import io
 import json
 import math
@@ -22,7 +23,7 @@ from engine.tests.test_models import FAKE_EMBED, config as models_config, embedd
 from engine.tests.test_themecheck import config as theme_config, verdicts
 from engine.tests.test_themeextract import Fake, VersionCase, row, values
 
-from kb import KbError, card, catalog, convert, models, read as reading, search as fulltext, textutil, theme, themecheck, themevectors, vectors
+from kb import KbError, card, catalog, convert, models, read as reading, search as fulltext, textutil, theme, themecheck, themeextract, themevectors, vectors
 from kb import __main__ as kbmain
 from kb import config as kbconfig
 
@@ -367,6 +368,165 @@ class BuildTest(VectorsCase):
                 with self.assertRaises(KbError):
                     self.build(cfg)
         self.assertEqual(self.calls(), 0)
+
+
+def other_rows(n=1):
+    """n themes with texts that no other of these tests has, so that nothing is shared between books."""
+    blocks = ["1", "2", "4", "5"]
+    return [row(title=f"Other theme {i + 1}", blocks=blocks[i], summary=f"A summary that is another {i + 1}.", problem=f"another problem {i + 1}", method=f"another method {i + 1}",
+                needs=f"another need {i + 1}", provides=f"another provision {i + 1}") for i in range(n)]
+
+
+class BatchTest(VectorsCase):
+    """The build in bounded batches, so that a window that cannot embed a whole backlog works it off over several (`max_texts`, `group`, `stop`, `waiting_texts`)."""
+
+    def per_call(self):
+        path = os.path.join(self.base_dir(), "calls.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [len(json.loads(json.loads(line)["stdin"])["texts"]) for line in f]
+
+    def digest(self):
+        with open(self.path(), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    # ---- the texts that wait
+
+    def test_the_texts_that_wait_are_counted_with_no_call_and_each_text_once(self):
+        self.themed(rows_of(2))                                           # two themes of six texts each
+        self.assertEqual(themevectors.waiting_texts(self.store, self.mcfg), 12)
+        self.assertEqual(self.calls(), 0)
+        self.build()
+        self.assertEqual(themevectors.waiting_texts(self.store, self.mcfg), 0)
+        self.themed(other_rows(1))
+        self.assertEqual(themevectors.waiting_texts(self.store, self.mcfg), 6)
+        self.assertEqual(self.calls(), 1)                                 # the one build that was made
+
+    def test_the_texts_that_wait_for_a_file_that_cannot_be_used_are_all_the_texts(self):
+        self.themed(rows_of(1))
+        self.build()
+        self.assertEqual(themevectors.waiting_texts(self.store, self.mcfg, again=True), 6)
+
+    # ---- whole themes, a batch at a time
+
+    def test_a_batch_takes_whole_themes_in_order_and_a_later_build_goes_on_from_the_file(self):
+        self.themed(rows_of(3))                                           # 18 texts in three themes
+        first = self.build(max_texts=12)
+        self.assertEqual((first["themes"], first["texts_sent"], first["made"]), (2, 12, 12))
+        self.assertEqual([t["theme"]["title"] for t in self.themes_read()], ["Theme number 1", "Theme number 2"])
+        second = self.build(max_texts=12)
+        self.assertEqual((second["themes"], second["texts_sent"], second["kept"], second["made"]), (3, 6, 12, 6))   # the last theme, whole, though fewer than 12 wait
+        third = self.build(max_texts=12)
+        self.assertEqual((third["themes"], third["texts_sent"]), (3, 0))
+        self.assertEqual(self.calls(), 2)
+
+    def test_a_theme_is_never_written_in_part_and_one_too_large_for_the_batch_is_left_out_and_the_others_go_on(self):
+        big = row(title="A larger theme", blocks="1", summary="A larger summary.", problem="large problem", method="large method", needs="large need",
+                  provides="large provision", limits="large limit")      # seven texts
+        self.themed([big] + other_rows(1))                                # then a theme of six
+        got = self.build(max_texts=6)
+        self.assertEqual((got["themes"], got["texts_sent"]), (1, 6))
+        self.assertEqual([t["theme"]["title"] for t in self.themes_read()], ["Other theme 1"])
+        for _, _, _, field, _, _ in self.stored():
+            self.assertIn(field, themevectors.FIELDS)
+        self.assertEqual(len(self.stored()), 6)                           # all six vectors of the one theme, and no vector of the other
+
+    def test_a_batch_smaller_than_any_theme_embeds_nothing_and_asks_no_model(self):
+        self.themed(rows_of(2))
+        got = self.build(max_texts=5)
+        self.assertEqual((got["themes"], got["texts_sent"], self.calls()), (0, 0, 0))
+
+    def test_the_themes_already_embedded_are_kept_whatever_the_batch(self):
+        self.themed(rows_of(2))
+        self.build()
+        self.themed(other_rows(1))
+        got = self.build(max_texts=6)
+        self.assertEqual((got["themes"], got["kept"], got["made"]), (3, 12, 6))
+
+    def test_a_text_that_two_themes_share_is_sent_once_and_counted_once_in_the_batch(self):
+        shared = [row(title="One", blocks="1", summary="A shared summary.", problem="p1", method="m1", needs="n1", provides="v1"),
+                  row(title="Two", blocks="2", summary="A shared summary.", problem="p2", method="m2", needs="n2", provides="v2")]
+        self.themed(shared)                                               # eleven distinct texts: the summary is the same
+        got = self.build(max_texts=11)
+        self.assertEqual((got["themes"], got["texts_sent"]), (2, 11))
+
+    def test_a_bad_bound_is_refused_and_no_bound_is_as_it_was(self):
+        self.themed(rows_of(1))
+        for bad in (-1, 1.5, "6", True):
+            with self.subTest(bad), self.assertRaises(KbError):
+                self.build(max_texts=bad)
+        for bad in (0, -1, 1.5, "4", True):
+            with self.subTest(group=bad), self.assertRaises(KbError):
+                self.build(group=bad)
+        with self.assertRaises(KbError):
+            self.build(stop="no")
+        self.assertEqual(self.calls(), 0)
+        self.assertEqual(self.build()["themes"], 1)
+
+    # ---- the wait for the lock is the caller's to bound
+
+    def test_a_look_at_the_lock_does_not_wait_and_a_write_waits_only_as_long_as_it_is_told(self):
+        import time
+        self.themed(rows_of(1))
+        with unittest.mock.patch.object(catalog, "LOCK_WAIT", 60), themevectors.lock(self.store.cfg["index_root"]):
+            began = time.monotonic()
+            with self.assertRaises(themevectors.Busy):
+                with themevectors.lock(self.store.cfg["index_root"], wait=0):
+                    pass
+            self.assertLess(time.monotonic() - began, 5)                  # not the 60 seconds of the catalog
+            began = time.monotonic()
+            with self.assertRaises(themevectors.Busy):
+                self.build(lock_wait=0.1)
+            self.assertLess(time.monotonic() - began, 5)
+        self.assertFalse(os.path.exists(self.path()))                     # the build that was refused wrote nothing
+
+    def test_a_bad_wait_is_refused_and_no_wait_is_the_catalogs(self):
+        self.themed(rows_of(1))
+        for bad in (-1, "1", True, float("nan")):
+            with self.subTest(bad), self.assertRaises(KbError):
+                self.build(lock_wait=bad)
+        self.assertEqual(self.build()["themes"], 1)
+
+    def test_every_vector_made_again_cannot_be_bounded_since_it_would_drop_the_themes_embedded_before(self):
+        self.themed(rows_of(2))
+        self.build()
+        with self.assertRaises(KbError):
+            self.build(again=True, max_texts=6)
+        self.assertEqual(len(self.themes_read()), 2)                       # the file is as it was
+
+    # ---- calls of a bounded size, and a stop between them
+
+    def test_the_texts_go_in_calls_of_at_most_the_group_given(self):
+        self.themed(rows_of(3))                                           # 18 texts
+        got = self.build(group=4)
+        self.assertEqual(got["texts_sent"], 18)
+        self.assertEqual(self.per_call(), [4, 4, 4, 4, 2])
+
+    def test_a_stop_between_two_calls_ends_the_build_before_the_next_call_and_leaves_the_old_file_byte_for_byte(self):
+        self.themed(rows_of(1))
+        self.build()
+        before = self.digest()
+        self.themed(other_rows(2))                                        # 12 more texts
+        with self.assertRaises(themeextract.Cut):
+            self.build(group=4, stop=lambda: self.calls() >= 2)           # the first build made one call; the stop comes after the next
+        self.assertEqual(self.calls(), 2)                                 # one call of the second build was made, the next one was not
+        self.assertEqual(self.digest(), before)                           # and nothing was written
+        self.assertEqual(self.build(group=4)["themes"], 3)                # a build with no stop goes on
+
+    def test_a_stop_that_is_there_before_the_first_call_asks_nothing_and_writes_nothing(self):
+        self.themed(rows_of(1))
+        with self.assertRaises(themeextract.Cut):
+            self.build(stop=lambda: True)
+        self.assertEqual(self.calls(), 0)
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_with_nothing_to_send_the_stop_is_not_asked_and_the_file_is_as_a_build_makes_it(self):
+        self.themed(rows_of(1))
+        self.build()
+        asked = []
+        got = self.build(stop=lambda: asked.append(1) or True)            # nothing waits: no call to stop
+        self.assertEqual((asked, got["texts_sent"]), ([], 0))
 
 
 class WhatIsReadTest(VectorsCase):

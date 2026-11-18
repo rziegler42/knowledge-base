@@ -740,8 +740,8 @@ class RefusalBeforeSendTest(ExtractCase):
 
 
 class JournalFake(Fake):
-    """A `Fake` whose record names the prompt version of the job and the entry, as a real call's does, and that notes what `probe` says
-    when each call is made (the saved pieces then)."""
+    """A `Fake` whose record names the prompt version of the job, the entry and the model of that entry, as a real call's does, and that notes what
+    `probe` says when each call is made (the saved pieces then)."""
 
     def __init__(self, *script, probe=None):
         super().__init__(*script)
@@ -750,7 +750,7 @@ class JournalFake(Fake):
     def __call__(self, cfg, name, prompt, job, launcher=None, root=None):
         self.probed.append(self.probe() if self.probe else None)
         out = super().__call__(cfg, name, prompt, job, launcher=launcher, root=root)
-        out["record"] = {**out["record"], "prompt_version": job.prompt_version, "registry": name}
+        out["record"] = {**out["record"], "prompt_version": job.prompt_version, "registry": name, "model": models.registry(cfg)[name]["model"]}
         return out
 
 
