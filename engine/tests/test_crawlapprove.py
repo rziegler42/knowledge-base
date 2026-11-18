@@ -383,6 +383,25 @@ class Preview(Case):
         text, _ = self.approve()
         self.assertNotIn("openalex.key", text)  # a key for a source that is off is not used, and is not said to be
 
+    def test_it_says_when_langsearch_is_the_web_search_and_where_its_key_comes_from_and_names_the_engine_of_the_search_only_when_it_is_on(self):
+        self.set_plan("[sources]\nweb_search = on\nweb_search_engine = langsearch\n")
+        text, _ = self.approve()
+        self.assertIn("web search: on (LangSearch)", text)
+        self.assertIn("langsearch.key", text)
+        self.assertIn("your query words go to it", text)
+        self.assertIn("for you to have read", text.split("langsearch.key")[1].split("\n")[0])
+        self.assertNotIn("DuckDuckGo", text)
+        self.set_plan("[sources]\nweb_search = on\n")
+        text, _ = self.approve()
+        self.assertIn("DuckDuckGo", text)
+        self.assertNotIn("langsearch.key", text)
+        self.assertNotIn("(LangSearch)", text)
+        self.set_plan("[sources]\nweb_search = off\nweb_search_engine = langsearch\n")
+        text, _ = self.approve()
+        self.assertIn("web search: off", text)
+        self.assertNotIn("langsearch.key", text)   # a choice of engine for a search that is off is not used, and is not said to be
+        self.assertNotIn("DuckDuckGo", text)
+
     def test_it_names_the_lists_the_scan_kinds_that_hold_and_that_a_named_list_replaces_the_default(self):
         text, _ = self.preview()
         self.assertIn("phishing_domains: on", text)

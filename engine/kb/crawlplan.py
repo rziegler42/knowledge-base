@@ -188,7 +188,7 @@ def parse_plan(text):
     if len(text.encode("utf-8")) > MAX_BYTES:
         raise KbError(f"the crawl plan file: it is over {MAX_BYTES // 1024} KiB")
     plan = defaults()
-    section, seen = None, set()
+    section, seen, word = None, set(), None   # `word` is what the plan wrote for web_search, in lower case
     for number, raw_line in enumerate(text.removeprefix("﻿").replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
         line = raw_line.split("#", 1)[0].strip()
         if not line:
@@ -214,6 +214,10 @@ def parse_plan(text):
         if raw == "" and key not in _EMPTY_OK:
             raise _refuse(number, "the value is empty")
         plan[key] = _value(key, raw, number)
+        if key == "web_search":
+            word = raw.lower()
+        if word == "duckduckgo" and plan["web_search_engine"] == "langsearch" and key in ("web_search", "web_search_engine"):
+            raise _refuse(number, "web_search = duckduckgo names the engine and web_search_engine says langsearch: write web_search = on")
     return plan
 
 

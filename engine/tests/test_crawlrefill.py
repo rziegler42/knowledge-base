@@ -19,7 +19,7 @@ from engine.tests import ENGINE_DIR
 from engine.tests.test_crawllists import Fetch
 from engine.tests.test_discover import Source, candidate, rows_for
 
-from kb import KbError, crawllog, crawlplan, crawlqueue, crawlrefill, crawlrun, srcopenalex, webclient, weblists
+from kb import KbError, crawllog, crawlplan, crawlqueue, crawlrefill, crawlrun, srclangsearch, srcopenalex, webclient, weblists
 
 UTC = datetime.timezone.utc
 NOW = datetime.datetime(2026, 11, 16, 12, 0, 0, tzinfo=UTC)
@@ -871,6 +871,14 @@ class KeyedOpenAlex(Case):
             self.assertTrue(call.policy.follow_redirects)
         self.assertEqual([l for l in self.lines() if l["outcome"] == "refused"], [])
 
+    def test_no_exception_in_the_chain_of_a_failure_of_the_client_holds_what_it_said_for_the_openalex_key_too(self):
+        self.fetch.replies[API + "&api_key=" + KEY] = webclient.FetchError("the server said " + KEY)
+        self.run_step(arxiv=False)
+        error = self.sources["openalex"].seen[0]
+        self.assertEqual(str(error), "the request was refused or failed")
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+
     def test_a_stop_file_ends_a_keyed_request_as_it_ends_every_other(self):
         open(os.path.join(self.index, "crawl.stop"), "w").close()
         self.run_step(arxiv=False)
@@ -879,6 +887,297 @@ class KeyedOpenAlex(Case):
     def test_the_default_path_of_the_key_is_the_openalex_key_file_of_the_config_folder(self):
         self.assertEqual(crawlrefill.OPENALEX_KEY_FILE, "openalex.key")
         self.assertEqual(crawlrefill.OPENALEX_HOST, "api.openalex.org")
+
+
+LS_KEY = "ls-test-key-0123456789abcdef"
+LS_URL = "https://api.langsearch.com/v1/web-search"
+LS_BODY = {"query": "control theory", "count": 10}
+
+
+class PostFake:
+    """A stand-in for `webclient.post_json`: it keeps each call and answers from `reply` (a tuple, an exception, or a function of the decoded body), as a `Result` that also says `.final`."""
+
+    def __init__(self, reply=None):
+        self.calls = []
+        self.reply = reply if reply is not None else (200, {"content-type": "application/json"}, b'{"code": 200, "data": {"webPages": {"value": []}}}')
+
+    def __call__(self, url, body, *, policy, headers=None, **kw):
+        self.calls.append(types.SimpleNamespace(url=url, body=body, policy=policy, headers=headers, kw=kw))
+        reply = self.reply(json.loads(body)) if callable(self.reply) else self.reply
+        if isinstance(reply, BaseException):
+            raise reply
+        status, reply_headers, reply_body = reply
+        return webclient.Result(status, reply_headers, reply_body, url + "#final")
+
+
+class Poster(Source):
+    """A source that makes the request a real one makes: it calls the `post` it is given with each dictionary of `bodies`, and keeps what came back or the error."""
+
+    def __init__(self, name, bodies, swallow=False):
+        super().__init__(name)
+        self.bodies, self.seen, self.swallow = bodies, [], swallow
+
+    def search(self, query, post, limit, *more):
+        for body in self.bodies:
+            try:
+                self.seen.append(post(body))
+            except srcopenalex.SourceRefused as error:
+                self.seen.append(error)
+                if not self.swallow:
+                    raise
+            except KbError as error:
+                self.seen.append(error)
+        return {"candidates": [], "rejected": []}
+
+
+class KeyedLangSearch(Case):
+    """`web_search = on` with `web_search_engine = langsearch`: the key goes to the one address of the search as `Authorization: Bearer`, through a policy of its own, and to nothing else."""
+
+    def setUp(self):
+        super().setUp()
+        self.key_path = self.put("langsearch.key", LS_KEY + "\n")
+        self.plan.update(web_search=True, web_search_engine="langsearch", openalex=False, arxiv=False, wikipedia=False)
+        self.post = PostFake()
+
+    def run_step(self, bodies=(LS_BODY,), key_path=None, swallow=False, post=None):
+        self.poster = Poster("web", [dict(b) if isinstance(b, dict) else b for b in bodies], swallow)
+        self.sources = {"openalex": Source("openalex"), "arxiv": Source("arxiv"), "wikipedia": Source("wikipedia"), "web_search": self.poster}
+        ctx = self.ctx()
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, post=post or self.post, langsearch_key_path=key_path or self.key_path)(ctx)
+        return ctx
+
+    def test_a_request_goes_to_the_one_address_as_json_bytes_through_a_policy_with_the_bearer_key_and_no_redirect(self):
+        self.run_step()
+        call, = self.post.calls[:1]
+        self.assertEqual(call.url, LS_URL)
+        self.assertIs(type(call.body), bytes)
+        self.assertEqual(json.loads(call.body), LS_BODY)
+        policy = call.policy
+        self.assertEqual(policy.credential_headers, {"Authorization": "Bearer " + LS_KEY})
+        self.assertEqual(policy.credential_host, "api.langsearch.com")
+        self.assertFalse(policy.follow_redirects)
+        self.assertEqual(policy.types, ("application/json",))
+        self.assertIsNotNone(policy.check)
+        self.assertNotIn(LS_KEY, call.url + json.dumps(call.headers or {}))
+        self.assertEqual(self.fetch.calls, [])   # nothing else was asked
+        self.assertEqual(call.kw, {"max_bytes": crawlrefill.MAX_ANSWER_BYTES})   # the client holds no more of an answer than the adapter takes
+        self.assertEqual(crawlrefill.MAX_ANSWER_BYTES, 1_100_000)
+
+    def test_the_adapter_gets_only_a_function_of_the_dictionary_and_the_key_is_in_nothing_it_sees(self):
+        self.run_step()
+        for seen in self.poster.seen:
+            self.assertIs(type(seen), tuple)
+            self.assertEqual(len(seen), 3)
+            self.assertFalse(hasattr(seen, "final"))   # the client's `Result` also says the address it came from
+            self.assertNotIn(LS_KEY.encode(), seen[2])
+
+    def test_a_body_that_is_not_a_dictionary_or_is_too_big_is_refused_before_the_client_is_called(self):
+        for bad in ("text", b"bytes", None, 5, ["query"], {"query": "x" * 5000}, {"query": {1, 2}}):
+            with self.subTest(repr(bad)[:30]):
+                self.setUp()
+                self.run_step(bodies=(bad,), swallow=True)
+                self.assertEqual(self.post.calls, [])
+                self.assertTrue(self.poster.seen and all(isinstance(s, KbError) for s in self.poster.seen))
+
+    def test_the_key_is_named_to_the_log_before_any_request_so_that_no_line_can_carry_it(self):
+        ctx = self.run_step()
+        self.assertEqual(ctx.log.safe(LS_KEY), crawllog.WITHHELD)
+        self.assertEqual(ctx.log.safe("see " + LS_KEY.upper()), crawllog.WITHHELD)
+        with self.assertRaises(KbError):
+            ctx.log.write("discover", "ok", reason=LS_KEY, now=NOW)
+        self.assertNotIn(LS_KEY, json.dumps(self.lines()) + json.dumps([list(r) for r in self.rows()]))
+
+    def test_the_encoded_form_of_a_key_with_marks_is_named_to_the_log_too(self):
+        path = self.put("odd.key", "ab&c#d%e=f+g/h?i-123456\n")
+        ctx = self.run_step(key_path=path)
+        self.assertEqual(ctx.log.safe("ab%26c%23d%25e%3Df%2Bg%2Fh%3Fi-123456"), crawllog.WITHHELD)
+        self.assertEqual(self.post.calls[0].policy.credential_headers, {"Authorization": "Bearer ab&c#d%e=f+g/h?i-123456"})
+
+    def refused_for(self, path):
+        """A run with the key file at `path`: no request is made, and LangSearch is off for the day with a fixed reason that holds none of the file."""
+        ctx = self.run_step(key_path=path)
+        self.assertEqual((self.post.calls, self.fetch.calls), ([], []))
+        refused = [l for l in self.lines() if l["step"] == "discover" and l["outcome"] == "refused"]
+        self.assertEqual(len(refused), 1)
+        self.assertTrue(refused[0]["reason"].startswith("web_search: the LangSearch key file is refused"), refused[0]["reason"])
+        self.assertNotIn(LS_KEY, json.dumps(self.lines()))
+        self.assertEqual(list(ctx.refill_report["refused"]), ["web_search"])
+        self.assertIn("source_off:web_search", [k for k, in self.conn.execute("SELECT key FROM counters")])
+
+    def test_a_key_file_of_mode_644_is_refused_and_nothing_is_asked(self):
+        os.chmod(self.key_path, 0o644)
+        self.refused_for(self.key_path)
+
+    def test_a_key_file_that_is_missing_is_refused_and_nothing_is_asked(self):
+        self.refused_for(os.path.join(self.files, "nothing.key"))
+
+    def test_an_empty_key_file_is_refused_and_nothing_is_asked(self):
+        self.refused_for(self.put("empty.key", ""))
+
+    def test_a_key_file_with_a_space_in_it_is_refused_and_nothing_is_asked(self):
+        self.refused_for(self.put("spaced.key", "has a space in it\n"))
+
+    def test_a_key_file_that_is_a_link_is_refused_and_nothing_is_asked(self):
+        link = os.path.join(self.files, "link.key")
+        os.symlink(self.key_path, link)
+        self.refused_for(link)
+
+    def test_an_answer_that_repeats_the_key_is_not_used_and_the_source_is_refused_with_a_fixed_text(self):
+        odd = "ab&c#d%e=f+g/h?i-123456"
+        for where, key, reply in (("a header", LS_KEY, (200, {"content-type": "application/json", "etag": '"' + LS_KEY + '"'}, b"{}")),
+                                  ("the body", LS_KEY, (200, {"content-type": "application/json"}, b'{"echo": "' + LS_KEY.encode() + b'"}')),
+                                  ("the body in upper case", LS_KEY, (200, {"content-type": "application/json"}, b'{"echo": "' + LS_KEY.upper().encode() + b'"}')),
+                                  ("the body, encoded", odd, (200, {"content-type": "application/json"}, b'{"echo": "ab%26c%23d%25e%3Df%2Bg%2Fh%3Fi-123456"}')),
+                                  ("a refusing answer", LS_KEY, (429, {"content-type": "application/json", "retry-after": LS_KEY}, b""))):
+            with self.subTest(where=where):
+                self.setUp()
+                path = self.put("echo.key", key + "\n")
+                self.post = PostFake(reply)
+                self.run_step(key_path=path)
+                seen = self.poster.seen[0]
+                self.assertIsInstance(seen, srcopenalex.SourceRefused)
+                self.assertEqual(seen.reason, "the answer repeats the key, so it is not used")
+                self.assertNotIn(key, json.dumps(self.lines()))
+
+    def test_an_answer_that_is_not_a_status_a_mapping_of_headers_and_bytes_is_not_used(self):
+        for where, reply in (("headers that are not a mapping", (200, "etag: x", b"{}")), ("a body that is text", (200, {"content-type": "application/json"}, "{}")), ("no headers", (200, None, b"{}"))):
+            with self.subTest(where=where):
+                self.setUp()
+                self.post = PostFake(reply)
+                self.run_step()
+                self.assertEqual(self.poster.seen[0].reason, "the answer repeats the key, so it is not used")
+
+    def test_an_answer_that_does_not_repeat_the_key_is_given_to_the_adapter_whole(self):
+        self.post = PostFake((200, {"content-type": "application/json", "etag": '"abc"'}, b'{"code": 200}'))
+        self.run_step()
+        seen = self.poster.seen[0]
+        self.assertEqual((seen[0], seen[1]["etag"], seen[2]), (200, '"abc"', b'{"code": 200}'))
+
+    def test_an_error_of_the_client_is_a_fixed_text_and_a_stop_file_ends_the_refill_without_a_request(self):
+        self.post = PostFake(webclient.FetchError("the server said " + LS_KEY))
+        self.run_step()
+        error = self.poster.seen[0]
+        self.assertIs(type(error), KbError)
+        self.assertEqual(str(error), "the request was refused or failed")
+        self.assertNotIn(LS_KEY, str(error) + repr(error.args))
+        self.assertIsNone(error.__cause__)
+        self.setUp()
+        open(os.path.join(self.index, "crawl.stop"), "w").close()
+        self.run_step()
+        self.assertEqual(self.post.calls, [])
+
+    def test_no_exception_in_the_chain_of_a_failure_of_the_client_holds_what_it_said(self):
+        odd = "k&#%+=/?;abcdefghij1234"
+        path = self.put("odd.key", odd + "\n")
+        said = "the server said " + odd + " and " + "k%26%23%25%2B%3D%2F%3F%3Babcdefghij1234"
+        self.post = PostFake(webclient.FetchError(said))
+        self.run_step(key_path=path)
+        error = self.poster.seen[0]
+        self.assertEqual(str(error), "the request was refused or failed")
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)   # not held, so that no one who walks the chain finds what the client said
+
+    def test_with_the_search_off_or_duckduckgo_chosen_the_key_file_is_not_read_and_nothing_is_posted(self):
+        os.chmod(self.key_path, 0o644)   # a file that would be refused: it is not looked at
+        for what, change in (("the search is off", {"web_search": False}), ("duckduckgo is chosen", {"web_search_engine": "duckduckgo"})):
+            with self.subTest(what):
+                self.setUp()
+                os.chmod(self.key_path, 0o644)
+                self.plan.update(change)
+                with mock.patch.object(crawlrefill.urlhaus, "read_key", side_effect=AssertionError("the key file was read")):
+                    self.run_step(bodies=())
+                self.assertEqual(self.post.calls, [])
+                self.assertEqual([l for l in self.lines() if l["outcome"] == "refused"], [])
+
+    def test_the_shared_policy_and_the_policy_of_openalex_have_no_langsearch_key(self):
+        self.plan.update(openalex=True, openalex_key=True, arxiv=True)
+        self.plan_arxiv = "https://export.arxiv.org/api/query?search_query=all:control"
+        okey = self.put("openalex.key", "oa-test-key-0123456789\n")
+        self.sources = {"openalex": Asks("openalex", [API]), "arxiv": Asks("arxiv", ["https://export.arxiv.org/api/query?search_query=all:control"]),
+                        "wikipedia": Source("wikipedia"), "web_search": Poster("web", [dict(LS_BODY)])}
+        ctx = self.ctx()
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, post=self.post, langsearch_key_path=self.key_path, openalex_key_path=okey)(ctx)
+        self.assertTrue(self.fetch.calls and self.post.calls)
+        for call in self.fetch.calls:
+            self.assertNotIn(LS_KEY, call.url)
+            self.assertNotIn("api.langsearch.com", call.url)
+            self.assertNotIn("Bearer", json.dumps(call.headers))
+            self.assertIsNone(call.policy.credential_headers)   # the keys are not in a policy of a GET: OpenAlex's is in its address
+        self.assertNotIn("oa-test-key", json.dumps([c.url for c in self.post.calls]))
+
+    def test_the_real_adapter_through_the_real_wrapper_gives_the_queue_the_addresses_and_the_request_holds_only_the_words_and_a_count(self):
+        reply = (200, {"content-type": "application/json"}, json.dumps({"code": 200, "data": {"webPages": {"value": [
+            {"url": "https://found.example/p", "name": "A name", "snippet": "SECRET snippet"}, {"url": "https://langsearch.com/own"}, {"url": "http://127.0.0.1/x"}]}}}).encode())
+        self.post = PostFake(reply)
+        self.sources = {"openalex": Source("openalex"), "arxiv": Source("arxiv"), "wikipedia": Source("wikipedia"), "web_search": srclangsearch}
+        ctx = self.ctx()
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, post=self.post, langsearch_key_path=self.key_path)(ctx)
+        self.assertTrue(self.post.calls)
+        for call in self.post.calls:
+            sent = json.loads(call.body)
+            self.assertEqual(set(sent), {"query", "count"})
+            self.assertEqual(call.url, LS_URL)
+        self.assertEqual({r[0] for r in self.rows("WHERE source = 'web-search'")}, {"https://found.example/p"})
+        self.assertNotIn("SECRET", json.dumps(self.lines()) + json.dumps([list(r) for r in self.rows()]))
+        self.assertNotIn(LS_KEY, json.dumps(self.lines()) + json.dumps([list(r) for r in self.rows()]))
+
+    def test_an_address_that_holds_the_key_in_the_form_that_is_stored_is_not_queued_whatever_way_it_was_written(self):
+        """A server that holds the key can write it into a result address so that the answer's bytes do not show it (a letter percent-encoded, a JSON escape, a full-width letter) and the address that is stored does."""
+        body = (b'{"code": 200, "data": {"webPages": {"value": ['
+                b'{"url": "https://found.example/p"},'
+                b'{"url": "https://a.example/%6cs-test-key-0123456789abcdef"},'
+                b'{"url": "https://b.example/%4Cs-test-key-0123456789abcdef"},'
+                b'{"url": "https://c.example/%6c%73-test-key-0123456789abcdef"},'
+                b'{"url": "https://d.example/%25256cs-test-key-0123456789abcdef"},'
+                b'{"url": "https://h.example/%2525252525256cs-test-key-0123456789abcdef"},'
+                b'{"url": "https://e.example/\u006cs-test-key-0123456789abcdef"},'
+                b'{"url": "https://\uff4cs-test-key-0123456789abcdef.example/x"},'
+                b'{"url": "https://f.example/x?q=\uff4c\uff53-test-key-0123456789abcdef"},'
+                b'{"url": "https://g.example/%256cs-test-key-0123456789abcdef"}]}}}')
+        self.post = PostFake((200, {"content-type": "application/json"}, body))
+        self.sources = {"openalex": Source("openalex"), "arxiv": Source("arxiv"), "wikipedia": Source("wikipedia"), "web_search": srclangsearch}
+        ctx = self.ctx()
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, post=self.post, langsearch_key_path=self.key_path)(ctx)
+        rows = self.rows("WHERE source = 'web-search'")
+        self.assertEqual({r[0] for r in rows if r[1] == "queued"}, {"https://found.example/p"})
+        stored = json.dumps([list(r) for r in self.conn.execute("SELECT address, domain, identity_key, found_from FROM candidates")])
+        for form in ("test-key-0123456789abcdef", "TEST-KEY-0123456789ABCDEF"):
+            self.assertNotIn(form, stored)
+        self.assertNotIn("test-key", json.dumps(self.lines()))
+
+    def test_an_address_that_holds_only_part_of_the_key_or_nothing_like_it_is_queued(self):
+        body = (b'{"code": 200, "data": {"webPages": {"value": [{"url": "https://found.example/p"}, {"url": "https://prefix.example/ls-test-key-01234567"},'
+                b'{"url": "https://suffix.example/x-test-key-0123456789abcdef"}, {"url": "https://other.example/test-key"}]}}}')
+        self.post = PostFake((200, {"content-type": "application/json"}, body))
+        self.sources = {"openalex": Source("openalex"), "arxiv": Source("arxiv"), "wikipedia": Source("wikipedia"), "web_search": srclangsearch}
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, post=self.post, langsearch_key_path=self.key_path)(self.ctx())
+        self.assertEqual({r[0] for r in self.rows("WHERE source = 'web-search'")},
+                         {"https://found.example/p", "https://prefix.example/ls-test-key-01234567", "https://suffix.example/x-test-key-0123456789abcdef", "https://other.example/test-key"})
+
+    def test_the_other_key_is_kept_out_of_the_queue_in_the_same_way_and_an_address_with_no_key_is_queued(self):
+        okey = self.put("openalex.key", "oa-test-key-0123456789\n")
+        self.plan.update(openalex=True, openalex_key=True, arxiv=False, wikipedia=False)
+        self.sources = {"openalex": Source("openalex", lambda q: [candidate("https://x.example/p", "openalex"), candidate("https://y.example/%6fa-test-key-0123456789", "openalex"),
+                                                                  candidate("https://z.example/OA-TEST-KEY-0123456789", "openalex")]),
+                        "arxiv": Source("arxiv"), "wikipedia": Source("wikipedia"), "web_search": Source("web")}
+        ctx = self.ctx()
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, post=self.post, langsearch_key_path=self.key_path, openalex_key_path=okey)(ctx)
+        queued = {r[0] for r in self.rows("WHERE source = 'openalex'") if r[1] == "queued"}
+        self.assertEqual(queued, {"https://x.example/p"})
+
+    def test_with_no_key_in_use_no_address_is_looked_through(self):
+        self.plan.update(web_search=False, openalex=True, openalex_key=False)
+        self.sources = {"openalex": Source("openalex", lambda q: [candidate("https://x.example/oa-test-key-0123456789", "openalex")]), "arxiv": Source("arxiv"),
+                        "wikipedia": Source("wikipedia"), "web_search": Source("web")}
+        ctx = self.ctx()
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, post=self.post, langsearch_key_path=self.key_path)(ctx)
+        self.assertEqual({r[0] for r in self.rows("WHERE source = 'openalex'")}, {"https://x.example/oa-test-key-0123456789"})
+
+    def test_the_names_of_the_address_and_the_key_file_are_the_ones_the_spec_gives(self):
+        self.assertEqual(crawlrefill.LANGSEARCH_KEY_FILE, "langsearch.key")
+        self.assertEqual(crawlrefill.LANGSEARCH_URL, "https://api.langsearch.com/v1/web-search")
+        self.assertEqual(crawlrefill.LANGSEARCH_HOST, "api.langsearch.com")
+        self.assertEqual(crawlrefill.MAX_POST_BODY, 4096)
 
 
 if __name__ == "__main__":

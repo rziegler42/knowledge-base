@@ -52,7 +52,7 @@ DEFAULTS = {
     "list_min_share": 0.5,
     "list_max_change": 0.3,
     "urlhaus_keep_days": 30,
-    "pinned_hosts": ["openalex.org", "arxiv.org", "wikipedia.org"],
+    "pinned_hosts": ["openalex.org", "arxiv.org", "wikipedia.org", "api.langsearch.com"],
 }
 FORMATS = ("domains",)
 LISTS = (   # name, the plan key that turns it on (None: always), the plan key of its address, whether a run cannot go on without a copy

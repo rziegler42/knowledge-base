@@ -219,12 +219,14 @@ def render_summary(plan, topics, allow_hosts, fingerprint_hex, date):
         f"Circuit breaker: after {plan['consecutive_failures']} failures in a row, or {plan['failure_share']} of the last {plan['window']} fetches, or a model entry that has not answered for {plan['model_down_minutes']} minutes; "
         f"a site that refuses {plan['domain_refusals']} times in a day is stopped for the day.",
         f"Topics: {sum(count for _w, count in sections.values())} topics: " + ", ".join(f"{count} in {_clean(name, 40)} at weight {weight}" for name, (weight, count) in sections.items()) + ".",
-        f"Sources: OpenAlex: {_switch(plan['openalex'])}{' (with your key)' if plan['openalex'] and plan['openalex_key'] else ''}; arXiv: {_switch(plan['arxiv'])}; Wikipedia: {_switch(plan['wikipedia'])}; web search: {_switch(plan['web_search'])}; "
+        f"Sources: OpenAlex: {_switch(plan['openalex'])}{' (with your key)' if plan['openalex'] and plan['openalex_key'] else ''}; arXiv: {_switch(plan['arxiv'])}; Wikipedia: {_switch(plan['wikipedia'])}; web search: {_switch(plan['web_search'])}{' (LangSearch)' if plan['web_search'] and plan['web_search_engine'] == 'langsearch' else ''}; "
         f"{plan['wander_share']} of a batch from citation links, to depth {plan['wander_depth']}, {plan['wander_per_work']} per work.",
     ]
     if plan["openalex"] and plan["openalex_key"]:
         lines.append("  OpenAlex requests carry your key from the file openalex.key in your config folder, in the address of each request: its terms are for you to have read.")
-    if plan["web_search"]:
+    if plan["web_search"] and plan["web_search_engine"] == "langsearch":
+        lines.append("  Web search uses LangSearch (api.langsearch.com) with your key from the file langsearch.key in your config folder; your query words go to it, and its terms are for you to have read.")
+    elif plan["web_search"]:
         lines.append("  Web search uses DuckDuckGo's HTML results, best effort: its terms are unresolved and are for you to have read.")
     lines += [
         f"Public lists: phishing_domains: {_switch(plan['phishing_domains'])}; urlhaus_recent: {_switch(plan['urlhaus_recent'])}; refreshed at most every {plan['refresh_hours']} hours; "

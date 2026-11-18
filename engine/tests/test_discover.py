@@ -129,7 +129,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(discover.normalize_plan({}), {
             "queued_total": 20000, "queued_per_domain": 50, "queue_low": 100, "discover_target": 200, "queries_per_topic": 3,
             "wander_share": 0.2, "wander_depth": 2, "wander_per_work": 5, "openalex": True, "openalex_key": False, "arxiv": True, "wikipedia": True,
-            "web_search": False, "gap_openalex_s": 1, "gap_arxiv_s": 3, "gap_wikipedia_s": 1, "gap_web_search_s": 30,
+            "web_search": False, "web_search_engine": "duckduckgo", "gap_openalex_s": 1, "gap_arxiv_s": 3, "gap_wikipedia_s": 1, "gap_web_search_s": 30,
             "web_search_per_day": 20})
 
     def test_a_value_given_replaces_the_default_and_the_rest_stay(self):
@@ -834,6 +834,104 @@ class GetsTest(Case):
         self.fill({"discover_target": 20, "wander_share": 0.0, "queue_low": 10**5, "wikipedia": False}, sources=sources, get=shared,
                   gets={"openalex": None, "arxiv": None, "wikipedia": own})
         self.assertEqual({g[0] for name in sources for g in sources[name].got}, {"shared"})
+
+
+class WebSearchEngineTest(Case):
+    """`web_search_engine` chooses the adapter: DuckDuckGo's page through the shared `get`, or LangSearch through the `post` that the caller gives for `web_search`."""
+    DDG = (b'<html><body><div id="links" class="results"><div class="result web-result"><h2 class="result__title">'
+           b'<a rel="nofollow" class="result__a" href="https://ddg.example/a">t</a></h2></div></div></body></html>')
+    PLAN = {"openalex": False, "arxiv": False, "wikipedia": False, "web_search": True, "wander_share": 0.0, "queue_low": 10**5, "discover_target": 100}
+
+    @staticmethod
+    def answer(*urls):
+        return (200, {"content-type": "application/json"}, json.dumps({"code": 200, "data": {"webPages": {"value": [{"url": u} for u in urls]}}}).encode())
+
+    def test_langsearch_is_asked_through_the_post_for_web_search_and_the_shared_get_is_never_used(self):
+        calls = []
+
+        def post(body):
+            calls.append(body)
+            return self.answer("https://ls.example/p")
+
+        def shared(*args, **kw):
+            raise AssertionError("the shared get")
+
+        got = self.fill(dict(self.PLAN, web_search_engine="langsearch"), sources={}, get=shared, gets={"web_search": post})
+        self.assertTrue(calls)
+        for body in calls:
+            self.assertEqual(set(body), {"query", "count"})
+        rows = self.rows("WHERE source = 'web-search'")
+        self.assertEqual({r[0] for r in rows}, {"https://ls.example/p"})
+        self.assertEqual({r[6] for r in rows}, {"queued"})
+        self.assertEqual(got["requests"]["web_search"], len(calls))
+
+    def test_duckduckgo_is_asked_through_the_shared_get_by_default_and_when_the_plan_says_so(self):
+        for plan in (dict(self.PLAN), dict(self.PLAN, web_search_engine="duckduckgo")):
+            with self.subTest(plan=sorted(plan)):
+                self.setUp()
+                urls = []
+
+                def shared(url, headers=None, timeout=None):
+                    urls.append(url)
+                    return 200, {"content-type": "text/html"}, self.DDG
+
+                self.fill(plan, sources={}, get=shared)
+                self.assertTrue(urls and all(u.startswith("https://html.duckduckgo.com/") for u in urls))
+                self.assertEqual({r[0] for r in self.rows("WHERE source = 'web-search'")}, {"https://ddg.example/a"})
+
+    def test_the_daily_number_of_queries_is_the_same_for_either_engine(self):
+        calls = []
+
+        def post(body):
+            calls.append(body)
+            return self.answer()
+
+        self.fill(dict(self.PLAN, web_search_engine="langsearch", web_search_per_day=2), sources={}, gets={"web_search": post})
+        self.assertEqual(len(calls), 2)
+        self.fill(dict(self.PLAN, web_search_engine="langsearch", web_search_per_day=2), sources={}, gets={"web_search": post})
+        self.assertEqual(len(calls), 2)   # the day's two are spent: nothing more is asked
+        self.assertEqual(self.counters()[("2026-11-16", "web_search_queries")], 2)
+
+    def test_a_refusal_of_langsearch_is_the_search_off_for_the_day_with_its_reason(self):
+        def post(body):
+            raise srcopenalex.SourceRefused("the LangSearch key file is refused: the key file must have mode 600")
+
+        got = self.fill(dict(self.PLAN, web_search_engine="langsearch"), sources={}, gets={"web_search": post})
+        self.assertEqual(list(got["refused"]), ["web_search"])
+        self.assertIn("the LangSearch key file is refused", got["refused"]["web_search"])
+        self.assertIn(("2026-11-16", "source_off:web_search"), self.counters())
+
+    def test_the_plan_reader_of_a_refill_refuses_duckduckgo_for_the_search_with_the_engine_langsearch_too(self):
+        for text in ("[sources]\nweb_search = duckduckgo\nweb_search_engine = langsearch\n", "[sources]\nweb_search_engine = langsearch\nweb_search = duckduckgo\n"):
+            with self.subTest(text):
+                with tempfile.TemporaryDirectory() as folder:
+                    path = Path(folder) / "plan.txt"
+                    path.write_text(text, encoding="utf-8")
+                    with self.assertRaises(KbError) as caught:
+                        discover.read_plan(str(path))
+                    self.assertIn("line 3", str(caught.exception))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "plan.txt"
+            path.write_text("[sources]\nweb_search = on\nweb_search_engine = langsearch\n", encoding="utf-8")
+            self.assertEqual(discover.read_plan(str(path)), {"web_search": True, "web_search_engine": "langsearch"})
+
+    def test_the_engine_is_one_of_the_two_words_in_the_plan_of_a_refill(self):
+        self.assertEqual(discover.normalize_plan({"web_search_engine": "langsearch"})["web_search_engine"], "langsearch")
+        for bad in ("bing", "LangSearch", "", None, True, 5, ["langsearch"]):
+            with self.subTest(repr(bad)):
+                with self.assertRaises(KbError):
+                    discover.normalize_plan({"web_search_engine": bad})
+
+    def test_a_post_with_one_argument_is_paced_like_a_get_with_three(self):
+        calls = []
+
+        def post(body):
+            calls.append(len(self.clock.slept))
+            return self.answer()
+
+        self.fill(dict(self.PLAN, web_search_engine="langsearch", web_search_per_day=3, gap_web_search_s=30), sources={}, gets={"web_search": post})
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.clock.slept, [30, 30])   # before the second and the third, not before the first
 
 
 class RefusalTest(Case):

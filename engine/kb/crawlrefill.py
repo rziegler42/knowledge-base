@@ -21,6 +21,7 @@ import json
 import os
 import re
 import stat
+import unicodedata
 from collections.abc import MutableMapping
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
@@ -34,11 +35,41 @@ SET_BY_POLICY = ("user-agent", "accept")
 DISCOVERY_TYPES = ("application/json", "application/atom+xml", "application/xml", "text/xml", "text/html")
 ACCEPT = "application/json, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, text/html;q=0.5"
 OPENALEX_HOST = "api.openalex.org"
+LANGSEARCH_HOST = "api.langsearch.com"
+LANGSEARCH_URL = "https://api.langsearch.com/v1/web-search"
+LANGSEARCH_KEY_FILE = "langsearch.key"  # in the owner's config folder, read by the same checks (a regular file of the owner, mode 600, one printable line)
+MAX_POST_BODY = webclient.MAX_POST_BYTES
+MAX_UNQUOTE = 8  # the most percent escapes of an address that are undone, one level at a time, to see whether it holds a key
+MAX_ANSWER_BYTES = 1_100_000  # the client holds no more of an answer of the search than the adapter takes (its cap is a million bytes)
 OPENALEX_KEY_FILE = "openalex.key"  # in the owner's config folder, read by the checks of the URLhaus key (a regular file of the owner, mode 600, one printable line)
 
 
 class _Stopped(Exception):
     """The stop file was seen: the refill ends at once and no source is marked off for the day (a `KbError` would be taken for a refusal by the source)."""
+
+
+def _stored_form(text):
+    """`text` as the queue would store an address that holds it: a percent escape undone (as often as it changes the text, to a bound), the compatibility forms folded (a full-width letter is the letter) and the case removed, so that
+    a key that a server wrote with a letter escaped or in another script shows. A JSON escape is already undone by the reader of the answer."""
+    for _ in range(MAX_UNQUOTE):   # as many times as it takes (a server can escape a letter three times), with a bound
+        again = unquote(text)
+        if again == text:
+            break
+        text = again
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
+def _without_keys(held):
+    """The address function that `discover.fill` gives the queue: `webaddr.canon_address`, except that an address which holds a key that is in use, in the form that is stored, is refused (the queue
+    takes the refusal as an address that cannot be used, and queues nothing). `held` is the list of the keys in use, which fills as a run reads them."""
+    def canon(address):
+        made = webaddr.canon_address(address)
+        stored = _stored_form(made)
+        if any(_stored_form(key) in stored for key in held):
+            raise KbError("an address that holds a key")
+        return made
+
+    return canon
 
 
 def _names_api_key(query):
@@ -165,8 +196,8 @@ class QueryCache(MutableMapping):
 class _Notes:
     """Discovery's notes as log lines: a candidate by its host, the source and the reason as text, the lines of the noisy kinds capped."""
 
-    def __init__(self, log, now):
-        self.log, self.now, self.counts, self.left_out = log, now, {}, 0
+    def __init__(self, log, now, held=()):
+        self.log, self.now, self.counts, self.left_out, self.held = log, now, {}, 0, held   # `held`: the keys in use, which fills as the run reads them
 
     def __call__(self, step, outcome, **fields):
         outcome = outcome if outcome in crawllog.OUTCOMES else "failed"
@@ -182,6 +213,8 @@ class _Notes:
                 host = urlsplit(address).hostname
             except ValueError:
                 host = None
+        if host and any(_stored_form(key) in _stored_form(host) for key in self.held):
+            host = None   # the log's own test of a secret does not fold a full-width letter, which the address function of the queue does
         parts = [str(p) for p in (fields.get("source"), fields.get("reason")) if p]
         n = fields.get("n")
         self.log.write(step, outcome, host=self.log.safe(host, "host") if host else None, reason=self.log.safe(": ".join(parts) or None),
@@ -192,7 +225,7 @@ def _stamp(now):
     return now.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _run(ctx, fetch, sources, call, rss_reader=None, openalex_key_path=None):
+def _run(ctx, fetch, sources, call, rss_reader=None, openalex_key_path=None, post=None, langsearch_key_path=None):
     plan, log, now = ctx.plan, ctx.log, ctx.clock()
     if ctx.matcher is None:
         raise crawlrun.StepRefused("the refill needs the matcher of the lists step, which did not run")
@@ -217,10 +250,13 @@ def _run(ctx, fetch, sources, call, rss_reader=None, openalex_key_path=None):
                 if address is None:
                     raise srcopenalex.SourceRefused("the address is not one that the key may be sent to")
             kept = {name: value for name, value in (headers or {}).items() if not (isinstance(name, str) and name.lower() in SET_BY_POLICY)}
+            failed = False
             try:
                 result = fetch(address, policy=use, headers=kept or None, **({} if timeout is None else {"timeout": timeout}))
             except webclient.FetchError:
-                raise KbError("the request was refused or failed") from None
+                failed = True
+            if failed:
+                raise KbError("the request was refused or failed")   # outside the `except`: the client's error, which may hold what a server said, is not this one's context
             if key is None:
                 return result
             answer = tuple(result)  # the client's `Result` also says `.final`, the address it came from, which holds the key: a keyed answer is only `(status, headers, body)`
@@ -231,6 +267,7 @@ def _run(ctx, fetch, sources, call, rss_reader=None, openalex_key_path=None):
 
     get = make_get(policy)
     gets = None
+    held = []   # the keys in use: no address that holds one of them is queued, whichever source gave it and whatever way it is written
     if plan["openalex"] and plan["openalex_key"]:
         # OpenAlex alone has the owner's key, and a policy that follows no redirect (the key is in the address); a key file that cannot be used makes the source refuse for the day with a
         # fixed reason, and no request is made, with or without the key
@@ -245,8 +282,51 @@ def _run(ctx, fetch, sources, call, rss_reader=None, openalex_key_path=None):
             gets = {"openalex": refusing}
         else:
             log.add_secrets([key, quote(key, safe="")])
+            held.append(key)
             keyed = webclient.Policy(user_agent=webclient.GENERIC_USER_AGENT, gap=0, jitter=0, follow_redirects=False, types=DISCOVERY_TYPES, check=policy.check, suffixes=suffixes, accept=ACCEPT)
             gets = {"openalex": make_get(keyed, key)}
+    if plan["web_search"] and plan["web_search_engine"] == "langsearch":
+        # LangSearch alone has this key, as `Authorization: Bearer` of a policy of its own (https to its host, no redirect), through a `post` that the adapter calls with a dictionary and
+        # nothing else: the adapter never has the key or the address. A key file that cannot be used makes the search refuse for the day with a fixed reason, and no request is made.
+        gets = dict(gets or {})
+        try:
+            ls_key = urlhaus.read_key(langsearch_key_path or os.path.join(config.config_dir(), LANGSEARCH_KEY_FILE))
+        except urlhaus.UrlhausError as e:
+            ls_why = textutil.clean(str(e), 160)
+
+            def ls_refusing(body):
+                raise srcopenalex.SourceRefused("the LangSearch key file is refused: " + ls_why)
+
+            gets["web_search"] = ls_refusing
+        else:
+            log.add_secrets([ls_key, quote(ls_key, safe="")])
+            held.append(ls_key)
+            ls_policy = webclient.Policy(user_agent=webclient.GENERIC_USER_AGENT, gap=0, jitter=0, follow_redirects=False, types=("application/json",), check=policy.check, suffixes=suffixes,
+                                         accept="application/json", credential_headers={"Authorization": "Bearer " + ls_key}, credential_host=LANGSEARCH_HOST)
+            send = post or webclient.post_json
+
+            def ls_post(body):
+                if crawlguard.stop_requested(ctx.index_root):
+                    raise _Stopped()
+                try:
+                    data = json.dumps(body, separators=(",", ":")).encode("utf-8") if isinstance(body, dict) else None
+                except (TypeError, ValueError):
+                    data = None
+                if data is None or len(data) > MAX_POST_BODY:
+                    raise KbError("the request is not a small JSON dictionary")
+                failed = False
+                try:
+                    result = send(LANGSEARCH_URL, data, policy=ls_policy, max_bytes=MAX_ANSWER_BYTES)
+                except webclient.FetchError:
+                    failed = True
+                if failed:
+                    raise KbError("the request was refused or failed")   # outside the `except`, as in `make_get`
+                answer = tuple(result)   # not the client's `Result`, which also says the address it came from
+                if _repeats(ls_key, answer):
+                    raise srcopenalex.SourceRefused("the answer repeats the key, so it is not used")
+                return answer
+
+            gets["web_search"] = ls_post
 
     def is_blocked(address):
         """A reason discovery can record (`owner`, `list:<name>`), or nothing. An address the matcher cannot read (`unusable`) is not a block: the queue drops it by its own checks (too long, not an address),
@@ -267,10 +347,10 @@ def _run(ctx, fetch, sources, call, rss_reader=None, openalex_key_path=None):
         return text
 
     cache = QueryCache(os.path.join(ctx.index_root, "crawl", CACHE_FILE))
-    notes = _Notes(log, now)
+    notes = _Notes(log, now, held)
     try:
         result = discover.fill(ctx.conn, crawlplan.discovery_plan(plan), topics, now=_stamp(now), get=get, gets=gets, chat=chat if isinstance(entry, str) and entry else None, sources=sources, log=notes,
-                               cache=cache, is_blocked=is_blocked, canon_address=webaddr.canon_address, site_of=lambda host: webaddr.site_of(host, suffixes),
+                               cache=cache, is_blocked=is_blocked, canon_address=_without_keys(held), site_of=lambda host: webaddr.site_of(host, suffixes),
                                pdfs=crawlfetch.pdf_limit(ctx, rss_reader) is not None)
     except _Stopped:
         result = {"status": "stopped", "added": 0}
@@ -291,11 +371,11 @@ def _run(ctx, fetch, sources, call, rss_reader=None, openalex_key_path=None):
         log.write("discover", "ok", reason=said, n=result["added"], now=now)
 
 
-def make_step(fetch=None, sources=None, call=None, rss_reader=None, openalex_key_path=None):
+def make_step(fetch=None, sources=None, call=None, rss_reader=None, openalex_key_path=None, post=None, langsearch_key_path=None):
     """The step for the `refill` point. `fetch` is `webclient.get` or a stand-in with its signature, `sources` replaces the source modules (tests), `call` is `models.call` or a stand-in, `rss_reader` reads the
     memory of a process group (`crawlfetch.pdf_limit`: with PDFs on and the memory readable, a work whose only text is a PDF is queued, and otherwise rejected for its type)."""
     def step(ctx):
-        _run(ctx, fetch or webclient.get, sources, call or models.call, rss_reader, openalex_key_path)
+        _run(ctx, fetch or webclient.get, sources, call or models.call, rss_reader, openalex_key_path, post, langsearch_key_path)
     return step
 
 

@@ -67,10 +67,10 @@ class Defaults(Files):
             "min_gap_s": 8, "jitter": 0.5, "user_agent": "browser",
             "bulk_floor_gb": 50, "index_floor_gb": 10,
             "consecutive_failures": 8, "failure_share": 0.5, "window": 20, "model_down_minutes": 30, "domain_refusals": 3,
-            "openalex": True, "openalex_key": False, "arxiv": True, "wikipedia": True, "web_search": False, "wander_share": 0.2, "wander_depth": 2, "wander_per_work": 5,
+            "openalex": True, "openalex_key": False, "arxiv": True, "wikipedia": True, "web_search": False, "web_search_engine": "duckduckgo", "wander_share": 0.2, "wander_depth": 2, "wander_per_work": 5,
             "gap_openalex_s": 1, "gap_arxiv_s": 3, "gap_wikipedia_s": 1, "gap_web_search_s": 30, "web_search_per_day": 20,
             "phishing_domains": True, "urlhaus_recent": False, "phishing_domains_format": "domains", "refresh_hours": 12, "list_max_mb": 50, "list_min_share": 0.5, "list_max_change": 0.3,
-            "urlhaus_keep_days": 30, "pinned_hosts": ["openalex.org", "arxiv.org", "wikipedia.org"],
+            "urlhaus_keep_days": 30, "pinned_hosts": ["openalex.org", "arxiv.org", "wikipedia.org", "api.langsearch.com"],
             "threshold": None, "min_chars": 400, "model_pick": True, "pdf_max_mb": 0, "tool_rss_mb": 2048,
             "topics": home + "crawl-topics.txt", "blacklist": home + "crawl-blacklist.txt", "allow": home + "crawl-allow.txt",
         }
@@ -104,7 +104,7 @@ class Defaults(Files):
         first["hold_kinds"].append("evil")
         first["batch"] = 999
         second = self.read("")
-        self.assertEqual(second["pinned_hosts"], ["openalex.org", "arxiv.org", "wikipedia.org"])
+        self.assertEqual(second["pinned_hosts"], ["openalex.org", "arxiv.org", "wikipedia.org", "api.langsearch.com"])
         self.assertNotIn("evil", second["hold_kinds"])
         self.assertEqual(second["batch"], 8)
 
@@ -202,6 +202,28 @@ topics = ~/somewhere/topics.txt
                 self.refused(f"[sources]\narxiv = {bad}\n", "line 2")
         self.refused("[sources]\nopenalex = duckduckgo\n", "line 2")
 
+    def test_the_engine_of_the_web_search_is_duckduckgo_unless_the_plan_says_langsearch_and_no_other_word_is_taken(self):
+        self.assertEqual(self.read("")["web_search_engine"], "duckduckgo")
+        for word in ("duckduckgo", "langsearch"):
+            self.assertEqual(self.read(f"[sources]\nweb_search_engine = {word}\n")["web_search_engine"], word)
+        for bad in ("bing", "LangSearch", "on", "off", "", "brave", "langsearch duckduckgo", "langsearch.com"):
+            with self.subTest(bad):
+                self.refused(f"[sources]\nweb_search_engine = {bad}\n", "line 2")
+        self.refused("[limits]\nweb_search_engine = langsearch\n", "line 2")  # a key of the plan in another section than its own is refused
+        plan = self.read("[sources]\nweb_search = duckduckgo\n")
+        self.assertEqual((plan["web_search"], plan["web_search_engine"]), (True, "duckduckgo"))   # the old word still turns the search on, with the old engine
+        plan = self.read("[sources]\nweb_search = on\nweb_search_engine = langsearch\n")
+        self.assertEqual((plan["web_search"], plan["web_search_engine"]), (True, "langsearch"))
+
+    def test_web_search_named_duckduckgo_with_the_engine_langsearch_is_a_contradiction_and_is_refused_in_either_order(self):
+        self.refused("[sources]\nweb_search = duckduckgo\nweb_search_engine = langsearch\n", "line 3")
+        self.refused("[sources]\nweb_search_engine = langsearch\nweb_search = duckduckgo\n", "line 3")
+        self.refused("[sources]\nweb_search = DuckDuckGo\nweb_search_engine = langsearch\n", "line 3")
+        for fine in ("[sources]\nweb_search = on\nweb_search_engine = langsearch\n", "[sources]\nweb_search = duckduckgo\nweb_search_engine = duckduckgo\n",
+                     "[sources]\nweb_search = off\nweb_search_engine = langsearch\n", "[sources]\nweb_search = duckduckgo\n"):
+            with self.subTest(fine):
+                self.read(fine)
+
     def test_the_openalex_key_is_a_switch_that_is_off_unless_the_plan_says_on(self):
         self.assertFalse(self.read("")["openalex_key"])
         for text, value in (("on", True), ("ON", True), ("Off", False), ("off", False)):
@@ -254,7 +276,7 @@ topics = ~/somewhere/topics.txt
         plan = self.read("")
         lists = crawlplan.lists_plan(plan)
         lists["pinned_hosts"].append("evil.example")
-        self.assertEqual(plan["pinned_hosts"], ["openalex.org", "arxiv.org", "wikipedia.org"])
+        self.assertEqual(plan["pinned_hosts"], ["openalex.org", "arxiv.org", "wikipedia.org", "api.langsearch.com"])
         self.assertEqual(crawlplan.discovery_plan(plan), {key: plan[key] for key in discover.PLAN})
 
     def test_the_lists_settings_and_the_discovery_settings_can_be_handed_on_as_those_modules_take_them(self):

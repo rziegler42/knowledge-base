@@ -22,13 +22,13 @@ import re
 import time
 from collections.abc import MutableMapping
 
-from . import KbError, config, crawlqueries, crawlqueue, crawltopics, models, srcarxiv, srcopenalex, srcwebsearch, srcwikipedia, textutil
+from . import KbError, config, crawlqueries, crawlqueue, crawltopics, models, srcarxiv, srclangsearch, srcopenalex, srcwebsearch, srcwikipedia, textutil
 
 SOURCES = ("openalex", "arxiv", "wikipedia", "web_search")  # the order in which a pick asks them
 PAGE = 10  # works asked for in one request
 MAX_PICKS = 50  # queries made in one refill, whatever the target
 PERMANENT = "permanent"
-_INT, _SHARE, _SECONDS, _SWITCH = "int", "share", "seconds", "switch"
+_INT, _SHARE, _SECONDS, _SWITCH, _CHOICE = "int", "share", "seconds", "switch", "choice"
 # key: (section of the plan file, kind, default, lowest, highest)
 PLAN = {
     "queued_total": ("limits", _INT, 20000, 1, 10**6),
@@ -44,6 +44,7 @@ PLAN = {
     "arxiv": ("sources", _SWITCH, True, None, None),
     "wikipedia": ("sources", _SWITCH, True, None, None),
     "web_search": ("sources", _SWITCH, False, None, None),
+    "web_search_engine": ("sources", _CHOICE, "duckduckgo", ("duckduckgo", "langsearch"), None),
     "gap_openalex_s": ("sources", _SECONDS, 1, 0, 3600),
     "gap_arxiv_s": ("sources", _SECONDS, 3, 0, 3600),
     "gap_wikipedia_s": ("sources", _SECONDS, 1, 0, 3600),
@@ -78,6 +79,8 @@ def normalize_plan(plan):
         _, kind, _, low, high = spec
         if kind == _SWITCH:
             good = type(value) is bool
+        elif kind == _CHOICE:
+            good = isinstance(value, str) and value in low
         elif kind == _INT:
             good = type(value) is int and low <= value <= high
         else:
@@ -94,7 +97,7 @@ def read_plan(path):
     that this refill does not use are left alone, a key of the plan in another section than its own is refused, and a refusal names the line
     and never quotes it."""
     text = crawltopics.read_text(path, "the crawl plan file")
-    made, section, seen = {}, None, set()  # `seen` holds (section, key): a key may be in two sections, not twice in one
+    made, section, seen, word = {}, None, set(), None  # `word` is what the plan wrote for web_search, in lower case; `seen` holds (section, key): a key may be in two sections, not twice in one
     for number, raw in enumerate(text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n"), 1):
         line = raw.split("#", 1)[0].strip()
         if not line:
@@ -116,11 +119,19 @@ def read_plan(path):
         if spec[0] != section:
             raise _refuse(f"line {number}: this key belongs to the section [{spec[0]}]")
         made[key] = _value(spec, key, value, number)
+        if key == "web_search":
+            word = value.lower()
+        if word == "duckduckgo" and made.get("web_search_engine") == "langsearch" and key in ("web_search", "web_search_engine"):
+            raise _refuse(f"line {number}: web_search = duckduckgo names the engine and web_search_engine says langsearch: write web_search = on")
     return made
 
 
 def _value(spec, key, value, number):
-    _, kind, _, _, _ = spec
+    _, kind, _, low, _ = spec
+    if kind == _CHOICE:
+        if value in low:
+            return value
+        raise _refuse(f"line {number}: the value is one of: " + ", ".join(low))
     if kind == _SWITCH:
         lower = value.lower()
         if lower == "on" or (key == "web_search" and lower == "duckduckgo"):
@@ -164,9 +175,9 @@ class _Gap:
 
 
 def _paced(get, gap):
-    def paced(url, headers=None, timeout=None):
+    def paced(*args, **kw):   # a GET is `(url, headers=, timeout=)` and the POST of a keyed search is `(body)`: what is given is passed on
         gap.wait()
-        return get(url, headers=headers, timeout=timeout)
+        return get(*args, **kw)
 
     return paced
 
@@ -246,7 +257,8 @@ def fill(conn, plan, topics, *, now, get, gets=None, chat=None, sources=None, lo
         raise _refuse("the cache is a dictionary that can be written")
     if arxiv_pacer is not None and not callable(getattr(arxiv_pacer, "wait", None)):
         raise _refuse("the pacer of arXiv has a wait")
-    registry = {"openalex": srcopenalex, "arxiv": srcarxiv, "wikipedia": srcwikipedia, "web_search": srcwebsearch}
+    registry = {"openalex": srcopenalex, "arxiv": srcarxiv, "wikipedia": srcwikipedia,
+                "web_search": srclangsearch if plan["web_search_engine"] == "langsearch" else srcwebsearch}   # the engine that the plan chooses; either gives candidates of the source `web-search`
     if sources is not None:
         if not isinstance(sources, dict) or not set(sources) <= set(SOURCES):
             raise _refuse("sources is a dictionary of source names to the objects that ask them")

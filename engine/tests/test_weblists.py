@@ -268,6 +268,15 @@ class PublicLists(Files):
         m.reload()
         self.assertEqual(m.blocked("api.openalex.org").reason, "owner")
 
+    def test_the_default_pinned_hosts_keep_a_public_list_from_blocking_the_langsearch_api_but_the_blacklist_still_can(self):
+        m = self.stocked(body=SAMPLE + b"\napi.langsearch.com\nlangsearch.com\n", pinned=weblists.DEFAULTS["pinned_hosts"])
+        self.assertIsNone(m.blocked("api.langsearch.com"))
+        self.assertIsNone(m.blocked("https://api.langsearch.com/v1/web-search"))
+        self.assertEqual(m.blocked("langsearch.com").reason, "list:phishing_domains")    # only the API host is pinned
+        self.write(self.black, "api.langsearch.com\n")
+        m.reload()
+        self.assertEqual(m.blocked("api.langsearch.com").reason, "owner")
+
     def test_the_allow_file_overrides_a_public_list_for_that_host_only(self):
         self.write(self.allow, "bad.example\n")
         m = self.stocked()
@@ -796,7 +805,7 @@ class Updates(Files):
         self.assertEqual(weblists.DEFAULTS["phishing_domains_format"], "domains")
         self.assertEqual(weblists.DEFAULTS["public_suffix_url"], "https://publicsuffix.org/list/public_suffix_list.dat")
         self.assertEqual(weblists.DEFAULTS["phishing_domains_url"], "https://raw.githubusercontent.com/Phishing-Database/Phishing.Database/master/phishing-domains-ACTIVE.txt")
-        self.assertEqual(weblists.DEFAULTS["pinned_hosts"], ["openalex.org", "arxiv.org", "wikipedia.org"])
+        self.assertEqual(weblists.DEFAULTS["pinned_hosts"], ["openalex.org", "arxiv.org", "wikipedia.org", "api.langsearch.com"])
         m = self.matcher()
         fake = Fake({weblists.DEFAULTS["phishing_domains_url"]: ok(SAMPLE), weblists.DEFAULTS["public_suffix_url"]: ok(PSL)})
         self.assertFalse(m.update(fake, T0, {})["stop"])
