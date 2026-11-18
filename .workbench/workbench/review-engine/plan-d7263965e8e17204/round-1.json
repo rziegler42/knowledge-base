@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Facts about the service, read from its own pages on 2026-11-18",
+      "problem": "The API contract, pricing/rate-limit behavior, and terms analysis are essential inputs, but the plan gives neither source URLs nor content hashes and explicitly says hashes were not taken. This conflicts with the project requirement to record external-reference provenance and leaves the owner unable to verify the service facts the implementation relies on.",
+      "severity": "major",
+      "suggestion": "Add the official documentation and terms URLs, retrieval date, and content hash for each source; revise the service facts from those recorded sources before approval."
+    },
+    {
+      "id": "R1-F2",
+      "location": "Increment C — Scope, steps, and verification",
+      "problem": "The integration path omits the refill step that owns the real discovery request wrapper and the run log. `crawlrefill` currently calls `discover.fill`, supplies the shared-client policy, and passes only the three-argument source call shape; its `_Notes` wrapper cannot register a key with the underlying log. Therefore the proposed `search(query, post, limit, key)` cannot be safely invoked and the key cannot be added to log secrets before a request through only the listed changes/tests.",
+      "severity": "major",
+      "suggestion": "Explicitly include `engine/kb/crawlrefill.py` and its tests in Increment C. Specify how it reads and validates the key, registers it with `ctx.log` before constructing/invoking the LangSearch request, supplies a credential-bearing no-redirect POST policy, and adapts discovery's source interface without exposing the key to plans, counters, or notes."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "Changes are needed: external-service evidence is not recorded, and the planned integration misses the refill/log boundary required for safe keyed requests.",
+  "verdict": "changes_needed"
+}

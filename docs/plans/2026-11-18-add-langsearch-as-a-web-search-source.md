@@ -1,0 +1,121 @@
+# Add LangSearch as a web search source of the unattended crawl
+
+Status: Proposed
+Created: 2026-11-18
+Candidate: none (the spec already names a keyed web search engine as another adapter that the owner may add with a key; this is that adapter, and no roadmap holds a candidate for it)
+Specs: docs/specs/population.md
+
+## Goal
+
+Discovery has one web search adapter, DuckDuckGo's HTML results, best effort, with unresolved terms and no stable markup; it is off. The owner has an account with **LangSearch**, a web search API with a free plan, a key and a documented answer. When this plan is done the crawl plan can say `web_search = on` and `web_search_engine = langsearch`, and discovery then asks LangSearch for candidate pages, at most the plan's `web_search_per_day` queries a day, through the same queue, the same checks and the same rules for a refusal as every other source. The shipped default stays `off`; turning it on is the owner's act in the crawl plan file and in the next `crawl-approve`, which names the engine, the key file and the terms the owner is to have read.
+
+Facts about the service, read from its own pages on 2026-11-18 (retrieved with `curl` that day, status 200 each; sha256 of the bytes served: `https://langsearch.com/terms-of-service` e67a65b7020645066d5c0b9de0538235bfd17f7021f0a753dc10d6cc5f5771cd; `https://langsearch.com/privacy-policy` 37e1ac6a100b320dbc81bda0f2f72d7a86a5d33d1e031797e7e4e1bbac50db97; `https://docs.langsearch.com/limits/api-limits` bbfc49418d14d3a3bc8c0a8875e81dc2e9cf132e29c899b6db00e75486b0b8f3; `https://docs.langsearch.com/api/web-search-api.md` e5edd2afb6993ab220292d21302eb9ab5546af306a453f37b9cbb83e7b3f6632). A text search of those bytes confirmed the effective date, the two terms quoted below, the POST path `/v1/web-search`, bearer authentication and the 5 RPS and 00:00 UTC lines; the rest was read by an agent from the rendered pages. The owner is to read the pages before the source is turned on. One endpoint, `POST https://api.langsearch.com/v1/web-search`, a JSON body with `query` and `count` (1 to 50) and optional `freshness`, `includeDomains`, `excludeDomains` and `contents`; the key goes in `Authorization: Bearer <key>`; the answer holds `data.webPages.value[]`, each with `url`, `name` and either `snippet` or, when asked, `text`; the free plan is $0 with 5 requests a second and token allowances that reset at 00:00 UTC, and no request quota per day; a 429 means the rate limit or the daily allowance is used up. The terms (effective 2024-12-19) grant a licence "solely for the purposes specified in these Terms" and list no purposes, forbid "scraping, mining, or harvesting data from LangSearch Services", and say nothing for or against keeping results. The operator is named only "LangSearch". Whether use as a crawl's source of addresses is within the terms is **unresolved and is the owner's** (the spec leaves a judgement on terms of service to the owner).
+
+## Scope
+
+**Changed:**
+- `engine/kb/webclient.py`: one new function that makes a POST of a small JSON body under the same policy and the same credential rules as `get` (https, one canonical host, no redirect, the key never written into an error), and its tests in the web client's test module. LangSearch takes its key only as `Authorization: Bearer <key>`, and the client refuses an `Authorization` header in every form (`FORBIDDEN_HEADERS`, found on 2026-11-18 while the OpenAlex key was built): the one change of the existing rules is that `authorization` is allowed as a **credential** header name, and stays refused as a header of a policy or of a call. The scrub of an error text also removes the token after `Bearer `, as the bare key could otherwise be echoed unscrubbed.
+- `engine/kb/srclangsearch.py` (new) and its test module: the adapter. It turns a query into candidate addresses, with the source's usual refusal rule.
+- `engine/kb/crawlrefill.py`, `engine/kb/discover.py`, `engine/kb/crawlplan.py`, `engine/kb/crawlapprove.py` and their tests: the plan value `web_search_engine` (`duckduckgo`, the default, or `langsearch`; the existing `web_search` stays the switch), the choice of the adapter, `discover._paced` passing its arguments through (it is now fixed to `(url, headers, timeout)`, which a POST does not fit), the reading of the key file, the secret given to the log, and the preview of `crawl-approve`. `crawlrefill` is where the real request path lives: it builds the one shared-client policy and the sources' `get` (GET only, no credential, redirects followed), and it holds the run's log; the keyed POST gets its own policy and its own `post` function there (https, `api.langsearch.com` as the credential host, no redirect), made only when the plan chooses `langsearch`, with the key registered through `ctx.log.add_secrets` before any request, and given to discovery through its `gets` argument (the per-source `get` that the OpenAlex key already uses). The adapter is called as `search(query, post, limit)` with the key already bound in the `post` closure's policy, so the key is not an argument of any plan, counter, note, event or adapter call; an answer whose headers or body repeat the key is not used (as the OpenAlex key's is not).
+- `engine/kb/weblists.py` (its default `pinned_hosts`) and its tests, and the spec's plan example: `api.langsearch.com` is added to the hosts that a public list never blocks, as the spec requires of the search sources (the owner's crawl plan file gives no `pinned_hosts`, so the default applies). The owner's blacklist still blocks it.
+- `docs/specs/population.md`: the sentences of the web search paragraph and of the plan's example.
+
+**Not changed:** the queue and its source names (`web-search` stays the one name for either engine), the judgement, the fetch of a candidate page, the counters' names, the models, every other source, and the DuckDuckGo adapter.
+
+## Non-goals
+
+- Other engines (Brave, SearXNG, OpenSERP, Firecrawl, an MCP search server). Each is a separate decision about terms and cost.
+- Using LangSearch's page text, snippets, titles or its reranker: only the **address** of each result is taken, and the page itself is fetched by the crawl's own client, so the guard, the scan and the judge see it as they see any candidate.
+- Query operators, freshness or domain filters: only plain words, as for the DuckDuckGo adapter.
+- Storing or showing the key anywhere but the owner's key file; a settings screen; reading the key from an environment variable.
+- A judgement on LangSearch's terms. The plan gives the owner the words to read.
+- Making the DuckDuckGo adapter and this one run in the same plan: one engine is chosen by the plan.
+
+## Assumptions and constraints
+
+- The key file is `langsearch.key` in the owner's config folder, a regular file of the owner, mode 600, one printable line, read by the checks of the URLhaus key reader (`urlhaus.read_key`). Today the file the owner made has mode 644, so the reader would refuse it until the owner sets mode 600. The plan reads no key and holds none; a test uses a made-up key in a temporary folder.
+- No test uses the network, a real key, a real model, or the owner's library or config; the POST test talks to a fake server on the client's one dial point.
+- The first version asks for the snippet mode (no `contents`), so the answers stay small; the client's answer cap applies.
+- A byte of engine code changes the fingerprint of the approved crawl plan. The crawl runs refuse until the owner approves again; that is the owner's act and happens when the owner chooses to stop the loop for it.
+- Search queries are the owner's topic words and the queries made from them. They go to LangSearch, an operator that names no company, address or place of storage and that logs queries as usage data. This is stated in the preview of `crawl-approve`, as the spec requires for a source with unresolved terms.
+- Nothing tracked points to anything untracked: the plan names the key file by its name in the config folder, which is the convention of the URLhaus key.
+
+## Completion criteria
+
+1. The web client has one POST function; a credential is sent only over https to its own host in a call that follows no redirect; the key is never written into an error, a log line or an event; a body over its small cap, a redirect and a non-JSON content type are refused; `get` behaves as before.
+2. `srclangsearch.search(query, post, limit)` (`post(body)`, a function of the request's dictionary, which the caller gives) returns candidates of the usual shape (`source` `web-search`, `found_from` the query, `depth` 0) from `data.webPages.value[].url` only; a status other than 200, a 429, a body that is not the documented answer, an over-long answer, a result address that is not a plain public web address, and any other surprise are each a `SourceRefused`, which turns the source off for the UTC day; nothing is retried or worked round.
+3. `web_search_engine = langsearch` (or `duckduckgo`) in a crawl plan file is read, the default is `duckduckgo`, `web_search = on`, `off` and `duckduckgo` keep their meaning, and any other word is refused naming the line; with the switch off the engine is not used and no key file is read. Discovery asks the chosen adapter, counts its queries in `web_search_queries`, and stops at `web_search_per_day`.
+4. A key file that is missing, not mode 600, not the owner's, a link or malformed turns the source off for the day with a fixed reason that holds none of the file; the key is added to the log's secrets before any request, held only in the policy of the `post` that `crawlrefill` builds (the adapter never receives it), an answer that repeats it is not used, and `api.langsearch.com` is a pinned host that a public list cannot block.
+5. `crawl-approve`'s preview names LangSearch when it is on, says that a key file is used and that its terms are for the owner to have read, and the shipped default plan has `web_search` off.
+6. `wb run code-work check` passes and the tests of every module changed pass.
+7. The owner has read the Result and the owner's trial (below) has been run once, or the owner has decided not to run it.
+
+## Increments
+
+### Increment A — One POST in the web client, under the credential rules of `get`
+
+**Outcome:** the client can send one small JSON POST to one https host with an `Authorization: Bearer` credential, and refuses everything the credential rules of `get` refuse; `Authorization` is accepted as a credential header name and as nothing else.
+**Dependencies:** none.
+**Affected areas:** `engine/kb/webclient.py`, the web client's test module, `docs/specs/population.md` (one sentence on the client).
+**Steps:**
+1. Read `webclient.get`, `_request`, `Policy`, `_clean_headers`, `_scrub` and the credential paragraph at the top of the module, and the nearest tests.
+2. Tests first, seen failing: a POST reaches a fake server with the method, the fixed `Content-Type: application/json`, the body, and the credential header; the credential is refused over http, to another host, with a redirect allowed by the policy, and when the host is not the canonical `credential_host`; a redirect answer is refused and never followed; a body over 4 KB, a body that is not bytes, and a header named by the call that the client sets are refused; `Authorization` given as a header of the policy or of the call is still refused (by `get` and by the POST), and as a credential header it is sent only under the credential rules, and `Proxy-Authorization`, `Cookie` and `Host` are still refused as credential headers; the token after `Bearer ` is scrubbed from every error text, as the whole header value is; the key is scrubbed from every error text, including a server that echoes it; a 200 answer of another type than the policy's is refused as for `get`; the existing tests for `get` still pass.
+3. Write the change: `_clean_headers` takes the names it forbids and the credential call leaves `authorization` out of them; `post_json(url, body, *, policy, headers=None, max_bytes=..., timeout=..., total_timeout=...)`, which shares the address check, the policy check, the pacing, the dial and the read of `get`, sets the method and the body in one place, and never follows a redirect. Deliberate single changes to see the tests catch them (the method, the host check, the redirect rule, the scrub, the scrub of the token after `Bearer`, the body cap, `Authorization` allowed as a call header, `Cookie` allowed as a credential header); the `reviewer`; before the commit the agent names what the client now exposes (a credential and a request body are new surface) and asks the owner whether to run a security review; it runs only if the owner asks, and the Result records the review or the owner's decision not to run it; the Result; the spec sentence.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_webclient` and the modules that use the client (`engine.tests.test_crawlfetch`, `engine.tests.test_urlhaus`, `engine.tests.test_srcopenalex`); the deliberate changes; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-18-add-langsearch-as-a-web-search-source#A`.
+
+### Increment B — The LangSearch adapter
+
+**Outcome:** a function that, given a query, a `post(body)` function and a limit, returns candidate addresses or raises the source's refusal, and nothing else. **The adapter never receives the key**: the credential lives only in the policy of the `post` closure that `crawlrefill` builds (Increment C), so no argument, return value, reason or candidate of the adapter can hold it.
+**Dependencies:** Increment A.
+**Affected areas:** `engine/kb/srclangsearch.py` (new), `engine/tests/test_srclangsearch.py` (new), `docs/specs/population.md` (the adapter's sentences).
+**Steps:**
+1. Read `srcwebsearch` (the contract, the refusal rule, the query cleaning, the address check), `srcopenalex` (`SourceRefused`, `_web`, the agent name) and their tests.
+2. Tests first, seen failing, on recorded-shape answers that the test writes itself: a plain answer gives its addresses in order, at most `limit`, without a repeat; the body sent holds only the cleaned words, a `count` and no `contents`; an operator, a bang or a quotation in the query never reaches the body; a 401, 403, 429, 500 and a status of another number each refuse with the status in the reason; an answer that is not JSON, that is over the cap, whose `code` is not the success code, whose `data.webPages.value` is missing or not a list, or whose entries lack a string `url` is refused; an address that is private, `localhost`, not http(s), longer than 2,048 characters or an address of LangSearch itself is not taken; the reason of a refusal is fixed text plus the status, and a `post` that raises an error with arbitrary text is named by its type only, so nothing the server or the client says reaches a reason or a candidate.
+3. Write the module: `search(query, post, limit)` with `post(body)` a function of the request's dictionary that the caller gives (the address is fixed in the caller's closure, and the adapter serialises nothing), `SOURCE = "web-search"`, `SourceRefused` named for this source, the same query cleaning as the DuckDuckGo adapter (letters and digits, at most 12 words), and an agent string like the other sources'. Deliberate single changes (an error text into the reason, the operator allowed, the limit, a private address taken, the success code unchecked); the `reviewer`; the Result; the spec sentences.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_srclangsearch engine.tests.test_srcwebsearch engine.tests.test_srcopenalex`; the deliberate changes; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-18-add-langsearch-as-a-web-search-source#B`.
+
+### Increment C — Choose it in the crawl plan, read the key, show it in the preview
+
+**Outcome:** `web_search = on` with `web_search_engine = langsearch` in the crawl plan makes discovery use the adapter with the owner's key, and `crawl-approve` says what that is.
+**Dependencies:** Increments A and B.
+**Affected areas:** `engine/kb/weblists.py` (the default pinned hosts) and its tests, `engine/kb/crawlrefill.py` (the shared-client policy, the sources' `get`, the log, and where the key is read, validated and given to the log's secrets), `engine/kb/discover.py`, `engine/kb/crawlplan.py`, `engine/kb/crawlapprove.py`, their tests (including `engine.tests.test_crawlrefill`), `docs/specs/population.md` (the plan example and the sources paragraph).
+**Steps:**
+1. Read how `web_search` is parsed in `discover._value` and `crawlplan` (two places accept `duckduckgo`), how `registry`, `ask` and the counters use it, how `crawlrefill` builds its policy, `get`, `_Notes` and the call of `discover.fill`, how `crawllists` reads the URLhaus key and gives it to the log (`add_secrets`), and `crawlapprove`'s preview.
+2. Tests first, seen failing: `web_search_engine` reads `langsearch` and `duckduckgo`, defaults to `duckduckgo`, another word is refused naming the line, and `web_search` reads `on`, `off` and `duckduckgo` as before; `_paced` passes its arguments through, so a POST is paced as a GET is; with `langsearch`, discovery asks the new adapter with the key and not the old one, counts `web_search_queries`, stops at `web_search_per_day`, and a refusal turns `web-search` off for the day with the reason; a key file that is missing, mode 644, a link or empty turns it off with a fixed reason that holds no file text and makes no request; the key is in the log's secrets before the request (tested through `crawlrefill`'s step with a fake POST), so a line that carries it is refused; the keyed POST uses its own policy (https, no redirect, `api.langsearch.com`, `Authorization: Bearer`) and the GET path of every other source still has no credential; an answer whose headers or body repeat the key (raw, lower case, percent-encoded), or that is not a status, a mapping of headers and bytes, is not used and the source is refused for the day with a fixed text; a public-list entry for `api.langsearch.com` does not block the request while an entry of the owner's blacklist does; `crawl-approve`'s preview with the web search on and `langsearch` chosen names the engine, the key file and "its terms are for you to have read", and with it off says nothing of it; the shipped default plan has `web_search` off and `duckduckgo` chosen.
+3. Write the change; deliberate single changes (the key not given to the log, the mode check skipped, the wrong adapter chosen, the daily cap not applied, the preview line dropped); the `reviewer`; before the commit the agent names what the change exposes (the key's whole path: file, log, events, queue, status) and asks the owner whether to run a security review; it runs only if the owner asks, and the Result records the review or the owner's decision not to run it; the Result; the spec.
+**Verification:** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_discover engine.tests.test_crawlplan engine.tests.test_crawlapprove engine.tests.test_crawlrefill engine.tests.test_weblists engine.tests.test_crawllists engine.tests.test_crawlstatus`; the deliberate changes; `wb run code-work check`.
+**Evidence:** the one local commit, with the trailer `Plan: 2026-11-18-add-langsearch-as-a-web-search-source#C`.
+
+## Verification for the plan as a whole
+
+Each increment's recorded verification stands unless a later increment changed its inputs. After C the agent reruns the web client's tests (C does not change the client, so this confirms it) and `wb run code-work check`, and runs a read-only check that no file outside "Scope" changed. A wider run is not needed: the change adds a function to the client and a module, and changes the choice of an adapter; the existing `get` paths are covered by the client's tests in A.
+
+**The owner's trial (not a test, not a commit).** With the key file at mode 600 and `web_search = on` and `web_search_engine = langsearch` in a copy of the plan, one real query is made through the adapter by a small script that prints only the number of results and their hosts, never the key. The owner decides whether to run it, and whether to turn the source on in the plan the crawl uses. The crawl is then approved again with `crawl-approve`.
+
+## Risks and sensitive actions
+
+- **A secret.** The key is read from the owner's key file and sent to one host. The tests, and a security review of A and of C if the owner asks for them, look at the file's checks, the credential rules, the scrub of errors, the log, the events, the queue and the status; the key reaches none of them. The key was pasted into a conversation on 2026-11-18 and is in that transcript; the owner is advised to replace it before the source is used.
+- **The terms.** The licence is for unspecified purposes and the "harvesting" ban is undefined; the operator names no company and no place of storage. Turning the source on is the owner's act and the preview says so. The owner may write to the address on the terms for an answer.
+- **Queries leave the machine.** Topic words go to a third party that logs them. They are the library's subject words, not book text or personal details; the preview says so.
+- **A change of engine code voids the approval of the crawl plan.** Runs refuse until the owner approves again, which is the owner's act at a time the owner chooses.
+- **An outside service can change or end.** The adapter treats any surprise as a refusal for the UTC day; the crawl goes on with its other sources.
+
+## Review record
+
+- **Reviewer:** a second model through the project's review engine (`review-plan`, the `ask-codex` bridge, location class `unknown`), 3 rounds of the bound of 3. Round 3 found nothing meaningful and the review converged.
+- **Applied (rounds 1 and 2):** the provenance of the LangSearch pages (addresses, date, sha256 of the bytes served); the refill step (`crawlrefill`) and its tests added to Increment C, where the real request path and the run's log live; the public-list exemption for `api.langsearch.com` (the pinned hosts); one interface, a three-argument adapter with the key held only in the credential policy of a `post` closure built in the refill step; the security review made the owner's decision, asked before a commit.
+- **Changed after round 2, before round 3 and before any approval (2026-11-18):** four corrections that the build of the OpenAlex key showed: (1) the shared client refuses an `Authorization` header in every form, so Increment A also lets `authorization` through as a credential header name only, and scrubs the token after `Bearer `; (2) `discover._paced` is fixed to `(url, headers, timeout)`, so Increment C makes it pass its arguments through and the adapter is called as `post(body)`; (3) the engine is chosen by a new key `web_search_engine` (`duckduckgo`, the default, or `langsearch`), and `web_search` stays the switch, because a switch cannot carry an engine; (4) an answer that repeats the key is not used, as for the OpenAlex key.
+- **Left for the owner:** the terms of LangSearch (the licence for unspecified purposes and the undefined ban on "harvesting"); a new key, since the one pasted into a conversation on 2026-11-18 is in that transcript; whether to run a security review of Increments A and C.
+
+## Deferred work
+
+- A second key-reading helper: the URLhaus reader is reused by name here; moving it to a neutral module and renaming its error is a cleanup.
+- Other engines, if the owner reads their terms (Brave has a clause against storing results; SearXNG and OpenSERP scrape engines whose terms forbid it).
+- Using the returned snippets or titles to judge a candidate before it is fetched.
+- Whether LangSearch's free token allowance is enough for the plan's queries a day: measured in the owner's trial, not assumed.
+
+## Result
+
+Empty until work starts.

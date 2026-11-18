@@ -1,0 +1,134 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-18T13:30:30Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "Fetched the four service pages again, recorded their addresses, the date and the sha256 of the bytes served, and confirmed the quoted terms and the POST path by text search of those bytes."
+    },
+    {
+      "at": "2026-11-18T13:30:30Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "Checked the refill step: it builds the shared GET policy and the sources get function and owns the run log, so the keyed POST path and the log secret belong there. Added that module and its tests to the scope and to Increment C, with the key bound before discovery sees the adapter."
+    },
+    {
+      "at": "2026-11-18T13:33:01Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "Checked the default pinned hosts and the spec rule that search sources are never blocked by a public list. Added the weblists defaults, the spec example and a test that a public entry cannot block the host while the owner blacklist can."
+    },
+    {
+      "at": "2026-11-18T13:33:01Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F2",
+      "reason": "The two call shapes did contradict. Chose the three-argument adapter with the key held only in the credential policy of a post closure built in the refill step, and aligned the outcome, steps, tests and criteria."
+    }
+  ],
+  "format": 1,
+  "generation": 8,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-18-add-langsearch-as-a-web-search-source.md",
+  "rounds": [
+    {
+      "at": "2026-11-18T13:29:45Z",
+      "bridge": "ask-codex",
+      "document_sha256": "fc3162d9abcb429ada8be48f4a0c0cf8847b577034bd62a136c67b9eca513449",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "837f4fd7856b72e7e9d6769638f2f911a68fd0d5da5e8e5d0d00b59588cdbbe5",
+      "usage": {
+        "input_tokens": 382808,
+        "output_tokens": 3445,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-18T13:32:09Z",
+      "bridge": "ask-codex",
+      "document_sha256": "0bae9f0100bfd50e8a76fd581897ce251d9cab16d5f6b9b6b8814dfd68fff1ae",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "e19554363b72a2b9fbe98ab174bc02ad79bb5d4689bfbfad7dabadf274d06f9d",
+      "usage": {
+        "input_tokens": 538107,
+        "output_tokens": 3102,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-18T15:38:07Z",
+      "bridge": "ask-codex",
+      "document_sha256": "cfb9d3b6aaa74faa16df25aeddb29822e08f7c8f284a22ad0f326c1e97aaf448",
+      "file": "round-3.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 3,
+      "profile": "second-opinion",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "e5ead09d25094f5d6955ada398533f3890b3d8bfbf91e6524e416fc8c03d94ef",
+      "usage": {
+        "input_tokens": 222561,
+        "output_tokens": 484,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "562404e62674adb3e7aff89b47bc9a7362121f6f2f4622e2eaf2fd7cfb447753",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

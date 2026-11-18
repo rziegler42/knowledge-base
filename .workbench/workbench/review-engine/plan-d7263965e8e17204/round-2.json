@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Scope and Increment C — affected areas, steps, and tests",
+      "problem": "The plan never updates the public-list exemption for the new search host. `pinned_hosts` currently contains only OpenAlex, arXiv, and Wikipedia, yet the population spec requires search-source hosts never be blocked by a public list. The keyed POST will still use the matcher hook, so a matching list entry can disable LangSearch.",
+      "severity": "major",
+      "suggestion": "Include the appropriate LangSearch API host in the pinned-host defaults and spec example, and add a test proving a public-list entry cannot block the configured LangSearch request while the owner blacklist still can."
+    },
+    {
+      "id": "R2-F2",
+      "location": "Completion criteria 2; Increment B — Outcome and step 3; Scope — crawlrefill/discovery integration",
+      "problem": "The adapter/key call contract is contradictory: completion criteria require `search(query, post, limit)`, scope says the key is already bound before discovery, but Increment B requires `search(query, post, limit, key)`. This leaves unclear whether the credential belongs in the client policy/POST closure or is passed through the adapter, which is material to the no-secret-in-logs boundary.",
+      "severity": "major",
+      "suggestion": "Choose one interface and use it consistently. Prefer a key-bound POST closure created in `crawlrefill` with credential headers held only in its no-redirect policy, and a three-argument adapter that never receives the key; align discovery wiring and tests to that contract."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "Two material gaps remain: the new source is not protected from public-list blocking, and its credential-passing interface is internally inconsistent.",
+  "verdict": "changes_needed"
+}
