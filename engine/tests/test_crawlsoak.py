@@ -88,7 +88,7 @@ RUN_MINUTES = 15
 EDGE = "edge.test"                                      # the site that redirects lead to
 FILED_TOTAL, BATCH = 4500, 6
 SEED_RUN = "earlier-run"
-ISSUE_LIMIT = "failed 3 times: the site it leads to is at its limit for the day"
+PUT_OFF = "the site it leads to is at its limit for the day"
 
 
 class Feed(Source):
@@ -638,19 +638,28 @@ class TheStalledAndThePutOffHop(Soak):
         self.assert_nothing_half_made()
         self.no_duplicate_fetch()
 
-    def test_a_hop_put_off_at_its_limit_counts_a_try_and_after_the_retries_the_candidate_is_failed(self):
-        """**The current behaviour, which the owner may change:** a candidate whose redirect leads to a site that is at its limit for the day is put off, but each such try is **counted** (`tries` rises, the redirector's own site
-        is charged a unit, the row waits 1 and then 6 hours), and at `retries` the candidate is `failed`, though it is a limit of the day and not a fault of the candidate. A change that makes a put-off hop cost no try must
-        change this test."""
+    def test_a_hop_put_off_at_its_limit_counts_a_try_waits_a_day_charges_no_site_and_is_taken_the_next_day(self):
+        """**The behaviour since the put-off hop was made to wait a day:** a candidate whose redirect leads to a site that is at its limit for the day is put off; its try is **counted** (`tries` 1, and the unit that `reserve` took for the
+        redirector's own page stays), it **waits 24 hours** (the limited site's day will have ended), **no site is charged** (no refusal is counted for the redirector or for the site it led to), and on the next day, when the
+        site's hop count is fresh, it is taken and kept. (Before, it waited 1 and then 6 hours and was failed at `retries` inside the day.) A change of any of these must change this test."""
         self.hopper_and_charge()
-        for now in self.hourly(1, (0, 0), (10, 0)):
+        for now in self.hourly(1, (0, 0), (24, 0)):
             self.assertEqual(self.play(now), 0, now)
         row = self.row(self.hopper)
-        self.assertEqual((row["status"], row["tries"], row["reason"], row["book_id"]), ("failed", 3, ISSUE_LIMIT, None))
-        self.assertEqual(self.requests().count("/doi/limit"), 3)                                             # three tries, three requests to the redirector
+        self.assertEqual((row["status"], row["tries"], row["reason"], row["book_id"]), ("queued", 1, PUT_OFF, None))
+        self.assertEqual(row["next_try"], "2026-11-17T00:00:00Z")                                            # a day after the try
+        self.assertEqual(self.requests().count("/doi/limit"), 1)                                             # one try the whole day: it was not asked again at the hours after
         self.assertNotIn("/paper", self.requests())
-        self.assertEqual(self.counters_of("2026-11-16")["fetch:doi.test"], 3)                                # each took a unit of the redirector's own site
-        self.assertEqual(self.counters_of("2026-11-16")[f"hop:{EDGE}"], LIMIT)
+        today = self.counters_of("2026-11-16")
+        self.assertEqual((today["fetch:doi.test"], today[f"hop:{EDGE}"]), (1, LIMIT))                       # the unit of its own page was taken, and no hop of the limited site was
+        self.assertEqual([key for key in today if key.startswith("refusal:")], [])                           # no site was charged a refusal
+        self.assertEqual(self.play(at(2, 0, 0)), 0)
+        row = self.row(self.hopper)
+        self.assertEqual((row["status"], row["tries"]), ("kept", 2))                                         # taken on the next day, and kept
+        self.assertIsNotNone(row["book_id"])
+        self.assertEqual(self.requests().count("/paper"), 1)
+        self.assertEqual(self.counters_of("2026-11-17")[f"hop:{EDGE}"], 1)                                   # that day's count of the site, fresh
+        self.assertEqual(self.counters_of("2026-11-16"), today)                                              # and the first day as it was
 
 
 class TheLists(Soak):
