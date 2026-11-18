@@ -1629,7 +1629,7 @@ class CommandTest(unittest.TestCase):
         self.assertTrue(set(got["sources"]["openalex"]["queries"]) <= {"Control theory", "Control theory survey", "Signal processing",
                                                                          "Signal processing survey", "SystemVerilog", "SystemVerilog survey"})
         self.assertEqual(got["sources"]["web_search"]["requests"], 0)
-        self.assertEqual(got["wander"]["kept_works_at_most"], 2)  # a wander part of 10 rows, five from each work, three requests each
+        self.assertEqual(got["wander"]["kept_works_at_most"], 2)  # a wander part of 10 rows, five from each work, two to five requests each
 
     def test_check_says_a_model_would_be_called_when_the_config_sets_crawl_query_and_makes_no_call(self):
         self.put_config(models_on=True, models={"local": {"bridge": "ask-ollama", "server": "srv", "model": "m1:latest"}}, tasks={"crawl-query": "local"})

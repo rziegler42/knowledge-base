@@ -983,7 +983,8 @@ class TrafilaturaTest(SandboxCase):
 
     def variant(self, **constants):
         """The entry for a copy of the wrapper with some of its limits made small, so the cut can be seen on a small page."""
-        source = open(os.path.join(convert_html.HERE, "extract_traf.py")).read()
+        with open(os.path.join(convert_html.HERE, "extract_traf.py")) as f:
+            source = f.read()
         for name, value in constants.items():
             found = re.search(rf"^{name} = ([0-9_]+)", source, re.M)
             source = source.replace(f"{name} = {found.group(1)}", f"{name} = {value}", 1)
@@ -1000,7 +1001,8 @@ class TrafilaturaTest(SandboxCase):
             + "</article></body></html>")
 
     def test_a_page_with_a_very_large_number_of_tags_is_cut_before_trafilatura_sees_it_and_says_so(self):
-        source = open(os.path.join(convert_html.HERE, "extract_traf.py")).read()
+        with open(os.path.join(convert_html.HERE, "extract_traf.py")) as f:
+            source = f.read()
         found = re.search(r"^MAX_TAGS = ([0-9_]+)", source, re.M)
         self.assertLessEqual(int(found.group(1).replace("_", "")), 250_000)  # about 8 seconds and 400 MB for paragraphs of one letter
         parsed = self.extract(self.PAGE, self.variant(MAX_TAGS=50))
