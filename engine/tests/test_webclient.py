@@ -40,7 +40,8 @@ class Server:
     """A raw TCP server on the local machine that records each request and answers from `routes`: path -> bytes, or a function (connection, path, headers) that writes by itself."""
 
     def __init__(self):
-        self.routes, self.hits = {}, []
+        self.heads = []   # the request line and header lines of each request, as they came, so that a header sent twice shows
+        self.routes, self.hits, self.requests = {}, [], []   # `requests`: (method, path, headers, body) of each request, the body read to its Content-Length
         self.lock = threading.Lock()
         self.inflight = self.max_inflight = 0
         outer = self
@@ -57,13 +58,21 @@ class Server:
                             return
                         data += chunk
                     head = data.split(b"\r\n\r\n")[0].decode("latin-1").split("\r\n")
-                    path = head[0].split(" ")[1]
+                    method, path = head[0].split(" ")[0], head[0].split(" ")[1]
                     headers = {}
                     for line in head[1:]:
                         key, _, value = line.partition(":")
                         headers[key.strip().lower()] = value.strip()
+                    body = data.split(b"\r\n\r\n", 1)[1]
+                    while headers.get("content-length", "").isdigit() and len(body) < int(headers["content-length"]):
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        body += chunk
                     with outer.lock:
                         outer.hits.append((path, headers))
+                        outer.requests.append((method, path, headers, body))
+                        outer.heads.append(head)
                         outer.inflight += 1
                         outer.max_inflight = max(outer.max_inflight, outer.inflight)
                     try:
@@ -744,6 +753,266 @@ class Headers(Net):
         by_path = dict(self.srv.hits)
         self.assertEqual(by_path["/s"]["x-custom"], "one")
         self.assertNotIn("x-custom", by_path["/clear"])
+
+
+class Post(Net):
+    """`webclient.post_json`: one small JSON POST under the credential rules of `get`, never following a redirect. `Authorization` is accepted as a credential header
+    name and as nothing else."""
+    BODY = b'{"query": "control theory", "count": 10}'
+
+    def policy(self, **kw):
+        kw.setdefault("types", ("application/json",))
+        kw.setdefault("follow_redirects", False)
+        return super().policy(**kw)
+
+    def bearer(self, **kw):
+        base = dict(credential_headers={"Authorization": "Bearer " + CANARY}, credential_host="a.test", follow_redirects=False)
+        base.update(kw)
+        return self.policy(**base)
+
+    def post(self, url, body=None, policy=None, **kw):
+        kw.setdefault("max_bytes", 100_000)
+        kw.setdefault("timeout", 3)
+        return webclient.post_json(url, self.BODY if body is None else body, policy=policy or self.policy(), **kw)
+
+    def json_ok(self, body=b"{}", **kw):
+        return reply(200, body=body, ctype="application/json", **kw)
+
+    def test_a_post_reaches_the_server_with_the_method_the_json_type_the_length_and_the_body_and_the_answer_comes_back_as_a_get_gives_it(self):
+        self.srv.routes["/q"] = self.json_ok(b'{"ok": true}')
+        status, headers, body = self.post("http://a.test/q")
+        self.assertEqual((status, body), (200, b'{"ok": true}'))
+        (method, path, sent, got), = self.srv.requests
+        self.assertEqual((method, path, got), ("POST", "/q", self.BODY))
+        self.assertEqual((sent["content-type"], sent["content-length"], sent["host"], sent["user-agent"]), ("application/json", str(len(self.BODY)), "a.test", "test-agent/1"))
+        self.assertEqual(sent["accept-encoding"], "identity")
+
+    def test_a_caller_cannot_change_the_content_type_of_a_post_in_any_spelling_or_place_and_it_is_sent_once(self):
+        self.srv.routes["/q"] = self.json_ok()
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            for name in ("Content-Type", "content-type", "CONTENT-TYPE", "Content-type"):
+                for where in ("policy", "call", "credential"):
+                    with self.subTest(name, where=where):
+                        del self.srv.heads[:]
+                        if where == "policy":
+                            self.post("http://a.test/q", policy=self.policy(headers={name: "text/plain"}))
+                        elif where == "call":
+                            self.post("http://a.test/q", headers={name: "text/plain"})
+                        else:
+                            self.post("https://a.test/q", policy=self.bearer(credential_headers={"Authorization": "Bearer " + CANARY, name: "text/plain"}))
+                        types = [line for line in self.srv.heads[0] if line.lower().startswith("content-type:")]
+                        self.assertEqual(types, ["Content-Type: application/json"])
+
+    def test_a_short_bearer_token_is_not_scrubbed_alone_so_that_it_cannot_blank_ordinary_text_but_the_whole_value_still_is(self):
+        self.srv.routes["/q"] = reply(200, body=b"{}", ctype="image/xyz")
+        self.srv.routes["/echo"] = reply(200, body=b"{}", ctype="image/" + "Bearer x")
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            with self.assertRaises(webclient.Refused) as caught:
+                self.post("https://a.test/q", policy=self.bearer(credential_headers={"Authorization": "Bearer x"}))
+        self.assertIn("image/xyz", str(caught.exception))
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            with self.assertRaises(webclient.Refused) as caught:
+                self.post("https://a.test/echo", policy=self.bearer(credential_headers={"Authorization": "Bearer x"}))
+        self.assertNotIn("Bearer x", str(caught.exception))
+
+    def test_the_bearer_credential_is_sent_over_https_to_its_host_and_to_no_other_header(self):
+        self.srv.routes["/q"] = self.json_ok()
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            self.assertEqual(self.post("https://a.test/q", policy=self.bearer())[0], 200)
+        sent = self.srv.requests[0][2]
+        self.assertEqual(sent["authorization"], "Bearer " + CANARY)
+        self.assertEqual([k for k, v in sent.items() if CANARY in v], ["authorization"])
+
+    def test_a_credential_is_refused_unless_every_condition_holds_for_a_post_too(self):
+        cases = {"follows redirects": self.bearer(follow_redirects=True), "no credential host": self.bearer(credential_host=None),
+                 "another host": self.bearer(credential_host="b.test"), "a host not in canonical form": self.bearer(credential_host="A.test."),
+                 "a host with a port": self.bearer(credential_host="a.test:443")}
+        for what, policy in cases.items():
+            with self.subTest(what):
+                with self.assertRaises(webclient.Refused):
+                    self.post("https://a.test/q", policy=policy)
+        with self.assertRaises(webclient.Refused):     # an http address
+            self.post("http://a.test/q", policy=self.bearer())
+        with self.assertRaises(webclient.Refused):     # another host than the credential host
+            self.post("https://www.a.test/q", policy=self.bearer())
+        self.assertEqual((self.lookups, self.dials, self.srv.requests), ([], [], []))
+
+    def test_a_post_never_follows_a_redirect_whatever_the_policy_says(self):
+        with self.assertRaises(webclient.Refused):
+            self.post("http://a.test/q", policy=self.policy(follow_redirects=True))
+        self.assertEqual((self.lookups, self.dials, self.srv.requests), ([], [], []))
+        for status in (301, 302, 303, 307, 308):
+            with self.subTest(status):
+                self.srv.routes["/r"] = redirect("http://b.test/q", status=status)
+                with self.assertRaises(webclient.Refused):
+                    self.post("http://a.test/r")
+        self.assertEqual({r[1] for r in self.srv.requests}, {"/r"})   # the target was never asked
+        self.assertEqual(len(self.srv.requests), 5)
+
+    def test_the_body_is_bytes_of_one_to_4096_and_nothing_else_and_nothing_is_asked_for_a_bad_one(self):
+        for bad in ("text", {"query": "x"}, None, 5, [b"x"], b"", bytearray(b"x"), b"x" * 4097, memoryview(b"x")):
+            with self.subTest(type(bad).__name__ + str(len(bad)) if hasattr(bad, "__len__") else str(bad)):
+                with self.assertRaises(webclient.Refused):
+                    webclient.post_json("http://a.test/q", bad, policy=self.policy())
+        self.assertEqual((self.lookups, self.dials, self.srv.requests), ([], [], []))
+        self.srv.routes["/q"] = self.json_ok()
+        self.post("http://a.test/q", b"x")
+        self.post("http://a.test/q", b"x" * 4096)
+        self.assertEqual([len(r[3]) for r in self.srv.requests], [1, 4096])
+
+    def test_authorization_is_refused_as_a_header_of_a_call_or_a_policy_for_a_post_and_for_a_get_and_only_a_credential_may_carry_it(self):
+        for name in ("Authorization", "authorization", "Cookie", "Proxy-Authorization", "Host", "Content-Length", "Transfer-Encoding"):
+            for where in ("call", "policy"):
+                with self.subTest(name, where=where):
+                    with self.assertRaises(webclient.Refused):
+                        if where == "call":
+                            self.post("http://a.test/q", headers={name: "Bearer x"})
+                        else:
+                            self.post("http://a.test/q", policy=self.policy(headers={name: "Bearer x"}))
+                    with self.assertRaises(webclient.Refused):
+                        if where == "call":
+                            self.get("http://a.test/q", headers={name: "Bearer x"})
+                        else:
+                            self.get("http://a.test/q", self.policy(headers={name: "Bearer x"}))
+        for name in ("Cookie", "Proxy-Authorization", "Host", "Content-Length", "Transfer-Encoding", "Accept", "User-Agent"):   # still refused as a credential header
+            with self.subTest("credential " + name):
+                with self.assertRaises(webclient.Refused):
+                    self.post("https://a.test/q", policy=self.bearer(credential_headers={name: CANARY}))
+        self.assertEqual((self.dials, self.srv.requests), ([], []))
+
+    def test_a_get_may_carry_authorization_as_a_credential_too_under_the_same_rules(self):
+        self.srv.routes["/p"] = self.json_ok()
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            self.assertEqual(self.get("https://a.test/p", self.bearer())[0], 200)
+        self.assertEqual(self.srv.hits[0][1]["authorization"], "Bearer " + CANARY)
+        with self.assertRaises(webclient.Refused):
+            self.get("http://a.test/p", self.bearer())
+
+    def test_the_token_after_bearer_is_scrubbed_from_every_error_text_and_so_is_the_whole_value(self):
+        self.srv.routes["/enc"] = reply(200, [("Content-Encoding", "x-" + CANARY)], b"{}", ctype="application/json")
+        self.srv.routes["/ct"] = reply(200, body=b"{}", ctype="text/" + CANARY.lower())
+        self.srv.routes["/echo"] = reply(200, [("Content-Encoding", "Bearer " + CANARY)], b"{}", ctype="application/json")
+        caught = []
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            for path in ("/enc", "/ct", "/echo", "/none"):
+                for call in (self.post, self.get):
+                    try:
+                        call("https://a.test" + path, policy=self.bearer())
+                    except Exception as e:
+                        caught.append(e)
+        self.assertGreaterEqual(len(caught), 6)
+        for exc in caught:
+            seen, stack = [], [exc]
+            while stack:
+                e = stack.pop()
+                if e is None or id(e) in seen:
+                    continue
+                seen.append(id(e))
+                for text in (str(e), repr(e), repr(e.args)):
+                    self.assertNotIn(CANARY, text)
+                    self.assertNotIn(CANARY.lower(), text)
+                stack += [e.__cause__, e.__context__]
+
+    def test_a_key_that_a_server_splits_with_a_control_character_is_still_scrubbed_from_the_headers_and_the_messages(self):
+        split = CANARY[:10] + "\x01" + CANARY[10:]
+        self.srv.routes["/h"] = reply(429, [("X-RateLimit-Limit", split), ("Retry-After", "Bearer " + split)], b"", ctype="application/json")
+        self.srv.routes["/ct"] = reply(200, body=b"{}", ctype="text/" + split)
+        self.srv.routes["/enc"] = reply(200, [("Content-Encoding", "x-" + split)], b"{}", ctype="application/json")
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            for call in (self.post, self.get):
+                status, headers, _ = call("https://a.test/h", policy=self.bearer())
+                self.assertEqual(status, 429)
+                for value in headers.values():
+                    self.assertNotIn(CANARY, value)
+                    self.assertNotIn(CANARY.replace("-", ""), value.replace("-", ""))
+                for path in ("/ct", "/enc"):
+                    with self.assertRaises(webclient.FetchError) as caught:
+                        call("https://a.test" + path, policy=self.bearer())
+                    self.assertNotIn(CANARY, str(caught.exception))
+                    self.assertNotIn(CANARY, str(caught.exception).replace("\x01", ""))
+
+    def test_no_exception_in_the_chain_of_a_failure_holds_what_the_server_said_with_the_key_in_it(self):
+        self.srv.routes["/status"] = lambda conn, path, headers: (CANARY + " 200 OK\r\n\r\n").encode()
+        self.srv.routes["/short"] = lambda conn, path, headers: ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 50\r\n\r\n" + CANARY).encode()
+        self.srv.routes["/chunk"] = lambda conn, path, headers: ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n" + CANARY + "\r\n").encode()
+        caught = []
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            for path in ("/status", "/short", "/chunk"):
+                for call in (self.post, self.get):
+                    try:
+                        call("https://a.test" + path, policy=self.bearer())
+                    except Exception as e:
+                        caught.append(e)
+        self.assertEqual(len(caught), 6)
+        for exc in caught:
+            seen, stack = [], [exc]
+            while stack:
+                e = stack.pop()
+                if e is None or id(e) in seen:
+                    continue
+                seen.append(id(e))
+                for text in (str(e), repr(e), repr(e.args)):
+                    self.assertNotIn(CANARY, text)
+                stack += [e.__cause__, e.__context__]
+
+    def test_a_credential_value_that_is_empty_spaces_or_too_short_to_be_a_key_is_refused_and_nothing_is_sent(self):
+        for value in ("", " ", "   ", "a", "e", "1234567", "Bearer"):
+            with self.subTest(repr(value)):
+                with self.assertRaises(webclient.Refused):
+                    self.post("https://a.test/q", policy=self.bearer(credential_headers={"Authorization": value}))
+        self.assertEqual((self.lookups, self.dials, self.srv.requests), ([], [], []))
+        self.srv.routes["/q"] = self.json_ok()
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            self.post("https://a.test/q", policy=self.bearer(credential_headers={"Authorization": "Bearer x"}))   # eight characters
+        self.assertEqual(self.srv.requests[0][2]["authorization"], "Bearer x")
+
+    def test_a_credential_with_stray_spaces_or_a_tab_is_still_scrubbed_after_the_servers_text_is_made_clean(self):
+        for value in ("  " + CANARY + " ", "\t" + CANARY, CANARY + "\t", "Bearer \t " + CANARY):
+            with self.subTest(repr(value)):
+                self.srv.routes["/enc"] = reply(200, [("Content-Encoding", "x-" + CANARY)], b"{}", ctype="application/json")
+                with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+                    with self.assertRaises(webclient.FetchError) as caught:
+                        self.post("https://a.test/enc", policy=self.bearer(credential_headers={"Auth-Key": value}))
+                self.assertNotIn(CANARY, str(caught.exception))
+
+    def test_a_credential_value_is_at_most_512_characters(self):
+        with self.assertRaises(webclient.Refused):
+            self.post("https://a.test/q", policy=self.bearer(credential_headers={"Authorization": "Bearer " + "k" * 506}))
+        self.srv.routes["/q"] = self.json_ok()
+        with mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock):
+            self.post("https://a.test/q", policy=self.bearer(credential_headers={"Authorization": "Bearer " + "k" * 505}))   # 512 characters
+        self.assertEqual(len(self.srv.requests[0][2]["authorization"]), 512)
+
+    def test_a_refusing_status_comes_back_with_its_headers_and_no_body_as_for_a_get(self):
+        self.srv.routes["/q"] = reply(429, [("Retry-After", "2"), ("X-RateLimit-Remaining", "0")], b"slow down", ctype="application/json")
+        status, headers, body = self.post("http://a.test/q")
+        self.assertEqual((status, body), (429, b""))
+        self.assertEqual((headers["retry-after"], headers["x-ratelimit-remaining"]), ("2", "0"))
+
+    def test_the_answer_is_gated_by_the_policys_types_and_size_as_for_a_get(self):
+        self.srv.routes["/html"] = reply(200, body=b"<html>x</html>")
+        with self.assertRaises(webclient.Refused):
+            self.post("http://a.test/html")
+        self.srv.routes["/big"] = self.json_ok(b"{" + b" " * 2000 + b"}")
+        with self.assertRaises(webclient.FetchError):
+            self.post("http://a.test/big", max_bytes=1000)
+
+    def test_a_post_is_paced_and_checked_by_the_hook_like_a_get(self):
+        seen = []
+        self.srv.routes["/q"] = self.json_ok()
+        self.post("http://a.test/q", policy=self.policy(check=lambda url: seen.append(url) and None))
+        self.assertEqual(seen, ["http://a.test/q"])
+        with self.assertRaises(webclient.Refused):
+            self.post("http://a.test/q", policy=self.policy(check=lambda url: "on the owner's blacklist"))
+        self.assertEqual(len(self.srv.requests), 1)
+
+    def test_get_still_sends_no_body_and_no_content_type(self):
+        self.srv.routes["/p"] = self.json_ok()
+        self.get("http://a.test/p")
+        (method, _path, sent, body), = self.srv.requests
+        self.assertEqual((method, body), ("GET", b""))
+        self.assertNotIn("content-type", sent)
+        self.assertNotIn("content-length", sent)
 
 
 class Hook(Net):

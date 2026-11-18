@@ -41,6 +41,12 @@ _NEVER_PUBLIC = (ipaddress.ip_network("168.63.129.16/32"),)   # a cloud platform
 _BINARY_MAGIC = (b"\x89PNG", b"GIF87a", b"GIF89a", b"\xff\xd8\xff")
 FORBIDDEN_HEADERS = frozenset(("host", "accept", "accept-encoding", "user-agent", "content-length", "transfer-encoding", "connection", "upgrade", "te", "keep-alive", "expect",
                                "proxy-authorization", "proxy-connection", "trailer", "authorization", "cookie"))
+# a credential header may be named `Authorization` (a bearer key is sent only so), and nothing else of the list above; a policy or a call may not carry it
+CREDENTIAL_FORBIDDEN_HEADERS = FORBIDDEN_HEADERS - {"authorization"}
+MAX_CREDENTIAL_VALUE = 512   # and at most this: a key is far shorter, and a longer value could be cut by the first clean of a server's text and leave a part of itself after the scrub
+MIN_CREDENTIAL_VALUE = 8     # a credential value (a whole header value, `Bearer <key>` included) is at least this long: an empty one, spaces, or a letter would be sent as it is and would blank ordinary text in every message
+MIN_TOKEN_SCRUB = 8          # the token after a scheme is scrubbed alone only from this length: a key is longer, and a shorter text would blank ordinary words
+MAX_POST_BYTES = 4096        # the body of one POST: a small JSON request
 _TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 _HEADER_KEYS = ("content-type", "content-length", "content-encoding", "content-language", "last-modified", "etag", "location", "date", "cache-control", "retry-after", "x-ratelimit-limit",
                 "x-ratelimit-remaining", "x-ratelimit-reset", "ratelimit-limit", "ratelimit-remaining", "ratelimit-reset")
@@ -153,10 +159,12 @@ def _clean_headers(mapping, what):
     for name, value in (mapping or {}).items():
         if not isinstance(name, str) or not _TOKEN.fullmatch(name):
             raise Refused(f"a {what} header has a name that is not allowed")
-        if name.lower() in FORBIDDEN_HEADERS:
+        if name.lower() in (CREDENTIAL_FORBIDDEN_HEADERS if what == "credential" else FORBIDDEN_HEADERS):
             raise Refused(f"the {what} header {name!r} is set by the client and cannot be given")
         if not isinstance(value, str) or any(not (32 <= ord(c) < 127 or c == "\t") for c in value):
             raise Refused(f"the {what} header {name!r} has a value that is not printable ASCII text")
+        if what == "credential" and not MIN_CREDENTIAL_VALUE <= len(value.strip()) <= MAX_CREDENTIAL_VALUE:
+            raise Refused(f"the credential header {name!r} has a value that is too short or too long to be a key")
         out[name] = value
     return out
 
@@ -256,8 +264,8 @@ def _timed_out(exc):
 
 
 def _read_response(response, policy, address, deadline, max_bytes, secrets=()):
-    def shown(text, limit):   # server text for a message or a record: a credential it echoes is removed before the text is cut
-        return textutil.clean(_scrub(text, secrets), limit)
+    def shown(text, limit):   # server text for a message or a record: made clean first (a control character a server put inside the key would otherwise hide it from the scrub and be removed after it), then a credential it echoes is removed, then it is cut
+        return textutil.clean(_scrub(textutil.clean(text, 10_000), secrets), limit)
 
     status = response.status
     headers = {}
@@ -292,12 +300,13 @@ def _read_response(response, policy, address, deadline, max_bytes, secrets=()):
     while True:
         if time.monotonic() > deadline:
             raise FetchError("timed out reading the response")
+        failure = None
         try:
             chunk = response.read1(65536)
         except Exception as e:
-            if _timed_out(e):
-                raise FetchError("timed out") from None
-            raise FetchError(f"network error while reading: {type(e).__name__}") from None
+            failure = "timed out" if _timed_out(e) else f"network error while reading: {type(e).__name__}"
+        if failure is not None:
+            raise FetchError(failure)
         if not chunk:
             break
         total += len(chunk)
@@ -311,8 +320,8 @@ def _read_response(response, policy, address, deadline, max_bytes, secrets=()):
     return Result(status, headers, body, address)
 
 
-def _request(parts, addresses, port, hop_headers, policy, timeout, total_timeout, max_bytes, address, secrets=()):
-    """One GET on one connection to a checked address, under a deadline that cuts the sockets when it passes."""
+def _request(parts, addresses, port, hop_headers, policy, timeout, total_timeout, max_bytes, address, secrets=(), method="GET", body=None):
+    """One request (a GET, or a POST with a body) on one connection to a checked address, under a deadline that cuts the sockets when it passes."""
     live, cancelled = [], threading.Event()
     host, scheme = parts.hostname, parts.scheme
     target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
@@ -322,17 +331,21 @@ def _request(parts, addresses, port, hop_headers, policy, timeout, total_timeout
         raw = _connect(host, addresses, port, timeout, live, cancelled, started + total_timeout)
         sock = raw
         if scheme == "https":
+            failure = None
             try:
                 sock = _tls_wrap(raw, host)
             except Exception as e:   # a certificate that is not accepted, a handshake that fails or times out
                 raw.close()
                 if _timed_out(e):
-                    raise FetchError("timed out") from None
-                if isinstance(e, ssl.SSLCertVerificationError):
-                    raise FetchError("the server's certificate was not accepted") from None
-                if isinstance(e, (OSError, ValueError)):
-                    raise FetchError(f"network error: {type(e).__name__}") from None
-                raise
+                    failure = "timed out"
+                elif isinstance(e, ssl.SSLCertVerificationError):
+                    failure = "the server's certificate was not accepted"
+                elif isinstance(e, (OSError, ValueError)):
+                    failure = f"network error: {type(e).__name__}"
+                else:
+                    raise
+            if failure is not None:
+                raise FetchError(failure)   # outside the `except`, so that the exception that held the server's text is not the new one's context
             live.append(sock)   # wrapping detaches the raw socket, so only this one can be cut now (the handshake itself is bounded by `timeout`)
         conn = http.client.HTTPConnection(host, port, timeout=timeout)
         conn.sock = sock
@@ -340,16 +353,20 @@ def _request(parts, addresses, port, hop_headers, policy, timeout, total_timeout
         try:
             if cancelled.is_set() or time.monotonic() > started + total_timeout:
                 raise FetchError("timed out")
+            failure = None
             try:
                 shown = f"[{host}]" if ":" in host else host   # the default port of the scheme is never written
-                conn.request("GET", target, headers={"Host": shown, **hop_headers})
+                conn.request(method, target, body=body, headers={"Host": shown, **hop_headers})
                 response = conn.getresponse()
             except Exception as e:
                 if _timed_out(e):
-                    raise FetchError("timed out") from None
-                if isinstance(e, (OSError, http.client.HTTPException, ValueError)):
-                    raise FetchError(f"network error: {type(e).__name__}") from None
-                raise
+                    failure = "timed out"
+                elif isinstance(e, (OSError, http.client.HTTPException, ValueError)):
+                    failure = f"network error: {type(e).__name__}"
+                else:
+                    raise
+            if failure is not None:
+                raise FetchError(failure)   # outside the `except`: a status line that holds the server's text (and the key) is not this error's context
             return _read_response(response, policy, address, started + total_timeout, max_bytes, secrets)
         finally:
             if response is not None:
@@ -390,6 +407,22 @@ def _ask(policy, address):
 def get(url, *, policy, headers=None, max_bytes=MAX_BYTES, timeout=TIMEOUT, total_timeout=TOTAL_TIMEOUT):
     """One GET of `url` under `policy`, following redirects hop by hop if the policy allows. Returns `Result` (a `(status, headers, body)` tuple with `.final`), or raises `Refused` or `FetchError`.
     `timeout` is the limit of one network operation; `total_timeout` of one hop's connection and body (each hop of a redirect has its own)."""
+    return _exchange("GET", None, url, policy, headers, max_bytes, timeout, total_timeout)
+
+
+def post_json(url, body, *, policy, headers=None, max_bytes=MAX_BYTES, timeout=TIMEOUT, total_timeout=TOTAL_TIMEOUT):
+    """One POST of `body` (bytes, one to `MAX_POST_BYTES`, a JSON request that the caller made; nothing here reads it) to `url` under `policy`, sent as `Content-Type: application/json`, which no header of a
+    caller can change. A POST never follows a redirect, whatever the policy says (it is refused if the policy allows one, and a redirect answer is refused), and every other rule is a GET's: the address,
+    the hook, the pacing, the credential (only over https, to its own host), the size, the time and the type of the answer. Returns `Result`, or raises `Refused` or `FetchError`. **The answer's body is data from the server:
+    a server that holds the key can echo it there (the headers and the messages are scrubbed, the body is not), so a caller does not log or keep the body of a keyed answer.**"""
+    if type(body) is not bytes or not 1 <= len(body) <= MAX_POST_BYTES:
+        raise Refused(f"the body of a POST is bytes, from 1 to {MAX_POST_BYTES} of them")
+    if policy.follow_redirects:
+        raise Refused("a POST follows no redirect")
+    return _exchange("POST", body, url, policy, headers, max_bytes, timeout, total_timeout)
+
+
+def _exchange(method, body, url, policy, headers, max_bytes, timeout, total_timeout):
     try:
         address = webaddr.canon_address(url)
     except webaddr.AddressError as e:
@@ -404,6 +437,8 @@ def get(url, *, policy, headers=None, max_bytes=MAX_BYTES, timeout=TIMEOUT, tota
             raise Refused("a credential is sent only over https to its own host, in a call that follows no redirect")
     pacer = policy.pacer or PACER
     secrets = [v for v in credentials.values() if v]
+    secrets += [" ".join(v.split()) for v in list(secrets) if " ".join(v.split()) != v]   # a server's text is made clean (spaces collapsed and cut off) before the scrub, so the value is also named the way it will read
+    secrets += [token for token in (v.split(None, 1)[1].strip() for v in list(secrets) if len(v.split(None, 1)) == 2) if len(token) >= MIN_TOKEN_SCRUB]   # a bearer key is also named alone: the token after the scheme (a token too short to be a key would blank ordinary text, and is left to the whole value's scrub)
     for hop in range(policy.max_redirects + 1):
         parts = urlsplit(address)
         host = parts.hostname
@@ -421,15 +456,22 @@ def get(url, *, policy, headers=None, max_bytes=MAX_BYTES, timeout=TIMEOUT, tota
             hop_headers.update(extras)
             if hop == 0:
                 hop_headers.update(credentials)
+        if method == "POST":
+            for name in [k for k in hop_headers if k.lower() == "content-type"]:
+                del hop_headers[name]   # whatever spelling a policy, a call or a credential gave
+            hop_headers["Content-Type"] = "application/json"   # last, so that nothing the caller gave can change it
         keys = [f"site:{webaddr.site_info(host, policy.suffixes)[0]}", _ip_key(addresses[0])]   # the address tried first: a name cannot hold the addresses of other sites
         with pacer.slot(keys, policy.gap, policy.jitter):
+            rebuilt = None
             try:
-                outcome = _request(parts, addresses, port, hop_headers, policy, timeout, total_timeout, max_bytes, address, secrets)
+                outcome = _request(parts, addresses, port, hop_headers, policy, timeout, total_timeout, max_bytes, address, secrets, method, body)
             except FetchError as e:
                 safe = _scrub(str(e), secrets)
-                if safe != str(e):
-                    raise type(e)(safe) from None
-                raise
+                if safe == str(e):
+                    raise
+                rebuilt = (type(e), safe)
+            if rebuilt is not None:
+                raise rebuilt[0](rebuilt[1])   # outside the `except`, so that the unscrubbed error is not this one's context
         if isinstance(outcome, Result):
             return outcome
         if not policy.follow_redirects:
