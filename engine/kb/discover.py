@@ -40,6 +40,7 @@ PLAN = {
     "wander_depth": ("sources", _INT, 2, 0, 10),
     "wander_per_work": ("sources", _INT, 5, 1, 20),
     "openalex": ("sources", _SWITCH, True, None, None),
+    "openalex_key": ("sources", _SWITCH, False, None, None),
     "arxiv": ("sources", _SWITCH, True, None, None),
     "wikipedia": ("sources", _SWITCH, True, None, None),
     "web_search": ("sources", _SWITCH, False, None, None),
@@ -211,7 +212,7 @@ def _picks(plan, topics, topic_part, day):
     return _in_turn(crawltopics.quota(topics, count, (day - datetime.date(1970, 1, 1)).days))
 
 
-def fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cache=None, is_blocked=None, canon_address=None, site_of=None,
+def fill(conn, plan, topics, *, now, get, gets=None, chat=None, sources=None, log=None, cache=None, is_blocked=None, canon_address=None, site_of=None,
          arxiv_pacer=None, clock=time.monotonic, sleep=time.sleep, pdfs=False):
     """Refill the queue. Returns early with nothing added when the queue holds `queue_low` rows or more that are queued (a `queue_low` of
     nothing means the queue is never refilled); otherwise adds up to `discover_target` rows, never more, and never past the total cap of
@@ -271,7 +272,7 @@ def fill(conn, plan, topics, *, now, get, chat=None, sources=None, log=None, cac
         if plan[name] and name in off:
             note("discover", "skipped", source=name, reason="the source is off for the day")
     gaps = {name: _Gap(plan[f"gap_{name}_s"], clock, sleep) for name in ("openalex", "wikipedia", "web_search")}
-    paced = {name: _paced(get, gap) for name, gap in gaps.items()}
+    paced = {name: _paced((gets or {}).get(name) or get, gap) for name, gap in gaps.items()}  # a source may have a `get` of its own (OpenAlex with the owner's key); none or no entry is the shared one
     state = {"topic": 0, "pacer": arxiv_pacer}
 
     def put(kind, row):

@@ -67,7 +67,7 @@ class Defaults(Files):
             "min_gap_s": 8, "jitter": 0.5, "user_agent": "browser",
             "bulk_floor_gb": 50, "index_floor_gb": 10,
             "consecutive_failures": 8, "failure_share": 0.5, "window": 20, "model_down_minutes": 30, "domain_refusals": 3,
-            "openalex": True, "arxiv": True, "wikipedia": True, "web_search": False, "wander_share": 0.2, "wander_depth": 2, "wander_per_work": 5,
+            "openalex": True, "openalex_key": False, "arxiv": True, "wikipedia": True, "web_search": False, "wander_share": 0.2, "wander_depth": 2, "wander_per_work": 5,
             "gap_openalex_s": 1, "gap_arxiv_s": 3, "gap_wikipedia_s": 1, "gap_web_search_s": 30, "web_search_per_day": 20,
             "phishing_domains": True, "urlhaus_recent": False, "phishing_domains_format": "domains", "refresh_hours": 12, "list_max_mb": 50, "list_min_share": 0.5, "list_max_change": 0.3,
             "urlhaus_keep_days": 30, "pinned_hosts": ["openalex.org", "arxiv.org", "wikipedia.org"],
@@ -83,6 +83,7 @@ class Defaults(Files):
     def test_the_shipped_default_has_the_sources_with_unresolved_terms_off_and_no_threshold(self):
         plan = self.read("")
         self.assertFalse(plan["web_search"])
+        self.assertFalse(plan["openalex_key"])
         self.assertFalse(plan["urlhaus_recent"])
         self.assertIsNone(plan["threshold"])
 
@@ -200,6 +201,15 @@ topics = ~/somewhere/topics.txt
             with self.subTest(bad):
                 self.refused(f"[sources]\narxiv = {bad}\n", "line 2")
         self.refused("[sources]\nopenalex = duckduckgo\n", "line 2")
+
+    def test_the_openalex_key_is_a_switch_that_is_off_unless_the_plan_says_on(self):
+        self.assertFalse(self.read("")["openalex_key"])
+        for text, value in (("on", True), ("ON", True), ("Off", False), ("off", False)):
+            self.assertEqual(self.read(f"[sources]\nopenalex_key = {text}\n")["openalex_key"], value)
+        for bad in ("yes", "true", "1", "", "duckduckgo", "openalex.key", "on off"):
+            with self.subTest(bad):
+                self.refused(f"[sources]\nopenalex_key = {bad}\n", "line 2")
+        self.refused("[limits]\nopenalex_key = on\n", "line 2")  # a key of the plan in another section than its own is refused
 
     def test_whole_numbers_and_numbers_are_checked_for_kind_and_range(self):
         cases = [("limits", "fetches_per_day", ["abc", "1.5", "-1", "0", "1e3", "10000000000", "10001", "", "0x10", "1_0"]), ("limits", "retries", ["0", "21", "x"]),

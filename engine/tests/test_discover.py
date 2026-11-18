@@ -128,7 +128,7 @@ class PlanTest(unittest.TestCase):
     def test_every_key_has_the_default_the_spec_gives(self):
         self.assertEqual(discover.normalize_plan({}), {
             "queued_total": 20000, "queued_per_domain": 50, "queue_low": 100, "discover_target": 200, "queries_per_topic": 3,
-            "wander_share": 0.2, "wander_depth": 2, "wander_per_work": 5, "openalex": True, "arxiv": True, "wikipedia": True,
+            "wander_share": 0.2, "wander_depth": 2, "wander_per_work": 5, "openalex": True, "openalex_key": False, "arxiv": True, "wikipedia": True,
             "web_search": False, "gap_openalex_s": 1, "gap_arxiv_s": 3, "gap_wikipedia_s": 1, "gap_web_search_s": 30,
             "web_search_per_day": 20})
 
@@ -797,6 +797,43 @@ class FillFurtherTest(Case):
         sources = self.sources()
         self.fill({"discover_target": 100, "wander_share": 0.0, "queries_per_topic": 1, "queue_low": 10**5}, sources=sources)
         self.assertTrue({q for q, _ in sources["openalex"].searches} <= {t for t, _, _ in TOPICS})
+
+
+class Asking(Source):
+    """A source that calls the `get` it is given, once for each search, and keeps what it got."""
+
+    def __init__(self, name, rows=None):
+        super().__init__(name, rows)
+        self.got = []
+
+    def search(self, query, get, limit, *more):
+        self.got.append(get("https://api.example.org/" + self.name))
+        return super().search(query, get, limit, *more)
+
+
+class GetsTest(Case):
+    def test_a_source_with_a_get_of_its_own_is_asked_through_it_and_the_others_through_the_shared_one(self):
+        sources = {"openalex": Asking("openalex", rows_for("openalex")), "arxiv": Asking("arxiv", rows_for("arxiv")), "wikipedia": Asking("wikipedia", rows_for("wikipedia"))}
+        shared = lambda url, headers=None, timeout=None: ("shared", url)  # noqa: E731
+        own = lambda url, headers=None, timeout=None: ("own", url)  # noqa: E731
+        self.fill({"discover_target": 20, "wander_share": 0.0, "queue_low": 10**5}, sources=sources, get=shared, gets={"openalex": own})
+        self.assertTrue(sources["openalex"].got and {g[0] for g in sources["openalex"].got} == {"own"})
+        for name in ("arxiv", "wikipedia"):
+            self.assertTrue(sources[name].got and {g[0] for g in sources[name].got} == {"shared"}, name)
+
+    def test_no_gets_is_the_shared_get_for_everyone(self):
+        sources = {"openalex": Asking("openalex", rows_for("openalex")), "arxiv": Asking("arxiv"), "wikipedia": Asking("wikipedia")}
+        shared = lambda url, headers=None, timeout=None: ("shared", url)  # noqa: E731
+        self.fill({"discover_target": 20, "wander_share": 0.0, "queue_low": 10**5}, sources=sources, get=shared)
+        self.assertEqual({g[0] for name in sources for g in sources[name].got}, {"shared"})
+
+    def test_a_get_of_none_for_a_source_means_the_shared_one_and_a_get_for_a_source_that_is_not_asked_is_not_used(self):
+        sources = {"openalex": Asking("openalex", rows_for("openalex")), "arxiv": Asking("arxiv", rows_for("arxiv"))}
+        shared = lambda url, headers=None, timeout=None: ("shared", url)  # noqa: E731
+        own = lambda url, headers=None, timeout=None: ("own", url)  # noqa: E731
+        self.fill({"discover_target": 20, "wander_share": 0.0, "queue_low": 10**5, "wikipedia": False}, sources=sources, get=shared,
+                  gets={"openalex": None, "arxiv": None, "wikipedia": own})
+        self.assertEqual({g[0] for name in sources for g in sources[name].got}, {"shared"})
 
 
 class RefusalTest(Case):

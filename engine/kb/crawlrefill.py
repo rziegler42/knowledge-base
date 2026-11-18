@@ -19,11 +19,12 @@ can still be fetched. This module changes no candidate row itself (discovery ins
 import datetime
 import json
 import os
+import re
 import stat
 from collections.abc import MutableMapping
-from urllib.parse import urlsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
-from . import KbError, crawlfetch, crawlguard, crawllists, crawllog, crawlplan, crawlrun, crawltopics, discover, models, webaddr, webclient
+from . import KbError, config, crawlfetch, crawlguard, crawllists, crawllog, crawlplan, crawlrun, crawltopics, discover, models, srcopenalex, textutil, urlhaus, webaddr, webclient
 
 CACHE_FILE = "query-cache.json"
 MAX_CACHE_BYTES = 1024 * 1024
@@ -32,10 +33,56 @@ CAPPED = ("skipped", "blocked", "rejected")
 SET_BY_POLICY = ("user-agent", "accept")
 DISCOVERY_TYPES = ("application/json", "application/atom+xml", "application/xml", "text/xml", "text/html")
 ACCEPT = "application/json, application/atom+xml, application/xml;q=0.9, text/xml;q=0.9, text/html;q=0.5"
+OPENALEX_HOST = "api.openalex.org"
+OPENALEX_KEY_FILE = "openalex.key"  # in the owner's config folder, read by the checks of the URLhaus key (a regular file of the owner, mode 600, one printable line)
 
 
 class _Stopped(Exception):
     """The stop file was seen: the refill ends at once and no source is marked off for the day (a `KbError` would be taken for a refusal by the source)."""
+
+
+def _names_api_key(query):
+    """True if a parameter of `query` is named `api_key`, in any case, any percent-encoding (read twice over) and either separator (`&` or `;`) of a query. The word in a
+    value (`search=api_key leak detection`) is not a parameter."""
+    for piece in re.split(r"[&;]", query):
+        if unquote(unquote(piece.split("=", 1)[0])).strip().lower() == "api_key":
+            return True
+    return False
+
+
+def _repeats(key, status_headers_body):
+    """True if the answer holds the key: in a header value or the body, as written, in lower or upper case, or percent-encoded (in either case of the hex digits)."""
+    _status, headers, body = status_headers_body
+    if not isinstance(headers, dict) or not isinstance(body, (bytes, bytearray)):
+        return True  # an answer that is not what the client gives is not looked through, and so is not used
+    forms = {key.lower(), quote(key, safe="").lower()}
+    seen = " ".join(str(v) for v in headers.values()).lower() + " " + body.decode("utf-8", "replace").lower()
+    return any(form in seen for form in forms)
+
+
+def _keyed_address(url, key):
+    """`url` with the owner's OpenAlex key added as the `api_key` query parameter, or None if the address may not have it: it is not an `https` address, its host is
+    not exactly `api.openalex.org` (a user name or a password in it, a port other than 443, a name that only starts or ends like it), or it already holds an `api_key`
+    in any spelling. The key is percent-encoded and goes after the query and before the fragment. The shared client refuses an `Authorization` header even as a
+    credential, so this is the one form that OpenAlex takes: the sources never see the key, and it is given only to the client."""
+    if not isinstance(url, str):
+        return None
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme != "https" or parts.hostname != OPENALEX_HOST or port not in (None, 443) or parts.username is not None or parts.password is not None:
+        return None
+    if _names_api_key(parts.query):
+        return None
+    query = (parts.query + "&" if parts.query else "") + "api_key=" + quote(key, safe="")
+    keyed = urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    try:
+        webaddr.canon_address(keyed)  # the client refuses an address that is too long once it is canonical (a bar becomes three characters), with a text that names no cause
+    except webaddr.AddressError:
+        return None
+    return keyed
 
 
 class QueryCache(MutableMapping):
@@ -145,7 +192,7 @@ def _stamp(now):
     return now.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _run(ctx, fetch, sources, call, rss_reader=None):
+def _run(ctx, fetch, sources, call, rss_reader=None, openalex_key_path=None):
     plan, log, now = ctx.plan, ctx.log, ctx.clock()
     if ctx.matcher is None:
         raise crawlrun.StepRefused("the refill needs the matcher of the lists step, which did not run")
@@ -157,16 +204,49 @@ def _run(ctx, fetch, sources, call, rss_reader=None):
     policy = webclient.Policy(user_agent=webclient.GENERIC_USER_AGENT, gap=0, jitter=0, follow_redirects=True, types=DISCOVERY_TYPES, check=crawllists.address_hook(ctx.index_root, ctx.matcher),
                               suffixes=suffixes, accept=ACCEPT)
 
-    def get(url, headers=None, timeout=None):
-        """The sources' `get`. The sources send their own `User-Agent` and `Accept`, which the client refuses from a caller (the policy sets both); every other header goes on. A request the client
-        refuses or cannot make is a `KbError` with a fixed text, which a source takes as its own refusal and discovery as the source being off for the day."""
-        if crawlguard.stop_requested(ctx.index_root):
-            raise _Stopped()
-        kept = {name: value for name, value in (headers or {}).items() if not (isinstance(name, str) and name.lower() in SET_BY_POLICY)}
+    def make_get(use, key=None):
+        def get(url, headers=None, timeout=None):
+            """The sources' `get`. The sources send their own `User-Agent` and `Accept`, which the client refuses from a caller (the policy sets both); every other header goes on. A request the client
+            refuses or cannot make is a `KbError` with a fixed text, which a source takes as its own refusal and discovery as the source being off for the day. With a `key` (OpenAlex's, as
+            `openalex_key = on` says) the address is given the key here, just before the client is called, or is refused if it may not have it."""
+            if crawlguard.stop_requested(ctx.index_root):
+                raise _Stopped()
+            address = url
+            if key is not None:
+                address = _keyed_address(url, key)
+                if address is None:
+                    raise srcopenalex.SourceRefused("the address is not one that the key may be sent to")
+            kept = {name: value for name, value in (headers or {}).items() if not (isinstance(name, str) and name.lower() in SET_BY_POLICY)}
+            try:
+                result = fetch(address, policy=use, headers=kept or None, **({} if timeout is None else {"timeout": timeout}))
+            except webclient.FetchError:
+                raise KbError("the request was refused or failed") from None
+            if key is None:
+                return result
+            answer = tuple(result)  # the client's `Result` also says `.final`, the address it came from, which holds the key: a keyed answer is only `(status, headers, body)`
+            if _repeats(key, answer):
+                raise srcopenalex.SourceRefused("the answer repeats the key, so it is not used")  # it would put the key in a candidate address or a header the sources keep
+            return answer
+        return get
+
+    get = make_get(policy)
+    gets = None
+    if plan["openalex"] and plan["openalex_key"]:
+        # OpenAlex alone has the owner's key, and a policy that follows no redirect (the key is in the address); a key file that cannot be used makes the source refuse for the day with a
+        # fixed reason, and no request is made, with or without the key
         try:
-            return fetch(url, policy=policy, headers=kept or None, **({} if timeout is None else {"timeout": timeout}))
-        except webclient.FetchError:
-            raise KbError("the request was refused or failed") from None
+            key = urlhaus.read_key(openalex_key_path or os.path.join(config.config_dir(), OPENALEX_KEY_FILE))
+        except urlhaus.UrlhausError as e:
+            why = textutil.clean(str(e), 160)
+
+            def refusing(url, headers=None, timeout=None):
+                raise srcopenalex.SourceRefused("the OpenAlex key file is refused: " + why)
+
+            gets = {"openalex": refusing}
+        else:
+            log.add_secrets([key, quote(key, safe="")])
+            keyed = webclient.Policy(user_agent=webclient.GENERIC_USER_AGENT, gap=0, jitter=0, follow_redirects=False, types=DISCOVERY_TYPES, check=policy.check, suffixes=suffixes, accept=ACCEPT)
+            gets = {"openalex": make_get(keyed, key)}
 
     def is_blocked(address):
         """A reason discovery can record (`owner`, `list:<name>`), or nothing. An address the matcher cannot read (`unusable`) is not a block: the queue drops it by its own checks (too long, not an address),
@@ -189,7 +269,7 @@ def _run(ctx, fetch, sources, call, rss_reader=None):
     cache = QueryCache(os.path.join(ctx.index_root, "crawl", CACHE_FILE))
     notes = _Notes(log, now)
     try:
-        result = discover.fill(ctx.conn, crawlplan.discovery_plan(plan), topics, now=_stamp(now), get=get, chat=chat if isinstance(entry, str) and entry else None, sources=sources, log=notes,
+        result = discover.fill(ctx.conn, crawlplan.discovery_plan(plan), topics, now=_stamp(now), get=get, gets=gets, chat=chat if isinstance(entry, str) and entry else None, sources=sources, log=notes,
                                cache=cache, is_blocked=is_blocked, canon_address=webaddr.canon_address, site_of=lambda host: webaddr.site_of(host, suffixes),
                                pdfs=crawlfetch.pdf_limit(ctx, rss_reader) is not None)
     except _Stopped:
@@ -211,11 +291,11 @@ def _run(ctx, fetch, sources, call, rss_reader=None):
         log.write("discover", "ok", reason=said, n=result["added"], now=now)
 
 
-def make_step(fetch=None, sources=None, call=None, rss_reader=None):
+def make_step(fetch=None, sources=None, call=None, rss_reader=None, openalex_key_path=None):
     """The step for the `refill` point. `fetch` is `webclient.get` or a stand-in with its signature, `sources` replaces the source modules (tests), `call` is `models.call` or a stand-in, `rss_reader` reads the
     memory of a process group (`crawlfetch.pdf_limit`: with PDFs on and the memory readable, a work whose only text is a PDF is queued, and otherwise rejected for its type)."""
     def step(ctx):
-        _run(ctx, fetch or webclient.get, sources, call or models.call, rss_reader)
+        _run(ctx, fetch or webclient.get, sources, call or models.call, rss_reader, openalex_key_path)
     return step
 
 

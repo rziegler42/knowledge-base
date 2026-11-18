@@ -369,6 +369,20 @@ class Preview(Case):
         self.assertIn("abuse.ch", text)
         self.assertIn("for you to have read", text)
 
+    def test_it_says_when_the_openalex_key_is_used_and_where_it_comes_from_and_says_nothing_when_it_is_not(self):
+        text, _ = self.preview()
+        self.assertNotIn("openalex.key", text)
+        self.assertNotIn("your key", text.split("Sources:")[1].split("Public lists")[0])
+        self.set_plan("[sources]\nopenalex_key = on\n")
+        text, _ = self.approve()
+        self.assertIn("OpenAlex: on (with your key)", text)
+        self.assertIn("openalex.key", text)
+        self.assertIn("in the address of each request", text)
+        self.assertIn("for you to have read", text.split("openalex.key")[1].split("\n")[0])
+        self.set_plan("[sources]\nopenalex = off\nopenalex_key = on\n")
+        text, _ = self.approve()
+        self.assertNotIn("openalex.key", text)  # a key for a source that is off is not used, and is not said to be
+
     def test_it_names_the_lists_the_scan_kinds_that_hold_and_that_a_named_list_replaces_the_default(self):
         text, _ = self.preview()
         self.assertIn("phishing_domains: on", text)

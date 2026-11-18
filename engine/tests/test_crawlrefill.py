@@ -628,5 +628,258 @@ class Wiring(Case):
         self.assertTrue(self.fetch.calls)
 
 
+KEY = "oa-test-key-0123456789"
+API = "https://api.openalex.org/works?search=control&per_page=10"
+
+
+class Asks(Source):
+    """A source that makes the requests a real one makes: it calls the `get` it is given for each address of `urls`, and keeps what came back or the error."""
+
+    def __init__(self, name, urls, swallow=False):
+        super().__init__(name)
+        self.urls, self.seen, self.swallow = urls, [], swallow
+
+    def search(self, query, get, limit, *more):
+        for url in self.urls:
+            try:
+                self.seen.append(get(url, headers={"User-Agent": "knowledge-base-discovery/0.1", "Accept": "application/json", "X-Other": "kept"}))
+            except srcopenalex.SourceRefused as error:
+                self.seen.append(error)
+                if not self.swallow:
+                    raise  # as a real source does: discovery turns the source off
+            except KbError as error:
+                self.seen.append(error)
+        return {"candidates": [], "rejected": []}
+
+
+class KeyedOpenAlex(Case):
+    """`openalex_key = on`: the key goes to OpenAlex's requests as the `api_key` query parameter, added by the refill step just before the client is called, and to nothing else."""
+
+    def setUp(self):
+        super().setUp()
+        self.key_path = self.put("openalex.key", KEY + "\n")
+        self.plan.update(openalex_key=True, arxiv=True, wikipedia=True)
+        self.plan_arxiv = "https://export.arxiv.org/api/query?search_query=all:control"
+
+    def run_step(self, urls=(API,), arxiv=True, key_path=None, swallow=False):
+        self.sources = {"openalex": Asks("openalex", list(urls), swallow), "arxiv": Asks("arxiv", [self.plan_arxiv] if arxiv else []),
+                        "wikipedia": Asks("wikipedia", ["https://en.wikipedia.org/w/api.php?action=query"] if arxiv else []), "web_search": Source("web")}
+        ctx = self.ctx()
+        crawlrefill.make_step(fetch=self.fetch, sources=self.sources, call=self.call, openalex_key_path=key_path or self.key_path)(ctx)
+        return ctx
+
+    def calls_to(self, host):
+        return [c for c in self.fetch.calls if host in c.url]
+
+    def test_an_address_of_openalex_goes_to_the_client_with_the_key_added_and_the_source_never_has_it(self):
+        self.fetch.replies[API + "&api_key=" + KEY] = (200, {"content-type": "application/json"}, b"{}")
+        self.run_step()
+        call, = [c for c in self.calls_to("api.openalex.org")][:1]
+        self.assertEqual(call.url, API + "&api_key=" + KEY)
+        self.assertTrue(all(KEY not in url for url in self.sources["openalex"].urls))
+        for seen in self.sources["openalex"].seen:
+            self.assertIsInstance(seen, tuple)  # it was answered
+            self.assertNotIn(KEY.encode(), seen[2])
+
+    def test_the_parameter_is_added_after_a_query_with_an_and_and_to_an_address_with_no_query_with_a_question_mark_and_before_a_fragment(self):
+        self.run_step(urls=("https://api.openalex.org/works", "https://api.openalex.org/works?x=1#top", "https://api.openalex.org/works?x=%26y"))
+        urls = sorted({c.url for c in self.calls_to("api.openalex.org")})
+        self.assertEqual(urls, sorted(["https://api.openalex.org/works?api_key=" + KEY, "https://api.openalex.org/works?x=1&api_key=" + KEY + "#top",
+                                       "https://api.openalex.org/works?x=%26y&api_key=" + KEY]))
+
+    def test_a_word_api_key_in_a_value_of_the_query_is_not_a_parameter_and_the_request_goes_with_the_key(self):
+        for url in ("https://api.openalex.org/works?search=api_key%20leak%20detection", "https://api.openalex.org/works?filter=title.search:api_key",
+                    "https://api.openalex.org/works?search=how+to+hide+an+api_key&per_page=5", "https://api.openalex.org/works?q=1%26api_key%3Dx"):
+            with self.subTest(url=url):
+                self.setUp()
+                self.run_step(urls=(url,), arxiv=False)
+                calls = self.calls_to("api.openalex.org")
+                self.assertTrue(calls)
+                self.assertEqual(calls[0].url.count("api_key=" + KEY), 1)
+
+    def test_a_parameter_named_api_key_is_refused_in_any_separator_case_and_encoding(self):
+        bad = ("https://api.openalex.org/works?q=1;api_key=other", "https://api.openalex.org/works?q=1&amp;api_key=other", "https://api.openalex.org/works?q=1&%41pi_Key=other",
+               "https://api.openalex.org/works?api_key", "https://api.openalex.org/works?q=1&api_key", "https://api.openalex.org/works?q=1&api%255fKEY=")
+        self.run_step(urls=bad, arxiv=False, swallow=True)
+        self.assertEqual(self.fetch.calls, [])
+
+    def test_an_answer_that_repeats_the_key_is_not_used_and_the_source_is_refused_with_a_fixed_text(self):
+        odd_key = "ab&c#d%e=f+g/h?i-123456"
+        for where, key, reply in (("a header", KEY, (200, {"content-type": "application/json", "etag": '"' + KEY + '"'}, b"{}")),
+                                  ("the body", KEY, (200, {"content-type": "application/json"}, b'{"results": [], "meta": {"echo": "' + KEY.encode() + b'"}}')),
+                                  ("the body in upper case", KEY, (200, {"content-type": "application/json"}, b'{"echo": "' + KEY.upper().encode() + b'"}')),
+                                  ("the body, encoded", odd_key, (200, {"content-type": "application/json"}, b'{"echo": "ab%26c%23d%25e%3Df%2Bg%2Fh%3Fi-123456"}')),
+                                  ("the body, encoded in lower case", odd_key, (200, {"content-type": "application/json"}, b'{"echo": "ab%26c%23d%25e%3df%2bg%2fh%3fi-123456"}')),
+                                  ("a refusing answer", KEY, (429, {"content-type": "application/json", "retry-after": KEY}, b""))):
+            with self.subTest(where=where):
+                self.setUp()
+                path = self.put("echo.key", key + "\n")
+                self.fetch.replies[API + "&api_key=" + __import__("urllib.parse", fromlist=["x"]).quote(key, safe="")] = reply
+                self.run_step(arxiv=False, key_path=path)
+                seen = self.sources["openalex"].seen[0]
+                self.assertIsInstance(seen, srcopenalex.SourceRefused)
+                self.assertEqual(seen.reason, "the answer repeats the key, so it is not used")
+                self.assertNotIn(key, json.dumps(self.lines()))
+
+    def test_an_answer_that_is_not_a_status_a_mapping_of_headers_and_bytes_is_not_used(self):
+        for where, reply in (("headers that are not a mapping", (200, "etag: x", b"{}")), ("a body that is text", (200, {"content-type": "application/json"}, "{}")),
+                             ("no headers", (200, None, b"{}"))):
+            with self.subTest(where=where):
+                self.setUp()
+                self.fetch.replies[API + "&api_key=" + KEY] = reply
+                self.run_step(arxiv=False)
+                seen = self.sources["openalex"].seen[0]
+                self.assertIsInstance(seen, srcopenalex.SourceRefused)
+                self.assertEqual(seen.reason, "the answer repeats the key, so it is not used")
+
+    def test_an_answer_that_does_not_repeat_the_key_is_given_to_the_source_whole(self):
+        self.fetch.replies[API + "&api_key=" + KEY] = (200, {"content-type": "application/json", "etag": '"abc"'}, b'{"results": []}')
+        self.run_step(arxiv=False)
+        seen = self.sources["openalex"].seen[0]
+        self.assertEqual((seen[0], seen[1]["etag"], seen[2]), (200, '"abc"', b'{"results": []}'))
+
+    def test_the_encoded_form_of_a_key_with_marks_is_named_to_the_log_as_well(self):
+        path = self.put("odd.key", "ab&c#d%e=f+g/h?i-123456\n")
+        ctx = self.run_step(arxiv=False, key_path=path)
+        self.assertEqual(ctx.log.safe("ab&c#d%e=f+g/h?i-123456"), crawllog.WITHHELD)
+        self.assertEqual(ctx.log.safe("ab%26c%23d%25e%3Df%2Bg%2Fh%3Fi-123456"), crawllog.WITHHELD)
+
+    def test_an_address_that_is_short_raw_and_too_long_once_the_client_has_made_it_canonical_is_refused_before_the_client_is_called(self):
+        url = "https://api.openalex.org/works?filter=" + "|" * 900  # 940 characters raw, 2,740 when each bar is written %7C
+        self.run_step(urls=(url,), arxiv=False, swallow=True)
+        self.assertEqual(self.fetch.calls, [])
+        self.assertIn("not one that the key may be sent to", str(self.sources["openalex"].seen[0]))
+
+    def test_the_host_is_read_in_any_case_and_the_key_goes_to_it(self):
+        self.run_step(urls=("https://API.OpenAlex.org/works?x=1",), arxiv=False)
+        call, = {c.url: c for c in self.calls_to("OpenAlex.org") + self.calls_to("openalex.org")}.values()
+        self.assertEqual(call.url, "https://API.OpenAlex.org/works?x=1&api_key=" + KEY)
+
+    def test_an_address_too_long_for_the_client_once_the_key_is_added_is_refused_with_a_cause_and_no_request(self):
+        path = self.put("long.key", "&" * 200 + "\n")  # 600 characters once it is percent-encoded
+        self.run_step(urls=("https://api.openalex.org/works?x=" + "a" * 1500,), arxiv=False, key_path=path, swallow=True)
+        self.assertEqual(self.fetch.calls, [])
+        seen = self.sources["openalex"].seen
+        self.assertTrue(seen and all(isinstance(s, srcopenalex.SourceRefused) for s in seen))
+        self.assertIn("not one that the key may be sent to", str(seen[0]))
+        self.run_step(urls=("https://api.openalex.org/works?x=" + "a" * 1500,), arxiv=False)  # with the usual key it is one the client takes
+        self.assertEqual(len(self.calls_to("api.openalex.org")) > 0, True)
+
+    def test_a_keyed_answer_is_only_status_headers_and_body_and_never_says_where_it_came_from(self):
+        self.fetch.replies[API + "&api_key=" + KEY] = (200, {"content-type": "application/json"}, b"{}")
+        self.run_step(arxiv=False)
+        seen = self.sources["openalex"].seen[0]
+        self.assertIs(type(seen), tuple)
+        self.assertEqual(len(seen), 3)
+        self.assertFalse(hasattr(seen, "final"))
+
+    def test_a_key_with_marks_that_an_address_would_read_is_percent_encoded_and_cannot_add_a_parameter(self):
+        odd = "ab&c#d%e=f+g/h?i-123456"
+        path = self.put("odd.key", odd + "\n")
+        self.run_step(arxiv=False, key_path=path)
+        call = self.calls_to("api.openalex.org")[0]
+        self.assertEqual(call.url, API + "&api_key=ab%26c%23d%25e%3Df%2Bg%2Fh%3Fi-123456")
+        self.assertEqual(call.url.count("&"), API.count("&") + 1)
+        self.assertNotIn("#", call.url)
+
+    def test_the_policy_for_the_key_follows_no_redirect_sets_no_header_of_its_own_and_is_the_pages_policy_otherwise(self):
+        self.run_step()
+        keyed, = {id(c.policy): c.policy for c in self.calls_to("api.openalex.org")}.values()
+        shared, = {id(c.policy): c.policy for c in self.calls_to("export.arxiv.org")}.values()
+        self.assertFalse(keyed.follow_redirects)
+        self.assertTrue(shared.follow_redirects)
+        self.assertIsNone(keyed.credential_headers)
+        self.assertEqual((keyed.types, keyed.accept, keyed.user_agent), (shared.types, shared.accept, shared.user_agent))
+        self.assertIs(keyed.check is not None, True)
+        for call in self.calls_to("api.openalex.org"):
+            self.assertEqual(call.headers, {"X-Other": "kept"})  # the sources' user agent and accept are the policy's, as for every request
+
+    def test_no_other_source_has_the_key_and_the_shared_policy_has_no_credential(self):
+        self.run_step()
+        for host, name in (("export.arxiv.org", "arxiv"), ("en.wikipedia.org", "wikipedia")):
+            self.assertTrue(self.calls_to(host), host)  # it was asked, and answered by the client, not refused on the way
+            self.assertFalse([s for s in self.sources[name].seen if isinstance(s, srcopenalex.SourceRefused)], name)
+        for call in self.calls_to("export.arxiv.org") + self.calls_to("en.wikipedia.org"):
+            self.assertNotIn("api_key", call.url)
+            self.assertNotIn(KEY, call.url + " ".join(call.headers.values()))
+            self.assertIsNone(call.policy.credential_headers)
+
+    def test_an_address_that_may_not_have_the_key_is_refused_before_the_client_is_called(self):
+        bad = ("http://api.openalex.org/works?q=1", "https://api.openalex.org.evil.example/works", "https://evil.example/works", "https://openalex.org/works",
+               "https://api.openalex.org@evil.example/works", "https://user:pw@api.openalex.org/works", "https://api.openalex.org:8443/works",
+               "https://api.openalex.org/works?api_key=other", "https://api.openalex.org/works?q=1&API_KEY=other", "https://api.openalex.org/works?Api_Key=",
+               "https://api.openalex.org/works?api%5Fkey=other", "https://api.openalex.org/works?q=1&api%255Fkey=other",
+               "https://api.openalex.org./works", "https://api.openalex.org\\@evil.example/works", "https://api.openalex.org\\.evil.example/works",
+               "ftp://api.openalex.org/works", "https://api.openalex.org:99999999/works", "not an address")
+        self.run_step(urls=bad, arxiv=False, swallow=True)
+        self.assertEqual(self.fetch.calls, [])
+        self.assertTrue(len(self.sources["openalex"].seen) >= len(bad) and len(self.sources["openalex"].seen) % len(bad) == 0)
+        for seen in self.sources["openalex"].seen:
+            self.assertIsInstance(seen, srcopenalex.SourceRefused)
+            self.assertNotIn(KEY, str(seen))
+
+    def test_the_key_is_given_to_the_log_before_any_request_so_that_no_line_can_carry_it(self):
+        ctx = self.run_step()
+        self.assertEqual(ctx.log.safe(KEY), crawllog.WITHHELD)
+        self.assertEqual(ctx.log.safe("see " + KEY.upper()), crawllog.WITHHELD)
+        with self.assertRaises(KbError):
+            ctx.log.write("discover", "ok", reason=KEY, now=NOW)
+
+    def test_the_key_is_in_no_log_line_no_queue_row_and_no_event_of_the_run(self):
+        self.run_step()
+        text = json.dumps(self.lines()) + json.dumps([list(r) for r in self.rows()])
+        self.assertNotIn(KEY, text)
+        self.assertNotIn("api_key", text)
+
+    def refused_for(self, path):
+        """A run with the key file at `path`: no request is made (and none without the key), and OpenAlex is off for the day with a fixed reason that holds none of the file."""
+        ctx = self.run_step(arxiv=False, key_path=path)
+        self.assertEqual(self.fetch.calls, [])
+        refused = [l for l in self.lines() if l["step"] == "discover" and l["outcome"] == "refused"]
+        self.assertEqual(len(refused), 1)  # asked once, refused, not asked again
+        self.assertTrue(refused[0]["reason"].startswith("openalex: the OpenAlex key file is refused"), refused[0]["reason"])
+        self.assertNotIn(KEY, json.dumps(self.lines()))
+        self.assertEqual(list(ctx.refill_report["refused"]), ["openalex"])
+        self.assertIn("source_off:openalex", [k for k, in self.conn.execute("SELECT key FROM counters")])
+
+    def test_a_key_file_of_mode_644_is_refused_and_nothing_is_asked(self):
+        os.chmod(self.key_path, 0o644)
+        self.refused_for(self.key_path)
+
+    def test_a_key_file_that_is_missing_is_refused_and_nothing_is_asked(self):
+        self.refused_for(os.path.join(self.files, "nothing.key"))
+
+    def test_an_empty_key_file_and_one_with_a_space_in_it_are_refused_and_nothing_is_asked(self):
+        self.refused_for(self.put("empty.key", ""))
+
+    def test_a_key_file_with_a_space_in_it_is_refused_and_nothing_is_asked(self):
+        self.refused_for(self.put("spaced.key", "has a space in it\n"))
+
+    def test_a_key_file_that_is_a_link_is_refused_and_nothing_is_asked(self):
+        link = os.path.join(self.files, "link.key")
+        os.symlink(self.key_path, link)
+        self.refused_for(link)
+
+    def test_with_the_key_off_the_file_is_not_read_and_a_request_has_no_key_and_follows_redirects_as_before(self):
+        self.plan["openalex_key"] = False
+        os.chmod(self.key_path, 0o644)  # a file that would be refused: it is not looked at
+        self.run_step(arxiv=False)
+        calls = self.calls_to("api.openalex.org")
+        self.assertTrue(calls)
+        for call in calls:
+            self.assertEqual(call.url, API)
+            self.assertTrue(call.policy.follow_redirects)
+        self.assertEqual([l for l in self.lines() if l["outcome"] == "refused"], [])
+
+    def test_a_stop_file_ends_a_keyed_request_as_it_ends_every_other(self):
+        open(os.path.join(self.index, "crawl.stop"), "w").close()
+        self.run_step(arxiv=False)
+        self.assertEqual(self.fetch.calls, [])
+
+    def test_the_default_path_of_the_key_is_the_openalex_key_file_of_the_config_folder(self):
+        self.assertEqual(crawlrefill.OPENALEX_KEY_FILE, "openalex.key")
+        self.assertEqual(crawlrefill.OPENALEX_HOST, "api.openalex.org")
+
+
 if __name__ == "__main__":
     unittest.main()
