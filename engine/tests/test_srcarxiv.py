@@ -86,19 +86,55 @@ class RequestTest(unittest.TestCase):
         _, fake = search(ok(fixture("arxiv_empty.xml")), hostile)
         terms = query(fake.urls[0])[1]["search_query"].split(" AND ")
         self.assertTrue(all(re.fullmatch(r"all:[^\W_]+", t) for t in terms), terms)
-        self.assertEqual(terms[:4], ["all:control", "all:AND", "all:theory", "all:ti"])  # an operator word is a word to look for
-        self.assertEqual(len(terms), 8)
+        self.assertEqual(terms, ["all:control", "all:theory", "all:ti"])  # the operator words AND and OR are stop words; `ti` is a word to look for
+        self.assertEqual(len(terms), 3)
 
-    def test_at_most_8_words_are_sent_and_one_is_enough(self):
+    def test_at_most_three_terms_are_sent_and_one_is_enough(self):
         _, fake = search(ok(fixture("arxiv_empty.xml")), "one two three four five six seven eight nine ten")
-        self.assertEqual(query(fake.urls[0])[1]["search_query"].count("all:"), 8)
+        self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:one AND all:two AND all:three")
         _, fake = search(ok(fixture("arxiv_empty.xml")), "kalman")
         self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:kalman")
+
+    def test_the_small_words_of_a_phrase_are_not_asked_for(self):
+        _, fake = search(ok(fixture("arxiv_empty.xml")), "FPGA architecture and design flow overview")
+        self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:FPGA AND all:architecture AND all:design")
+        _, fake = search(ok(fixture("arxiv_empty.xml")), "The Theory OF Computation")  # a stop word is known in any case, and the words keep the case they had
+        self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:Theory AND all:Computation")
+
+    def test_the_words_that_topics_put_in_front_of_a_subject_are_not_asked_for(self):
+        _, fake = search(ok(fixture("arxiv_empty.xml")), "advanced principles of radio frequency engineering and circuit design")
+        self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:radio AND all:frequency AND all:engineering")
+        _, fake = search(ok(fixture("arxiv_empty.xml")), "comparative analysis of ngspice and LTspice for circuit simulation")
+        self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:ngspice AND all:LTspice AND all:circuit")
+        _, fake = search(ok(fixture("arxiv_empty.xml")), "relational database theory textbook introduction")
+        self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:relational AND all:database AND all:theory")
+
+    def test_every_word_of_the_stop_list_is_dropped_wherever_it_stands(self):
+        stop = ("a an and are as at be by for from in into is it of on or the their to with using via toward towards "
+                "textbooks textbook overview introduction advanced principles fundamentals comparative analysis").split()
+        self.assertEqual(len(stop), 34)
+        for word in stop:
+            with self.subTest(word=word):
+                _, fake = search(ok(fixture("arxiv_empty.xml")), f"{word} kalman filter control")
+                self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:kalman AND all:filter AND all:control")
+
+    def test_a_stop_word_is_a_whole_word_and_not_a_part_of_one(self):
+        _, fake = search(ok(fixture("arxiv_empty.xml")), "android theory island")
+        self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:android AND all:theory AND all:island")
+
+    def test_a_query_of_stop_words_alone_keeps_its_first_word(self):
+        _, fake = search(ok(fixture("arxiv_empty.xml")), "and of the")
+        self.assertEqual(query(fake.urls[0])[1]["search_query"], "all:and")
+
+    def test_the_same_phrase_always_makes_the_same_request(self):
+        urls = [search(ok(fixture("arxiv_empty.xml")), "history of algebra from arithmetic to abstract structures")[1].urls[0] for _ in range(3)]
+        self.assertEqual(len(set(urls)), 1)
+        self.assertEqual(query(urls[0])[1]["search_query"], "all:history AND all:algebra AND all:arithmetic")
 
     def test_a_word_is_letters_and_digits_of_any_alphabet_and_the_marks_are_cut(self):
         _, fake = search(ok(fixture("arxiv_empty.xml")), "régulation optimale C++ k-means 3.5 snake_case")
         terms = query(fake.urls[0])[1]["search_query"].split(" AND ")
-        self.assertEqual(terms, ["all:régulation", "all:optimale", "all:C", "all:k", "all:means", "all:3", "all:5", "all:snake"])
+        self.assertEqual(terms, ["all:régulation", "all:optimale", "all:C"])  # the marks are cut before the words are chosen: `k`, `means`, `3`, `5` and `snake` would follow
 
     def test_a_query_with_no_letter_or_digit_asks_nothing(self):
         for text in ("!!!", "---", "(  )", "+ - *", "_ _"):

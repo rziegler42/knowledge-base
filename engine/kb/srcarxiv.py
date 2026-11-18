@@ -17,7 +17,8 @@ What was read and what follows from it:
   is a refusal. **The capture's checks are written again here and not imported**, because `parse_atom` reads one paper and has them inline,
   and to share them `capture_arxiv.py` would have to be changed, which this plan does not own; a test shows that the capture refuses the same
   bodies, and when that file is free the checks can move to one place.
-- Only plain words go into the search: the query is cut into its letters and digits, each word is a term `all:<word>` joined with AND, and
+- Only plain words go into the search: the query is cut into its letters and digits, the small words and the words that topics put before a
+  subject are dropped, at most the first `MAX_TERMS` (three) of the rest are kept, each is a term `all:<word>` joined with AND, and
   nothing of the query's own punctuation, operators or field names reaches arXiv's query syntax.
 - Only the id of an entry is used (the title and the abstract are not read), and it must be an arXiv abstract address that
   `capture_arxiv.parse_id` takes; the candidate is rebuilt from that id, as `srcopenalex` does for an arXiv paper."""
@@ -36,7 +37,9 @@ USER_AGENT = srcopenalex.USER_AGENT
 TIMEOUT = 30
 MAX_BODY = 1_000_000  # as `capture_arxiv.METADATA_MAX_BYTES`
 MAX_TAGS = 20_000
-MAX_WORDS = 8
+MAX_TERMS = 3  # the words a search asks for: every word must match (`AND`), and a long phrase finds nothing (measured 2026-11-18: the whole phrase found no paper for ten phrases of ten, the first three words found ten for nine of them)
+# words that a phrase of a topic carries and that no paper is searched for: the small words, and the words that put a subject in front of a kind of book (the list measured on 2026-11-18)
+_STOP = frozenset("a an and are as at be by for from in into is it of on or the their to with using via toward towards textbooks textbook overview introduction advanced principles fundamentals comparative analysis".split())
 MIN_GAP = 3.0
 MAX_LIMIT = 50
 _ATOM = "{http://www.w3.org/2005/Atom}"
@@ -150,10 +153,11 @@ def search(query, get, limit, pacer):
         raise _refuse(f"limit must be a whole number from 1 to {MAX_LIMIT}")
     if not callable(get) or not callable(getattr(pacer, "wait", None)):
         raise _refuse("get is a function of the address and the pacer has a wait")
-    words = _WORDS.findall(text)[:MAX_WORDS]
+    words = _WORDS.findall(text)
     if not words:
         raise _refuse("a query needs at least one letter or digit")
-    terms = " AND ".join(f"all:{w}" for w in words)
+    kept = [w for w in words if w.lower() not in _STOP][:MAX_TERMS] or words[:1]  # a phrase of nothing but small words keeps its first word
+    terms = " AND ".join(f"all:{w}" for w in kept)
     url = API + "?" + "&".join(f"{key}={quote(value, safe=safe)}" for key, value, safe in [
         ("search_query", terms, ":"), ("start", "0", ""), ("max_results", str(limit), ""), ("sortBy", "relevance", ""),
         ("sortOrder", "descending", "")])
