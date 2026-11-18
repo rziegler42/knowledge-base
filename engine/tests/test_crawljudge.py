@@ -953,6 +953,51 @@ class JudgeBookTest(RecordCase):
         with mock.patch.object(crawljudge.crawllog.Log, "write", side_effect=KbError("the log cannot be written")), self.assertRaises(KbError):
             self.judge_book(book, version)
 
+    def long_name(self, n=52):
+        return ("wnt-beta-catenin-signaling-in-development-and-cancer-" + "x" * n)[:n]
+
+    def test_a_kept_book_whose_shelf_name_is_long_is_judged_and_its_line_shows_the_name_cut(self):
+        name = self.long_name()
+        book, version, row = self.crawl_book(document("pid", 0.7))
+        with mock.patch.object(crawljudge, "_verdict", return_value=(True, 0.7, name, None)):
+            got, _ = self.judge_book(book, version)
+        self.assertEqual((got["outcome"], got["ok"], got["shelf"]), ("kept", True, name))
+        (event,) = self.named(book, "crawl_judged")
+        self.assertEqual(event["shelf"], name)
+        (line,) = self.log_lines()
+        self.assertEqual((line["outcome"], line["reason"]), ("ok", "score 0.700 shelf " + name[:36] + "..."))
+
+    def test_a_rejected_book_whose_shelf_name_is_long_is_weeded_with_the_whole_name_and_its_line_shows_it_cut(self):
+        name = self.long_name()
+        book, version, row = self.crawl_book(document("pid", 0.1))
+        with mock.patch.object(crawljudge, "_verdict", return_value=(False, 0.1, name, below(0.1, name))):
+            got, _ = self.judge_book(book, version)
+        self.assertEqual((got["outcome"], got["reason"]), ("rejected", below(0.1, name)))
+        (event,) = self.named(book, "crawl_rejected")
+        self.assertEqual(event["reason"], below(0.1, name))
+        self.assertEqual((self.row(row)["status"], self.row(row)["reason"]), ("rejected", below(0.1, name)))
+        (line,) = self.log_lines()
+        self.assertEqual(line["reason"], below(0.1, name[:36] + "..."))
+
+    def test_the_line_of_a_rejection_finished_later_shows_the_name_cut_too(self):
+        name = self.long_name()
+        book, version, row = self.crawl_book(document("pid", 0.1))
+        with mock.patch.object(crawljudge, "_verdict", return_value=(False, 0.1, name, below(0.1, name))), \
+                mock.patch.object(crawljudge.crawlstate, "reject_kept", side_effect=RuntimeError("died")), self.assertRaises(RuntimeError):
+            self.judge_book(book, version)
+        again, _ = self.judge_book(book, version)
+        self.assertEqual((again["outcome"], self.row(row)["status"]), ("already_rejected", "rejected"))
+        (line,) = self.log_lines()
+        self.assertEqual(line["reason"], below(0.1, name[:36] + "..."))
+
+    def test_a_name_of_39_characters_is_logged_whole_and_one_of_40_is_cut(self):
+        for size, shown in ((39, self.long_name(39)), (40, self.long_name(40)[:36] + "...")):
+            with self.subTest(size=size):
+                book, version, row = self.crawl_book(document("pid", 0.7))
+                with mock.patch.object(crawljudge, "_verdict", return_value=(True, 0.7, self.long_name(size), None)):
+                    self.judge_book(book, version)
+                self.assertEqual(self.log_lines()[-1]["reason"], "score 0.700 shelf " + shown)
+
     def test_the_run_must_be_a_name_and_now_a_time_with_a_zone_and_nothing_is_recorded_if_not(self):
         book, version, _ = self.crawl_book(document("pid", 0.7))
         embed = FakeEmbed()

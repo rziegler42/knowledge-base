@@ -20,6 +20,7 @@ refusal that is not that (no entry set, shelf vectors missing or stale, a model 
 Nothing here opens a card, makes a request or reads the owner's config, plan or key."""
 import datetime
 import math
+import re
 import time
 
 from . import KbError, convert, crawlbooks, crawllog, crawlstate, models, placement, shelfmatch, shelfvectors, stages
@@ -132,6 +133,14 @@ def embedded_text(title, text):
 
 
 # --- the verdict
+
+_LONG_NAME = re.compile(r"[A-Za-z0-9_+/=-]{40,}")      # the run of characters that the crawl log takes for a key (`crawllog._LONG`)
+
+
+def logged(reason):
+    """The reason as the log is given it: each run of 40 or more name characters (a long shelf name) cut to its first 36 and `...`, which the log's credential check accepts. What is recorded is not cut."""
+    return _LONG_NAME.sub(lambda found: found.group(0)[:36] + "...", reason) if isinstance(reason, str) else reason
+
 
 def below_threshold(shelf, score, threshold):
     return f"the best shelf is {shelf} at {score:.3f}, under the threshold {threshold:g}"
@@ -246,7 +255,7 @@ def judge_book(store, conn, cfg, plan, book_id, version_id, run, now, embed=None
     row = found.get("candidate")
 
     def line(outcome, reason, chars=None, seconds=None):
-        log.write("judge", outcome, candidate=row if type(row) is int else None, book=book_id, n=chars, reason=reason, seconds=seconds, now=now)
+        log.write("judge", outcome, candidate=row if type(row) is int else None, book=book_id, n=chars, reason=logged(reason), seconds=seconds, now=now)
 
     def weed(reason, score, chars, seconds):
         weeded = crawlbooks.weed(store, book_id, reason, score, "judge")
