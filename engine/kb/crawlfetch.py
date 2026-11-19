@@ -34,7 +34,7 @@ import os
 from collections import namedtuple
 from urllib.parse import urlsplit
 
-from . import KbError, capture_url, convert_run, crawlbooks, crawlguard, crawllists, crawlrun, crawlstate, identity, stages, webaddr, webclient
+from . import KbError, capture_arxiv, capture_url, convert_run, crawlbooks, crawlguard, crawllists, crawlrun, crawlstate, identity, stages, webaddr, webclient
 from . import store as library_store
 
 # a common browser's string; the plan's `user_agent = browser` sends it. It names no project, tool or contact (the owner chose a browser's, as `shelf.md` agreed).
@@ -42,6 +42,7 @@ BROWSER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605
 PAGE_MAX_BYTES = capture_url.MAX_BYTES               # the plan has no key for the size of a page; this is the capture's own limit
 SITE_REFUSALS = (401, 403, 429, 451)
 PDF_REASON = "pdf not safe to convert"
+MAX_ARXIV_ID = 40                                    # a real id is at most 20 characters (`math.GT/0309136`); a longer one is not read as a paper's
 NOT_A_PDF = "not a PDF"
 PDFS_OFF = "PDF files are off for this run: the memory of a tool cannot be read here, so a limit of memory could not be enforced"
 MIB = 1024 * 1024
@@ -179,6 +180,17 @@ WHY_ENDED = {"fetches_per_day": "fetches_per_day reached: no new candidates toda
 ALREADY_HELD = "already held"
 
 
+def _arxiv_id(address):
+    """The id of the paper that a canonical address names (`webaddr.identity_key` reads it: the hosts `arxiv.org`, `www.arxiv.org` and `export.arxiv.org`, an `/abs/` or `/pdf/` path, a legacy id with a slash, a version and a
+    final `.pdf` that it drops), or `None` when the address is not a paper's. The version is dropped on purpose: the crawl takes the latest. It makes no request."""
+    try:
+        key = webaddr.identity_key(address)
+    except KbError:
+        return None
+    paper = key[6:] if key.startswith("arxiv:") else None
+    return paper if paper is not None and len(paper) <= MAX_ARXIV_ID else None        # a legacy id has no length of its own: a long one is junk, and would be sent to arXiv, kept as a key and tried again
+
+
 def _path_is_pdf(address):
     try:
         return urlsplit(address).path.lower().endswith(".pdf")
@@ -193,8 +205,9 @@ def _crawl_found(events):
 class _Run:
     """One run of the step: the context, the library, the policy and the counts."""
 
-    def __init__(self, ctx, fp, library, ident, capture, scan):
+    def __init__(self, ctx, fp, library, ident, capture, scan, capture_paper=None):
         self.ctx, self.fp, self.library, self.ident, self.capture = ctx, fp, library, ident, capture
+        self.capture_paper = capture_paper or capture_arxiv.capture
         self.filed = crawlbooks.filed_count(library, scan)
         self.orphans = set(scan.orphans)
         self.state, _restarted = crawlguard.load_state(ctx.index_root)
@@ -269,7 +282,7 @@ class _Run:
 
     def one(self, row):
         """Take one candidate through the capture."""
-        if row["source"] == "arxiv" or (self.fp.pdf_bytes is None and _path_is_pdf(row["address"])):
+        if self.fp.pdf_bytes is None and (row["source"] == "arxiv" or _path_is_pdf(row["address"])):
             return self.outcome(row, Outcome("rejected", PDF_REASON, False))
         try:
             address = webaddr.canon_address(row["address"])
@@ -280,10 +293,25 @@ class _Run:
             self.finish(row, "rejected", ALREADY_HELD, owner)
             self.say("rejected", row, ALREADY_HELD, owner)
             return
+        paper = _arxiv_id(address)
+        if paper is None and row["source"] == "arxiv":
+            return self.outcome(row, Outcome("rejected", "the address is not usable", False))
+        if paper is not None:
+            if self.fp.pdf_bytes is None:
+                return self.outcome(row, Outcome("rejected", PDF_REASON, False))
+            owner = self.ident.lookup("arxiv", paper)
+            if owner and not self._adoptable(owner, row["id"]):                  # a book that `adopt` would refuse (the owner's, one the crawl has counted, one weeded by someone else): no request is made for it, since the capture would write a newer version into it
+                self.finish(row, "rejected", ALREADY_HELD, owner)
+                self.say("rejected", row, ALREADY_HELD, owner)
+                return
         try:
-            more = {"pdf_max_bytes": self.fp.pdf_bytes, "page_max_bytes": PAGE_MAX_BYTES} if self.fp.pdf_bytes else {}       # with no PDF limit the capture is called exactly as before
-            result = self.capture(self.library, self.ident, address, policy=self._policy(), types=self.fp.policy.types, auto_filed=True, max_bytes=self.fp.max_bytes,
-                                  timeout=self.fp.timeout, total_timeout=self.fp.total_timeout, **more)
+            if paper is not None:
+                result = self.capture_paper(self.library, self.ident, paper, policy=self._policy(), max_bytes=min(self.fp.pdf_bytes, capture_arxiv.PDF_MAX_BYTES), timeout=self.fp.timeout,
+                                            total_timeout=self.fp.total_timeout, auto_filed=True)
+            else:
+                more = {"pdf_max_bytes": self.fp.pdf_bytes, "page_max_bytes": PAGE_MAX_BYTES} if self.fp.pdf_bytes else {}       # with no PDF limit the capture is called exactly as before
+                result = self.capture(self.library, self.ident, address, policy=self._policy(), types=self.fp.policy.types, auto_filed=True, max_bytes=self.fp.max_bytes,
+                                      timeout=self.fp.timeout, total_timeout=self.fp.total_timeout, **more)
         except webclient.Refused as e:
             return self.outcome(row, classify(e))
         status, book = result["status"], result["book_id"]
@@ -340,6 +368,20 @@ class _Run:
         own.check = check
         return own
 
+    def _adoptable(self, book, candidate):
+        """True if a book that holds the key of a paper may go to the capture: it is the crawl's own (`auto_filed`) and `adopt` would take it: it has no `crawl_found` and is active, or is weeded after a failed capture of the crawl's, or it is the active book that this candidate was already counted for (a death after the event and before the row was finished: the capture says `held` and the row is kept); or it cannot be read (a stale entry of the index, which the capture handles)."""
+        try:
+            root = self.library.read_book(book)
+            if root.get("auto_filed") is not True:
+                return False
+            events = self.library.read_events(book)
+        except KbError:
+            return True
+        found = _crawl_found(events)
+        if found is not None:
+            return found.get("candidate") == candidate and root.get("state") == "active"
+        return root.get("state") == "active" or (root.get("state") == "weeded" and any(e.get("event") == "capture_failed" for e in events))
+
     def _owners(self, book):
         """True if the address names a book that exists and is not the crawl's (a book of the owner's: nothing here fetches into it)."""
         try:
@@ -348,8 +390,8 @@ class _Run:
             return False
 
 
-def make_step(capture=None, open_store=None, statvfs=None, rss_reader=None):
-    """The function for the `fetch` point. `capture`, `open_store`, `statvfs` and `rss_reader` (the reader of the memory of a process group, for `pdf_limit`) replace the real ones (tests)."""
+def make_step(capture=None, open_store=None, statvfs=None, rss_reader=None, capture_paper=None):
+    """The function for the `fetch` point. `capture`, `open_store`, `statvfs`, `rss_reader` (the reader of the memory of a process group, for `pdf_limit`) and `capture_paper` (the capture of an arXiv paper) replace the real ones (tests)."""
 
     def step(ctx):
         if not isinstance(getattr(ctx, "plan_digest", None), str):
@@ -360,7 +402,7 @@ def make_step(capture=None, open_store=None, statvfs=None, rss_reader=None):
             raise crawlrun.StepRefused(str(e)) from None
         library = (open_store or library_store.Store.open)()
         _sweep(ctx, library)
-        run = _Run(ctx, fp, library, identity.Identity(ctx.index_root), capture or capture_url.capture, crawlbooks.scan_crawl_books(library))
+        run = _Run(ctx, fp, library, identity.Identity(ctx.index_root), capture or capture_url.capture, crawlbooks.scan_crawl_books(library), capture_paper)
         ended = "the step failed"
         try:
             ended = _loop(ctx, run, statvfs or os.statvfs)

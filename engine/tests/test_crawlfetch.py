@@ -17,13 +17,14 @@ from unittest import mock
 
 from engine.tests import ENGINE_DIR  # noqa: F401  (puts the engine folder on the import path)
 from engine.tests import test_crawllists, test_crawlrefill
+from engine.tests.test_capture_arxiv import PDF1, atom
 from engine.tests.test_capture_policy import PAGE
 from engine.tests.test_discover import Source
 from engine.tests.test_store import StoreCase, make_writable
 from engine.tests.test_weblists import Fake, ok as list_ok, plan as lists_plan
 from engine.tests.test_webclient import PRIVATE, Net, PeerSock, redirect, reply
 
-from kb import KbError, capture_url, crawlbooks, crawlfetch, crawlguard, crawllog, crawlplan, crawlqueue, crawlrefill, crawlrun, crawlstate, identity, library, store, webclient, weblists
+from kb import KbError, capture_arxiv, capture_url, crawlbooks, crawlfetch, crawlguard, crawllog, crawlplan, crawlqueue, crawlrefill, crawlrun, crawlstate, identity, library, store, webclient, weblists
 from kb.capture_url import FetchError
 
 NOW = datetime.datetime(2026, 11, 16, 12, 0, tzinfo=datetime.timezone.utc)
@@ -1109,11 +1110,11 @@ class PdfsOn(StepCase):
         self.assertIsNone(crawlfetch.pdf_limit(other, unreadable))
         self.assertIsNone(crawlfetch.pdf_limit(other, reader))
 
-    def test_the_arxiv_source_is_still_rejected_without_a_request_with_pdfs_on(self):
-        ident = self.add("/abs", host="arxiv.test", source="arxiv")
+    def test_an_arxiv_source_candidate_that_is_not_a_paper_address_is_rejected_as_not_usable_without_a_request_with_pdfs_on(self):
+        ident = self.add("/abs", host="arxiv.test", source="arxiv")             # a host that is not an arXiv host: no id to read
         hits = len(self.srv.hits)
         self.run_step(rss_reader=readable)
-        self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "pdf not safe to convert"))
+        self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "the address is not usable"))
         self.assertEqual((len(self.srv.hits), self.store.list_books()), (hits, []))
 
     def test_the_policy_takes_the_type_and_the_larger_cap_only_when_a_pdf_limit_is_given(self):
@@ -1128,6 +1129,233 @@ class PdfsOn(StepCase):
         for bad in (0, -1, True, 1.5, "5"):
             with self.subTest(bad), self.assertRaises(KbError):
                 crawlfetch.build(dict(self.plan), self.matcher, SUFFIXES, self.index, pdf_bytes=bad)
+
+
+class ArxivPapers(StepCase):
+    """A candidate whose address is an arXiv paper (`webaddr.identity_key` reads `arxiv:<id>`) is fetched with the capture for arXiv, under the plan's limit for PDF files."""
+
+    def setUp(self):
+        super().setUp()
+        self.plan.update(pdf_max_mb=5)
+        self.calls = []
+
+    def fake(self, mode="filed"):
+        """A capture for arXiv that records its call and makes the book the real one makes (`held` and `failed` as modes)."""
+        def capture(library, ident, arxiv_id, **kw):
+            self.calls.append((arxiv_id, kw))
+            held = ident.lookup("arxiv", arxiv_id)
+            if mode == "refused":
+                raise webclient.Refused("refused: the address is blocked")
+            if held and mode == "filed":
+                return {"status": "held", "book_id": held, "version_id": "v1"}
+            book = library.create_book(title="A paper " + arxiv_id, kind="preprint", authors=[], year=None, identity_keys={"arxiv": arxiv_id}, auto_filed=kw["auto_filed"])
+            ident.reassign("arxiv", arxiv_id, book)
+            if mode == "failed":
+                return {"status": "failed", "book_id": book, "version_id": None, "reason": "the PDF could not be fetched"}
+            return {"status": "filed", "book_id": book, "version_id": "v1"}
+        return capture
+
+    def go(self, mode="filed", **kw):
+        kw.setdefault("rss_reader", readable)
+        return self.run_step(capture_paper=self.fake(mode), **kw)
+
+    def test_an_arxiv_source_candidate_is_captured_by_its_id_under_the_plans_limit_and_is_a_crawl_book(self):
+        ident = self.add("/abs/2101.00001", host="arxiv.org", source="arxiv")
+        hits = len(self.srv.hits)
+        self.go()
+        self.assertEqual(len(self.calls), 1)
+        arxiv_id, kw = self.calls[0]
+        self.assertEqual((arxiv_id, kw["auto_filed"], kw["max_bytes"]), ("2101.00001", True, 5 * MIB))
+        self.assertIsInstance(kw["policy"], webclient.Policy)
+        self.assertEqual((kw["timeout"], kw["total_timeout"]), (self.build().timeout, self.build().total_timeout))
+        row = self.row(ident)
+        self.assertEqual((row["status"], row["reason"]), ("kept", None))
+        book = row["book_id"]
+        root = self.store.read_book(book)
+        self.assertEqual((root["auto_filed"], root["kind"], root["state"]), (True, "preprint", "active"))
+        found = [e for e in self.store.read_events(book) if e["event"] == "crawl_found"]
+        self.assertEqual([(e["candidate"], e["source"]) for e in found], [(ident, "arxiv")])
+        self.assertEqual(len(self.srv.hits), hits)                                                    # no page was asked for
+        self.assertEqual(self.counters()[("2026-11-16", "fetch")], 1)
+        lines = [(x["step"], x["outcome"], x["candidate"], x["book"]) for x in self.lines() if x["step"] in ("fetch", "capture") and x["candidate"] is not None]
+        self.assertEqual(lines, [("capture", "ok", ident, book), ("fetch", "ok", ident, book)])
+
+    def test_a_candidate_of_another_source_at_an_arxiv_address_is_captured_as_a_paper_and_not_as_a_page(self):
+        ident = self.add("/abs/2101.00002", host="arxiv.org", source="openalex")
+        hits = len(self.srv.hits)
+        self.go()
+        self.assertEqual([c[0] for c in self.calls], ["2101.00002"])
+        self.assertEqual((self.row(ident)["status"], len(self.srv.hits)), ("kept", hits))
+
+    def test_every_spelling_of_an_arxiv_address_gives_the_id_without_its_version_from_either_source(self):
+        cases = [("arxiv.org", "/pdf/2101.00003v2", "2101.00003"), ("www.arxiv.org", "/abs/2101.00004", "2101.00004"), ("export.arxiv.org", "/pdf/2101.00005.pdf", "2101.00005"),
+                 ("arxiv.org", "/abs/cs/0112017", "cs/0112017"), ("arxiv.org", "/pdf/cs/0112018.pdf", "cs/0112018"), ("arxiv.org", "/abs/cs/0112019v2", "cs/0112019")]
+        others = [("www.arxiv.org", "/pdf/2102.00003v3", "2102.00003"), ("export.arxiv.org", "/abs/2102.00004", "2102.00004"), ("arxiv.org", "/pdf/2102.00005.pdf", "2102.00005"),
+                  ("www.arxiv.org", "/abs/cs/0111017", "cs/0111017"), ("export.arxiv.org", "/pdf/cs/0111018.pdf", "cs/0111018"), ("arxiv.org", "/abs/cs/0111019v4", "cs/0111019")]
+        for host, path, _ in cases:
+            self.add(path, host=host, source="arxiv")
+        for host, path, _ in others:
+            self.add(path, host=host, source="openalex")
+        self.go()
+        self.assertEqual(sorted(c[0] for c in self.calls), sorted(want for _, _, want in cases + others))
+
+    def test_with_no_limit_for_pdf_files_or_an_unreadable_memory_such_a_candidate_is_rejected_as_a_pdf_with_no_request_and_no_book(self):
+        for limit, reader in ((0, readable), (5, unreadable)):
+            self.plan.update(pdf_max_mb=limit)
+            a = self.add(f"/abs/2101.1{limit}001", host="arxiv.org", source="arxiv")
+            b = self.add(f"/abs/2101.1{limit}002", host="arxiv.org", source="openalex")
+            hits = len(self.srv.hits)
+            self.go(rss_reader=reader)
+            for ident in (a, b):
+                self.assertEqual((self.row(ident)["status"], self.row(ident)["reason"]), ("rejected", "pdf not safe to convert"))
+            self.assertEqual((self.calls, len(self.srv.hits), self.store.list_books()), ([], hits, []))
+
+    def test_a_paper_the_owner_holds_by_its_key_or_by_its_address_is_rejected_as_held_with_no_request(self):
+        mine = self.store.create_book(title="Mine", kind="preprint", authors=[], year=None, identity_keys={"arxiv": "2101.00006"})
+        self.ident.reassign("arxiv", "2101.00006", mine)
+        theirs = self.store.create_book(title="Page", kind="web page", authors=[], year=None, identity_keys={"url": "http://arxiv.org/abs/2101.00007"})
+        self.ident.reassign("url", "http://arxiv.org/abs/2101.00007", theirs)
+        a = self.add("/abs/2101.00006", host="arxiv.org", source="arxiv")
+        b = self.add("/abs/2101.00007", host="arxiv.org", source="openalex")
+        self.go()
+        self.assertEqual(self.calls, [])
+        self.assertEqual([(self.row(x)["status"], self.row(x)["reason"], self.row(x)["book_id"]) for x in (a, b)], [("rejected", "already held", mine), ("rejected", "already held", theirs)])
+        self.assertEqual((self.names(mine), self.names(theirs)), ([], []))                                  # neither book was touched
+
+    def test_an_abstract_page_the_crawl_kept_does_not_stop_the_paper_from_being_fetched_as_a_second_book(self):
+        page = self.store.create_book(title="Abstract", kind="web page", authors=[], year=None, identity_keys={"url": "http://arxiv.org/abs/2101.00008"}, auto_filed=True)
+        self.ident.reassign("url", "http://arxiv.org/abs/2101.00008", page)
+        crawlbooks.record_found(self.store, page, candidate=999, source="openalex", found_from=None, topic="t", run="run-0", plan_digest=DIGEST)
+        ident = self.add("/abs/2101.00008", host="arxiv.org", source="openalex")
+        self.go()
+        row = self.row(ident)
+        self.assertEqual([c[0] for c in self.calls], ["2101.00008"])
+        self.assertEqual(row["status"], "kept")
+        self.assertNotEqual(row["book_id"], page)
+
+    def test_a_paper_of_the_crawls_own_made_by_a_try_that_died_is_adopted_and_one_of_another_candidate_is_rejected_as_held(self):
+        orphan = self.store.create_book(title="Orphan", kind="preprint", authors=[], year=None, identity_keys={"arxiv": "2101.00009"}, auto_filed=True)
+        self.ident.reassign("arxiv", "2101.00009", orphan)
+        counted = self.store.create_book(title="Counted", kind="preprint", authors=[], year=None, identity_keys={"arxiv": "2101.00010"}, auto_filed=True)
+        self.ident.reassign("arxiv", "2101.00010", counted)
+        crawlbooks.record_found(self.store, counted, candidate=998, source="arxiv", found_from=None, topic="t", run="run-0", plan_digest=DIGEST)
+        a = self.add("/abs/2101.00009", host="arxiv.org", source="arxiv")
+        b = self.add("/abs/2101.00010", host="arxiv.org", source="arxiv")
+        self.go()
+        self.assertEqual([c[0] for c in self.calls], ["2101.00009"])                                        # the one already counted is rejected before any request
+        self.assertEqual((self.row(a)["status"], self.row(a)["book_id"]), ("kept", orphan))
+        self.assertIn("crawl_found", self.names(orphan))
+        self.assertEqual((self.row(b)["status"], self.row(b)["reason"], self.row(b)["book_id"]), ("rejected", "already held", counted))
+
+    def test_a_paper_the_crawl_has_counted_or_that_someone_weeded_is_never_fetched_into_but_a_failed_capture_of_the_crawls_is_tried_again(self):
+        def paper(arxiv_id, weeded=False, found=False, failed=False, auto=True):
+            book = self.store.create_book(title="P " + arxiv_id, kind="preprint", authors=[], year=None, identity_keys={"arxiv": arxiv_id}, auto_filed=auto)
+            self.ident.reassign("arxiv", arxiv_id, book)
+            if found:
+                crawlbooks.record_found(self.store, book, candidate=990, source="arxiv", found_from=None, topic="t", run="run-0", plan_digest=DIGEST)
+            if failed:
+                self.store.append_event(book, "capture_failed", reason="the capture did not finish", run="run-0")
+            if weeded:
+                self.store.set_state(book, "weeded")
+            return book
+        counted = paper("2101.00021", found=True)
+        counted_weeded = paper("2101.00022", found=True, weeded=True)
+        weeded_by_someone = paper("2101.00023", weeded=True)
+        retry = paper("2101.00024", weeded=True, failed=True)
+        rows = {name: self.add(f"/abs/{name}", host="arxiv.org", source="arxiv") for name in ("2101.00021", "2101.00022", "2101.00023", "2101.00024")}
+        self.go()
+        self.assertEqual([c[0] for c in self.calls], ["2101.00024"])
+        for name in ("2101.00021", "2101.00022", "2101.00023"):
+            self.assertEqual((self.row(rows[name])["status"], self.row(rows[name])["reason"]), ("rejected", "already held"))
+        self.assertEqual((self.row(rows["2101.00024"])["status"], self.row(rows["2101.00024"])["book_id"]), ("kept", retry))
+        self.assertEqual([self.names(b).count("filed") for b in (counted, counted_weeded, weeded_by_someone)], [0, 0, 0])
+
+    def test_a_row_requeued_after_a_death_between_its_found_event_and_its_finish_is_kept_for_the_book_it_was_counted_for(self):
+        ident = self.add("/abs/2101.00025", host="arxiv.org", source="arxiv")
+        book = self.store.create_book(title="Counted", kind="preprint", authors=[], year=None, identity_keys={"arxiv": "2101.00025"}, auto_filed=True)
+        self.ident.reassign("arxiv", "2101.00025", book)
+        crawlbooks.record_found(self.store, book, candidate=ident, source="arxiv", found_from=None, topic="t", run="run-0", plan_digest=DIGEST)
+        self.go()
+        row = self.row(ident)
+        self.assertEqual(([c[0] for c in self.calls], row["status"], row["book_id"]), (["2101.00025"], "kept", book))
+
+    def test_an_id_that_is_far_longer_than_any_real_one_is_not_read_as_a_paper(self):
+        long_id = "a" * 60 + "/0112017"
+        junk = self.add(f"/abs/{long_id}", host="arxiv.org", source="arxiv")
+        self.go()
+        self.assertEqual((self.row(junk)["status"], self.row(junk)["reason"], self.calls), ("rejected", "the address is not usable", []))
+
+    def test_a_failed_capture_leaves_no_active_book_and_is_a_failed_try(self):
+        ident = self.add("/abs/2101.00011", host="arxiv.org", source="arxiv")
+        self.go("failed")
+        row = self.row(ident)
+        self.assertEqual((row["tries"], row["status"]), (1, "queued"))
+        self.assertEqual(self.active_books(), [])
+        made = self.store.list_books()
+        self.assertEqual([self.store.read_book(b)["state"] for b in made], ["weeded"])
+        self.assertIn("capture_failed", self.names(made[0]))
+        state, _ = crawlguard.load_state(self.index)
+        self.assertEqual(state["history"], [False])
+
+    def test_a_refusal_by_the_policy_is_a_block_as_for_a_page(self):
+        ident = self.add("/abs/2101.00012", host="arxiv.org", source="arxiv")
+        self.go("refused")
+        row = self.row(ident)
+        self.assertEqual((row["status"], row["reason"]), ("rejected", crawlfetch.classify(webclient.Refused("refused: the address is blocked")).reason))
+        self.assertEqual((self.store.list_books(), self.tripped), ([], []))
+
+    def test_an_arxiv_source_candidate_that_is_not_a_paper_address_is_rejected_as_not_usable_and_another_source_keeps_the_page_capture(self):
+        a = self.add("/list/cs/new", host="arxiv.org", source="arxiv")
+        self.doc("/list/cs/new")
+        b = self.add("/list/cs/new", host="www.arxiv.org", source="openalex")
+        self.go()
+        self.assertEqual((self.row(a)["status"], self.row(a)["reason"]), ("rejected", "the address is not usable"))
+        self.assertEqual((self.row(b)["status"], self.calls), ("kept", []))
+        self.assertEqual(self.store.read_book(self.row(b)["book_id"])["kind"], "web page")
+
+    def test_the_size_limit_is_the_plans_and_never_more_than_the_captures_own_cap(self):
+        self.plan.update(pdf_max_mb=200)
+        self.add("/abs/2101.00013", host="arxiv.org", source="arxiv")
+        self.go()
+        self.assertEqual(self.calls[0][1]["max_bytes"], capture_arxiv.PDF_MAX_BYTES)
+        self.assertLess(capture_arxiv.PDF_MAX_BYTES, 200 * MIB)
+
+    def test_the_real_capture_counts_the_two_hosts_it_asks_as_one_site_and_one_fetch_of_the_day(self):
+        patcher = mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.dns["export.arxiv.org"], self.dns["arxiv.org"] = ["93.184.216.70"], ["93.184.216.71"]       # the two hosts the capture asks in production
+        self.srv.routes["/api/query?id_list=2101.00014"] = reply(200, body=atom("2101.00014", 1), ctype="application/atom+xml")
+        self.srv.routes["/pdf/2101.00014v1"] = reply(200, body=PDF1, ctype="application/pdf")
+
+        def real(library, ident, arxiv_id, **kw):
+            return capture_arxiv.capture(library, ident, arxiv_id, api_base="https://export.arxiv.org/api/query", pdf_base="https://arxiv.org/pdf", **kw)
+
+        ident = self.add("/abs/2101.00014", host="arxiv.org", source="arxiv")
+        self.run_step(rss_reader=readable, capture_paper=real)
+        row = self.row(ident)
+        self.assertEqual((row["status"], row["reason"]), ("kept", None))
+        self.assertEqual([path for path, _ in self.srv.hits], ["/api/query?id_list=2101.00014", "/pdf/2101.00014v1"])
+        self.assertEqual(self.store.read_book(row["book_id"])["kind"], "preprint")
+        self.assertEqual(self.counters(), {("2026-11-16", "fetch"): 1, ("2026-11-16", "fetch:arxiv.org"): 1})
+
+    def test_a_paper_larger_than_the_plans_limit_makes_no_book_through_the_real_capture(self):
+        self.plan.update(pdf_max_mb=1)
+        patcher = mock.patch.object(webclient, "_tls_wrap", lambda sock, host: sock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.dns["export.arxiv.org"], self.dns["arxiv.org"] = ["93.184.216.70"], ["93.184.216.71"]
+        self.srv.routes["/api/query?id_list=2101.00015"] = reply(200, body=atom("2101.00015", 1), ctype="application/atom+xml")
+        self.srv.routes["/pdf/2101.00015v1"] = reply(200, body=b"%PDF-1.4\n" + b"0" * (2 * MIB), ctype="application/pdf")
+
+        def real(library, ident, arxiv_id, **kw):
+            return capture_arxiv.capture(library, ident, arxiv_id, api_base="https://export.arxiv.org/api/query", pdf_base="https://arxiv.org/pdf", **kw)
+
+        ident = self.add("/abs/2101.00015", host="arxiv.org", source="arxiv")
+        self.run_step(rss_reader=readable, capture_paper=real)
+        row = self.row(ident)
+        self.assertEqual((row["status"], row["reason"]), ("rejected", "over the size limit"))
+        self.assertEqual(self.active_books(), [])
 
 
 class ClassifyPdf(Case):
