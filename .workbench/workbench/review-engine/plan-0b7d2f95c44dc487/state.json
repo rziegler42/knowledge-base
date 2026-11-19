@@ -1,0 +1,146 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-19T14:52:34Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "Only a book of the owner blocks a fetch before the request; the crawl own books go to the capture. The assumption, criterion 4 and the test list now say so, with the abstract page and the orphan cases tested."
+    },
+    {
+      "at": "2026-11-19T14:52:34Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F2",
+      "reason": "The id is read as everything after the abs or pdf segment so legacy ids with a slash work; step 3 and the tests now list legacy and versioned forms and the refusals."
+    },
+    {
+      "at": "2026-11-19T14:54:58Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "The id is now read with the existing webaddr identity key function, which knows the three arXiv hosts, legacy ids, versions and a final pdf, so no second parser is written; the tests cover each host."
+    },
+    {
+      "at": "2026-11-19T14:54:58Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F2",
+      "reason": "Chose the narrow rule: only a candidate of the arxiv source without a paper address is rejected; another source at a non-paper arXiv address stays with the page capture. Step 4 and test h say so."
+    },
+    {
+      "at": "2026-11-19T14:55:41Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R3-F1",
+      "reason": "Checked on the real function: identity key drops the version. The plan now says the crawl always takes the latest version, test c expects the id without the version, and keeping a named version is deferred."
+    }
+  ],
+  "format": 1,
+  "generation": 9,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-19-fetch-arxiv-papers-in-the-unattended-crawl.md",
+  "rounds": [
+    {
+      "at": "2026-11-19T14:52:05Z",
+      "bridge": "ask-codex",
+      "document_sha256": "c8e1a32980bd6e914b8f0c4db0ca63aaaa07f60c600a839b861c1bfea8d5b486",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R1-F2",
+          "severity": "minor"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "999f32e76c4bbe2acd0e87ed9697731c3c82be02cccdfd04e794d8720f16f240",
+      "usage": {
+        "input_tokens": 522442,
+        "output_tokens": 3877,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-19T14:54:21Z",
+      "bridge": "ask-codex",
+      "document_sha256": "dc86a5ea5b9d1fe290232133d0fbf3677debcf0247dd0ff7fc0f24029b0121e0",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "317aed42aacbba737591323889bd30730768c3801434ff00661ee4eed6207f1c",
+      "usage": {
+        "input_tokens": 445389,
+        "output_tokens": 3538,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-19T14:55:24Z",
+      "bridge": "ask-codex",
+      "document_sha256": "5c68b5d2f0fbd3f33c26625ab050878db0f6e12aa612ab4105ba6ec4c33e851b",
+      "file": "round-3.json",
+      "findings": [
+        {
+          "id": "R3-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 3,
+      "profile": "second-opinion",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "38510efaf88fa54eb5cd908c5076105664df9357b6cdf3c9bf3bebd6a7e104bc",
+      "usage": {
+        "input_tokens": 172201,
+        "output_tokens": 599,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "3c854a897bc12b701c91cb777a99b8d766fd66fc6141cf96ebca354cbdbe7c8f",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

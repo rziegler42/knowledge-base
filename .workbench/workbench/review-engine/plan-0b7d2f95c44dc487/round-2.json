@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-19-fetch-arxiv-papers-in-the-unattended-crawl.md:61-62",
+      "problem": "The proposed parser recognizes only the exact host `arxiv.org`. This leaves valid `www.arxiv.org/abs/...` and `www.arxiv.org/pdf/...` candidates to the ordinary page capture, contrary to criterion 2's requirement that an arXiv-paper address from another source be captured as a preprint. It also conflicts with the existing canonical identity support, which recognizes `www.arxiv.org` as an arXiv host.",
+      "severity": "major",
+      "suggestion": "Define the supported arXiv host set consistently with the existing identity logic (at least `arxiv.org` and `www.arxiv.org`), route and test each supported host through `capture_arxiv.capture`, or explicitly narrow the completion criterion and spec to apex-host addresses only."
+    },
+    {
+      "id": "R2-F2",
+      "location": "docs/plans/2026-11-19-fetch-arxiv-papers-in-the-unattended-crawl.md:60-62",
+      "problem": "Test 2(h) requires any non-paper address on `arxiv.org` to be rejected without a call, but implementation step 4 only rejects a no-id address when its candidate source is `arxiv`. A non-arXiv-source candidate at `/list/cs/new` will fall through to `capture_url.capture`, so the listed test and implementation steps do not describe the same behavior.",
+      "severity": "major",
+      "suggestion": "Choose the intended rule and state it in step 4: either reject every candidate on the supported arXiv hosts whose path is not a paper address, with tests across sources, or limit test 2(h) to `source=arxiv` and retain ordinary page capture for other sources."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The duplicate and legacy-ID issues from round 1 are addressed, but host coverage and the non-paper-address rule remain internally incomplete.",
+  "verdict": "changes_needed"
+}

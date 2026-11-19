@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "docs/plans/2026-11-19-fetch-arxiv-papers-in-the-unattended-crawl.md:60-62",
+      "problem": "Step 3 takes the capture id from webaddr.identity_key, which deliberately removes the version (as required by population.md). Consequently /pdf/2101.00001v2 becomes 2101.00001 and capture_arxiv fetches the latest version, contradicting test 2(c) and the promised version preservation. Calling parse_id afterward cannot recover the discarded version.",
+      "severity": "major",
+      "suggestion": "Use identity_key for paper recognition and the versionless owner lookup, but preserve the requested version separately for the capture call. Specify how the shared address module supplies that version and adjust the scope and tests accordingly."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "The revised routing loses explicit paper versions through the versionless identity key.",
+  "verdict": "changes_needed"
+}
