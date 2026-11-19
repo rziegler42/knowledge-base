@@ -1,0 +1,146 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-19T17:25:35Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "The index already claims a key atomically (first register wins), so the plan now claims the hash before the book, takes over a stale entry, finishes an unfinished book, and holds a lock for the run; tests for each point of interruption and for a second run are added."
+    },
+    {
+      "at": "2026-11-19T17:28:26Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F1",
+      "reason": "The lock cannot cover the crawl capture, so the book is now made live before the hash is claimed and the crawl capture answers held for it; the small remaining window is stated, with a todo, and an interleaving test is added."
+    },
+    {
+      "at": "2026-11-19T17:28:26Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R2-F2",
+      "reason": "One cleaned, length-bounded form of the file name is used for the title, the stored source and every printed line; the raw name is stored nowhere; tests for control, bidi, zero-width, newline and long names added."
+    },
+    {
+      "at": "2026-11-19T17:29:25Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R3-F1",
+      "reason": "Checked: the helper only asks whether a book exists, so a weeded holder would pass as live. The plan now treats only an active book as a holder, takes over any other, and tests a failure followed by two successful runs."
+    },
+    {
+      "at": "2026-11-19T17:29:25Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R3-F2",
+      "reason": "The residue against a crawl capture already in flight is real and cannot be removed without changing the crawl capture; the plan now states it in full, asks for the load to run with the stop file in place, and records it as a todo."
+    }
+  ],
+  "format": 1,
+  "generation": 9,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-19-load-pdf-files-from-a-folder-into-the-library.md",
+  "rounds": [
+    {
+      "at": "2026-11-19T17:25:01Z",
+      "bridge": "ask-codex",
+      "document_sha256": "e4ee7edbcf4f77def453920f373407f8942b3aa7b35352cace5a902f6e72064c",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "9218722fcc601b50c54f2a09b7070aa75713c7c8cfd6744ec4ea2d8f4fb48bbe",
+      "usage": {
+        "input_tokens": 466096,
+        "output_tokens": 3585,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-19T17:27:29Z",
+      "bridge": "ask-codex",
+      "document_sha256": "c91e56eddf543f3572d6077662c7b6859ffe5821d79ec6cbb33ba6c208518784",
+      "file": "round-2.json",
+      "findings": [
+        {
+          "id": "R2-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R2-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "f320557bb84d94ba526f51beebb2631a2512a82d8ee4f2dbf47a34f05d8445e3",
+      "usage": {
+        "input_tokens": 526722,
+        "output_tokens": 3965,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-19T17:29:01Z",
+      "bridge": "ask-codex",
+      "document_sha256": "33e5141f6f023cc2b8452d0287828ae6288ea6696ce0013f89cb0504d22c4160",
+      "file": "round-3.json",
+      "findings": [
+        {
+          "id": "R3-F1",
+          "severity": "major"
+        },
+        {
+          "id": "R3-F2",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-6.1-sol",
+      "n": 3,
+      "profile": "second-opinion",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "low",
+        "model": "gpt-6.1-sol",
+        "options": {}
+      },
+      "sha256": "5ba6dcc3a73195db8dbec450f5547b23d1d18ba770f1ebb70fdeffda19dfc34a",
+      "usage": {
+        "input_tokens": 214410,
+        "output_tokens": 772,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    }
+  ],
+  "seal": "83bc57e0cbf09c66e0d2729bbde103e396b8c8907054078755049e1569a1cadf",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}

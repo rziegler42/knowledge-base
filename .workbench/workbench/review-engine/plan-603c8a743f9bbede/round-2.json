@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-19-load-pdf-files-from-a-folder-into-the-library.md:34, 56-58",
+      "problem": "The proposed flock excludes only other `capture-file` commands, while `capture_url.capture` deliberately does not take it. A file capture can claim a hash, before it creates its book; a concurrent URL capture sees that index entry as stale via `_live`, creates and files its own book, and its later `ident.register` is ignored. The file capture then creates a second live book for the same bytes. Thus the claim does not safely coordinate with the crawl as the plan asserts.",
+      "severity": "major",
+      "suggestion": "Define a cross-capture claim/recovery protocol that `capture_url` also obeys, or make all capture paths use one shared lock. Add an interleaving test with file capture paused after its claim and URL capture of identical bytes, asserting one live book and a correct identity entry."
+    },
+    {
+      "id": "R2-F2",
+      "location": "docs/plans/2026-11-19-load-pdf-files-from-a-folder-into-the-library.md:56-57, 69",
+      "problem": "The plan cleans the title but stores and emits the raw basename in `source[\"file_name\"]` and command output. A filename is explicitly untrusted input; control, direction, and zero-width characters can therefore enter persisted metadata or terminal-visible output, contrary to the plan's stated safety concern about what a filename can carry.",
+      "severity": "major",
+      "suggestion": "Specify one cleaned, length-bounded representation for the stored and displayed filename (or a deliberately safe literal representation where exact spelling is needed), and test control, bidi, zero-width, newline, and oversized basenames in version source and CLI output."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The revised per-command claim and recovery protocol is improved, but it still races with the existing URL/crawl capture path, and filename metadata/output remains unsanitized.",
+  "verdict": "changes_needed"
+}

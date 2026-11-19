@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "docs/plans/2026-11-19-load-pdf-files-from-a-folder-into-the-library.md: Assumptions and constraints, duplicate protocol; Increment A step 2(i)",
+      "problem": "Failure cleanup weeds the newly created book but leaves its hash claim in the index. On retry, that holder exists but is not live. The protocol only specifies takeover for a nonexistent holder, leaving this ordinary recovery case undefined. Register cannot replace it because it uses INSERT OR IGNORE.",
+      "severity": "major",
+      "suggestion": "Define takeover for an existing inactive holder, as well as a missing holder, and test a failed capture followed by two successful captures of the same bytes: the retry must own the index key and the subsequent call must report duplicate."
+    },
+    {
+      "id": "R3-F2",
+      "location": "docs/plans/2026-11-19-load-pdf-files-from-a-folder-into-the-library.md: Assumptions and constraints, crawl concurrency residue; Increment A step 2(m)",
+      "problem": "The remaining crawl race is broader than the stated interval between book creation and hash claim. capture_url can finish its hash lookup before file capture starts, pause, then create and file its book after file capture has completed. Its later register silently loses the claim without weeding its book. Thus even a completed file capture does not ensure the claimed held behavior for an already-running crawl capture. The new tests cover ordered claims but omit this interleaving.",
+      "severity": "major",
+      "suggestion": "Add the interleaving where capture_url pauses after its hash lookup and resumes after file capture completes. Either prevent overlapping crawl capture operationally or correct the residual-risk description and completion guarantees to explicitly cover this race."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "Two recovery and concurrency gaps remain in the revised duplicate protocol.",
+  "verdict": "changes_needed"
+}
