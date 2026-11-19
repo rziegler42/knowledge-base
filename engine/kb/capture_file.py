@@ -235,3 +235,50 @@ def capture(store, ident, path, max_bytes=MAX_BYTES, step_hook=None):
     except BaseException:
         _weed(store, book_id, "the capture did not finish")
         raise
+
+
+def expand(paths):
+    """The work of one call: a list of `("file", path)`, `("skipped", cleaned name, reason)` and `("refused", cleaned name, reason)` (a folder that cannot be read). A path that is a folder (a link to a folder is followed: the owner named it) gives the entries directly inside it, in name order: those whose name ends in `.pdf` in any
+    case and that are not folders are files (a link with that name is a file too: `capture` refuses it, so that the owner sees it), every other entry is skipped with its reason, and no folder is entered. Any other
+    path is a file, whatever its name (`capture` says what it is)."""
+    work = []
+    for path in paths:
+        path = os.fsdecode(path)
+        if not os.path.isdir(path):
+            work.append(("file", path))
+            continue
+        try:
+            with os.scandir(path) as scan:
+                entries = sorted(scan, key=lambda e: e.name)
+        except OSError:
+            work.append(("refused", clean_name(path), "the folder cannot be read"))      # only its cleaned base name is shown, never its path
+            continue
+        for entry in entries:
+            name = textutil.clean(entry.name, NAME_CHARS) or "untitled"
+            try:
+                is_folder = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                work.append(("skipped", name, "it cannot be examined"))
+                continue
+            if is_folder:
+                work.append(("skipped", name, "it is a folder"))
+            elif entry.name.lower().endswith(".pdf"):
+                work.append(("file", entry.path))
+            else:
+                work.append(("skipped", name, "it is not a PDF file"))
+    return work
+
+
+def load(store, ident, paths, max_bytes=MAX_BYTES):
+    """Capture every file of `expand(paths)` in turn and yield one dict for each: the result of `capture` (`filed`, `duplicate` or `refused`), or `skipped` with a reason. An error of any kind for one file (the store, the file system, the index database) is a refusal of that file,
+    with a cleaned reason, and the next file is taken. The caller holds `lock`."""
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise KbError("the size limit must be a whole number from 1")
+    for item in expand(paths):
+        if item[0] in ("skipped", "refused"):
+            yield _result(item[0], item[1], reason=item[2])
+            continue
+        try:
+            yield capture(store, ident, item[1], max_bytes=max_bytes)
+        except Exception as e:                                # a stop by the owner (KeyboardInterrupt) is not caught: it ends the run
+            yield _result("refused", clean_name(item[1]), reason=textutil.clean(str(e) or getattr(e, "strerror", None) or type(e).__name__, 200))

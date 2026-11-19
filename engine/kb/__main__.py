@@ -4,7 +4,7 @@ import json
 import os
 import sys
 
-from . import (KbError, __version__, approvals, capture_arxiv, capture_url, card, cardmake, catalog, config, convert_html,
+from . import (KbError, __version__, approvals, capture_arxiv, capture_file, capture_url, card, cardmake, catalog, config, convert_html,
                convert_pdf, identity, index, library, models, process, read, scan, search, stages, textutil, trial)
 from . import cardmarks, cardqueue
 from . import placeapply, placement, placereview, shelfbuild, shelfschema, shelfvectors, themerun, themereflag, themevectors, walk, weave
@@ -48,6 +48,10 @@ def main(argv=None):
     ax.add_argument("--max-bytes", type=int, default=capture_arxiv.PDF_MAX_BYTES, help="refuse a PDF larger than this")
     ax.add_argument("--timeout", type=float, default=capture_url.TIMEOUT, help="seconds for each network read")
     ax.add_argument("--total-timeout", type=float, default=capture_url.TOTAL_TIMEOUT, help="seconds for each fetch")
+    cf = sub.add_parser("capture-file", help="file PDF files from your disk as books of your own: each path is a file, or a folder whose .pdf files "
+                                             "are taken (not its subfolders); a file the library already holds is skipped")
+    cf.add_argument("paths", nargs="+", metavar="PATH")
+    cf.add_argument("--max-bytes", type=int, default=capture_file.MAX_BYTES, help="refuse a file larger than this")
     d = sub.add_parser("describe-tool", help="print the approved-list entry for a tool, to review and paste into "
                                              "approved_tools in the config (it changes nothing)")
     d.add_argument("tool", nargs="?", default="kb-scan", choices=[*DESCRIBABLE, "all"],
@@ -589,6 +593,17 @@ def main(argv=None):
                 print(f"failed: {out['reason']}", file=sys.stderr)
                 return 1
             return 0
+        if args.command == "capture-file":
+            store = Store.open()
+            counts = {"filed": 0, "duplicate": 0, "refused": 0, "skipped": 0}
+            with capture_file.lock(store.cfg["index_root"]):
+                for row in capture_file.load(store, identity.Identity(store.cfg["index_root"]), args.paths, max_bytes=args.max_bytes):
+                    counts[row["status"]] += 1
+                    print(json.dumps({k: v for k, v in row.items() if v is not None}), flush=True)
+                    if row["status"] == "refused":
+                        print(f"refused: {row['file_name']}: {row['reason']}", file=sys.stderr, flush=True)
+            print(", ".join(f"{name} {n}" for name, n in counts.items()))
+            return 1 if counts["refused"] else 0
         if args.command == "capture-url":
             store = Store.open()
             out = capture_url.capture(store, identity.Identity(store.cfg["index_root"]), args.address,

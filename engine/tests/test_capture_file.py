@@ -453,6 +453,81 @@ class Claims(FileCase):
         self.assertEqual(seen, [(out["book_id"], "active", False)])
 
 
+class Load(FileCase):
+    def test_an_error_of_the_store_or_the_file_system_for_one_file_is_a_refusal_of_that_file_and_the_next_is_taken(self):
+        paths = [self.write(f"{n}.pdf", PDF1 + n.encode()) for n in ("a", "b", "c", "d")]
+        real = capture_file.capture
+
+        def flaky(store, ident, path, **kw):
+            if path.endswith("b.pdf"):
+                raise KbError("the store is unhappy\x07 with it")
+            if path.endswith("c.pdf"):
+                raise OSError(errno.EIO, "input output error")
+            return real(store, ident, path, **kw)
+
+        with mock.patch.object(capture_file, "capture", flaky):
+            rows = list(capture_file.load(self.store, self.ident, [self.files]))
+        self.assertEqual([(r["status"], r["file_name"]) for r in rows], [("filed", "a"), ("refused", "b"), ("refused", "c"), ("filed", "d")])
+        self.assertEqual(rows[1]["reason"], "the store is unhappy with it")                      # cleaned of the control character
+        self.assertIn("input output error", rows[2]["reason"])
+        self.assertEqual(len(self.active()), 2)
+        self.assertTrue(paths)
+
+    def test_an_error_of_any_other_kind_for_one_file_is_a_refusal_too_but_a_stop_ends_the_run(self):
+        import sqlite3
+        self.write("a.pdf", PDF1 + b"a")
+        self.write("b.pdf", PDF1 + b"b")
+        real = capture_file.capture
+
+        def flaky(store, ident, path, **kw):
+            if path.endswith("a.pdf"):
+                raise sqlite3.OperationalError("database is locked")
+            return real(store, ident, path, **kw)
+
+        with mock.patch.object(capture_file, "capture", flaky):
+            rows = list(capture_file.load(self.store, self.ident, [self.files]))
+        self.assertEqual([(r["status"], r["file_name"]) for r in rows], [("refused", "a"), ("filed", "b")])
+        self.assertIn("database is locked", rows[0]["reason"])
+        with mock.patch.object(capture_file, "capture", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                list(capture_file.load(self.store, self.ident, [self.files]))
+
+    def test_links_in_a_folder_are_refused_and_named_and_a_folder_given_as_a_link_is_followed(self):
+        real = self.write("real.pdf")
+        os.symlink(real, os.path.join(self.files, "link.pdf"))
+        os.symlink(self.files, os.path.join(self.files, "folderlink.pdf"))
+        os.symlink(self.files, os.path.join(self.files, "folderlink"))
+        rows = list(capture_file.load(self.store, self.ident, [self.files]))
+        self.assertEqual([(r["status"], r["file_name"]) for r in rows], [("skipped", "folderlink"), ("refused", "folderlink"), ("refused", "link"), ("filed", "real")])
+        outer = os.path.join(self.base, "outer-link")
+        os.symlink(self.files, outer)
+        again = list(capture_file.load(self.store, self.ident, [outer]))
+        self.assertEqual([r["status"] for r in again if r["file_name"] == "real"], ["duplicate"])
+
+    def test_a_skipped_entry_is_shown_cleaned_and_a_name_that_cleans_to_nothing_is_untitled(self):
+        self.write("Bad" + chr(0x202e) + chr(7) + "name.txt", b"x")
+        self.write(chr(0x200b), b"x")
+        rows = list(capture_file.load(self.store, self.ident, [self.files]))
+        self.assertEqual(sorted((r["status"], r["file_name"]) for r in rows), [("skipped", "Badname.txt"), ("skipped", "untitled")])
+
+    def test_a_folder_that_cannot_be_read_is_one_refusal_with_its_cleaned_base_name_and_the_other_paths_are_taken(self):
+        closed = os.path.join(self.base, "closed-folder-qwerty")
+        os.mkdir(closed)
+        path = self.write("a.pdf")
+        os.chmod(closed, 0)
+        self.addCleanup(os.chmod, closed, 0o700)
+        rows = list(capture_file.load(self.store, self.ident, [closed, path]))
+        self.assertEqual([(r["status"], r["file_name"]) for r in rows], [("refused", "closed-folder-qwerty"), ("filed", "a")])
+        self.assertNotIn(self.base, json.dumps(rows))
+
+    def test_the_limit_is_checked_before_any_file_is_looked_at(self):
+        self.write("a.pdf")
+        for bad in (0, -1, 1.5, None):
+            with self.assertRaises(KbError):
+                list(capture_file.load(self.store, self.ident, [self.files], max_bytes=bad))
+        self.assertEqual(self.active(), [])
+
+
 class Lock(FileCase):
     def test_a_second_holder_is_refused_and_the_lock_is_free_after_a_run_and_after_an_error(self):
         with capture_file.lock(self.index):

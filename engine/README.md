@@ -150,6 +150,23 @@ optional `arXiv:` in front. Whitespace and anything else is refused before any r
   same checks as any address: http or https only, no credentials, and no private or local host unless `--allow-private`.
 - A withdrawal flag is not read yet.
 
+## Loading PDF files from your disk
+
+```sh
+cd engine
+python3 -m kb capture-file '/path/to/folder'
+python3 -m kb capture-file '/path/to/one.pdf' '/path/to/another-folder' --max-bytes 50000000
+python3 -m kb process        # then scan, convert and index the new books
+```
+
+Each path is a file, or a folder whose `.pdf` files (any case, directly inside it; not its subfolders) are taken in name order.
+It prints one JSON line for each file (`filed`, `duplicate`, `refused` or `skipped`, with the cleaned name of the file and, for a book, its id) and a last line `filed N, duplicate N, refused N, skipped N`. A refused file is also named on the standard error, and the exit code is 1 if any was refused (2 if the whole call was refused: a limit below 1, or another run holding the lock).
+
+- A file is read as bytes and never parsed. It is opened without following a link, must be a regular file of at most `--max-bytes` (default 100 MB) and must begin `%PDF-`. It is filed as a book of the kind `paper` on the shelf `default`, as your own book (not marked as the crawl's, so the crawl never moves it), with the file as `original/paper.pdf` and its sha256 as an identity key.
+- A file whose bytes the library already holds is a `duplicate`: nothing is filed, and the line names the book. Two runs at once are kept apart by a lock; a run that was stopped is finished by the next run of the same files.
+- The title and the name shown are one cleaned form of the file name without `.pdf` (control and direction characters removed, at most 200 characters). The path of a file or a folder is stored and shown nowhere: only cleaned names are shown. A folder that cannot be read is one refused line with its own cleaned name. A folder given as a link is followed (you named it); a link inside a folder is not, and is refused if it is named `.pdf`. Zip files and other kinds of file are skipped: unpack them first.
+- Run it with the stop file of the crawl in place (the crawl takes no part in the lock); the plan names the two rare cases that can leave a duplicate book.
+
 ## Approved tools, the sandbox and the scan
 
 The engine runs a program on a captured file only if you have put it on the list. The list is `approved_tools` in your config
