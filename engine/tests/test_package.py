@@ -1624,10 +1624,14 @@ class SuggestTopicsSkillTests(unittest.TestCase):
         step2 = self.lower.split("## 2.", 1)[1].split("## 3.", 1)[0]
         for phrase in ("the crawl turns every topic into search queries and sends them to outside search services", "openalex, arxiv, wikipedia and a web search, each only if the owner's plan has it on",
                        "the topics also go to the model server of the owner's config, which writes the queries", "no secret, no credential, no private text from the project",
-                       "no name of a project, product, company or person", "if you cannot put the subject in general words, do not propose it",
+                       "no name that points at the owner: not the owner's own project, product, company or team, not an employer, a client or a colleague, not an unpublished or internal tool or a private repository, and not a person that the conversation was about",
+                       "a topic may name a public thing when it is about that thing itself (a method, a standard, a published work or tool, a public organisation, or a person only as the name of a method or work)",
+                       "public means that anyone can find it without this project or this conversation; if you are not sure that a name is public, leave it out",
+                       "if you cannot put the subject in general words, do not propose it, and tell the owner why",
                        "the comments of evidence hold no private text either: they are kept in the owner's file and covered by the digest of the approval, but the summary of the approval shows counts and not text, so the owner reads the block you show"):
             self.assertIn(phrase, step2)
         self.assertNotIn("in what the owner approves", self.lower)
+        self.assertNotIn("no name of a project, product, company or person", self.lower)      # the rule was wider than its purpose (plan 2026-11-20-let-suggest-topics-name-public-things)
 
     def test_it_says_how_to_write_the_proposal_in_the_form_of_the_file_and_never_a_weight_or_a_section_of_its_own(self):
         from kb import crawltopics
