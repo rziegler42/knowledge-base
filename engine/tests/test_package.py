@@ -925,6 +925,17 @@ class SkillTests(unittest.TestCase):
         for phrase in ("refused", "tell the owner", "do not try another way"):
             self.assertIn(phrase, self.lower)
 
+    def test_the_description_the_opening_and_step_one_say_that_the_skill_also_serves_a_question_in_the_librarys_own_field(self):
+        """Plan `2026-11-20-say-in-the-card-spec-and-the-opening-of-pose-a-problem-that-it-also-serves-a-question-in-the-librarys-own-field`, Increment B."""
+        description = dict(line.split(": ", 1) for line in self.head.splitlines()[1:])["description"]
+        self.assertIn("from other fields or from the problem's own field, as the owner asked", description)
+        self.assertLessEqual(len(description), 300)
+        opening = " ".join(self.body.lower().split("## 1.", 1)[0].split())
+        self.assertIn("or an answer from a field that the library is mainly about", opening)
+        self.assertIn("ideas from fields other than its own", opening)
+        step1 = self.lower.split("## 1.", 1)[1].split("## 2.", 1)[0]
+        self.assertIn("a book from another field could match, and it finds the books of the problem's own field that say the same thing in other words", step1)
+
     def test_it_says_what_the_problems_own_field_means_for_the_answer_by_what_the_owner_asked_for(self):
         """Plan `2026-11-20-keep-the-books-of-the-problems-own-field-and-name-the-reference-pages-in-the-search-skills`, Increment A: for a question in the library's own field those books are the answer."""
         step5 = self.lower.split("## 5.", 1)[1].split("## 6.", 1)[0]
