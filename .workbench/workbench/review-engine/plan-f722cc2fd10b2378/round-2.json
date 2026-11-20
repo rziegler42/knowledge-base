@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Completion criteria 2; Increment B steps 2–3",
+      "problem": "The required per-topic “line of evidence” has no representation in the topics-file grammar. A non-comment evidence line in the example will be parsed as an additional crawl topic, so the example can parse successfully while sending evidence text as queries and exceeding the intended five proposals.",
+      "severity": "major",
+      "suggestion": "Specify that evidence is prose outside the parseable topics block (or a `#` comment), and test that parsing the block yields only the proposed topic lines and no more than five topics."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "One ambiguity in the proposed topic output can turn evidence into crawl queries; otherwise the plan’s stated command-name discrepancy is recorded as decided in round 1.",
+  "verdict": "changes_needed"
+}

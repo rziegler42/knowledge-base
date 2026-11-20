@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R1-F1",
+      "location": "Goal; Completion criteria 1–2; Increments A–B",
+      "problem": "The plan requires both new skills to invoke `wb run kb ...`, but its named spec says the project, capability, module, and command are all named `knowledge-base`, with agents running `wb run knowledge-base ...`. This is direct drift from the named source of truth.",
+      "severity": "major",
+      "suggestion": "Either revise the plan to use the spec’s `knowledge-base` command throughout, or explicitly include and justify the required spec change before implementing skills that teach the `kb` command."
+    }
+  ],
+  "format": 1,
+  "round": 1,
+  "summary": "The plan otherwise gives concrete scope and verification, but its command contract conflicts with the named specification.",
+  "verdict": "changes_needed"
+}
