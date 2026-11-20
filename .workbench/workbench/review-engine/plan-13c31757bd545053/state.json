@@ -1,0 +1,39 @@
+{
+  "closed": null,
+  "decisions": [],
+  "format": 1,
+  "generation": 2,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers.md",
+  "rounds": [
+    {
+      "at": "2026-11-20T14:25:23Z",
+      "bridge": "ask-codex",
+      "document_sha256": "f80e45389a87dcc97c8fddba3f36635ba7e7f03e817cf0437b42a7e705dcccce",
+      "file": "round-1.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "8d0926f75b7f1dd73d5bc787addb36c4d2b245f0f4d38bc4bd22fef5129337f4",
+      "usage": {
+        "input_tokens": 748654,
+        "output_tokens": 4495,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "8bd7e3b5135b3fbebbbb16848047c6ddb9b27c266e96b07cc597ed8237b51658",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
