@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "Assumptions and constraints; Increment B, steps 2(e) and 3",
+      "problem": "The planned failure handling catches only `KbError`, but a closed SQLite queue connection causes `crawlstate.ceilings()` to call `conn.execute()` and raise `sqlite3.ProgrammingError`, not `KbError`. Thus the explicitly required closed-connection test cannot produce the short window without an unplanned error translation or broader database-error handling.",
+      "severity": "major",
+      "suggestion": "Specify a narrow boundary that treats queue-read database errors, including a closed connection, as an unreadable counter and selects the short window; add tests for both that translation and unexpected errors that must still propagate."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan aligns with its cited spec change and has no named roadmap candidate. Its required safe fallback for an unreadable counter is incomplete for a closed queue connection.",
+  "verdict": "changes_needed"
+}
