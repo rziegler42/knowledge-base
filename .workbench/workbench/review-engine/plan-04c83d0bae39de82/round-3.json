@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "id": "R3-F1",
+      "location": "Increment A, step 3; Assumptions and constraints (path cleaning)",
+      "problem": "Encoding locator strings before hiding paths defeats the helper’s existing path redaction when a known path contains an apostrophe, double quote, backslash or percent sign. The current redactor matches raw and JSON-escaped path spellings, neither of which matches the new percent-encoded spelling. Such a path inside a locator can therefore appear in the reply despite the requirement to keep path cleaning intact.",
+      "severity": "major",
+      "suggestion": "Redact known paths in parsed string values before encoding locator strings, or explicitly handle their encoded spellings. Add a regression case with a known path containing one of the four encoded characters inside a locator."
+    },
+    {
+      "id": "R3-F2",
+      "location": "Completion criterion 2",
+      "problem": "The statement that the locator reaching the engine has none of the codes contradicts the required lossless round trip for a heading containing literal `%27`. That heading must still contain `%27` after decoding.",
+      "severity": "minor",
+      "suggestion": "Replace the final clause with a requirement that the decoded locator exactly equals the original engine locator, including any literal code-like text."
+    }
+  ],
+  "format": 1,
+  "round": 3,
+  "summary": "The plan preserves the intended locator round trip, but its specified processing order can bypass existing path redaction. One completion criterion also contradicts preservation of literal code-like text. No roadmap candidate is named, and no spec drift was found.",
+  "verdict": "changes_needed"
+}

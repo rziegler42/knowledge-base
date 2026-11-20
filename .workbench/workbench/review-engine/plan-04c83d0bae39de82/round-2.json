@@ -1,0 +1,15 @@
+{
+  "findings": [
+    {
+      "id": "R2-F1",
+      "location": "docs/plans/2026-11-20-make-the-locators-of-the-helper-safe-to-copy-into-a-single-quoted-command.md: Scope; Increment A",
+      "problem": "The plan changes the helper’s output contract from escaping every apostrophe in every reply to percent-encoding four characters only inside locators, but it does not update its named source spec. The Reading module section of docs/specs/knowledge-base.md currently requires the old whole-reply apostrophe escape. This leaves the project’s source of truth contradicting the intended implementation.",
+      "severity": "blocker",
+      "suggestion": "Add docs/specs/knowledge-base.md to scope and an increment that replaces the obsolete behavior statement with the locator-only percent-encoding and read-side decoding contract."
+    }
+  ],
+  "format": 1,
+  "round": 2,
+  "summary": "The plan otherwise addresses the prior locator-only guarantee, but it must reconcile the named spec before it can be relied on.",
+  "verdict": "changes_needed"
+}
