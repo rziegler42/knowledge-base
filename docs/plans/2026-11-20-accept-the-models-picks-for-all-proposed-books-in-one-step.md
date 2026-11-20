@@ -89,6 +89,17 @@ Plan review through the review engine (`gpt-5.6-terra`), 2 rounds of a bound of 
 - Round 2: no meaningful findings.
 - Rejected: none. Left for the owner: the approval, and whether to run a security review (asked once, in the owner's hands).
 
+Increment A, independent review by the `reviewer` agent (read only, 1 exchange of a cap of 6): no blocking findings.
+
+- Applied: the card's text hash (`text_sha256`) is now in the text the owner reads, so that every field written is also a field the digest binds.
+- Not applied, with reasons: (1) a proposal whose time (`at`) is not of the shape `place-apply` wants is answered here and left out there as unreadable; a typed `ok` does the same, `review` does not check it either, and the engine writes that shape, so a book would have to be damaged by hand; (2) the catalog lock is held for the whole re-made list, which for 455 books is about a minute of card reads; the wait of any other writer is bounded by the lock's own limit, and the plan has the loop paused; (3) `version`, `generation` and the proposal's time are cut by `safe` in the text while the raw value is written; the engine writes these and the digest binds the card text hash and the schema hash, which a different value would change.
+- Could not be checked by the reviewer: that the tests assert what their names say, and the time the lock is held on the real library.
+
+Increment B, independent review by the `reviewer` agent (1 exchange of a cap of 6): no blocking findings. The command line passes only the digest to the step, so the terminal check and the digest cannot be skipped by an argument; the spec and the guide match the code.
+
+- Applied: the guide now says that the crawl's approval is voided and `crawl-approve` is run again before the stop file is removed; the spec now says the step stops at the first error and names the books answered before it.
+- Not applied: a command-line test of an empty or upper-case digest; the step's own tests (`AcceptPicks`) already refuse each, so the command line adds none.
+
 ## Deferred work
 
 - An undo of a move, and a way to accept the picks for a part of the list (one shelf, or the books above a score). Both are separate decisions.
@@ -96,4 +107,9 @@ Plan review through the review engine (`gpt-5.6-terra`), 2 rounds of a bound of 
 
 ## Result
 
-Empty until work starts.
+**Increment A** (built in a worktree at `eb544a4`, copied to `main` in one step, which voided the approval of the crawl).
+
+- Done: `placereview.accept_plan`, `accept_render`, `accept_preview` and `accept_picks`, and 15 tests of `AcceptPicks` and one of `AcceptDirectly` (the display's own cleaning with a hostile value in every field, which a card made by the engine does not reach). Tests were written first and seen failing (14 errors: the functions did not exist).
+- Verification run in `main` after the copy: `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_placereview engine.tests.test_placeapply engine.tests.test_placement`, 232 tests, OK, Python 3.15.0; `wb run code-work check`, 74 plans, no problems; `git diff --check`, clean.
+- Breaks (19 single changes, each compile-checked, each caught by at least one test, the file restored byte for byte): the digest not compared; the shape of the digest not checked; a book with no pick included; an answered book answered again; the terminal check removed; only the input checked; only the output checked; the store not refused read-only; the lock not taken; `equals_pick` false; the answer text `ok`; a none answered as a shelf; the proposal's time wrong; a stop not named; the title and the reason not cleaned; the left-out counts dropped; the tally dropped; the stale branch counted as answerable. Five of the first run were not caught and the tests were strengthened (the read-only check must come before the lock; the left-out lines; the display's cleaning with a hostile value; a card that cannot be read while the list is made; the message of a bad digest).
+- Departures from the plan: the plan's break "the list not made again under the lock" is not a break the tests can show (the digest of the list made before the lock and that of the list made under it are equal unless another process writes in between), so the list is made only under the lock and the break was replaced by "the store not refused read-only". The step says `answered` and not `moved` in its result. Nothing else.

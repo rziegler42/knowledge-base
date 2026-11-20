@@ -664,5 +664,235 @@ class CommandLine(ReviewCase):
         self.assertIn("place-review", r.stdout)
 
 
+class AcceptPicks(ReviewCase):
+    """The step that answers `ok` for every unanswered book that has a pick (plan `2026-11-20-accept-the-models-picks-for-all-proposed-books-in-one-step`, Increment A)."""
+
+    def setUp(self):
+        super().setUp()
+        self.a, _ = self.proposed("Book a", answer="2: Because a.", source={"address_final": "https://example.org/a", "retrieved": "2026-11-01T00:00:00+00:00", "sha256": "ab" * 32})
+        self.b, _ = self.proposed("Book b", answer="none: Nothing fits b.")
+
+    def preview(self):
+        return placereview.accept_preview(self.store, schema_path=self.schema_path)
+
+    def accept(self, digest, tty=True, **kw):
+        return placereview.accept_picks(self.store, digest, schema_path=self.schema_path, is_tty=lambda: tty, say=lambda text: None, **kw)
+
+    def lines(self):
+        return {b: self.store.read_events(b) for b in self.store.list_books()}
+
+    def test_the_list_holds_the_unanswered_books_with_a_pick_or_a_none_and_counts_the_others_by_reason(self):
+        c, _ = self.proposed("Book c", answer="I would say two")                  # malformed: no pick
+        d, _ = self.proposed("Book d", answer="1: x.")
+        self.session(["ok"], book_ids=[d])                                          # answered
+        e, ve = self.proposed("Book e", answer="1: x.")
+        card.file(self.store, card.make(self.store, e, ve, model=dict(copy.deepcopy(MODEL), summary=LONG + " changed", topics=["t"]), records=[]))   # stale
+        f, _ = self.proposed("Book f", answer="1: x.")
+        with open(self.store.events_file(f), "a") as fh:
+            fh.write("this is not json\n")                                          # unreadable
+        g, _ = self.proposed("Book g", answer="1: x.")
+        self.store.set_shelf(g, "gene-editing")                                     # moved
+        h, _ = self.proposed("Book h", answer=KbError("down"))                      # error: no proposal
+        text, digest, items, left = self.preview()
+        self.assertEqual([i["book"] for i in items], [self.a, self.b])
+        self.assertEqual(left, {"no_pick": 1, "confirmed": 1, "stale": 1, "unreadable": 1, "moved": 1, "no_proposal": 1})
+        self.assertIsNone(items[1]["pick"])
+        self.assertIn("Left out: 6 books", text)
+        for words in ("with a proposal that has no pick", "already answered", "out of date", "cannot be read", "no longer on the shelf default", "is an error"):
+            self.assertRegex(text, r"(?m)^  1 .*%s" % words)
+
+    def test_a_card_that_cannot_be_read_when_the_list_is_made_leaves_the_book_out_as_stale(self):
+        real = card.read
+
+        def read(*a, **k):
+            if sys._getframe(1).f_code.co_name == "accept_plan":
+                raise KbError("gone")
+            return real(*a, **k)
+        with mock.patch.object(card, "read", read):
+            _, _, items, left = self.preview()
+        self.assertEqual((items, left["stale"]), ([], 2))
+
+    def test_the_text_names_each_book_counts_each_shelf_and_ends_with_its_digest(self):
+        import hashlib
+        import re
+        text, digest, items, left = self.preview()
+        pick = self.pick_of(self.a)["order"][1]
+        by_slug = {s["slug"]: s for s in schema_data()["shelves"]}
+        for word in ("Book a", "Book b", "https://example.org/a", by_slug[pick]["name"], "Because a.", "Nothing fits b.", self.a, self.b, self.pick_of(self.a)["text_sha256"]):
+            self.assertIn(word, text)
+        self.assertRegex(text, r"(?m)^1 .*%s" % re.escape(by_slug[pick]["name"]))   # a count for the shelf
+        self.assertRegex(text, r"(?m)^1 .*none")
+        body, last = text.rsplit("\n", 1)
+        self.assertEqual(last, "digest: " + digest)
+        self.assertRegex(digest, r"[0-9a-f]{32}")
+        self.assertEqual(hashlib.sha256(body.encode()).hexdigest()[:32], digest)
+
+    def test_the_preview_writes_nothing_and_takes_no_lock(self):
+        before = self.lines()
+        with mock.patch.object(placereview.catalog, "lock", side_effect=AssertionError("the preview takes no lock")):
+            self.preview()
+        self.assertEqual(self.lines(), before)
+
+    def test_the_digest_changes_when_any_field_of_the_list_changes(self):
+        _, first, _, _ = self.preview()
+        self.edit_proposal(self.a, lambda e: e["answer"].__setitem__("reason", "A different reason."))
+        _, second, _, _ = self.preview()
+        self.assertNotEqual(first, second)
+        self.proposed("Book c", answer="1: x.")
+        _, third, _, _ = self.preview()
+        self.assertNotEqual(second, third)
+
+    def test_the_step_writes_one_line_for_each_book_of_the_shape_of_ok_and_nothing_else(self):
+        twin, _ = self.proposed("Book twin", answer="2: Because a.")
+        self.session(["ok"], book_ids=[twin])
+        (typed,) = self.confirmations(twin)
+        before = self.lines()
+        _, digest, _, _ = self.preview()
+        result = self.accept(digest)
+        self.assertEqual(result["answered"], [self.a, self.b])
+        (ca,) = self.confirmations(self.a)
+        (cb,) = self.confirmations(self.b)
+        proposal = self.pick_of(self.a)
+        self.assertEqual(ca["result"], {"kind": "shelf", "shelf": proposal["order"][1], "words": None})
+        self.assertEqual((cb["result"], cb["equals_pick"], ca["equals_pick"]), ({"kind": "none", "shelf": None, "words": None}, True, True))
+        self.assertEqual(ca["answer"], "accept-picks")
+        self.assertEqual(set(ca), set(typed))
+        self.assertEqual((ca["proposal"], ca["version"], ca["generation"], ca["text_sha256"], ca["schema_sha256"]),
+                         (proposal["at"], proposal["version"], proposal["generation"], proposal["text_sha256"], proposal["schema_sha256"]))
+        after = self.lines()
+        for book in before:
+            self.assertEqual(after[book][:len(before[book])], before[book])                     # nothing is changed, only added to
+            self.assertEqual(len(after[book]) - len(before[book]), 1 if book in (self.a, self.b) else 0)
+
+    def test_a_book_answered_by_the_step_is_confirmed_in_the_listing_and_is_listed_by_place_apply(self):
+        from kb import placeapply
+        _, digest, _, _ = self.preview()
+        self.accept(digest)
+        counts = placereview.listing(self.store, schema_path=self.schema_path)
+        self.assertEqual((counts["confirmed"], counts["accepted_pick"], counts["none"], counts["unconfirmed"]), (2, 1, 1, 0))
+        items, _, _ = placeapply.plan(self.store, schema_path=self.schema_path)
+        self.assertEqual([i["book"] for i in items], [self.a])
+        self.assertEqual(items[0]["typed"], "accept-picks")
+
+    def test_a_second_run_has_an_empty_list_and_writes_nothing(self):
+        _, digest, _, _ = self.preview()
+        self.accept(digest)
+        before = self.lines()
+        _, again, items, _ = self.preview()
+        self.assertEqual(items, [])
+        self.assertEqual(self.accept(again)["answered"], [])
+        self.assertEqual(self.lines(), before)
+
+    def test_a_digest_that_is_not_the_shape_of_one_or_is_of_another_list_is_refused_and_writes_nothing(self):
+        before = self.lines()
+        for bad in (None, "", "abc", "A" * 32, "g" * 32, "0" * 31, "0" * 33, 12):
+            with self.assertRaisesRegex(KbError, "32 lowercase hexadecimal"):
+                self.accept(bad)
+        with self.assertRaisesRegex(KbError, "digest"):
+            self.accept("0" * 32)
+        self.assertEqual(self.lines(), before)
+
+    def test_a_list_that_changed_after_the_preview_is_refused_and_writes_nothing(self):
+        _, digest, _, _ = self.preview()
+        self.session(["1"], book_ids=[self.a])                                      # the owner answers a book in between
+        before = self.lines()
+        with self.assertRaisesRegex(KbError, "changed"):
+            self.accept(digest)
+        self.assertEqual(self.lines(), before)
+
+    def test_the_step_refuses_without_a_terminal_for_input_and_output_both_and_writes_nothing(self):
+        _, digest, _, _ = self.preview()
+        before = self.lines()
+        tty, no = types.SimpleNamespace(isatty=lambda: True), types.SimpleNamespace(isatty=lambda: False)
+        with self.assertRaisesRegex(KbError, "terminal"):
+            self.accept(digest, tty=False)
+        for stdin, stdout in ((tty, no), (no, tty), (no, no)):
+            with mock.patch.object(placereview.sys, "stdin", stdin), mock.patch.object(placereview.sys, "stdout", stdout):
+                with self.assertRaisesRegex(KbError, "terminal"):
+                    placereview.accept_picks(self.store, digest, schema_path=self.schema_path, say=lambda text: None)
+        self.assertEqual(self.lines(), before)
+        with mock.patch.object(placereview.sys, "stdin", tty), mock.patch.object(placereview.sys, "stdout", tty):
+            self.assertEqual(len(placereview.accept_picks(self.store, digest, schema_path=self.schema_path, say=lambda text: None)["answered"]), 2)
+
+    def test_the_step_refuses_a_store_that_is_open_read_only(self):
+        _, digest, _, _ = self.preview()
+        before = self.lines()
+        with mock.patch.object(self.store, "write", False), mock.patch.object(placereview.catalog, "lock", side_effect=AssertionError("refused before the lock")):
+            with self.assertRaisesRegex(KbError, "read-only"):
+                self.accept(digest)
+        self.assertEqual(self.lines(), before)
+
+    def test_the_step_holds_the_catalog_lock_while_it_writes(self):
+        _, digest, _, _ = self.preview()
+        held = []
+        real = placereview.catalog.lock
+
+        class Spy:
+            def __init__(self, root):
+                self.inner = real(root)
+
+            def __enter__(self):
+                held.append("in")
+                return self.inner.__enter__()
+
+            def __exit__(self, *a):
+                held.append("out")
+                return self.inner.__exit__(*a)
+        original = self.store.append_event
+
+        def appending(*a, **k):
+            held.append("append")
+            return original(*a, **k)
+        with mock.patch.object(placereview.catalog, "lock", Spy), mock.patch.object(self.store, "append_event", appending):
+            self.accept(digest)
+        self.assertEqual(held, ["in", "append", "append", "out"])
+
+    def test_a_stop_in_the_middle_leaves_the_books_answered_so_far_and_a_second_run_answers_the_rest(self):
+        _, digest, _, _ = self.preview()
+        original, calls = self.store.append_event, []
+
+        def failing(*a, **k):
+            calls.append(a[0])
+            if len(calls) == 2:
+                raise OSError(28, "No space left on device")
+            return original(*a, **k)
+        with mock.patch.object(self.store, "append_event", failing):
+            with self.assertRaisesRegex(KbError, "stopped at the book"):
+                self.accept(digest)
+        self.assertEqual((len(self.confirmations(self.a)), len(self.confirmations(self.b))), (1, 0))
+        _, again, items, _ = self.preview()
+        self.assertEqual([i["book"] for i in items], [self.b])
+        self.accept(again)
+        self.assertEqual(len(self.confirmations(self.b)), 1)
+
+    def test_every_text_shown_is_cleaned_of_control_and_escape_characters(self):
+        self.proposed("Evil \x1b[31mtitle\x1b[0m‮ book", answer="1: Reason \x1b]0;x\x07 here.")
+        text, _, _, _ = self.preview()
+        for bad in ("\x1b", "\x07", "‮"):
+            self.assertNotIn(bad, text)
+
+
+class AcceptDirectly(ShownDirectly):
+    """`accept_render` with a hostile value in every field it prints: a card and a proposal made by the engine are already clean, so only a direct call reaches the display's own cleaning."""
+
+    def test_a_title_an_address_a_reason_and_every_shelf_text_are_cleaned_whatever_the_card_and_the_proposal_hold(self):
+        made = {"title": "Title " + HOSTILE, "source": {"address_final": "https://example.org/" + HOSTILE}}
+        for answer in ({"kind": "shelf", "index": 2, "chosen": "gene-editing", "reason": "Reason " + HOSTILE},
+                       {"kind": "none", "index": None, "chosen": None, "reason": "Reason " + HOSTILE}):
+            with self.subTest(kind=answer["kind"]):
+                proposal = {"at": "2026-11-20T00:00:00+00:00", "version": "v1", "generation": 1, "text_sha256": "a" * 64, "schema_sha256": "b" * 64, "answer": answer}
+                with mock.patch.object(placereview.shelfvectors, "_read_schema", return_value=(self.schema(), "c" * 64)), \
+                        mock.patch.object(placereview, "state_of", return_value=("unconfirmed", proposal, None)), \
+                        mock.patch.object(card, "read", return_value=(1, made)), mock.patch.object(self.store, "list_books", return_value=["book"]):
+                    text, _, items, _ = placereview.accept_preview(self.store)
+                self.assertEqual(len(items), 1)
+                self.assertClean(text)
+                for word in ("Title ", "https://example.org/", "Reason "):
+                    self.assertIn(word, text)
+                if answer["kind"] == "shelf":
+                    for word in ("Gene ", "Domain ", "Field ", "Sub "):
+                        self.assertIn(word, text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,10 +17,12 @@ A later step that files books must not rest on it alone: it must ask the owner a
 Every text that is shown (a title, an address, a summary, a shelf's name and scope sentence, the model's reason) is untrusted: a book's text came from a web page or a paper, and the reason is model output.
 It is cleaned of control, format and line characters (an escape sequence loses its escape character), of invisible characters and of long runs of combining marks, and cut, before it is printed. The events
 that are read back are data too: a proposal that is not the shape `placement` writes (five different shelves of the schema, a chosen shelf among them, a number that matches) is counted as unreadable and not shown."""
+import hashlib
 import re
 import sys
+from collections import Counter
 
-from . import KbError, card, placement, shelfvectors, textutil
+from . import KbError, card, catalog, placement, shelfvectors, textutil
 from .store import _SHELF
 
 EVENT = "placement_confirmed"
@@ -272,3 +274,104 @@ def review(store, schema_path=None, book_ids=None, again=False, input_fn=input, 
                            schema_sha256=proposal["schema_sha256"], answer=typed, result=result, equals_pick=equals_pick)
         counts["skipped" if result["kind"] == "skipped" else "confirmed"] += 1
     return counts
+
+
+# The step that answers `ok` for every unanswered book that has a pick (plan `2026-11-20-accept-the-models-picks-for-all-proposed-books-in-one-step`). It records the same line `review` records for
+# `ok`, for the list the owner read, in the owner's terminal, if the list still has the digest the owner gives. Like every answer it is a record and not an approval: `place-apply` moves.
+ACCEPT_ANSWER = "accept-picks"
+ACCEPT_FORMAT = 1
+_DIGEST = re.compile(r"[0-9a-f]{32}")
+ACCEPT_LEFT = (("no_pick", "with a proposal that has no pick (the model gave no usable answer)"), ("confirmed", "already answered"),
+               ("stale", "with a proposal that is out of date (run place-propose again)"), ("unreadable", "whose proposal or log cannot be read"),
+               ("moved", "no longer on the shelf default"), ("no_proposal", "whose proposal is an error"))
+
+
+def accept_plan(store, schema_path=None):
+    """`(items, left, schema_hash)`: the books that the step would answer, in the order of their ids (each unanswered, with a pick or a none and a card that is the one the proposal was made for), the counts
+    of the books it would not by reason (every reason of `ACCEPT_LEFT` is a key) and the hash of the schema file. Nothing is written."""
+    schema, schema_hash = shelfvectors._read_schema(schema_path or shelfvectors.DEFAULT_SCHEMA)
+    items, left = [], {key: 0 for key, _ in ACCEPT_LEFT}
+    for book_id in sorted(store.list_books()):
+        found = state_of(store, book_id, schema, schema_hash)
+        if found is None:
+            continue
+        state, proposal, _ = found
+        if state != "unconfirmed":
+            left[state] += 1
+            continue
+        answer = proposal["answer"]
+        if answer["kind"] not in ("shelf", "none"):
+            left["no_pick"] += 1
+            continue
+        try:
+            _, made = card.read(store, book_id, proposal["version"], proposal["generation"])
+        except KbError:
+            left["stale"] += 1
+            continue
+        chosen = answer["chosen"] if answer["kind"] == "shelf" else None
+        items.append({"book": book_id, "title": safe(made.get("title", ""), 300), "address": _address(made), "pick": chosen,
+                      "pick_name": safe(schema.by_slug[chosen]["name"], 200) if chosen else None, "pick_path": _path(schema, chosen) if chosen else None,
+                      "reason": safe(answer.get("reason") or "", SHOWN_REASON), "proposal_at": proposal["at"], "version": proposal["version"], "generation": proposal["generation"],
+                      "text_sha256": proposal["text_sha256"], "schema_sha256": proposal["schema_sha256"]})
+    return items, left, schema_hash
+
+
+def accept_render(items, left, schema_hash):
+    """The text the owner reads, without its digest line. Every field of every item and every count is in it, so a change to any of them changes the digest."""
+    lines = ["place-review accept-picks preview, format %d" % ACCEPT_FORMAT, "schema file sha256: %s" % safe(schema_hash, 100)]
+    if not items:
+        lines.append("No book would be answered.")
+    else:
+        lines.append("%d book%s would be answered with the model's pick (the answer is recorded as %s; no book is moved):" % (len(items), "" if len(items) == 1 else "s", ACCEPT_ANSWER))
+        tally = Counter((i["pick"], i["pick_name"], i["pick_path"]) for i in items)
+        for (pick, name, path), n in sorted(tally.items(), key=lambda kv: (-kv[1], kv[0][0] or "")):
+            lines.append("%d %s" % (n, "none (the model said no shelf fits)" if pick is None else "%s | %s" % (name, path)))
+    for number, item in enumerate(items, 1):
+        lines += ["", "[%d of %d] book %s" % (number, len(items), safe(item["book"], 40)), "title: %s" % item["title"], "address: %s" % item["address"],
+                  "shelf of the pick: %s" % ("none" if item["pick"] is None else "%s (%s)" % (safe(item["pick"], 100), item["pick_name"])),
+                  "the model's reason: %s" % item["reason"], "card: generation %s of version %s" % (safe(item["generation"], 20), safe(item["version"], 40)),
+                  "card text sha256: %s" % safe(item["text_sha256"], 64), "proposal made: %s" % safe(item["proposal_at"], 60)]
+    lines += ["", "Left out: %d book%s" % (sum(left.values()), "" if sum(left.values()) == 1 else "s")]
+    lines += ["  %d %s" % (left[key], words) for key, words in ACCEPT_LEFT if left.get(key)]
+    return "\n".join(lines)
+
+
+def _accept_digest(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+def accept_preview(store, schema_path=None):
+    """`(text, digest, items, left)`: what the owner reads, ending with the line `digest: <digest>`, the digest, and the list and counts it was made from. Nothing is written and no lock is taken."""
+    items, left, schema_hash = accept_plan(store, schema_path)
+    body = accept_render(items, left, schema_hash)
+    digest = _accept_digest(body)
+    return body + "\ndigest: " + digest, digest, items, left
+
+
+def accept_picks(store, digest, schema_path=None, is_tty=None, say=print):
+    """Record, as `review` records `ok`, the model's pick (or its none) for each book of the list whose digest is `digest`, or refuse. Returns `{"answered": [book ids], "digest": digest}`. Refused unless the
+    digest has the shape of one, the input and the output are both a terminal, the store is open for writing and the list, made again under the catalog lock, has that digest. A stop in the middle leaves
+    the books answered so far answered and names them."""
+    if type(digest) is not str or not _DIGEST.fullmatch(digest):
+        raise KbError("the digest is the 32 lowercase hexadecimal characters on the last line of what `place-review --accept-picks` prints")
+    if is_tty is None:
+        is_tty = lambda: sys.stdin.isatty() and sys.stdout.isatty()  # noqa: E731
+    if not is_tty():
+        raise KbError("place-review --accept-picks with a digest records answers and takes its approval from a terminal; run it in your own terminal (without a digest it prints the list and needs none)")
+    if not getattr(store, "write", False):
+        raise KbError("the store was opened read-only")
+    with catalog.lock(store.cfg["index_root"]):
+        items, left, schema_hash = accept_plan(store, schema_path)
+        if _accept_digest(accept_render(items, left, schema_hash)) != digest:
+            raise KbError("the list is not the one with that digest (it changed since you read it, or the digest is another's): run `place-review --accept-picks` again, read the list and give its digest")
+        answered = []
+        for item in items:
+            result = {"kind": "none", "shelf": None, "words": None} if item["pick"] is None else {"kind": "shelf", "shelf": item["pick"], "words": None}
+            try:
+                store.append_event(item["book"], EVENT, proposal=item["proposal_at"], version=item["version"], generation=item["generation"], text_sha256=item["text_sha256"],
+                                   schema_sha256=item["schema_sha256"], answer=ACCEPT_ANSWER, result=result, equals_pick=True)
+            except Exception as e:  # whatever stops a write, the owner is told which books were answered before it
+                raise KbError("stopped at the book %s: %s; answered before it: %s" % (safe(item["book"], 40), safe(getattr(e, "strerror", None) or e, 300), ", ".join(answered) or "none")) from None
+            answered.append(item["book"])
+            say("answered %s with %s" % (safe(item["book"], 40), "none" if item["pick"] is None else safe(item["pick"], 100)))
+        return {"answered": answered, "digest": digest}
