@@ -87,8 +87,9 @@ can be wrong, so before you rely on a book, read the book:
   `|`, `<`, `>`, `(`, `)`, `\` and any other character that a shell reads, even if the book's title has it.
 - `wb run kb read [--version <version_id>] <book> '<locator-json>'` returns the passage with its citation; `<book>` is the `book_id`,
   and the version is that of the search result you took the locator from. Copy the locator exactly as the result gave it: the helper writes an apostrophe in it as `%27`, a double quote as `%22`, a backslash as
-  `%5C` and a percent sign as `%25`, so that it can sit between single quotes. Never decode, change or type these codes yourself. If a
-  locator you hold has an apostrophe or a backslash in it (an old helper does not write the codes), do not run the read, and mark the book unread.
+  `%5C` and a percent sign as `%25`, so that it can sit between single quotes. Never decode, change or type these codes yourself, and keep
+  the locator on one line. If you cannot be sure of a locator, or a locator you hold has an apostrophe or a backslash in it (an old helper does not
+  write the codes), do not run the read, and mark the book unread.
 
 If no passage of the book turns up, mark the book unread: say that you could not check it against the book, and do not rely on it. Cite
 a book by its citation, never by a path. If the passage does not support the card, say so and drop the book.

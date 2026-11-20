@@ -954,6 +954,34 @@ class LocatorCodeTests(LauncherCase):
         self.assertIn("kb exited with code 1", err.getvalue())
         self.assertIn("UTF-8", err.getvalue())
 
+    def test_the_coding_round_trips_for_random_and_adversarial_strings_and_its_output_holds_none_of_the_three_characters(self):
+        """The fuzz of the second security review (2026-11-20), seeded and shorter: 200,000 strings were tried by hand."""
+        import random
+        generator = random.Random(7)
+        alphabet = ["%", "'", '"', BACKSLASH, "2", "5", "7", "C", "c", "a", " ", chr(10), chr(9), chr(0), chr(0x2028), chr(0xd800), chr(0xe9), chr(0x4e2d), chr(0x1F600),
+                    chr(0x2019), chr(0xff07), "u", "0"]
+        for _ in range(5000):
+            text = "".join(generator.choice(alphabet) for _ in range(generator.randint(0, 14)))
+            coded = self.helper.write_codes(text)
+            self.assertEqual(self.helper.read_codes(coded), text, repr(text))
+            for character in ("'", '"', BACKSLASH):
+                self.assertNotIn(character, coded, repr(text))
+
+    def test_hostile_headings_copied_out_of_a_reply_are_one_argument_of_a_real_shell_whatever_they_hold(self):
+        """The twelve headings of the second security review's experiment, through the whole reply path and `sh -c`."""
+        import subprocess
+        headings = [HOSTILE, 'a"b', "c" + BACKSLASH + "d", "50%27%25", "caf" + chr(0xe9), chr(0x4e2d) + chr(0x6587), "a" + chr(0x2019) + "b", "'", "''", chr(0x1F600) + "'", "%",
+                    "x" * 1500 + "'"]
+        for heading in headings:
+            with self.subTest(heading=heading[:30]):
+                self.control({"stdout": json.dumps({"results": [{"locator": locator_of(heading)}]}, indent=1)})
+                copied = self.raw_locator(self.body(self.run_helper("search", "x")[1]), "locator", 0)
+                self.assertNotIn("'", copied)
+                self.assertNotIn(BACKSLASH, copied)
+                with tempfile.TemporaryDirectory() as folder:
+                    done = subprocess.run(["sh", "-c", "printf '%s' '" + copied + "'"], cwd=folder, capture_output=True, text=True, timeout=30)
+                    self.assertEqual((done.returncode, done.stdout, done.stderr, os.listdir(folder)), (0, copied, "", []))
+
     def test_the_text_is_cut_after_the_codes_are_written(self):
         self.control({"stdout": json.dumps({"results": [{"locator": locator_of("'" * 1500)}] * 40}, indent=1)})
         body = self.body(self.run_helper("search", "x")[1])
@@ -1197,7 +1225,8 @@ class SkillTests(unittest.TestCase):
     def test_it_says_to_copy_the_locator_as_the_result_gave_it_and_never_to_decode_the_codes(self):
         for phrase in ("copy the locator exactly as the result gave it: the helper writes an apostrophe in it as `%27`, a double quote as `%22`, a backslash as `%5c` and a percent sign as `%25`, so that it can sit between single quotes",
                        "never decode, change or type these codes yourself",
-                       "if a locator you hold has an apostrophe or a backslash in it (an old helper does not write the codes), do not run the read, and mark the book unread"):
+                       "never decode, change or type these codes yourself, and keep the locator on one line",
+                       "if you cannot be sure of a locator, or a locator you hold has an apostrophe or a backslash in it (an old helper does not write the codes), do not run the read, and mark the book unread"):
             self.assertIn(phrase, self.lower)
 
     def test_the_words_taken_from_a_book_into_a_search_are_plain_words(self):
@@ -1342,7 +1371,8 @@ class WalkSkillTests(unittest.TestCase):
     def test_it_says_to_copy_the_locator_as_the_result_gave_it_and_never_to_decode_the_codes(self):
         for phrase in ("copy the locator exactly as the result gave it: the helper writes an apostrophe in it as `%27`, a double quote as `%22`, a backslash as `%5c` and a percent sign as `%25`, so that it can sit between single quotes",
                        "never decode, change or type these codes yourself",
-                       "if a locator you hold has an apostrophe or a backslash in it (an old helper does not write the codes), do not run the read, and mark the lead unread"):
+                       "never decode, change or type these codes yourself, and keep the locator on one line",
+                       "if you cannot be sure of a locator, or a locator you hold has an apostrophe or a backslash in it (an old helper does not write the codes), do not run the read, and mark the lead unread"):
             self.assertIn(phrase, self.lower)
 
     def test_it_says_to_stop_and_tell_the_owner_when_the_helper_refuses_for_its_settings(self):
