@@ -1,6 +1,6 @@
 # Accept the model's picks for all proposed books in one step
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-20
 Candidate: none (work too small to need roadmap direction: the owner's answer to 455 proposals, one book at a time, is the step that holds up the placement of the owner's own books, and a command that records the same answer for all of them follows from that finding)
 Specs: docs/specs/shelf.md ("Placement when more than one shelf fits", the paragraph on what an owner's answer is)

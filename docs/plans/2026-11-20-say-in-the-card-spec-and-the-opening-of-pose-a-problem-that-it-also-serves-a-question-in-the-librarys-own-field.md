@@ -1,6 +1,6 @@
 # Say in the card spec and in the opening of pose-a-problem that it also serves a question in the library's own field
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-20
 Candidate: none (work too small to need roadmap direction: it finishes the plan `2026-11-20-keep-the-books-of-the-problems-own-field-and-name-the-reference-pages-in-the-search-skills`, whose review found two places that still say the old rule and were outside its Scope)
 Specs: docs/specs/card.md
@@ -84,7 +84,6 @@ No review by the review engine (Codex): the owner chose to commit, approve and i
 ## Deferred work
 
 - The parenthesis "(every shelf is `default`)" in the same paragraph of `card.md` (a todo item of the owner).
-- The two sentences of `engine/README.md` (lines 885 and 903) that still say the caller sets aside the books of the problem's own field without a condition (a todo item of the owner), and the line of the roadmap `cross-field-discovery.md` that says the same, which the owner may leave as the roadmap's own words.
 
 ## Result
 

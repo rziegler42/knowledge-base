@@ -1,6 +1,6 @@
 # Lengthen the idle window of the crawl once the day's fetches are used up
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-19
 Candidate: none (a correction that follows from a finding: the idle window of plan `2026-11-18-use-the-idle-time-of-the-loop-for-themes-and-the-weave` has one length whatever the crawl has to do, and on a day when the crawl has nothing to fetch the window is the only work left and is too short for a backlog of themes)
 Specs: docs/specs/population.md ("The idle window", "The crawl plan", acceptance criterion 20)

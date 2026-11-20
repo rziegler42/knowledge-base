@@ -1,6 +1,6 @@
 # Keep the books of the problem's own field when it is what was asked for, and name the reference pages, in the search skills
 
-Status: Proposed
+Status: Completed
 Created: 2026-11-20
 Candidate: none (work too small to need roadmap direction: a correction that follows from the first use of the two skills on a real question, 2026-11-20)
 Specs: docs/specs/knowledge-base.md
@@ -97,7 +97,6 @@ Increment B, independent review by the `reviewer` agent (read only, 1 exchange; 
 
 ## Deferred work
 
-- `docs/specs/card.md`, the description and the opening paragraph and step 1 of `pose-a-problem`: they say cross-field only (two todo items of the owner, from the review of Increment A).
 - The filter by kind or shelf (a todo item of the owner).
 - The agent for the library, after the skills have had use.
 - The skills for running the library (the status of the loop, a hand run with the stop file, a change of the engine, the command forms of the gate), which the project does not have.
