@@ -28,19 +28,27 @@ stop and tell the owner what it said; do not try another way to reach the librar
 
 ## 2. What goes out
 
-**The crawl turns every topic into search queries and sends them to outside search services** (OpenAlex, arXiv, Wikipedia and a web search)
-when it looks for books. So a topic is a general subject that you would say to anyone: no secret, no credential, no private text from the project, and no name of a project,
+**The crawl turns every topic into search queries and sends them to outside search services** (OpenAlex, arXiv, Wikipedia and a web search,
+each only if the owner's plan has it on) when it looks for books, and the topics also go to the model server of the owner's config, which writes the queries.
+So a topic is a general subject that you would say to anyone: no secret, no credential, no private text from the project, and no name of a project,
 product, company or person. If you cannot put the subject in general words, do not propose it, and tell the owner why. The comments of
-evidence hold no private text either: they land in the owner's file and in what the owner approves.
+evidence hold no private text either: they are kept in the owner's file and covered by the digest of the approval, but the summary of the approval
+shows counts and not text, so the owner reads the block you show.
 
 ## 3. Write the proposal
 
 Propose at most five topics, one idea to a line, each of at most 300 characters. Write them in the form of the owner's file: a line in
 square brackets opens a section, and the owner has three: `[core weight=10]`, `[exploratory weight=5]` and `[low weight=1]`. Put each topic
-under the section that fits (exploratory when you are unsure), and never write a weight of your own and never a section of your own. A `#`
-starts a comment, which the crawl skips: **evidence goes in a comment line above its topic, never as a plain line**, because the crawl would
+under the section that fits (exploratory when you are unsure), and never write a weight of your own and never a section of your own. These three
+sections and their weights are the owner's as an example: if the owner's file names other sections or weights, the owner pastes the topic lines
+under the owner's own section header. A comment is a line whose first character is `#`, and the crawl skips it. Nothing else is a comment: a `#`
+after a topic on the same line stays part of the topic and is sent out with it, so never put evidence or a `#` after a topic.
+**Evidence goes in a comment line above its topic, never as a plain line**, because the crawl would
 read it as one more topic, and queries made from it would be sent out. Keep each comment to one line, and start every line of a comment
-with `#`: a line without it is a topic. A topic never starts with `[` or `#`. This is the form, with two topics:
+with `#`: a line without it is a topic. A topic never starts with `[` or `#`. Write the proposal in plain characters: no invisible or control
+character, because one before a `#` or a `[` makes the line a topic, and no text copied raw from a result. Put the subject and the evidence in
+your own words. Write each topic on one line and never wrap it over two, because the second line would be a topic of its own, and let no two
+topics be alike, even in case or spacing, because the crawl refuses a file that holds a repeat. This is the form, with two topics:
 
 ```
 [exploratory weight=5]
@@ -50,7 +58,7 @@ Hierarchical planning with learned subgoals for long-horizon tasks
 Belief-state search for games with hidden information
 ```
 
-Show the block to the owner as it is, and say in a sentence of your own, outside the block, why you propose it.
+Show the block to the owner as it is, and say in a sentence of your own, outside the block, why you propose it and that the sections are your guess.
 
 ## 4. Say what you could not tell
 

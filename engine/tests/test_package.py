@@ -1364,19 +1364,49 @@ class SuggestTopicsSkillTests(unittest.TestCase):
 
     def test_it_says_that_the_crawl_sends_every_topic_to_outside_services_and_what_a_topic_may_not_hold(self):
         step2 = self.lower.split("## 2.", 1)[1].split("## 3.", 1)[0]
-        for phrase in ("the crawl turns every topic into search queries and sends them to outside search services", "openalex, arxiv, wikipedia and a web search", "no secret, no credential, no private text from the project",
+        for phrase in ("the crawl turns every topic into search queries and sends them to outside search services", "openalex, arxiv, wikipedia and a web search, each only if the owner's plan has it on",
+                       "the topics also go to the model server of the owner's config, which writes the queries", "no secret, no credential, no private text from the project",
                        "no name of a project, product, company or person", "if you cannot put the subject in general words, do not propose it",
-                       "the comments of evidence hold no private text either: they land in the owner's file and in what the owner approves"):
+                       "the comments of evidence hold no private text either: they are kept in the owner's file and covered by the digest of the approval, but the summary of the approval shows counts and not text, so the owner reads the block you show"):
             self.assertIn(phrase, step2)
+        self.assertNotIn("in what the owner approves", self.lower)
 
     def test_it_says_how_to_write_the_proposal_in_the_form_of_the_file_and_never_a_weight_or_a_section_of_its_own(self):
         from kb import crawltopics
         step3 = self.lower.split("## 3.", 1)[1].split("## 4.", 1)[0]
         for phrase in ("at most five topics", "one idea to a line", "at most %d characters" % crawltopics.MAX_TOPIC, "`[core weight=10]`", "`[exploratory weight=5]`", "`[low weight=1]`",
-                       "never write a weight of your own and never a section of your own", "a `#` starts a comment", "evidence goes in a comment line above its topic",
+                       "never write a weight of your own and never a section of your own", "a comment is a line whose first character is `#`, and the crawl skips it", "evidence goes in a comment line above its topic",
                        "never as a plain line", "the crawl would read it as one more topic, and queries made from it would be sent out",
-                       "keep each comment to one line, and start every line of a comment with `#`", "a topic never starts with `[` or `#`"):
+                       "keep each comment to one line, and start every line of a comment with `#`", "a topic never starts with `[` or `#`",
+                       "nothing else is a comment: a `#` after a topic on the same line stays part of the topic and is sent out with it, so never put evidence or a `#` after a topic",
+                       "write the proposal in plain characters: no invisible or control character, because one before a `#` or a `[` makes the line a topic, and no text copied raw from a result",
+                       "put the subject and the evidence in your own words",
+                       "write each topic on one line and never wrap it over two, because the second line would be a topic of its own, and let no two topics be alike, even in case or spacing, because the crawl refuses a file that holds a repeat",
+                       "say in a sentence of your own, outside the block, why you propose it and that the sections are your guess",
+                       "these three sections and their weights are the owner's as an example: if the owner's file names other sections or weights, the owner pastes the topic lines under the owner's own section header"):
             self.assertIn(phrase, step3)
+        self.assertNotIn("a `#` starts a comment", self.lower)
+
+    def test_a_hash_after_a_topic_is_part_of_the_topic_which_is_why_the_skill_forbids_evidence_after_a_topic(self):
+        from kb import crawltopics
+        self.assertEqual(crawltopics.parse_topics("[core weight=1]\nA topic # gap: private evidence\n"), [("A topic # gap: private evidence", 1, "core")])
+
+    def test_a_topic_wrapped_over_two_lines_is_two_topics_and_a_repeat_in_case_or_spacing_refuses_the_file_which_is_why_the_skill_says_so(self):
+        from kb import crawltopics
+        wrapped = crawltopics.parse_topics("[core weight=1]\nHierarchical planning with learned\nsubgoals for long-horizon tasks\n")
+        self.assertEqual([t for t, _, _ in wrapped], ["Hierarchical planning with learned", "subgoals for long-horizon tasks"])
+        with self.assertRaises(Exception) as caught:
+            crawltopics.parse_topics("[core weight=1]\nBelief state search\nbelief  STATE search\n")
+        self.assertIn("repeat", str(caught.exception))
+
+    def test_an_invisible_character_before_a_hash_or_a_bracket_makes_the_line_a_topic_which_is_why_the_skill_forbids_it(self):
+        from kb import crawltopics
+        for invisible in (chr(0x200b), chr(0xfeff), chr(0x200e)):
+            with self.subTest(character=hex(ord(invisible))):
+                comment = crawltopics.parse_topics("[core weight=1]\nReal topic\n" + invisible + "# gap: evidence\n")
+                self.assertEqual([t for t, _, _ in comment], ["Real topic", "# gap: evidence"])
+                section = crawltopics.parse_topics("[core weight=1]\nReal topic\n" + invisible + "[low weight=1]\nOther\n")
+                self.assertEqual([(t, s) for t, _, s in section], [("Real topic", "core"), ("[low weight=1]", "core"), ("Other", "core")])
 
     def test_it_says_the_owner_compares_for_repeats_and_that_a_change_of_the_file_needs_the_crawl_to_be_approved_again_and_what_could_not_be_told(self):
         step4 = self.lower.split("## 4.", 1)[1]
