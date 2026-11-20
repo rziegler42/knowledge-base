@@ -25,8 +25,8 @@ owner-only file ``~/.config/knowledge-base/helper.json`` (``{"engine": "<absolut
 never in the project, and refuses a file that others can read or write, a link, or a path that leads into the project. No argument
 is a path, an address or a token: a book is its 26-character identifier, a locator is a small JSON object that a search returned,
 a ref is three identifiers of fixed shape, and every option is one of those above. What the engine prints is data from outside: it is
-cleaned, cut to a bound, stripped of the paths of this machine that the helper knows, and printed between two marker lines that carry a
-random token. The helper never runs it or believes it. It writes no file: none of the four engine commands does.
+cleaned, cut to a bound, stripped of the paths of this machine that the helper knows, written with every apostrophe as the JSON escape (so that a
+locator copied out of a reply holds none to end a single-quoted argument), and printed between two marker lines that carry a random token. The helper never runs it or believes it. It writes no file: none of the four engine commands does.
 """
 
 import json
@@ -280,9 +280,18 @@ def run_program(argv, cwd, env, timeout):
                 pass
 
 
+def no_apostrophe(text):
+    """`text` with each ASCII apostrophe written as the six characters ``\\u0027``. The engine prints JSON, which leaves an apostrophe as it is, and an
+    agent copies a locator out of a reply into a command between single quotes: an apostrophe in a heading of a crawled page would end the quotes and
+    let the rest of the heading run in the agent's shell. In a JSON string the escape means the same apostrophe, and the JSON the engine prints never
+    holds a backslash before an apostrophe that is not itself escaped, so the text stays valid JSON with the same meaning (from the security review of
+    2026-11-20)."""
+    return text.replace("'", "\\u0027")
+
+
 def cleaned(data, limit, hide=()):
     """The engine's bytes as text with no control characters, the known paths of this machine replaced, cut to `limit` characters
-    with the cut marked."""
+    with the cut marked, and every apostrophe written as the JSON escape (see `no_apostrophe`)."""
     text = plain(data.decode("utf-8", "replace"), "\n\t")
     spellings = set()
     for path in hide:  # the engine prints JSON, so a path may come escaped (a backslash, a quote, a letter outside ASCII)
@@ -290,7 +299,7 @@ def cleaned(data, limit, hide=()):
             spellings.update((path, json.dumps(path)[1:-1], json.dumps(path, ensure_ascii=False)[1:-1]))
     for path in sorted(spellings, key=len, reverse=True):
         text = text.replace(path, "[path]")
-    return text if len(text) <= limit else text[:limit] + "\n[cut at %d characters]" % limit
+    return no_apostrophe(text if len(text) <= limit else text[:limit]) + ("" if len(text) <= limit else "\n[cut at %d characters]" % limit)
 
 
 def wrap(command, text, notes=""):
@@ -456,9 +465,9 @@ def read(args, cwd):
     if len(rest) != 2:
         raise Refused("read takes a book and a locator; %s" % USAGE)
     book, locator = rest
-    if not BOOK.match(book):
+    if not BOOK.fullmatch(book):
         raise Refused("the book is its 26-character identifier from a search result, and never a path or an address")
-    if "--version" in values and not VERSION.match(values["--version"]):
+    if "--version" in values and not VERSION.fullmatch(values["--version"]):
         raise Refused("--version is v and a number from 1 to 999999, as in v2")
     chars = whole_number(values["--chars"], 100, 20000, "--chars") if "--chars" in values else DEFAULT_CHARS
     try:

@@ -108,7 +108,13 @@ Each increment's recorded verification stands. After C, `engine/tests/test_packa
 
 ## Review record
 
-Empty until a review is asked for.
+Increment A, independent review by the `reviewer` agent, 1 exchange (of a cap of 6): no blocking findings. Its recommendation: no blocking findings. It ran nothing and read the code and the tests.
+
+- Found sound (read only): every route from the engine's bytes to the helper's output goes through `cleaned` (the success text, the standard error notes, the text of a failed run); the helper's own refusal and failure messages hold no engine text; `search`, `read`, `theme-walk` and `problem-search` all print `json.dumps(..., indent=1)` on success; the replacement leaves valid JSON with the same meaning (a backslash before an apostrophe, a page's own `\u0027`, keys and lists); the cut is made before the escape, so it cannot land inside one; the path hiding runs first, so a path that holds an apostrophe is still found; `plain` runs before the escape and cannot add an apostrophe; the new tests match criteria 1 to 3.
+- Applied: (1) a test gap: no test put an apostrophe in a hidden path, so an escape moved ahead of the hiding would have leaked such a path. Added `test_a_path_that_holds_an_apostrophe_is_still_hidden_because_the_escape_comes_after_the_hiding` and the break "escape before the paths are hidden" (caught by it); (2) the module docstring of the helper now says that the engine's text is written with every apostrophe as the JSON escape.
+- Noted, not changed: (3) the bound `MAX_TEXT` (and `MAX_STDERR`) counts characters before the escape, so a reply made of apostrophes can be up to six times the stated bound (about 393000 characters instead of 65536); the marker still says "cut at 65536", which is true of the engine's text, and the engine's own output stays capped at 1 MiB by `MAX_OUTPUT`; (4) Increment A, step 2 of this plan says the text "holds no `\u0027`" where it means no ASCII apostrophe (a slip of mine when I corrected the escapes in this plan; criterion 1 says it right and the code and tests follow criterion 1); the plan is approved, so the wording stands and is recorded here; (5) the skill's step 4 still tells an agent to write the apostrophes of a locator as the escape: correct, and Increment C is the planned place to update it.
+- Could not be checked by the reviewer: any run result; that the fake engine passes its output byte for byte (the tests show it); real replies of the engine with apostrophes (the live check of the plan).
+- No security review of the changed helper was run; it runs only if the owner asks.
 
 ## Deferred work
 
@@ -119,4 +125,12 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+**Increment A** (in `main` directly, as the earlier plan's increments were).
+
+- Done: `package/kb/helper/kb` has the function `no_apostrophe`, which writes each ASCII apostrophe as `\u0027`, called at the end of `cleaned` (after the paths are hidden and after the cut) for all engine text: the standard output of the four commands, the standard error notes and the text of a failed run; the helper's own sentences are not changed; `BOOK` and `VERSION` are checked with `fullmatch`; the module docstring says it. `engine/tests/test_package.py` has the class `ApostropheTests` (7 tests).
+- Tests were written first and seen failing for the right reasons (9 failures: raw apostrophes in all four commands, in the standard error and in a failed run, an unchanged cut, and a trailing newline accepted for a book and a version), then passing. One of them takes the locator out of a reply as an agent copies it, shows with `shlex` that a single-quoted command holding it is one argument, and shows that the engine receives the same locator through `read`.
+- Verification (Python 3.15.0): `python3 -B -m unittest engine.tests.test_package` with `KB_WORKBENCH_CHECKOUT` set, 141 tests, OK; unset, 141 tests, OK, 85 skipped; `wb run code-work check`, 79 plans, no problems; `git diff --check`, clean; no `.pyc` or `__pycache__` in `package/`. No engine file changed, so no wider run.
+- Breaks: 12 single changes to the helper, 11 caught by a test, the file restored byte for byte after each run: the escape removed; written as the Python escape (which is only an apostrophe); only the first apostrophe; another escape (hex); applied before the cut; the standard error not escaped; a failed run not escaped; the wrapper escaped too; applied before the paths are hidden; `match` for `fullmatch` on the book and on the version. Not caught, and it cannot be: "the cut marker goes through the escape too" gives identical output, because the marker holds no apostrophe.
+- Slips of mine, found by the checks: the writing tool turned every escape of this plan into a plain apostrophe, so the first approved text was wrong; the commit preview showed it, a script wrote the escapes back, and the owner approved the corrected plan (region 430a1385) before the plan was committed (95691c8). My first script for the helper wrote a real Python escape into its source, which is an apostrophe, so the replacement did nothing; the new tests failed and showed it, and the doubled backslash fixed it.
+- What an agent sees now: an apostrophe in a title, a heading or an excerpt reads `\u0027` in every reply of the helper, in all four skills. An agent that reads JSON takes it as an apostrophe; a passage quoted for the owner has to be written with the apostrophe.
+- Not done: the live check by hand (a real `read` of a passage whose heading holds an apostrophe); the owner's copy of the package in the other folder, and the pin and approval there.

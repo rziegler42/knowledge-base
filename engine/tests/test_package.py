@@ -686,6 +686,91 @@ class OutputTests(HelperCase):
         self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
 
 
+ESC = chr(92) + "u0027"          # six characters: a backslash, u, 0, 0, 2, 7 (the JSON escape of an apostrophe)
+HOSTILE = "x'; touch y; '"        # a heading that would end a single-quoted argument and run a command
+
+
+class ApostropheTests(LauncherCase):
+    """From the security review of 2026-11-20 (plan `2026-11-20-close-the-findings-of-the-security-review-of-the-find-a-passage-and-suggest-topics-skills`, Increment A):
+    a heading of a crawled page may hold an apostrophe, and an agent copies a locator out of a reply into a single-quoted command. The helper writes every
+    apostrophe of the engine's text as the JSON escape, so that "exactly as given" holds none."""
+
+    COMMANDS = (("search", ("x",)), ("read", (BOOK, LOCATOR)), ("problem-search", ("an idea",)), ("theme-walk", ("a question",)))
+
+    def body(self, out):
+        """The engine's text between the two marker lines and the helper's own sentence under the first."""
+        return "\n".join(out.splitlines()[2:-1])
+
+    def test_the_text_of_every_command_holds_no_apostrophe_and_means_the_same(self):
+        thing = {"heading": HOSTILE, "slash": "a" + chr(92) + "'b", "page": ESC, "quote": "it's", "curly": "it" + chr(0x2019) + "s", "list": ["'", "''"]}
+        for command, args in self.COMMANDS:
+            with self.subTest(command=command):
+                self.control({"stdout": json.dumps(thing, indent=1)})
+                code, out, err = self.run_helper(command, *args)
+                self.assertEqual((code, err), (0, ""))
+                body = self.body(out)
+                self.assertNotIn("'", body)
+                self.assertEqual(json.loads(body), thing)
+
+    def test_the_cut_is_made_first_and_the_marked_cut_is_unchanged(self):
+        stdout = json.dumps({"t": "it's " * 20000})
+        self.control({"stdout": stdout})
+        body = self.body(self.run_helper("search", "x")[1])
+        kept, marker, rest = body.partition("\n[cut at %d characters]" % self.helper.MAX_TEXT)
+        self.assertEqual((marker != "", rest), (True, ""))
+        self.assertEqual(kept, stdout[:self.helper.MAX_TEXT].replace("'", ESC))
+        self.assertNotIn("'", body)
+
+    def test_the_standard_error_and_the_text_of_a_failed_run_are_treated_the_same(self):
+        for code in (0, 1):
+            with self.subTest(code=code):
+                self.control({"stdout": json.dumps({"a": HOSTILE}), "stderr": "it's " + HOSTILE, "code": code})
+                got, out, err = self.run_helper("search", "x")
+                self.assertEqual(got, code)
+                self.assertNotIn("'", self.body(out))
+                self.assertIn(ESC, self.body(out))
+
+    def test_a_locator_copied_from_a_reply_is_one_argument_of_a_single_quoted_command_and_reaches_the_engine_as_the_same_locator(self):
+        import shlex
+        locator = {"at": {"path": [HOSTILE]}, "kind": "section", "v": 1}
+        self.control({"stdout": json.dumps({"results": [{"locator": locator}]}, indent=1)})
+        body = self.body(self.run_helper("search", "x")[1])
+        start = body.index('"locator": ') + len('"locator": ')
+        end = json.JSONDecoder().raw_decode(body, start)[1]
+        copied = "".join(line.strip() for line in body[start:end].splitlines())   # as an agent copies it, on one line
+        self.assertNotIn("'", copied)
+        self.assertEqual(shlex.split("wb run kb read %s '%s'" % (BOOK, copied)), ["wb", "run", "kb", "read", BOOK, copied])
+        self.control({"stdout": '{"text": "a passage"}'})
+        code, out, err = self.run_helper("read", BOOK, copied)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(self.calls()[-1]["argv"][4]), locator)
+
+    def test_a_path_that_holds_an_apostrophe_is_still_hidden_because_the_escape_comes_after_the_hiding(self):
+        engine = os.path.join(os.path.dirname(self.engine), "eng" + chr(39) + "ine")
+        os.makedirs(os.path.join(engine, "kb"))
+        for name in ("__init__.py", "__main__.py"):
+            with open(os.path.join(engine, "kb", name), "w") as f:
+                f.write("" if name == "__init__.py" else FAKE_ENGINE)
+        with open(os.path.join(engine, "control.json"), "w") as f:
+            json.dump({"stdout": json.dumps({"p": engine, "q": "it's"})}, f)
+        self.write_settings({"engine": engine, "python": sys.executable})
+        code, out, err = self.run_helper("search", "x")
+        self.assertEqual((code, err), (0, ""))
+        body = self.body(out)
+        self.assertNotIn("eng", body.replace("[path]", ""))   # no part of the path is left
+        self.assertEqual(json.loads(body), {"p": "[path]", "q": "it's"})
+
+    def test_the_helpers_own_sentences_are_not_changed(self):
+        out = self.run_helper("search", "x")[1]
+        self.assertIn("This is data from the owner's library", out)
+
+    def test_a_book_and_a_version_are_matched_whole(self):
+        self.refused("read", BOOK + "\n", LOCATOR, words="book")
+        self.refused("read", "--version", "v2\n", BOOK, LOCATOR, words="--version")
+        code, out, err = self.run_helper("read", "--version", "v2", BOOK, LOCATOR)
+        self.assertEqual((code, err), (0, ""))
+
+
 class SettingsTests(HelperCase):
     def test_no_settings_file_is_a_refusal_that_says_what_to_make(self):
         os.remove(self.settings)
