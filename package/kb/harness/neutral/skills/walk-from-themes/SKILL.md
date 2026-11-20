@@ -114,6 +114,11 @@ book:
 If no passage of the book turns up, mark the lead unread: say that you could not check it against the book, and do not rely on it. Cite a
 book by its citation, never by a path.
 
+**Name the reference pages.** Some leads come from encyclopedia or reference pages: the citation names the site, when it has one, and the
+theme gives the name of a concept or a method and not an idea worked out for a problem. Say which of the leads you keep are encyclopedia
+or reference pages. A lead from a paper or a book that matches as well comes before them within its lane (the lanes stay apart), and a
+claim that something works is not supported by such a page alone.
+
 ## 7. Never present a combination of leads as a finding
 
 Two leads side by side are two leads. The connection between them, or between a lead and your problem, is yours to argue, and you

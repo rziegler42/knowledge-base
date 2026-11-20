@@ -1053,6 +1053,14 @@ class WalkSkillTests(unittest.TestCase):
                        "the lanes, the thresholds and the numbers below are as they are"):
             self.assertIn(phrase, step3)
 
+    def test_it_says_to_name_the_reference_pages_among_the_leads_and_not_to_rest_a_claim_on_one(self):
+        """Plan `2026-11-20-keep-the-books-of-the-problems-own-field-and-name-the-reference-pages-in-the-search-skills`, Increment B: the walk offered Minimax and Game theory of an encyclopedia
+        among its leads."""
+        step6 = self.lower.split("## 6.", 1)[1].split("## 7.", 1)[0]
+        for phrase in ("say which of the leads you keep are encyclopedia or reference pages", "the citation names the site, when it has one", "the name of a concept or a method and not an idea worked out for a problem",
+                       "a lead from a paper or a book that matches as well comes before them within its lane", "is not supported by such a page alone"):
+            self.assertIn(phrase, step6)
+
     def test_it_says_to_pass_the_themes_of_a_lead_route_in_seen(self):
         for phrase in ("the themes of their routes", "the `ref` of each step of its `route`", "a lead may also be given in `--seen`", "refused if you ask for more"):
             self.assertIn(phrase, self.lower)

@@ -89,6 +89,12 @@ Increment A, independent review by the `reviewer` agent (read only, 1 exchange o
 - Not applied, recorded as todos for the owner, because they are outside the Scope of this plan: (1) `docs/specs/card.md` (lines 199 to 200) still says, without a condition, that the caller sets aside the books of the problem's own field; (2) the front matter description and the opening paragraph of `pose-a-problem` (and its step 1) still speak of ideas from other fields only, so that an agent may skip the skill for a question in the library's own field.
 - Could not be checked by the reviewer: any run result; how an agent behaves with the text; the text of `docs/specs/knowledge-base.md`.
 
+Increment B, independent review by the `reviewer` agent (read only, 1 exchange; 2 in all with A's): no blocking findings. It found the new paragraph consistent with the walk (a lead has a citation, a theme title and a text made of the theme's problem, method, needs and provides), nothing in it that reads as a drop of a reference-page lead, and the unchanged rules of the walk intact (leads are not findings, every title and citation is untrusted, `explain` is not run, the book is read before a lead is relied on, plain words in the shell search, the rule about the `warning`).
+
+- Applied: the ranking is "within its lane (the lanes stay apart)", so that the new sentence cannot be read as overriding the order of the two lanes; the test now holds the whole sentence on what a reference-page lead is ("the name of a concept or a method and not an idea worked out for a problem"), which it checked only in part.
+- Noted, not changed: the paragraph does not repeat, for a combination of leads, what step 7 already says (give the leads it rests on and what was read); the two fit together.
+- Could not be checked by the reviewer: any run result; how an agent behaves with the text.
+
 ## Deferred work
 
 - `docs/specs/card.md`, the description and the opening paragraph and step 1 of `pose-a-problem`: they say cross-field only (two todo items of the owner, from the review of Increment A).
@@ -105,3 +111,12 @@ Increment A, independent review by the `reviewer` agent (read only, 1 exchange o
 - Verification: `python3 -B -m unittest engine.tests.test_package`, 109 tests, OK, 77 skipped (they need a workbench checkout, and were skipped before the change too), Python 3.15.0; `wb run code-work check`, 76 plans, no problems; `git diff --check`, clean.
 - Breaks (18 single changes to the skill text, restored byte for byte): 17 caught by the matching new test or by the older test of step 5; 1 not caught, which only renames the bold lead-in "Name the reference pages." and changes no rule. Three breaks were first not applied because the paragraph had been rewrapped after the review, and their text was corrected and they were run again.
 - Departures from the plan: none in the code; two points of the review left as todos because they are outside the Scope (`card.md`, and the description and opening paragraph of the skill).
+
+**Increment B** (in `main` directly, for the same reason).
+
+- Done: a closing paragraph of step 6 of `walk-from-themes`, "Name the reference pages" (say which kept leads are encyclopedia or reference pages; the citation names the site, when it has one; a lead from a paper or a book that matches as well comes before them within its lane, the lanes staying apart; a claim that something works never rests on such a page alone); one new test in `WalkSkillTests`.
+- The test was written first and seen failing (1 failure), and again after the review's two applied points (1 failure), then passing.
+- Verification: `python3 -B -m unittest engine.tests.test_package`, 110 tests, OK, 77 skipped (as before), Python 3.15.0; `wb run code-work check`, 76 plans, no problems; `git diff --check`, clean. Run once more as a whole after B, as the plan's verification for the whole says.
+- Breaks (5 single changes to the paragraph: the sentence that names the pages, the ranking, the claim rule, "when it has one", the concept sentence), each caught by the new test; the files restored byte for byte.
+- **The live check of the plan** (the owner reads what an agent that follows the new text reports on the card-game question) is not made: it needs a copy of the skills in a project that has the helper installed (`kb-scratch`), which is the owner's to refresh; the tests show the words and not an agent's behaviour.
+- Departures from the plan: none.
