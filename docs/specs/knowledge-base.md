@@ -219,6 +219,11 @@ summary.
   nothing useful was found it says so.
 - **[agreed]** The workbench agent is the first and most frequent user, through a governed workbench command. An MCP server is a
   later door onto the same interface, for tools outside the workbench.
+- **[proposed]** A locator that a reply of the helper carries is text of a book that the agent copies into a command between single quotes,
+  so the helper writes the apostrophe, the double quote, the backslash and the percent sign of the strings of a locator as `%27`, `%22`, `%5C` and
+  `%25`, and `read` takes them back; the agent copies the locator as given and decodes nothing in a command. It does not ask the agent to type an escape,
+  because the harness turns a typed backslash-u escape into the character it stands for (found by the first live test of the skills,
+  2026-11-20). The same holds for the `anchor` of a theme in a result, whose `start` and `end` are locators.
 
 ### Curation side
 
