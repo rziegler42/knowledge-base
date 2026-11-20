@@ -90,7 +90,12 @@ Each increment's recorded verification stands. After B, `engine/tests/test_packa
 
 ## Review record
 
-Empty until a review is asked for.
+Increment A, independent review by the `reviewer` agent, 1 exchange (of a cap of 6): no blocking findings; it ran nothing and read the helper in full, the tests, `jsonstrict` and the engine's bound.
+
+- **Found true (read only):** the new bound cannot admit a locator that the engine cannot take (the engine's bound is 100000 characters; the ASCII form of 2000 UTF-8 bytes is at most about 12000), lone surrogates are refused by the strict reader so the encoding in the check cannot raise, and the old direction is also right (the bytes as given are what the bound counted before the codes); `emit` writes nothing before it fails, because a `TextIOWrapper` encodes the whole text first; the message names bytes and the order of `plain` and `write_codes` matches the plan; the one break that no test catches ("plain applied after the codes") gives identical output.
+- **Applied:** (1) no test showed that the engine still gets the ASCII form, so a `sent` written with raw non-ASCII would have passed: the CJK test now asserts `argv[4].isascii()` and a break covers it; (2) the control-character test put a control character only in the `start` of an anchor: the `end` has one too.
+- **Noted, not changed:** the keys of a locator are not cleaned or coded (the engine's keys are fixed words, and this predates the plan); the `plain` that the plan adds matters only below U+0020, because the `plain` that `with_coded_locators` already ran on the whole reply removes the other characters (so the Unicode-version difference between the helper's interpreter and the engine's was already in force); the parse limit of 3 times the bound can refuse a locator of almost only codes that is typed with much white space (a refusal that says "larger than 6000 bytes"); a stream with the error handler `replace` or `backslashreplace` never raises, so `emit` would write a reply with replacement characters (outside the plan: it assumes the entry point passes `sys.stdout` as it is); an `OSError` from `emit` in the `Failed` branch ends as a traceback and in the success branch is reported as "could not be started" (both predate this plan).
+- **Could not be checked by the reviewer:** any run result and the breaks; the behaviour of the real `sys.stdout` under a non-UTF-8 locale; what changed relative to HEAD.
 
 ## Deferred work
 
@@ -103,4 +108,11 @@ Empty until a review is asked for.
 
 ## Result
 
-Empty until work starts.
+**Increment A** (in `main` directly, as the earlier plans' increments were).
+
+- Done: in `package/kb/helper/kb`, `read` measures the bound of 2000 as the UTF-8 bytes of the compact JSON of the decoded locator written as the agent gave it (`ensure_ascii` false) and says "bytes" in its refusal, while the string passed to the engine stays the ASCII form; `code_locators` passes each string of a locator through `plain` before `write_codes`; a new `emit` writes the reply to the output and turns a `UnicodeError` into `failed: ... set a UTF-8 locale ...` with a return of 1 and nothing written, for the text of a success and for the text of a failed run. `LocatorCodeTests` has 7 more tests: the CJK locator of 480 characters and the ASCII form it sends; the exact bound in bytes and one byte more; control characters in a locator, a next and an anchor's start and end (newline, tab, CR, NUL, ESC, DEL, U+2028, a bidirectional mark, a lone surrogate); a stream of ASCII encoding for a success and for a failed run.
+- Tests were written first and seen failing for the right reasons (7 failures and 1 error: the CJK locator and the exact bound refused, a backslash in a locator for newline, tab, CR, NUL and ESC, and a `UnicodeEncodeError` from the helper; the cases DEL, U+2028, the bidirectional mark and the lone surrogate already passed, because the `plain` over the whole reply removes them, and stay as guards), then passing.
+- Verification (Python 3.15.0): `python3 -B -m unittest engine.tests.test_package` with `KB_WORKBENCH_CHECKOUT` set, 162 tests, OK; unset, 162 tests, OK, 98 skipped; `wb run code-work check`, 81 plans, no problems; `git diff --check`, clean; no `.pyc` or `__pycache__` in `package/`. No engine file changed, so no wider run.
+- Breaks: 14 single changes to the helper, 13 caught by a test, the file restored byte for byte: the bound on the ASCII form again, on characters, never enforced, one byte too wide; the message without "bytes"; the string sent to the engine no longer ASCII; `plain` removed, or keeping newline and tab; `UnicodeError` not caught; a stream that cannot carry the reply reported as a success; the message without what to set; the text of a failed run and of a success written without the check. Not caught, and it cannot be: "plain applied after the codes instead of before" gives identical output, because the codes are ASCII.
+- Departures from the plan: none beyond the review's two test additions.
+- Not done: Increment B; the owner's installation of the new helper in `kb-scratch`.

@@ -318,7 +318,7 @@ def code_locators(value, found):
         for key, item in value.items():
             if key in LOCATOR_KEYS and isinstance(item, dict):
                 found.append(key)
-                coded[key] = in_strings(item, write_codes)
+                coded[key] = in_strings(item, lambda text: write_codes(plain(text)))      # a control character would be written with a backslash by JSON
             else:
                 coded[key] = code_locators(item, found)
         return coded
@@ -537,11 +537,25 @@ def read(args, cwd):
     if depth(parsed) > MAX_DEPTH:
         raise Refused("the locator is nested deeper than %d levels" % MAX_DEPTH)
     parsed = in_strings(parsed, read_codes)
+    as_given = json.dumps(parsed, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+    if len(as_given.encode("utf-8")) > MAX_LOCATOR:      # the bytes of the locator as the agent wrote it, the codes taken back: not the ASCII form sent to the engine
+        raise Refused("the locator is longer than %d bytes once its codes are taken back" % MAX_LOCATOR)
     sent = json.dumps(parsed, separators=(",", ":"), sort_keys=True)
-    if len(sent) > MAX_LOCATOR:
-        raise Refused("the locator is longer than %d characters once its codes are taken back" % MAX_LOCATOR)
     tail = ["--chars", str(chars)] + (["--version", values["--version"]] if "--version" in values else [])
     return query_engine("read", tail + [book, sent], cwd)
+
+
+CANNOT_CARRY = "the reply holds characters that the output stream cannot carry; set a UTF-8 locale (for example LANG=en_US.UTF-8) and run the call again"
+
+
+def emit(out, err, text):
+    """Write `text` to `out`. False, with a message on `err`, when the stream cannot encode it: nothing is written then, because a stream encodes the whole text first."""
+    try:
+        out.write(text)
+    except UnicodeError:
+        err.write("failed: %s\n" % CANNOT_CARRY)
+        return False
+    return True
 
 
 def main(argv, stdin, out, err, cwd):
@@ -551,7 +565,8 @@ def main(argv, stdin, out, err, cwd):
         if not argv or argv[0] not in commands:
             raise Refused(USAGE)
         text = commands[argv[0]](argv[1:], cwd)
-        out.write(text)
+        if not emit(out, err, text):
+            return 1
         return 0
     except Refused as exc:
         err.write("refused: %s\n" % exc)
@@ -559,7 +574,7 @@ def main(argv, stdin, out, err, cwd):
     except Failed as exc:
         err.write("failed: %s\n" % exc)
         if exc.text:
-            out.write(exc.text)
+            emit(out, err, exc.text)
         return 1
     except OSError as exc:
         err.write("refused: the call could not be started (%s)\n" % display.ascii_text(exc.strerror or "error")[:100])

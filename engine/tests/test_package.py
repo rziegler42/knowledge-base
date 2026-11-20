@@ -887,6 +887,73 @@ class LocatorCodeTests(LauncherCase):
         self.assertIn("failed: ", err)
         self.assertIn("too deeply", err)
 
+    def test_a_locator_with_a_long_non_ascii_heading_is_within_the_bound_as_the_agent_wrote_it(self):
+        """From the second security review (2026-11-20): 480 CJK characters are about 1,670 bytes in UTF-8, which the bound of 2000 bytes allows, and about 2,900 characters of
+        the ASCII form that the engine gets; the helper measured the second and refused the page."""
+        loc = locator_of(chr(0x4e2d) * 480)
+        copied = json.dumps(loc, ensure_ascii=False)
+        self.assertLessEqual(len(json.dumps(loc, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")), self.helper.MAX_LOCATOR)
+        self.assertGreater(len(json.dumps(loc, separators=(",", ":"), sort_keys=True)), self.helper.MAX_LOCATOR)
+        self.control({"stdout": '{"text": "a passage"}'})
+        code, out, err = self.run_helper("read", BOOK, copied)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(json.loads(self.calls()[-1]["argv"][4]), loc)
+        self.assertTrue(self.calls()[-1]["argv"][4].isascii())      # the engine gets the ASCII form, whatever the locale of its environment
+
+    def test_the_bound_is_in_bytes_of_the_locator_as_given_and_one_byte_more_is_refused(self):
+        bound = self.helper.MAX_LOCATOR
+        base = len(json.dumps(locator_of(""), separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8"))
+        room = bound - base
+        heading = chr(0x4e2d) * (room // 3) + "x" * (room % 3)
+        loc = locator_of(heading)
+        self.assertEqual(len(json.dumps(loc, separators=(",", ":"), sort_keys=True, ensure_ascii=False).encode("utf-8")), bound)
+        self.control({"stdout": '{"text": "a passage"}'})
+        self.assertEqual(self.run_helper("read", BOOK, json.dumps(loc, ensure_ascii=False))[0], 0)
+        self.refused("read", BOOK, json.dumps(locator_of(heading + "x"), ensure_ascii=False), words="%d bytes" % bound)
+
+    def test_a_control_character_in_a_string_of_a_locator_never_puts_a_backslash_in_it_and_other_strings_are_as_before(self):
+        """From the second security review: JSON writes a control character with a backslash, which the harness rewrites. The engine cleans its headings, so none reaches a locator today."""
+        for number in (10, 9, 13, 0, 27, 127, 0x2028, 0x202e, 0xd800):
+            with self.subTest(character=hex(number)):
+                heading = "a" + chr(number) + "b"
+                reply = {"results": [{"title": "tab" + chr(9) + "kept", "locator": locator_of(heading),
+                                      "anchor": {"path": [heading], "start": locator_of(heading), "end": locator_of("c" + chr(number) + "d")}}], "next": locator_of(heading)}
+                self.control({"stdout": json.dumps(reply, indent=1)})
+                body = self.body(self.run_helper("search", "x")[1])
+                for key in ("locator", "anchor", "next"):
+                    self.assertNotIn(BACKSLASH, self.raw_locator(body, key), key)
+                shown = json.loads(body)
+                self.assertEqual(shown["results"][0]["locator"]["at"]["path"][0], "ab")
+                self.assertEqual(shown["results"][0]["anchor"]["start"]["at"]["path"][0], "ab")
+                self.assertEqual(shown["results"][0]["anchor"]["end"]["at"]["path"][0], "cd")
+                self.assertEqual(shown["next"]["at"]["path"][0], "ab")
+                self.assertEqual(shown["results"][0]["title"], "tab" + chr(9) + "kept")        # the other strings are as the helper has always cleaned them
+
+    def test_a_stream_that_cannot_carry_the_reply_is_a_failure_and_nothing_is_written(self):
+        self.control({"stdout": json.dumps({"results": [{"locator": locator_of("caf" + chr(0xe9))}]})})
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding="ascii", write_through=True)
+        err = io.StringIO()
+        code = self.helper.main(["search", "x"], io.BytesIO(b""), out, err, self.project)
+        out.flush()
+        self.assertEqual(code, 1)
+        self.assertEqual(raw.getvalue(), b"")
+        self.assertTrue(err.getvalue().startswith("failed: "), err.getvalue())
+        self.assertIn("UTF-8", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_the_text_of_a_failed_run_is_written_through_the_same_check_of_the_stream(self):
+        self.control({"stdout": json.dumps({"results": [{"locator": locator_of("caf" + chr(0xe9))}]}), "code": 1})
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding="ascii", write_through=True)
+        err = io.StringIO()
+        code = self.helper.main(["search", "x"], io.BytesIO(b""), out, err, self.project)
+        out.flush()
+        self.assertEqual(code, 1)
+        self.assertEqual(raw.getvalue(), b"")
+        self.assertIn("kb exited with code 1", err.getvalue())
+        self.assertIn("UTF-8", err.getvalue())
+
     def test_the_text_is_cut_after_the_codes_are_written(self):
         self.control({"stdout": json.dumps({"results": [{"locator": locator_of("'" * 1500)}] * 40}, indent=1)})
         body = self.body(self.run_helper("search", "x")[1])
