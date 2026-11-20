@@ -11,7 +11,7 @@ import sys
 import types
 import unicodedata
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 from engine.tests import ENGINE_DIR  # noqa: F401  (puts the engine folder on the import path)
@@ -662,6 +662,77 @@ class CommandLine(ReviewCase):
     def test_the_command_is_listed(self):
         r = subprocess.run([sys.executable, "-m", "kb", "--help"], cwd=ENGINE_DIR, env=dict(os.environ, KB_CONFIG_DIR=self.cfg), capture_output=True, text=True, timeout=120)
         self.assertIn("place-review", r.stdout)
+
+
+class AcceptPicksCommand(ReviewCase):
+    """`place-review --accept-picks` and `--accept-picks --digest HEX` (plan `2026-11-20-accept-the-models-picks-for-all-proposed-books-in-one-step`, Increment B)."""
+    DIGEST = "a" * 32
+
+    def main(self, *argv):
+        from kb import __main__ as cli
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli.Store, "open", return_value=self.store) as opened, redirect_stdout(out), redirect_stderr(err):
+            code = cli.main(["place-review", *argv])
+        return code, out.getvalue(), err.getvalue(), opened
+
+    def test_the_flag_prints_the_list_read_only_and_records_nothing(self):
+        with mock.patch.object(placereview, "accept_preview", return_value=("THE LIST\ndigest: " + self.DIGEST, self.DIGEST, [], {})) as previewed, \
+                mock.patch.object(placereview, "accept_picks") as accepted:
+            code, out, err, opened = self.main("--accept-picks")
+        self.assertEqual((code, out, err), (0, "THE LIST\ndigest: " + self.DIGEST + "\n", ""))
+        previewed.assert_called_once()
+        accepted.assert_not_called()
+        opened.assert_called_once_with(write=False)
+
+    def test_the_flag_with_a_digest_records_for_that_digest_and_prints_the_result_as_json(self):
+        with mock.patch.object(placereview, "accept_picks", return_value={"answered": ["x"], "digest": self.DIGEST}) as accepted, mock.patch.object(placereview, "accept_preview") as previewed:
+            code, out, err, opened = self.main("--accept-picks", "--digest", self.DIGEST)
+        self.assertEqual((code, json.loads(out)), (0, {"answered": ["x"], "digest": self.DIGEST}))
+        self.assertEqual(accepted.call_args.args, (self.store, self.DIGEST))
+        previewed.assert_not_called()
+        opened.assert_called_once_with()
+
+    def test_the_flag_cannot_be_given_with_the_other_flags_and_a_digest_needs_the_flag(self):
+        for extra in (["--list"], ["--again"], ["--book", "x"]):
+            with self.subTest(extra=extra), mock.patch.object(placereview, "accept_preview") as previewed, mock.patch.object(placereview, "accept_picks") as accepted:
+                code, out, err, _ = self.main("--accept-picks", *extra)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("cannot be given with", err)
+                previewed.assert_not_called()
+                accepted.assert_not_called()
+        with mock.patch.object(placereview, "accept_picks") as accepted, mock.patch.object(placereview, "review") as reviewed:
+            code, out, err, _ = self.main("--digest", self.DIGEST)
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("--digest goes with --accept-picks", err)
+            accepted.assert_not_called()
+            reviewed.assert_not_called()
+
+    def test_with_a_digest_it_refuses_unless_input_and_output_are_both_a_terminal_and_records_nothing(self):
+        book, _ = self.proposed("The gene book", answer="2: Because.")
+        before = self.store.read_events(book)
+        tty, no = types.SimpleNamespace(isatty=lambda: True), types.SimpleNamespace(isatty=lambda: False)
+        for stdin, stdout in ((tty, no), (no, tty), (no, no)):
+            with self.subTest(stdin=stdin.isatty(), stdout=stdout.isatty()):
+                from kb import __main__ as cli
+                err = io.StringIO()
+                with mock.patch.object(cli.Store, "open", return_value=self.store), mock.patch("sys.stdin", stdin), mock.patch("sys.stdout", stdout), redirect_stderr(err):
+                    code = cli.main(["place-review", "--accept-picks", "--digest", self.DIGEST])
+                self.assertEqual(code, 2)
+                self.assertIn("terminal", err.getvalue())
+        self.assertEqual(self.store.read_events(book), before)
+
+    def test_the_real_command_with_a_piped_input_refuses_and_the_flag_is_in_the_help(self):
+        book, _ = self.proposed("The gene book", answer="2: Because.")
+        before = self.store.read_events(book)
+        run = lambda *a, **k: subprocess.run([sys.executable, "-m", "kb", *a], cwd=ENGINE_DIR, env=dict(os.environ, KB_CONFIG_DIR=self.cfg), capture_output=True, text=True, timeout=120, **k)
+        r = run("place-review", "--accept-picks", "--digest", self.DIGEST, input="")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("terminal", r.stderr)
+        help_text = " ".join(run("place-review", "--help").stdout.split())
+        self.assertIn("--accept-picks", help_text)
+        self.assertIn("record exactly those answers", help_text)
+        self.assertIn("the digest on the last line of the list you read", help_text)
+        self.assertEqual(self.store.read_events(book), before)
 
 
 class AcceptPicks(ReviewCase):

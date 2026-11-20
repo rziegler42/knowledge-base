@@ -142,6 +142,9 @@ def main(argv=None):
     pr.add_argument("--list", action="store_true", help="print the counts of where each book stands, read only")
     pr.add_argument("--again", action="store_true", help="ask again about books you have already answered")
     pr.add_argument("--book", action="append", metavar="BOOK_ID", help="go through this book only; give it once for each book")
+    pr.add_argument("--accept-picks", action="store_true", help="print the list of books that would be answered with the model's pick (or its none), with a digest of that list (read only); "
+                                                                 "with --digest, record exactly those answers, in your own terminal, if the list still has that digest; it moves no book")
+    pr.add_argument("--digest", metavar="DIGEST", help="with --accept-picks: the digest on the last line of the list you read; it records the answers and needs a terminal")
     pa = sub.add_parser("place-apply", help="print the list of books that your answers would move onto their shelves, with a digest of that list (read only); with --digest, make exactly those moves, "
                                             "in your own terminal, if the list still has that digest")
     pa.add_argument("--digest", metavar="DIGEST", help="the digest on the last line of the list you read; it makes the moves and needs a terminal")
@@ -373,6 +376,16 @@ def main(argv=None):
             print(json.dumps(placement.propose(Store.open(), cfg, book_ids=args.book, again=args.again)))
             return 0
         if args.command == "place-review":
+            if args.digest is not None and not args.accept_picks:
+                raise KbError("--digest goes with --accept-picks")
+            if args.accept_picks:
+                if args.list or args.again or args.book:
+                    raise KbError("--accept-picks cannot be given with --list, --again or --book")
+                if args.digest is not None:
+                    print(json.dumps(placereview.accept_picks(Store.open(), args.digest)))
+                    return 0
+                print(placereview.accept_preview(Store.open(write=False))[0])
+                return 0
             if args.list:
                 print(json.dumps(placereview.listing(Store.open(write=False))))
                 return 0

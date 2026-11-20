@@ -349,6 +349,13 @@ The schema is fixed, so shelves are not split or merged. The library may still s
   `place-apply --digest`, in a terminal, with the digest of the list they read (a preview that shows what it will do, as the governed actions above require). How a later action that takes the levels
   `ask`, `delegated` or `none` shows and binds what it will do is for the plan that builds it. That a record is not an approval is implied by the permission levels above; it is recorded here so that the step is planned with it.
   The digest proves that the list is unchanged, not that the owner read it, and the terminal check is an interlock and not proof that a person typed.
+- **[proposed]** Built in the engine (the plan `2026-11-20-accept-the-models-picks-for-all-proposed-books-in-one-step`; `engine/README.md`, "Confirming a proposal"): the owner may take the model's pick for every
+  unanswered book at once. `python3 -m kb place-review --accept-picks` prints, read only (no lock, no write), the books it would answer (each unanswered, current, with a shelf or a `none` as the model's pick), with a count for
+  each shelf, the counts of the books it would leave out by reason, and a digest of that text; `place-review --accept-picks --digest HEX` records, for exactly those books, the line that `ok` records
+  (`equals_pick` true, the typed answer `accept-picks`), only if the input and the output are both a terminal, the store is open for writing and the list, made again under the catalog lock, still has that digest;
+  it stops at the first error and names the books answered before it.
+  **It is the owner's answer and not their approval:** a recorded answer is still a record (above), `place-apply` still prints its own list with its own digest, and no book moves until the owner runs that.
+  It has no undo of its own: a book answered by it is asked again with `place-review --again --book ID`.
 
 ### Changing a shelf's scope
 
