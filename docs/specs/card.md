@@ -196,8 +196,9 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   sub-problems (the caller restates and splits the problem; the engine calls no chat model). Each is searched as above and the reply
   holds each sub-problem's ranked books and one list in which each book appears once, with its best result without the card text
   (a reply over 61,000 characters is refused) and the sub-problems that returned it with the rank and score of each. **The engine
-  sets nothing aside by field**: no card says which field a book belongs to (every shelf is `default`), so the caller sets aside the
-  books of the problem's own field. An agent in a project reaches it through the `kb` helper (`wb run kb problem-search`), which sends
+  sets nothing aside by field**: no card says which field a book belongs to (every shelf is `default`), so the caller decides from what the
+  owner asked for (step 5 of the skill `pose-a-problem`): for a request of ideas from other fields the caller sets aside the books of the problem's
+  own field, and for a question in a field the library is mainly about the caller keeps them as the answer. An agent in a project reaches it through the `kb` helper (`wb run kb problem-search`), which sends
   the sub-problems to the embedding model of the config and to nothing else, and through the skill `pose-a-problem` that the package
   ships. A field label on cards, so that the engine could set a field aside, is not built.
 - **[proposed]** The card as shown to a reader marks each kept topic, key idea, caveat and neutral limit, and each sentence of the
