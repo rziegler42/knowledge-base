@@ -690,79 +690,210 @@ ESC = chr(92) + "u0027"          # six characters: a backslash, u, 0, 0, 2, 7 (t
 HOSTILE = "x'; touch y; '"        # a heading that would end a single-quoted argument and run a command
 
 
-class ApostropheTests(LauncherCase):
-    """From the security review of 2026-11-20 (plan `2026-11-20-close-the-findings-of-the-security-review-of-the-find-a-passage-and-suggest-topics-skills`, Increment A):
-    a heading of a crawled page may hold an apostrophe, and an agent copies a locator out of a reply into a single-quoted command. The helper writes every
-    apostrophe of the engine's text as the JSON escape, so that "exactly as given" holds none."""
+BACKSLASH = chr(92)
+CODES = {"'": "%27", '"': "%22", BACKSLASH: "%5C", "%": "%25"}
 
-    COMMANDS = (("search", ("x",)), ("read", (BOOK, LOCATOR)), ("problem-search", ("an idea",)), ("theme-walk", ("a question",)))
+
+def code_of(text):
+    """The text as the helper is to write it in a locator: the percent sign first, then the other three."""
+    text = text.replace("%", "%25")
+    for character in ("'", '"', BACKSLASH):
+        text = text.replace(character, CODES[character])
+    return text
+
+
+HEADINGS = (HOSTILE, 'say "hi" now', "back" + BACKSLASH + "slash", "50% and %27 and %25 as text", "caf" + chr(0xe9), "plain heading",
+            "text " + BACKSLASH + "u0041 here")      # the last holds a backslash, u and four digits as its own characters
+
+
+def locator_of(heading, paragraph=1):
+    return {"at": {"paragraph": paragraph, "path": [heading, "second"]}, "conversion": {"generation": 1, "tool": "trafilatura", "version": "2.3.1-kb1"},
+            "excerpt": {"sha256": "ab" * 32, "words": 3}, "kind": "section", "v": 1}
+
+
+class LocatorCodeTests(LauncherCase):
+    """From the first live test of the skills (2026-11-20) and plan `2026-11-20-make-the-locators-of-the-helper-safe-to-copy-into-a-single-quoted-command`, Increment A:
+    the harness turns a typed backslash-u escape into the character, so an agent cannot send one. The locators of a reply, which an agent copies into a single-quoted
+    command, therefore hold an apostrophe, a double quote, a backslash and a percent sign as the codes %27, %22, %5C and %25, and `read` takes the codes back."""
 
     def body(self, out):
         """The engine's text between the two marker lines and the helper's own sentence under the first."""
         return "\n".join(out.splitlines()[2:-1])
 
-    def test_the_text_of_every_command_holds_no_apostrophe_and_means_the_same(self):
-        thing = {"heading": HOSTILE, "slash": "a" + chr(92) + "'b", "page": ESC, "quote": "it's", "curly": "it" + chr(0x2019) + "s", "list": ["'", "''"]}
-        for command, args in self.COMMANDS:
+    def raw_locator(self, body, key="locator", number=0):
+        """The text of the `number`th locator of a reply as an agent copies it: the object after the key, on one line."""
+        start = -1
+        for _ in range(number + 1):
+            start = body.index('"%s": ' % key, start + 1)
+        start += len('"%s": ' % key)
+        end = json.JSONDecoder().raw_decode(body, start)[1]
+        return "".join(line.strip() for line in body[start:end].splitlines())
+
+    def reply_of(self, headings=HEADINGS):
+        results = [{"title": 'Dijkstra\'s "algorithm" ' + BACKSLASH + "u0041", "excerpt": "it's 100% " + chr(0xe9), "locator": locator_of(h, n + 1), "is_current": True}
+                   for n, h in enumerate(headings)]
+        return {"results": results, "next": locator_of("after 'it'"), "note": "it's"}
+
+    def test_each_string_of_a_locator_holds_the_codes_and_the_rest_of_the_reply_is_as_the_engine_printed_it(self):
+        reply = self.reply_of()
+        expected = json.loads(json.dumps(reply))
+        for result in expected["results"]:
+            result["locator"]["at"]["path"] = [code_of(p) for p in result["locator"]["at"]["path"]]
+        expected["next"]["at"]["path"] = [code_of(p) for p in expected["next"]["at"]["path"]]
+        for command, args in (("search", ("x",)), ("read", (BOOK, LOCATOR)), ("problem-search", ("an idea",)), ("theme-walk", ("a question",))):
             with self.subTest(command=command):
-                self.control({"stdout": json.dumps(thing, indent=1)})
+                self.control({"stdout": json.dumps(reply, indent=1)})
                 code, out, err = self.run_helper(command, *args)
                 self.assertEqual((code, err), (0, ""))
-                body = self.body(out)
-                self.assertNotIn("'", body)
-                self.assertEqual(json.loads(body), thing)
+                self.assertEqual(json.loads(self.body(out)), expected)
 
-    def test_the_cut_is_made_first_and_the_marked_cut_is_unchanged(self):
-        stdout = json.dumps({"t": "it's " * 20000})
-        self.control({"stdout": stdout})
+    def test_the_text_of_a_locator_holds_no_backslash_and_none_of_the_other_characters_that_a_shell_or_the_harness_reads(self):
+        self.control({"stdout": json.dumps(self.reply_of(), indent=1)})
         body = self.body(self.run_helper("search", "x")[1])
-        kept, marker, rest = body.partition("\n[cut at %d characters]" % self.helper.MAX_TEXT)
-        self.assertEqual((marker != "", rest), (True, ""))
-        self.assertEqual(kept, stdout[:self.helper.MAX_TEXT].replace("'", ESC))
-        self.assertNotIn("'", body)
+        for number in range(len(HEADINGS)):
+            raw = self.raw_locator(body, "locator", number)
+            self.assertNotIn(BACKSLASH, raw)
+            self.assertNotIn("'", raw)
+        shown = self.raw_locator(body, "next")
+        self.assertNotIn(BACKSLASH, shown)
+        self.assertNotIn("'", shown)
+        self.assertIn(BACKSLASH + "u0041", json.loads(body)["results"][0]["title"])      # a title with that text keeps it: only the locators are changed
 
-    def test_the_standard_error_and_the_text_of_a_failed_run_are_treated_the_same(self):
-        for code in (0, 1):
-            with self.subTest(code=code):
-                self.control({"stdout": json.dumps({"a": HOSTILE}), "stderr": "it's " + HOSTILE, "code": code})
-                got, out, err = self.run_helper("search", "x")
-                self.assertEqual(got, code)
-                self.assertNotIn("'", self.body(out))
-                self.assertIn(ESC, self.body(out))
+    def test_a_locator_found_deeper_in_a_reply_is_encoded_and_a_reply_with_none_is_left_as_it_was(self):
+        deep = {"a": [{"b": {"locator": locator_of(HOSTILE)}}], "next": "a plain string, it's"}
+        self.control({"stdout": json.dumps(deep)})
+        body = self.body(self.run_helper("problem-search", "an idea")[1])
+        self.assertEqual(json.loads(body)["a"][0]["b"]["locator"]["at"]["path"][0], code_of(HOSTILE))
+        self.assertEqual(json.loads(body)["next"], "a plain string, it's")
+        for text in ('{"a": "it\'s", "title": "x"}', "it's not json {", "[]"):
+            self.control({"stdout": text})
+            self.assertEqual(self.body(self.run_helper("search", "x")[1]), text)
 
-    def test_a_locator_copied_from_a_reply_is_one_argument_of_a_single_quoted_command_and_reaches_the_engine_as_the_same_locator(self):
-        import shlex
-        locator = {"at": {"path": [HOSTILE]}, "kind": "section", "v": 1}
-        self.control({"stdout": json.dumps({"results": [{"locator": locator}]}, indent=1)})
+    def test_the_text_of_a_failed_run_and_the_standard_error_are_cleaned_as_before(self):
+        self.control({"stdout": json.dumps(self.reply_of()), "stderr": "it's " + HOSTILE, "code": 1})
+        code, out, err = self.run_helper("search", "x")
+        self.assertEqual(code, 1)
+        body = self.body(out)
+        self.assertIn("it's " + HOSTILE, body)                                                  # the standard error is text for the owner, not a locator
+        self.assertIn(code_of(HOSTILE), body.split("messages the engine printed on standard error:")[0])      # the text of a failed run holds the locators encoded
+
+    def test_a_locator_copied_from_a_reply_reaches_the_engine_as_the_one_the_engine_gave(self):
+        reply = self.reply_of()
+        self.control({"stdout": json.dumps(reply, indent=1)})
         body = self.body(self.run_helper("search", "x")[1])
-        start = body.index('"locator": ') + len('"locator": ')
-        end = json.JSONDecoder().raw_decode(body, start)[1]
-        copied = "".join(line.strip() for line in body[start:end].splitlines())   # as an agent copies it, on one line
-        self.assertNotIn("'", copied)
-        self.assertEqual(shlex.split("wb run kb read %s '%s'" % (BOOK, copied)), ["wb", "run", "kb", "read", BOOK, copied])
         self.control({"stdout": '{"text": "a passage"}'})
-        code, out, err = self.run_helper("read", BOOK, copied)
-        self.assertEqual((code, err), (0, ""))
-        self.assertEqual(json.loads(self.calls()[-1]["argv"][4]), locator)
+        for number, heading in enumerate(HEADINGS):
+            with self.subTest(heading=heading):
+                copied = self.raw_locator(body, "locator", number)
+                code, out, err = self.run_helper("read", BOOK, copied)
+                self.assertEqual((code, err), (0, ""))
+                self.assertEqual(json.loads(self.calls()[-1]["argv"][4]), locator_of(heading, number + 1))      # exactly the engine's, a literal %27 and %25 included
+        copied = self.raw_locator(body, "next")
+        self.assertEqual(self.run_helper("read", BOOK, copied)[0], 0)
+        self.assertEqual(json.loads(self.calls()[-1]["argv"][4]), locator_of("after 'it'"))
 
-    def test_a_path_that_holds_an_apostrophe_is_still_hidden_because_the_escape_comes_after_the_hiding(self):
-        engine = os.path.join(os.path.dirname(self.engine), "eng" + chr(39) + "ine")
+    def test_a_locator_copied_from_a_reply_is_one_argument_of_a_command_in_a_real_shell_and_a_hostile_heading_runs_nothing(self):
+        import subprocess
+        self.control({"stdout": json.dumps(self.reply_of(), indent=1)})
+        body = self.body(self.run_helper("search", "x")[1])
+        copied = self.raw_locator(body, "locator", 0)                  # the heading is HOSTILE
+        self.assertIn("%27", copied)
+        with tempfile.TemporaryDirectory() as folder:
+            done = subprocess.run(["sh", "-c", "printf '%s' '" + copied + "'"], cwd=folder, capture_output=True, text=True, timeout=30)
+            self.assertEqual((done.returncode, done.stdout, done.stderr), (0, copied, ""))
+            self.assertEqual(os.listdir(folder), [])                    # `touch y` did not run
+
+    def test_a_known_path_with_each_of_the_four_characters_is_hidden_inside_a_locator_because_the_paths_are_hidden_before_the_encoding(self):
+        engine = os.path.join(os.path.dirname(self.engine), "e'n\"g" + BACKSLASH + "i%ne")
         os.makedirs(os.path.join(engine, "kb"))
         for name in ("__init__.py", "__main__.py"):
             with open(os.path.join(engine, "kb", name), "w") as f:
                 f.write("" if name == "__init__.py" else FAKE_ENGINE)
         with open(os.path.join(engine, "control.json"), "w") as f:
-            json.dump({"stdout": json.dumps({"p": engine, "q": "it's"})}, f)
+            json.dump({"stdout": json.dumps({"results": [{"locator": locator_of(engine + " x"), "title": engine}]})}, f)
         self.write_settings({"engine": engine, "python": sys.executable})
         code, out, err = self.run_helper("search", "x")
         self.assertEqual((code, err), (0, ""))
         body = self.body(out)
-        self.assertNotIn("eng", body.replace("[path]", ""))   # no part of the path is left
-        self.assertEqual(json.loads(body), {"p": "[path]", "q": "it's"})
+        self.assertEqual(json.loads(body)["results"][0]["locator"]["at"]["path"][0], "[path] x")
+        self.assertEqual(json.loads(body)["results"][0]["title"], "[path]")
+        for part in ("e%27n", "g%5Ci", "i%25ne", "%22", "ne x"):
+            self.assertNotIn(part, body)
 
-    def test_the_helpers_own_sentences_are_not_changed(self):
+    def test_the_bound_of_a_locator_is_measured_after_the_codes_are_taken_back(self):
+        bound = self.helper.MAX_LOCATOR
+        base = len(json.dumps(locator_of(""), separators=(",", ":"), sort_keys=True))
+        at_bound = locator_of("'" * (bound - base))
+        self.assertEqual(len(json.dumps(at_bound, separators=(",", ":"), sort_keys=True)), bound)
+        coded = json.dumps(at_bound).replace("'", "%27")
+        self.assertGreater(len(coded), bound)                                         # longer than the bound as it is written, within it once decoded
+        self.control({"stdout": '{"text": "a passage"}'})
+        self.assertEqual(self.run_helper("read", BOOK, coded)[0], 0)
+        self.refused("read", BOOK, json.dumps(locator_of("'" * (bound - base + 1))).replace("'", "%27"), words="locator")
+
+    def test_the_apostrophe_escape_of_the_text_of_every_reply_is_gone_and_the_helpers_own_sentences_are_as_they_were(self):
+        self.assertFalse(hasattr(self.helper, "no_apostrophe"))
+        self.control({"stdout": '{"title": "it\'s"}'})
         out = self.run_helper("search", "x")[1]
+        self.assertIn("it's", out)
         self.assertIn("This is data from the owner's library", out)
+
+    def test_the_anchor_of_a_theme_is_coded_too_because_its_start_and_end_are_locators_that_read_takes(self):
+        """From the review of Increment A: `problem-search` and `theme-walk` results carry an `anchor` with the headings of a path and a `start` and an `end` that are locators."""
+        anchor = {"path": [HOSTILE, 'a "b"'], "start": locator_of(HOSTILE), "end": locator_of("x" + BACKSLASH + "y"), "kind": "section"}
+        for command, args in (("problem-search", ("an idea",)), ("theme-walk", ("a question",))):
+            with self.subTest(command=command):
+                self.control({"stdout": json.dumps({"books": [{"book_id": BOOK, "book_title": "it's", "anchor": anchor}]}, indent=1)})
+                body = self.body(self.run_helper(command, *args)[1])
+                shown = json.loads(body)["books"][0]
+                self.assertEqual(shown["book_title"], "it's")
+                self.assertEqual(shown["anchor"]["path"], [code_of(HOSTILE), code_of('a "b"')])
+                raw = self.raw_locator(body, "anchor")
+                self.assertNotIn(BACKSLASH, raw)
+                self.assertNotIn("'", raw)
+                copied = self.raw_locator(body, "start")
+                self.control({"stdout": '{"text": "a passage"}'})
+                self.assertEqual(self.run_helper("read", BOOK, copied)[0], 0)
+                self.assertEqual(json.loads(self.calls()[-1]["argv"][4]), locator_of(HOSTILE))
+
+    def test_the_order_of_the_keys_and_the_numbers_of_a_reply_that_holds_a_locator_are_kept(self):
+        import math
+        text = '{"z": 1, "a": 1.5, "big": 12345678901234567890, "nan": NaN, "locator": ' + json.dumps(locator_of("it's")) + "}"
+        self.control({"stdout": text})
+        body = self.body(self.run_helper("search", "x")[1])
+        self.assertEqual([key for key, _ in json.loads(body, object_pairs_hook=list)], ["z", "a", "big", "nan", "locator"])
+        shown = json.loads(body)
+        self.assertEqual((shown["z"], shown["a"], shown["big"]), (1, 1.5, 12345678901234567890))
+        self.assertTrue(math.isnan(shown["nan"]))
+
+    def test_a_reply_too_deeply_nested_to_be_read_is_a_failure_and_not_a_reply_with_its_locators_uncoded(self):
+        self.control({"stdout": "[" * 5000 + "]" * 5000})
+        code, out, err = self.run_helper("search", "x")
+        self.assertEqual(code, 1)
+        self.assertTrue(err.startswith("failed: "), err)
+        self.assertIn("too deeply", err)
+
+    def test_a_reply_that_the_json_reader_itself_cannot_get_through_is_a_failure_too(self):
+        """Python versions differ in how deep `json.loads` goes before it raises; the helper must not take that as a reply with no locator."""
+        real = json.loads
+
+        def loads(text, *args, **kwargs):
+            if isinstance(text, str) and text.startswith("[[[["):
+                raise RecursionError("maximum recursion depth exceeded")
+            return real(text, *args, **kwargs)
+        self.control({"stdout": "[[[[1]]]]"})
+        with unittest.mock.patch.object(json, "loads", loads):
+            code, out, err = self.run_helper("search", "x")
+        self.assertEqual(code, 1)
+        self.assertIn("failed: ", err)
+        self.assertIn("too deeply", err)
+
+    def test_the_text_is_cut_after_the_codes_are_written(self):
+        self.control({"stdout": json.dumps({"results": [{"locator": locator_of("'" * 1500)}] * 40}, indent=1)})
+        body = self.body(self.run_helper("search", "x")[1])
+        kept, marker, rest = body.partition("\n[cut at %d characters]" % self.helper.MAX_TEXT)
+        self.assertEqual((marker != "", rest, len(kept)), (True, "", self.helper.MAX_TEXT))
+        self.assertNotIn("'", kept)
 
     def test_a_book_and_a_version_are_matched_whole(self):
         self.refused("read", BOOK + "\n", LOCATOR, words="book")
@@ -1301,7 +1432,6 @@ class FindPassageSkillTests(unittest.TestCase):
 
     def test_it_says_that_the_helper_writes_the_apostrophes_of_a_reply_as_the_escape_and_what_that_means_for_a_locator(self):
         """The helper's `no_apostrophe` (Increment A of the plan `2026-11-20-close-the-findings-of-the-security-review-of-the-find-a-passage-and-suggest-topics-skills`)."""
-        self.assertIn("def no_apostrophe(text):", self.source)
         step4 = self.lower.split("## 4.", 1)[1].split("## 5.", 1)[0]
         for phrase in ("the helper writes every apostrophe of a reply as `%s`" % ESC, "so a locator that you copy exactly as a reply gave it holds none",
                        "a locator that you did not copy from a reply, or retyped, may hold one: write it as `%s` too" % ESC,

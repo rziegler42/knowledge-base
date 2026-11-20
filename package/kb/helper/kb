@@ -25,7 +25,7 @@ owner-only file ``~/.config/knowledge-base/helper.json`` (``{"engine": "<absolut
 never in the project, and refuses a file that others can read or write, a link, or a path that leads into the project. No argument
 is a path, an address or a token: a book is its 26-character identifier, a locator is a small JSON object that a search returned,
 a ref is three identifiers of fixed shape, and every option is one of those above. What the engine prints is data from outside: it is
-cleaned, cut to a bound, stripped of the paths of this machine that the helper knows, written with every apostrophe as the JSON escape (so that a
+cleaned, cut to a bound, stripped of the paths of this machine that the helper knows, the locators of a reply written with an apostrophe, a double quote, a backslash and a percent sign as the codes %27, %22, %5C and %25 (so that a
 locator copied out of a reply holds none to end a single-quoted argument), and printed between two marker lines that carry a random token. The helper never runs it or believes it. It writes no file: none of the four engine commands does.
 """
 
@@ -280,18 +280,76 @@ def run_program(argv, cwd, env, timeout):
                 pass
 
 
-def no_apostrophe(text):
-    """`text` with each ASCII apostrophe written as the six characters ``\\u0027``. The engine prints JSON, which leaves an apostrophe as it is, and an
-    agent copies a locator out of a reply into a command between single quotes: an apostrophe in a heading of a crawled page would end the quotes and
-    let the rest of the heading run in the agent's shell. In a JSON string the escape means the same apostrophe, and the JSON the engine prints never
-    holds a backslash before an apostrophe that is not itself escaped, so the text stays valid JSON with the same meaning (from the security review of
-    2026-11-20)."""
-    return text.replace("'", "\\u0027")
+CODES = (("%", "%25"), ("'", "%27"), ('"', "%22"), ("\\", "%5C"))      # the percent sign first, so that a code is never coded again
+UNCODE = {"25": "%", "27": "'", "22": '"', "5C": "\\"}
+CODE = re.compile(r"%(25|27|22|5C)")
+LOCATOR_KEYS = ("locator", "next", "anchor")      # `anchor`: the headings and the start and end (locators) of a theme in a result
+
+
+def write_codes(text):
+    """`text` with an apostrophe, a double quote, a backslash and a percent sign written as %27, %22, %5C and %25."""
+    for character, code in CODES:
+        text = text.replace(character, code)
+    return text
+
+
+def read_codes(text):
+    """`text` with the four codes taken back, in one pass: a text that held %27 as its own characters was written as %2527 and comes back as it was."""
+    return CODE.sub(lambda match: UNCODE[match.group(1)], text)
+
+
+def in_strings(value, function):
+    """`value` (parsed JSON) with `function` applied to each string value; the keys of an object are not changed."""
+    if isinstance(value, str):
+        return function(value)
+    if isinstance(value, list):
+        return [in_strings(item, function) for item in value]
+    if isinstance(value, dict):
+        return {key: in_strings(item, function) for key, item in value.items()}
+    return value
+
+
+def code_locators(value, found):
+    """`value` (a reply, parsed) with the strings of every locator written with the codes. A locator is an object under the key ``locator``, ``next`` or ``anchor`` (the
+    anchor of a theme: headings, and a start and an end that are locators), at any depth; `found` gets an item for each. A locator is what an agent copies into a command between single quotes, and the harness turns a typed backslash-u escape
+    into its character, so a locator holds no apostrophe, no double quote and no backslash (from the first live test of the skills, 2026-11-20)."""
+    if isinstance(value, dict):
+        coded = {}
+        for key, item in value.items():
+            if key in LOCATOR_KEYS and isinstance(item, dict):
+                found.append(key)
+                coded[key] = in_strings(item, write_codes)
+            else:
+                coded[key] = code_locators(item, found)
+        return coded
+    if isinstance(value, list):
+        return [code_locators(item, found) for item in value]
+    return value
+
+
+def with_coded_locators(text):
+    """The reply with its locators coded, written again as the engine writes JSON (one space of indent) except that a character outside ASCII is written as itself,
+    so that no locator holds a backslash. A reply that holds no locator, or is not JSON, is as it was."""
+    too_deep = "kb printed a reply nested too deeply for the helper to read"
+    try:
+        reply = json.loads(text)
+    except ValueError:
+        return text
+    except RecursionError:
+        raise Failed(too_deep)      # not a reply with its locators left as they are: an agent could copy one
+    found = []
+    try:
+        coded = code_locators(reply, found)
+        if not found:
+            return text
+        return plain(json.dumps(coded, indent=1, ensure_ascii=False), "\n\t")
+    except RecursionError:
+        raise Failed(too_deep)
 
 
 def cleaned(data, limit, hide=()):
     """The engine's bytes as text with no control characters, the known paths of this machine replaced, cut to `limit` characters
-    with the cut marked, and every apostrophe written as the JSON escape (see `no_apostrophe`)."""
+    with the cut marked. The paths are hidden in the raw text first, and the locators of a reply are written with the codes after (see `code_locators`)."""
     text = plain(data.decode("utf-8", "replace"), "\n\t")
     spellings = set()
     for path in hide:  # the engine prints JSON, so a path may come escaped (a backslash, a quote, a letter outside ASCII)
@@ -299,7 +357,8 @@ def cleaned(data, limit, hide=()):
             spellings.update((path, json.dumps(path)[1:-1], json.dumps(path, ensure_ascii=False)[1:-1]))
     for path in sorted(spellings, key=len, reverse=True):
         text = text.replace(path, "[path]")
-    return no_apostrophe(text if len(text) <= limit else text[:limit]) + ("" if len(text) <= limit else "\n[cut at %d characters]" % limit)
+    text = with_coded_locators(text)
+    return text if len(text) <= limit else text[:limit] + "\n[cut at %d characters]" % limit
 
 
 def wrap(command, text, notes=""):
@@ -471,14 +530,18 @@ def read(args, cwd):
         raise Refused("--version is v and a number from 1 to 999999, as in v2")
     chars = whole_number(values["--chars"], 100, 20000, "--chars") if "--chars" in values else DEFAULT_CHARS
     try:
-        parsed = jsonstrict.parse_object(locator.encode("utf-8", "surrogatepass"), MAX_LOCATOR)
+        parsed = jsonstrict.parse_object(locator.encode("utf-8", "surrogatepass"), 3 * MAX_LOCATOR)      # the codes make it at most three times as long
     except (ValueError, UnicodeError) as exc:
         raise Refused("the locator is not usable: %s; it is the locator object of a search result"
                       % display.ascii_text(str(exc))[:100])
     if depth(parsed) > MAX_DEPTH:
         raise Refused("the locator is nested deeper than %d levels" % MAX_DEPTH)
+    parsed = in_strings(parsed, read_codes)
+    sent = json.dumps(parsed, separators=(",", ":"), sort_keys=True)
+    if len(sent) > MAX_LOCATOR:
+        raise Refused("the locator is longer than %d characters once its codes are taken back" % MAX_LOCATOR)
     tail = ["--chars", str(chars)] + (["--version", values["--version"]] if "--version" in values else [])
-    return query_engine("read", tail + [book, json.dumps(parsed, separators=(",", ":"), sort_keys=True)], cwd)
+    return query_engine("read", tail + [book, sent], cwd)
 
 
 def main(argv, stdin, out, err, cwd):
