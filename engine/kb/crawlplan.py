@@ -64,6 +64,7 @@ PLAN.update({
     "pdf_max_mb": ("pdf", "int", 0, 0, 200),                # the largest PDF the crawl takes, in megabytes; 0 takes none (the client holds a response whole in memory, about twice its size at peak)
     "tool_rss_mb": ("pdf", "int", 2048, 64, 100_000),       # the most resident memory a scan or a converter may use before the sandbox kills it
     "themes_window_s": ("idle", "int", 600, 0, 3600),       # the seconds a run may spend after its fetch on themes, the vectors of the themes and the weave; 0 is off
+    "themes_window_full_s": ("idle", "int", 3600, 0, 3600), # the same, in a run whose day has used up its fetches (never past the end of the day); 0 is the same as `themes_window_s`
     "topics": ("files", "path", HOME + "crawl-topics.txt", None, None),
     "blacklist": ("files", "path", HOME + "crawl-blacklist.txt", None, None),
     "allow": ("files", "path", HOME + "crawl-allow.txt", None, None),
@@ -230,6 +231,19 @@ def lists_plan(plan):
 def discovery_plan(plan):
     """The settings discovery reads, as `discover.normalize_plan` takes them: exactly the keys of `discover.PLAN`."""
     return {key: plan[key] for key in discover.PLAN}
+
+
+def day_end(now, timezone):
+    """The end of the day that `day_of(now, timezone)` names: the start of the next day in the plan's zone, as an aware time **in UTC** (`local` is the machine's zone, with its changes of the clock; a day of 23 or 25
+    hours has its own end). UTC is returned so that it is compared and subtracted as a real instant: two times that share one zone object are compared by their wall clocks, which is wrong across a change of the
+    clock. A time with no zone and a zone that is not known are refused as `day_of` refuses them."""
+    day = datetime.date.fromisoformat(day_of(now, timezone)) + datetime.timedelta(days=1)
+    start = datetime.datetime.combine(day, datetime.time.min)
+    if timezone == "local":
+        end = start.astimezone()                    # a time with no zone is taken as the machine's own time, changes of the clock included
+    else:
+        end = start.replace(tzinfo=zoneinfo.ZoneInfo(timezone))
+    return end.astimezone(datetime.timezone.utc)
 
 
 def day_of(now, timezone):

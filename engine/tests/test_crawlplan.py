@@ -71,7 +71,7 @@ class Defaults(Files):
             "gap_openalex_s": 1, "gap_arxiv_s": 3, "gap_wikipedia_s": 1, "gap_web_search_s": 30, "web_search_per_day": 20,
             "phishing_domains": True, "urlhaus_recent": False, "phishing_domains_format": "domains", "refresh_hours": 12, "list_max_mb": 50, "list_min_share": 0.5, "list_max_change": 0.3,
             "urlhaus_keep_days": 30, "pinned_hosts": ["openalex.org", "arxiv.org", "wikipedia.org", "api.langsearch.com"],
-            "threshold": None, "min_chars": 400, "model_pick": True, "pdf_max_mb": 0, "tool_rss_mb": 2048, "themes_window_s": 600,
+            "threshold": None, "min_chars": 400, "model_pick": True, "pdf_max_mb": 0, "tool_rss_mb": 2048, "themes_window_s": 600, "themes_window_full_s": 3600,
             "topics": home + "crawl-topics.txt", "blacklist": home + "crawl-blacklist.txt", "allow": home + "crawl-allow.txt",
         }
         for key, value in expected.items():
@@ -177,6 +177,20 @@ topics = ~/somewhere/topics.txt
         for bad in ("-1", "3601", "100000", "2.5", "abc", "", "1e3", "600s", "0x10"):
             with self.subTest(bad):
                 self.refused(f"[idle]\nthemes_window_s = {bad}\n", "line 2")
+
+    def test_the_long_window_of_a_day_with_no_fetches_left_is_3600_seconds_by_default_and_a_whole_number_from_0_to_3600(self):
+        self.assertEqual(self.read("")["themes_window_full_s"], 3600)
+        for good in (0, 1, 600, 3600):
+            self.assertEqual(self.read(f"[idle]\nthemes_window_full_s = {good}\n")["themes_window_full_s"], good)
+            self.assertEqual(self.read(f"[idle]\nthemes_window_full_s = {good}\n")["themes_window_s"], 600)       # the other key is not touched
+        for bad in ("-1", "3601", "100000", "2.5", "abc", "", "1e3", "3600s", "0x10", "True", "None"):
+            with self.subTest(bad):
+                self.refused(f"[idle]\nthemes_window_full_s = {bad}\n", "line 2")
+
+    def test_the_long_window_key_belongs_to_the_idle_section_and_nowhere_else(self):
+        for section in ("limits", "pdf", "files", "judge", "breaker"):
+            with self.subTest(section):
+                self.refused(f"[{section}]\nthemes_window_full_s = 60\n", "line 2")
 
     def test_the_window_key_belongs_to_the_idle_section_and_nowhere_else(self):
         for section in ("limits", "pdf", "files", "judge"):
@@ -445,6 +459,48 @@ class Days(unittest.TestCase):
         fall_b = datetime.datetime(2026, 11, 1, 6, 30, tzinfo=datetime.timezone.utc)     # 01:30 EST, the second
         self.assertEqual((crawlplan.day_of(fall_a, zone), crawlplan.day_of(fall_b, zone)), ("2026-11-01", "2026-11-01"))
 
+    def test_the_end_of_a_day_is_the_start_of_the_next_in_the_plans_zone(self):
+        utc = datetime.timezone.utc
+        t = datetime.datetime(2026, 11, 16, 3, 30, tzinfo=utc)
+        self.assertEqual(crawlplan.day_end(t, "UTC"), datetime.datetime(2026, 11, 17, 0, 0, tzinfo=utc))
+        self.assertEqual(crawlplan.day_end(t, "America/New_York"), datetime.datetime(2026, 11, 16, 5, 0, tzinfo=utc))       # 00:00 EST of the 16th
+        self.assertEqual(crawlplan.day_end(t, "Asia/Tokyo"), datetime.datetime(2026, 11, 16, 15, 0, tzinfo=utc))
+        for zone in ("UTC", "America/New_York", "Asia/Tokyo"):
+            end = crawlplan.day_end(t, zone)
+            self.assertNotEqual(crawlplan.day_of(end - datetime.timedelta(seconds=1), zone), crawlplan.day_of(end, zone))     # the last second of the day, and the first of the next
+            self.assertEqual(crawlplan.day_of(end - datetime.timedelta(seconds=1), zone), crawlplan.day_of(t, zone))
+        for zone in ("UTC", "America/New_York", "Asia/Tokyo", "local"):
+            self.assertIs(crawlplan.day_end(t, zone).tzinfo, datetime.timezone.utc, zone)           # an instant in UTC, so that the arithmetic with the run's clock is on real instants
+
+    def test_the_end_of_a_day_that_has_no_midnight_in_common_with_the_utc_day_and_the_ends_of_a_month_and_a_year(self):
+        utc = datetime.timezone.utc
+        self.assertEqual(crawlplan.day_end(datetime.datetime(2026, 11, 30, 23, 59, 59, tzinfo=utc), "UTC"), datetime.datetime(2026, 12, 1, 0, 0, tzinfo=utc))
+        self.assertEqual(crawlplan.day_end(datetime.datetime(2026, 12, 31, 23, 59, 59, tzinfo=utc), "UTC"), datetime.datetime(2027, 1, 1, 0, 0, tzinfo=utc))
+        self.assertEqual(crawlplan.day_end(datetime.datetime(2028, 2, 28, 12, 0, tzinfo=utc), "UTC"), datetime.datetime(2028, 2, 29, 0, 0, tzinfo=utc))       # a leap year
+        self.assertEqual(crawlplan.day_end(datetime.datetime(2026, 11, 17, 0, 0, tzinfo=utc), "UTC"), datetime.datetime(2026, 11, 18, 0, 0, tzinfo=utc))       # at the start, the whole day is left
+
+    def test_the_end_of_a_day_of_25_hours_and_of_a_day_of_23_hours(self):
+        utc = datetime.timezone.utc
+        zone = "America/New_York"
+        fall = datetime.datetime(2026, 11, 1, 4, 0, tzinfo=utc)                      # 00:00 EDT, the start of a day of 25 hours
+        self.assertEqual(crawlplan.day_end(fall, zone), datetime.datetime(2026, 11, 2, 5, 0, tzinfo=utc))       # 00:00 EST
+        self.assertEqual(crawlplan.day_end(fall, zone) - fall, datetime.timedelta(hours=25))
+        spring = datetime.datetime(2026, 3, 8, 5, 0, tzinfo=utc)                     # 00:00 EST, the start of a day of 23 hours
+        self.assertEqual(crawlplan.day_end(spring, zone), datetime.datetime(2026, 3, 9, 4, 0, tzinfo=utc))       # 00:00 EDT
+        self.assertEqual(crawlplan.day_end(spring, zone) - spring, datetime.timedelta(hours=23))
+
+    def test_the_end_of_a_day_in_local_is_the_zone_of_the_machine_with_its_changes_of_clock(self):
+        utc = datetime.timezone.utc
+        saved = os.environ.get("TZ")
+        self.addCleanup(lambda: (os.environ.pop("TZ", None) if saved is None else os.environ.__setitem__("TZ", saved), time.tzset()))
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        self.assertEqual(crawlplan.day_end(datetime.datetime(2026, 11, 20, 3, 0, tzinfo=utc), "local"), datetime.datetime(2026, 11, 20, 5, 0, tzinfo=utc))       # 22:00 EST of the 19th: the day ends at 00:00 EST of the 20th (05:00Z)
+        self.assertEqual(crawlplan.day_end(datetime.datetime(2026, 11, 1, 4, 0, tzinfo=utc), "local") - datetime.datetime(2026, 11, 1, 4, 0, tzinfo=utc), datetime.timedelta(hours=25))
+        os.environ["TZ"] = "Asia/Tokyo"
+        time.tzset()
+        self.assertEqual(crawlplan.day_end(datetime.datetime(2026, 11, 16, 3, 30, tzinfo=utc), "local"), datetime.datetime(2026, 11, 16, 15, 0, tzinfo=utc))
+
     def test_local_is_the_zone_of_the_machine(self):
         t = datetime.datetime(2026, 11, 16, 3, 30, tzinfo=datetime.timezone.utc)
         saved = os.environ.get("TZ")
@@ -455,6 +511,14 @@ class Days(unittest.TestCase):
         os.environ["TZ"] = "Asia/Tokyo"
         time.tzset()
         self.assertEqual(crawlplan.day_of(t, "local"), "2026-11-16")
+
+    def test_the_end_of_a_day_refuses_a_time_without_a_zone_and_a_zone_that_is_not_known_as_the_day_does(self):
+        with self.assertRaises(KbError):
+            crawlplan.day_end(datetime.datetime(2026, 11, 16, 3, 30), "UTC")
+        with self.assertRaises(KbError):
+            crawlplan.day_end(datetime.datetime(2026, 11, 16, 3, 30, tzinfo=datetime.timezone.utc), "Mars/Olympus")
+        with self.assertRaises(KbError):
+            crawlplan.day_end("2026-11-16", "UTC")
 
     def test_a_time_without_a_zone_or_a_zone_that_is_not_known_is_refused(self):
         with self.assertRaises(KbError):

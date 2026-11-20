@@ -229,6 +229,27 @@ class Bytecode(Case):
             self.assertEqual(cli.main(["crawl-run"]), 3)
         self.assertIn("pycache_prefix", "".join(c.args[0] for c in err.write.call_args_list))
 
+    def dry_text(self, plan_text):
+        self.set_plan(plan_text)
+        self.approve()
+        self.out.clear()
+        self.do_run(dry_run=True)
+        return "\n".join(self.out)
+
+    def test_a_dry_run_says_the_two_lengths_of_the_idle_window(self):
+        text = self.dry_text(PLAN_TEXT)
+        self.assertIn("use up to 600 seconds of an idle window (up to 3600 seconds once the day's fetches are used up, never past the end of the day) to make themes", text)
+        text = self.dry_text(PLAN_TEXT + "[idle]\nthemes_window_s = 90\nthemes_window_full_s = 1500\n")
+        self.assertIn("use up to 90 seconds of an idle window (up to 1500 seconds once the day's fetches are used up", text)
+
+    def test_a_dry_run_says_the_long_window_is_the_same_when_its_key_is_zero_and_that_there_is_no_window_when_the_short_one_is_zero(self):
+        text = self.dry_text(PLAN_TEXT + "[idle]\nthemes_window_full_s = 0\n")
+        self.assertIn("seconds of an idle window (the same length once the day's fetches are used up) to make themes", text)
+        self.assertNotIn("3600 seconds", text)
+        text = self.dry_text(PLAN_TEXT + "[idle]\nthemes_window_s = 0\nthemes_window_full_s = 1500\n")
+        self.assertIn("no idle window (themes_window_s is 0)", text)
+        self.assertNotIn("1500", text)
+
     def test_a_dry_run_names_the_bytecode_folder_and_says_what_a_real_run_would_do(self):
         self.do_run(dry_run=True)
         text = "\n".join(self.out)

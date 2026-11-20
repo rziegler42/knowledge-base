@@ -101,4 +101,16 @@ Plan review with the review engine (`review-plan`; model `gpt-5.6-terra` for rou
 
 ## Result
 
-Empty until work starts.
+### Increment A
+
+Built in a separate worktree (`wt-window`, branch `long-window`, from `534ebab`), so that the approval of the running crawl was not voided while it was written and reviewed; copied to `main` and committed with the word of the owner (the copy voided the approval of the crawl).
+
+**Step 1, what was read.** The places that change: `crawlplan.PLAN` (the key, section `idle`), `crawlplan.day_of` (the zone code that `day_end` reuses), the preview line `Idle window:` of `crawlapprove` and the dry-run sentence of `crawlrun`; the tests that name `themes_window_s` are those of `test_crawlplan` (the defaults, the values, the section), `test_crawlapprove` (the preview and the digest) and `test_crawlrun` (the dry run).
+
+**What was done.** `engine/kb/crawlplan.py`: the key `themes_window_full_s` (section `idle`, whole number from 0 to 3600, default 3600) and `day_end(now, timezone)`, which gives the start of the next day in the plan's zone as an **instant in UTC** (`local` is the machine's zone, with its changes of the clock); `engine/kb/crawlapprove.py` and `engine/kb/crawlrun.py`: the sentences of the preview and the dry run, which name both lengths; the tests of the three modules.
+
+**Departures from the plan's wording, for the owner to accept.**
+1. The plan's test (d) said that a plan which names the default digests the same as one that does not. That is not how the approval digest works (it covers the text of the plan file, for every key, as was checked on the existing key `themes_window_s`), so the test says what is true: a plan with no key has the default, and each other value changes the digest.
+2. `day_end` returns UTC and not the zone of the plan (from the review of this increment): two times that share one zone object are compared by their wall clocks, which is wrong across a change of the clock, and Increment B subtracts and compares it with the run's clock.
+
+**Verification run (in the worktree).** `python3 -B -W error::ResourceWarning -m unittest engine.tests.test_crawlplan engine.tests.test_crawlapprove engine.tests.test_crawlrun` (and the schedule, status and idle modules) passed; the new tests were written first and failed for the right reason. Fourteen deliberate single changes of the three code files (the limits, the default and the section of the key, the zone and the next-day arithmetic of `day_end`, the `local` branch, the day taken from the time, the conversion to UTC, and the words of the preview and of the dry run) were each compile-checked, each made a test fail, and the files were restored byte for byte; two were missed at first (the dry-run words) and the tests were made exact. **Review:** `reviewer`, one exchange: no blocking finding; applied: the test of the preview now reads `up to 600 seconds` (the number 600 is also in 3600), and `day_end` returns UTC. **Not run:** `wb run code-work check` (in `main`, after the copy).

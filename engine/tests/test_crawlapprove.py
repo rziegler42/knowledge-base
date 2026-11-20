@@ -994,6 +994,35 @@ class Hardening(Case):
         self.assertIn("themes_window_s is 0", line)
         self.assertNotIn("seconds", line)
 
+    def test_the_summary_says_the_long_window_of_a_day_with_no_fetches_left_and_that_it_ends_with_the_day(self):
+        self.set_plan()
+        text, _ = self.approve()
+        line = next(x for x in text.splitlines() if x.startswith("Idle window:"))
+        self.assertIn("up to 600 seconds", line)
+        self.assertIn("once the day's fetches are used up", line)
+        self.assertIn("3600 seconds", line)
+        self.assertIn("end of the day", line)
+        self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_full_s = 0\n")
+        text, _ = self.approve()
+        line = next(x for x in text.splitlines() if x.startswith("Idle window:"))
+        self.assertIn("same length", line)
+        self.assertNotIn("3600 seconds", line)
+        self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_s = 0\nthemes_window_full_s = 1800\n")
+        text, _ = self.approve()
+        line = next(x for x in text.splitlines() if x.startswith("Idle window:"))
+        self.assertIn("themes_window_s is 0", line)
+        self.assertNotIn("1800", line)                                            # no window at all, whatever the other key says
+
+    def test_a_change_of_the_long_window_changes_the_digest_and_a_plan_without_the_key_is_accepted_with_its_default(self):
+        self.set_plan()
+        text, plain = self.approve()
+        self.assertIn("up to 3600 seconds", next(x for x in text.splitlines() if x.startswith("Idle window:")))      # the default, with no key in the file
+        self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_full_s = 1800\n")
+        _, other = self.approve()
+        self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_full_s = 0\n")
+        _, zero = self.approve()
+        self.assertEqual(len({plain, other, zero}), 3)
+
     def test_a_change_of_the_window_changes_the_digest(self):
         self.set_plan()
         _, first = self.approve()
