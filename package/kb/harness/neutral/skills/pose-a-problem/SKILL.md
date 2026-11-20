@@ -56,12 +56,21 @@ not searched because they have no usable vector yet (a card whose only vectors a
 library: say so in your answer, with both numbers, and tell the owner to run `card-vectors`, which makes the vectors of the cards that have
 none. A search that covered little cannot show that nothing fits.
 
-## 5. Set aside the problem's own field
+## 5. Decide what the problem's own field means for the answer
 
-The library does not know which field a book belongs to, so **the engine sets nothing aside: you do.** For each book, read its title (in
-the citation) and its matched text, and set aside the book if it is from the problem's own field or is only the home field's version of
-the same idea, because that is not what you were asked to find. Say which books you set aside and why, in a line each, so that the
-owner can disagree.
+The library does not know which field a book belongs to, so **the engine sets nothing aside: you do.** First read what the owner asked
+for. For each book, read its title (in the citation) and its matched text, and judge whether it is from the problem's own field or is
+only the home field's version of the same idea; say what you judged.
+
+- If the owner asked for ideas from other fields, set aside the books of the problem's own field, because that is not what you were
+  asked to find. Say which books you set aside and why, in a line each, so that the owner can disagree.
+- If the owner asked a question in a field that the library is mainly about, the books of that field are the answer: do not set them
+  aside. Keep them under the heading "From the problem's own field", before the books of other fields under the heading "From other
+  fields", and hold each to the rules of step 6.
+- If you cannot tell which of the two the owner wants, keep both groups, name them with those two headings, and say that you could not
+  tell.
+
+Whichever you did, say which of the two you took the request to be, in one line, so that the owner can correct it.
 
 ## 6. Keep a book only with a reason from its text
 
@@ -81,11 +90,17 @@ can be wrong, so before you rely on a book, read the book:
 If no passage of the book turns up, mark the book unread: say that you could not check it against the book, and do not rely on it. Cite
 a book by its citation, never by a path. If the passage does not support the card, say so and drop the book.
 
+**Name the reference pages.** Some books are encyclopedia or reference pages: the citation names the site, when it has one, and the matched
+text gives the name of a concept or a method and not an idea worked out for a problem. Say which of the books you keep are encyclopedia or
+reference pages. A paper or a book that matches as well comes before them within each group of your answer, and a claim that something
+works is not supported by such a page alone.
+
 ## 7. When nothing fits
 
-If nothing from another field fits after step 5, say so plainly: nothing from another field fit, and what was searched (the
-sub-problems you used). Do not stretch a weak match to have something to report, and do not search again with the same idea in other
-words to find a fit.
+If the owner asked for ideas from other fields and nothing from another field fits after step 5, say so plainly: nothing from another
+field fit, and what was searched (the sub-problems you used). If the owner asked a question in the library's own field, do not say that
+nothing fit while you kept books of that field: report them as the answer (step 5). If you could not tell what the owner wanted and
+nothing fits in either group, say so plainly, with what was searched. Do not stretch a weak match to have something to report, and do not search again with the same idea in other words to find a fit.
 
 If the search covered little (step 4), do not say that nothing from another field fit: say that the search covered little, with the
 numbers, and what it found.

@@ -925,6 +925,26 @@ class SkillTests(unittest.TestCase):
         for phrase in ("refused", "tell the owner", "do not try another way"):
             self.assertIn(phrase, self.lower)
 
+    def test_it_says_what_the_problems_own_field_means_for_the_answer_by_what_the_owner_asked_for(self):
+        """Plan `2026-11-20-keep-the-books-of-the-problems-own-field-and-name-the-reference-pages-in-the-search-skills`, Increment A: for a question in the library's own field those books are the answer."""
+        step5 = self.lower.split("## 5.", 1)[1].split("## 6.", 1)[0]
+        for phrase in ("the engine sets nothing aside: you do", "first read what the owner asked for", "if the owner asked for ideas from other fields, set aside the books of the problem's own field",
+                       "say which books you set aside and why", "in a field that the library is mainly about", "do not set them aside", "under the heading \"from the problem's own field\"",
+                       "before the books of other fields under the heading \"from other fields\"", "hold each to the rules of step 6", "if you cannot tell which of the two the owner wants",
+                       "keep both groups", "say that you could not tell", "say what you judged", "say which of the two you took the request to be"):
+            self.assertIn(phrase, step5)
+        step7 = self.lower.split("## 7.", 1)[1]
+        for phrase in ("if the owner asked for ideas from other fields and nothing from another field fits", "say so plainly", "a question in the library's own field",
+                       "while you kept books of that field", "report them as the answer", "if you could not tell what the owner wanted and nothing fits in either group"):
+            self.assertIn(phrase, step7)
+
+    def test_it_says_to_name_the_reference_pages_and_not_to_rest_a_claim_on_one(self):
+        """Plan `2026-11-20-keep-the-books-of-the-problems-own-field-and-name-the-reference-pages-in-the-search-skills`, Increment A: seven of the 17 books of the first use were encyclopedia pages."""
+        step6 = self.lower.split("## 6.", 1)[1].split("## 7.", 1)[0]
+        for phrase in ("say which of the books you keep are encyclopedia or reference pages", "the citation names the site, when it has one", "the name of a concept",
+                       "a paper or a book that matches as well comes before them within each group", "is not supported by such a page alone"):
+            self.assertIn(phrase, step6)
+
     def test_it_says_what_to_do_when_the_search_covered_little_of_the_library(self):
         """Plan `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`, Increment C: the search sees only the cards that have a vector."""
         step4 = self.lower.split("## 4.", 1)[1].split("## 5.", 1)[0]

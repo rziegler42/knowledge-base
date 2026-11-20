@@ -83,12 +83,25 @@ Each increment's recorded verification stands. After B, `engine/tests/test_packa
 
 Plan review through the review engine (`gpt-5.6-terra`), 1 round of a bound of 3, converged on 2026-11-20: no meaningful findings; the reviewer found the plan actionable, consistent with its named spec, and its scoped changes covering the stated behaviour. Applied: none. Rejected: none. Before the review I corrected one detail of the plan myself (PageRank was a lead of the exploration lane, not of the follow-through lane). Left for the owner: the approval, which is also the decision about what `pose-a-problem` is for (the first sentence of the goal).
 
+Increment A, independent review by the `reviewer` agent (read only, 1 exchange of a cap of 6): no blocking findings. It found no way for the new wording to turn a home-field book silently into an idea of another field, and found the unchanged rules (plain words, untrusted data, single quotes, no loops, one call, the book read before it is relied on, the card quoted as the card's, the coverage rule of step 4, the closing paragraph of step 7) intact.
+
+- Applied: (3) the agent now says, in one line, which of the two kinds it took the request to be, so that a wrong reading is visible and not only implied by the headings; (4) step 7 now covers the empty case when the agent could not tell what the owner wanted and nothing fits in either group ("say so plainly, with what was searched"); (5) a paper or a book that matches as well comes before a reference page "within each group", so that the two orderings of step 5 and step 6 do not collide; (6) "the citation names the site, when it has one" (the citation of a book with an address names the site, and that of a book loaded from a file says "no source address recorded").
+- Not applied, recorded as todos for the owner, because they are outside the Scope of this plan: (1) `docs/specs/card.md` (lines 199 to 200) still says, without a condition, that the caller sets aside the books of the problem's own field; (2) the front matter description and the opening paragraph of `pose-a-problem` (and its step 1) still speak of ideas from other fields only, so that an agent may skip the skill for a question in the library's own field.
+- Could not be checked by the reviewer: any run result; how an agent behaves with the text; the text of `docs/specs/knowledge-base.md`.
+
 ## Deferred work
 
+- `docs/specs/card.md`, the description and the opening paragraph and step 1 of `pose-a-problem`: they say cross-field only (two todo items of the owner, from the review of Increment A).
 - The filter by kind or shelf (a todo item of the owner).
 - The agent for the library, after the skills have had use.
 - The skills for running the library (the status of the loop, a hand run with the stop file, a change of the engine, the command forms of the gate), which the project does not have.
 
 ## Result
 
-Empty until work starts.
+**Increment A** (built in `main` directly, since no code of `engine/kb` changes and so the approval of the crawl is not touched).
+
+- Done: step 5 of `pose-a-problem` is rewritten ("Decide what the problem's own field means for the answer": read what the owner asked for; judge each book's field and say what was judged; for ideas from other fields set the own-field books aside and say which; for a question in a field the library is mainly about keep them under "From the problem's own field" before "From other fields", each held to the rules of step 6; when it cannot tell keep both and say so; in every case say which of the two the request was taken to be); step 6 ends with "Name the reference pages" (say which kept books are encyclopedia or reference pages, papers and books first within each group, a claim that something works never rests on such a page alone); step 7's first paragraph follows the two kinds of request and covers the empty case; two new tests in `SkillTests` of `engine/tests/test_package.py`.
+- Tests were written first and seen failing (2 failures: the words were not in the skill), and again after the review's four applied points (2 failures), then passing.
+- Verification: `python3 -B -m unittest engine.tests.test_package`, 109 tests, OK, 77 skipped (they need a workbench checkout, and were skipped before the change too), Python 3.15.0; `wb run code-work check`, 76 plans, no problems; `git diff --check`, clean.
+- Breaks (18 single changes to the skill text, restored byte for byte): 17 caught by the matching new test or by the older test of step 5; 1 not caught, which only renames the bold lead-in "Name the reference pages." and changes no rule. Three breaks were first not applied because the paragraph had been rewrapped after the review, and their text was corrected and they were run again.
+- Departures from the plan: none in the code; two points of the review left as todos because they are outside the Scope (`card.md`, and the description and opening paragraph of the skill).
