@@ -7,6 +7,7 @@ Run them with `python3 -W error::ResourceWarning -m unittest engine.tests.test_c
 import datetime
 import json
 import os
+import sqlite3
 import types
 import unittest
 from unittest import mock
@@ -17,7 +18,7 @@ from engine.tests.test_themecheck import config
 from engine.tests.test_themeextract import JournalFake, row, values
 from engine.tests.test_themerun import GOOD, REFUSED, SAYS, RunCase, scripted
 
-from kb import KbError, cardstate, catalog, crawlguard, crawlidle, crawllog, crawlplan, crawlrun, models, theme, themerun, themevectors
+from kb import KbError, cardstate, catalog, crawlguard, crawlidle, crawllog, crawlplan, crawlqueue, crawlrun, crawlstate, models, theme, themerun, themevectors
 
 NOW = datetime.datetime(2026, 11, 18, 12, 0, 0, tzinfo=datetime.timezone.utc)
 HOUR = datetime.timedelta(hours=1)
@@ -239,6 +240,162 @@ class WindowTest(IdleCase):
         self.assertEqual((self.fake.calls, self.written()), ([], []))
         end = self.ended()
         self.assertEqual((end["outcome"], end["reason"]), ("skipped", "settings"))
+
+
+class LongWindowTest(IdleCase):
+    """With the day's fetches used up the window is `themes_window_full_s` (never past the run's deadline or the end of the day); in every other run it is `themes_window_s`."""
+
+    def queue(self, used, limit=5):
+        """A queue connection on the context, with `used` of the day's `limit` fetches counted for the day of the fake clock."""
+        self.crawl_plan["fetches_per_day"] = limit
+        conn = crawlqueue.connect(self.index_root())
+        self.addCleanup(conn.close)
+        conn.execute("INSERT INTO counters(day, key, n) VALUES (?, 'fetch', ?) ON CONFLICT(day, key) DO UPDATE SET n = excluded.n", (crawlplan.day_of(self.now, "UTC"), used))
+        ctx = self.ctx()
+        ctx.conn = conn
+        return ctx
+
+    def themes_of(self, books):
+        return [b for b in books if self.themed(b)]
+
+    def test_with_the_fetches_used_up_a_window_longer_than_the_short_one_finishes_the_books_the_short_one_would_cut(self):
+        self.books(3)
+        books = sorted(self.store.list_books())
+        self.crawl_plan["themes_window_s"] = 400
+        self.idle(GOOD * 3, per_call=100, ctx=self.queue(used=5))
+        self.assertEqual(len(self.fake.calls), 6)                                       # all three books: 600 seconds of calls, in a window of 3600 seconds
+        self.assertEqual(self.themes_of(books), books)
+        end = self.ended()
+        self.assertEqual((end["outcome"], end["reason"], end["n"]), ("ok", "nothing to do", 3))
+
+    def test_with_the_fetches_not_used_up_the_window_is_the_short_one_and_the_lines_are_those_of_before(self):
+        self.books(2)
+        self.crawl_plan["themes_window_s"] = 400
+        self.idle(GOOD + GOOD, per_call=100, ctx=self.queue(used=4))                    # one fetch short of the limit
+        self.assertEqual(len(self.fake.calls), 3)                                        # as the test of the deadline: the share of 240 seconds is spent after three calls
+        end = self.ended()
+        self.assertEqual((end["outcome"], end["reason"], end["n"]), ("ok", "deadline", 1))
+
+    def test_the_limit_itself_is_used_up_and_one_short_of_it_is_not(self):
+        for used, calls in ((4, 3), (5, 4), (6, 4)):
+            with self.subTest(used=used):
+                self.books(2)
+                self.crawl_plan["themes_window_s"] = 400
+                self.idle(GOOD + GOOD, per_call=100, ctx=self.queue(used=used))
+                self.assertEqual(len(self.fake.calls), calls)
+                for b in self.store.list_books():
+                    self.store.set_state(b, "weeded")                                     # the next case starts with books of its own
+                for name in os.listdir(os.path.join(self.index_root(), "crawl", "log")):
+                    os.unlink(os.path.join(self.index_root(), "crawl", "log", name))
+                self.now = NOW
+
+    def test_the_long_window_is_cut_by_the_deadline_of_the_run(self):
+        self.books(2)
+        ctx = self.queue(used=5)
+        ctx.deadline = NOW + datetime.timedelta(seconds=250)
+        self.idle(GOOD + GOOD, per_call=100, ctx=ctx)
+        self.assertEqual(len(self.fake.calls), 2)                                        # as in the short window: 60 percent of the 250 seconds the run has left
+        self.assertEqual(self.ended()["reason"], "deadline")
+
+    def test_the_long_window_starts_no_call_after_the_end_of_the_day_and_lets_a_call_that_began_before_it_finish(self):
+        self.now = datetime.datetime(2026, 11, 18, 23, 50, 0, tzinfo=datetime.timezone.utc)      # ten minutes to the end of the day
+        self.books(4)
+        self.crawl_plan["themes_window_s"] = 100
+        self.idle(GOOD * 4, per_call=350, ctx=self.queue(used=5))
+        self.assertEqual(len(self.fake.calls), 2)                                        # calls at 0 and 350 seconds; the second ends at 700, after the day's end at 600; nothing more begins
+        self.assertEqual(self.embedded, [])                                              # nor the embedding of the vectors, nor a repair of the weave
+        end = self.ended()
+        self.assertEqual((end["outcome"], end["reason"], end["seconds"]), ("ok", "deadline", 700))
+
+    def test_the_themes_keep_60_percent_of_the_long_window(self):
+        self.books(5)
+        self.crawl_plan["themes_window_full_s"] = 1000
+        self.idle(GOOD * 5, per_call=100, ctx=self.queue(used=5))
+        self.assertEqual(len(self.fake.calls), 6)                                        # calls at 0 to 500; at 600 seconds the share of the themes (60 percent of 1000) is spent
+        self.assertEqual(self.ended()["reason"], "deadline")
+
+    def test_a_window_of_zero_is_off_whatever_the_long_one_says_and_a_long_one_of_zero_is_the_short_window(self):
+        self.books(2)
+        self.crawl_plan["themes_window_s"] = 0
+        self.crawl_plan["themes_window_full_s"] = 1800
+        self.idle(GOOD + GOOD, ctx=self.queue(used=5))
+        self.assertEqual(self.fake.calls, [])
+        end = self.ended()
+        self.assertEqual((end["outcome"], end["reason"]), ("skipped", "off"))
+        for name in os.listdir(os.path.join(self.index_root(), "crawl", "log")):
+            os.unlink(os.path.join(self.index_root(), "crawl", "log", name))
+        self.crawl_plan["themes_window_s"] = 400
+        self.crawl_plan["themes_window_full_s"] = 0
+        self.idle(GOOD + GOOD, per_call=100, ctx=self.queue(used=5))
+        self.assertEqual(len(self.fake.calls), 3)                                        # the short window, though the fetches are used up
+
+    def test_a_context_with_no_queue_a_counter_that_cannot_be_read_and_a_closed_connection_give_the_short_window(self):
+        for how in ("no connection", "a plan error", "a locked database", "a closed connection"):
+            with self.subTest(how):
+                self.books(2)
+                self.crawl_plan["themes_window_s"] = 400
+                ctx = self.queue(used=5)
+                patcher = None
+                if how == "no connection":
+                    del ctx.conn
+                elif how == "a plan error":
+                    patcher = mock.patch.object(crawlstate, "ceilings", side_effect=KbError("the plan is not right"))
+                elif how == "a locked database":
+                    patcher = mock.patch.object(crawlstate, "ceilings", side_effect=sqlite3.OperationalError("database is locked"))
+                else:
+                    ctx.conn.close()
+                if patcher:
+                    patcher.start()
+                    self.addCleanup(patcher.stop)
+                self.idle(GOOD + GOOD, per_call=100, ctx=ctx)
+                self.assertEqual(len(self.fake.calls), 3, how)
+                if patcher:
+                    patcher.stop()
+                for b in self.store.list_books():
+                    self.store.set_state(b, "weeded")
+                for name in os.listdir(os.path.join(self.index_root(), "crawl", "log")):
+                    os.unlink(os.path.join(self.index_root(), "crawl", "log", name))
+                self.now = NOW
+
+    def test_a_day_with_no_counter_at_all_gives_the_short_window(self):
+        self.books(2)
+        self.crawl_plan["themes_window_s"] = 400
+        ctx = self.ctx()
+        ctx.conn = crawlqueue.connect(self.index_root())                                 # a queue with no row for the day: nothing was fetched
+        self.addCleanup(ctx.conn.close)
+        self.idle(GOOD + GOOD, per_call=100, ctx=ctx)
+        self.assertEqual(len(self.fake.calls), 3)
+
+    def test_a_long_window_shorter_than_the_short_one_is_the_window_of_a_used_up_day(self):
+        self.books(3)
+        self.crawl_plan["themes_window_s"] = 3000
+        self.crawl_plan["themes_window_full_s"] = 400                                    # the earliest of the three ends: the themes get 240 seconds of it
+        self.idle(GOOD * 3, per_call=100, ctx=self.queue(used=5))
+        self.assertEqual(len(self.fake.calls), 3)
+        self.assertEqual(self.ended()["reason"], "deadline")
+
+    def test_an_error_of_another_kind_in_the_read_of_the_counter_propagates_and_the_window_still_writes_its_line(self):
+        self.books(1)
+        ctx = self.queue(used=5)
+        with mock.patch.object(crawlstate, "ceilings", side_effect=RuntimeError("a fault of the code")):
+            with self.assertRaises(RuntimeError):
+                self.idle(GOOD, ctx=ctx)
+        end = self.ended()
+        self.assertEqual((end["outcome"], end["reason"]), ("failed", "failed"))
+        self.assertEqual(self.fake.calls, [])
+
+    def test_a_stop_file_made_in_the_middle_of_a_long_window_prevents_the_next_call(self):
+        self.books(3)
+        self.idle(GOOD * 3, per_call=100, ctx=self.queue(used=5), on_call=lambda n: self.stop_file() if n == 2 else None)
+        self.assertEqual(len(self.fake.calls), 2)
+        end = self.ended()
+        self.assertEqual((end["outcome"], end["reason"]), ("skipped", "stopped"))
+
+    def test_the_same_code_runs_in_the_long_window_the_lines_of_the_themes_the_vectors_and_the_weave(self):
+        self.books(2)
+        self.idle(GOOD + GOOD, per_call=100, ctx=self.queue(used=5))
+        self.assertEqual([x["outcome"] for x in self.lines("themes")], ["ok", "ok"])
+        self.assertTrue(self.embedded)                                                   # the vectors of the books were embedded in the same window
 
 
 class DeadlineTest(IdleCase):

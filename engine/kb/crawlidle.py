@@ -6,6 +6,9 @@ time back at a deadline**, so that the next run starts on time. What this step g
 
 - **The window is the earlier of `themes_window_s` and what the run has left of its own time budget** (`ctx.deadline`). A run that was refused, stopped or tripped,
   or whose budget is spent, never reaches this point (`crawlrun.attach_point`).
+- **In a run whose day has used up `fetches_per_day` the window is the earliest of `themes_window_full_s`, the run's deadline and the end of the crawl's day** (`_long_end`;
+  plan `2026-11-19-lengthen-the-idle-window-once-the-days-fetches-are-used-up`): no new book can arrive until the day ends, so the time is the window's to use, and no
+  work of it begins after the counters reset. A counter that cannot be read (a plan error, a database error, no queue on the context) gives the short window.
 - **A `stop` function is given to `themerun.run`** and says true when the stop file is there, when the deadline has come, or when a disk floor refuses; it is looked
   at before every book and before every model call, so a window ends at most one model call after its deadline. A book that is cut keeps the pieces it has answered
   (the run's journal) and is made the next time, with no try charged.
@@ -28,8 +31,9 @@ sentence, a number or a book's id, never a word of a book or of a reply.
 The module makes no request and reads no environment variable; `themerun` makes the calls through the configured entries."""
 import datetime
 import os
+import sqlite3
 
-from . import KbError, crawlguard, crawlrun, theme, themeextract, themerun, themevectors
+from . import KbError, crawlguard, crawlplan, crawlrun, crawlstate, theme, themeextract, themerun, themevectors
 from . import store as library_store
 from . import weave as library_weave
 
@@ -69,6 +73,23 @@ def _eligible(library, cfg, index_root, leave_out):
         if len(chosen) >= BATCH:
             break
     return chosen
+
+
+def _long_end(ctx, began):
+    """The end of a window in a run whose day has used up `fetches_per_day`, or `None` when the window is the short one: the earliest of `themes_window_full_s` after `began`, the run's deadline and the end of the
+    crawl's day (so that no work of the window begins after the day's counters reset). `None` too when `themes_window_full_s` is 0, when the context has no queue, and **when the counter cannot be read**: an error of the
+    plan's own checks (`KbError`) or of the queue's database (`sqlite3.Error`, which a closed connection and a locked file raise) means "not used up", never the long window by mistake. Any other error is a fault of the code and propagates."""
+    full = ctx.plan["themes_window_full_s"]
+    conn = getattr(ctx, "conn", None)
+    if not full or conn is None:
+        return None
+    try:
+        used, limit = crawlstate.ceilings(conn, ctx.plan, began)["fetch"]
+        if used < limit:
+            return None
+        return min(began + datetime.timedelta(seconds=full), ctx.deadline, crawlplan.day_end(began, ctx.plan["timezone"]))
+    except (KbError, sqlite3.Error):
+        return None
 
 
 def _answers(ctx, probe, answered, tasks=TASKS):
@@ -141,7 +162,8 @@ def make_step(open_store=None, statvfs=None, probe=None, launcher=None, root=Non
         try:
             if window == 0:
                 return
-            end = min(began + datetime.timedelta(seconds=window), ctx.deadline)
+            reason = FAILED                                            # what the line says if the read of the day's counter, below, is a fault of the code
+            end = _long_end(ctx, began) or min(began + datetime.timedelta(seconds=window), ctx.deadline)
             themes_end = began + (end - began) * THEMES_SHARE
 
             def stopper(until, why):
