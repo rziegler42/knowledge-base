@@ -18,6 +18,7 @@ query after the entry's query prefix, if it has one.
 
 Vectors are model output, so they are checked when they are made and again when they are read: the right length, finite numbers and
 not all zeros."""
+import fcntl
 import hashlib
 import json
 import math
@@ -28,11 +29,12 @@ import sqlite3
 import stat
 import struct
 import tempfile
-from contextlib import closing
+import time
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import KbError, card, catalog, models, textutil
+from . import KbError, card, catalog, models, textutil, themeextract
 from . import search as fulltext  # the limits of a result and the excerpt: the same as the search of the text
 
 INDEX_FILE = "vectors.sqlite"
@@ -240,17 +242,43 @@ def _insert(conn, meta, rows):
                      [(b, v, g, f, h, pack(vec)) for b, v, g, f, h, vec in rows])
 
 
-def build(store, cfg, again=False, launcher=None, root=None):
-    """Build the file of vectors again from the cards and put it in place of the old one. Returns the counts: the cards read, the cards
-    with no model part, the cards and books that could not be read (`left_out`), the vectors in the file, the vectors `kept` from the old
-    file and `made` now, the texts sent (`texts_sent`), the model the bridge reported, the dimension and whether the old file was not
-    usable (another format, model, dimension or document prefix, or damaged) and so `replaced`. With `again`, every vector is made again. Refused: model work off, no `card-embed` set in the config,
-    a model that the bridge reports as another than the one that made the vectors that are kept, a library that is not there. A failure
-    leaves the old file as it was. Only the text of the embedded fields is sent. The cards and the old file are read before the models are
-    called, and the lock is taken only to write: a card made, or a second build, while the texts are with the model gives a file that
-    is valid for the cards that were read, and a search treats a vector whose text no longer matches its card as stale."""
-    if type(again) is not bool:
-        raise KbError("again is true or false")
+class Busy(KbError):
+    """Another writer holds the lock of the catalog, which the file of vectors is written under, and still did after the wait that was given."""
+
+
+@contextmanager
+def write_lock(index_root, wait):
+    """The writers' lock of the catalog, for the write of the file (and for a caller that wants to look at it before it begins work that the lock would lose). With no `wait` it is the catalog's own (`catalog.lock`, which waits two minutes and then refuses). With a `wait` in seconds (0 for none) it
+    waits that long on the same lock file and then refuses with `Busy`: a caller that has a time to keep gives a short one, because no stop is looked at while the lock is waited for. A wait that is not a number of seconds
+    from 0 to under an hour (a NaN would never reach its deadline) is refused before the lock file is opened."""
+    if wait is None:
+        with catalog.lock(index_root):
+            yield
+        return
+    if type(wait) not in (int, float) or not 0 <= wait < 3600:
+        raise KbError("the wait for the lock is a number of seconds from 0 to 3600, or none")
+    try:
+        fd = os.open(os.path.join(index_root, catalog.LOCK_FILE), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as e:
+        raise KbError(f"the catalog lock cannot be opened ({e.strerror})") from None
+    try:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise Busy("the catalog is being written by another process; try again when it has finished") from None
+                time.sleep(0.05)
+        yield
+    finally:
+        os.close(fd)  # closing it lets go of the lock
+
+
+def _plan(store, cfg, again):
+    """What a build would do, read only: `{"name", "entry", "index_root", "final", "counts", "old", "old_model", "reason", "rows", "todo"}`: the cards read, the rows of the old file that are kept (`rows`, as the build writes
+    them) and the rows that need a text embedded (`todo`, each `(book_id, version_id, number, field, sha, text)`, in the order of the cards)."""
     name, _ = models.choose(cfg, "card-embed")
     entry = models.registry(cfg)[name]
     store._guard()  # the library's marker and device: an unmounted drive must not give an empty file
@@ -268,24 +296,91 @@ def build(store, cfg, again=False, launcher=None, root=None):
             rows.append((book_id, version_id, number, field, sha, kept[1]))
         else:
             todo.append((book_id, version_id, number, field, sha, text))
+    return {"name": name, "entry": entry, "index_root": index_root, "final": final, "counts": counts, "old": old, "old_model": old_model, "reason": reason, "rows": rows, "todo": todo}
+
+
+def waiting_texts(store, cfg, again=False):
+    """How many texts have no vector in the file (or a vector of another text): the texts a build would send. Reads the library and the file, takes no lock, writes nothing and sends nothing."""
+    if type(again) is not bool:
+        raise KbError("again is true or false")
+    return len(_plan(store, cfg, again)["todo"])
+
+
+def _batch(todo, max_texts):
+    """`todo` narrowed to whole cards that fit `max_texts` texts to send: the cards in the order of the library, a card taken when the texts it needs fit what is left, and left out, whole, when they do not, so that the
+    next cards still go on. The vectors the file already has are not part of this: they are all kept."""
+    taken, used, current, group = [], 0, None, []
+
+    def close():
+        nonlocal used
+        if group and used + len(group) <= max_texts:
+            taken.extend(group)
+            used += len(group)
+    for row in todo:
+        if (row[0], row[1]) != current:
+            close()
+            current, group = (row[0], row[1]), []
+        group.append(row)
+    close()
+    return taken
+
+
+def build(store, cfg, again=False, launcher=None, root=None, stop=None, max_texts=None, group=None, lock_wait=None):
+    """Build the file of vectors again from the cards and put it in place of the old one. Returns the counts: the cards read, the cards
+    with no model part, the cards and books that could not be read (`left_out`), the vectors in the file, the vectors `kept` from the old
+    file and `made` now, the texts sent (`texts_sent`), the model the bridge reported, the dimension and whether the old file was not
+    usable (another format, model, dimension or document prefix, or damaged) and so `replaced`. With `again`, every vector is made again. Refused: model work off, no `card-embed` set in the config,
+    a model that the bridge reports as another than the one that made the vectors that are kept, a library that is not there. A failure
+    leaves the old file as it was. Only the text of the embedded fields is sent. The cards and the old file are read before the models are
+    called, and the lock is taken only to write: a card made, or a second build, while the texts are with the model gives a file that
+    is valid for the cards that were read, and a search treats a vector whose text no longer matches its card as stale.
+
+    Three arguments bound the work, for a caller that has a time to keep (the idle window of the crawl); with none of them the build is as it was. `max_texts` sends at most that many texts, of whole cards only
+    (`_batch`): a card whose texts do not fit what is left waits for a later build, and the file keeps every vector it already had whose text has not changed, so that a backlog is worked off over several builds. `group` sends at
+    most that many texts in one call, so that a stop is looked at about as often as a call takes. `stop` is a function that says true when the caller wants no more calls: it is looked at before each call, and a stop
+    raises `themeextract.Cut` with the call not made and nothing written, so that the old file is as it was. `lock_wait` is the seconds to wait for the lock at the write (the catalog's two minutes when none is given):
+    a caller that has a time to keep gives a few, and a refusal is `Busy`, with nothing written. `again` and `max_texts` do not go together: every vector made again from a batch would drop the vectors made before."""
+    if type(again) is not bool:
+        raise KbError("again is true or false")
+    if max_texts is not None and (type(max_texts) is not int or max_texts < 0):
+        raise KbError("max_texts is a whole number of texts, or none")
+    if group is not None and (type(group) is not int or group < 1):
+        raise KbError("group is a whole number of texts above zero, or none")
+    if lock_wait is not None and (type(lock_wait) not in (int, float) or not 0 <= lock_wait < 3600):
+        raise KbError("lock_wait is a number of seconds from 0 to 3600, or none")
+    if again and max_texts is not None:
+        raise KbError("again makes every vector again and cannot be bounded by max_texts: the file would lose the vectors made before")
+    if stop is not None and not callable(stop):
+        raise KbError("stop is a function, or none")
+    plan = _plan(store, cfg, again)
+    name, entry, index_root, final = plan["name"], plan["entry"], plan["index_root"], plan["final"]
+    counts, old_model, reason, rows, todo = plan["counts"], plan["old_model"], plan["reason"], plan["rows"], plan["todo"]
+    if max_texts is not None:
+        todo = _batch(todo, max_texts)
     made, made_model = [], None
     per = max(1, models.MAX_EMBED_NUMBERS // entry["dimension"])  # as many texts at a time as their vectors can be held in memory
+    if group is not None:
+        per = min(per, group)
     for start in range(0, len(todo), per):
-        group = todo[start:start + per]
-        got = models.embed(cfg, name, [t[5] for t in group], launcher=launcher, root=root, kind="document")
+        if stop is not None and stop():
+            raise themeextract.Cut()
+        chunk = todo[start:start + per]
+        got = models.embed(cfg, name, [t[5] for t in chunk], launcher=launcher, root=root, kind="document")
+        if len(got["vectors"]) != len(chunk):   # `models.embed` checks this; a text must never be dropped without a word, so the build checks what it was given as well
+            raise KbError(f"the model gave {len(got['vectors'])} vectors for {len(chunk)} texts; nothing was written")
         if rows and got["model"] != old_model:
             raise KbError(f"the model the bridge reports ({textutil.clean(got['model'], 60)}) is not the one that made the vectors that "
                           f"are kept ({textutil.clean(old_model, 60)}); run `{COMMAND} --again` to make every vector again")
         if made_model is not None and got["model"] != made_model:
             raise KbError("the model that the bridge reported changed between the chunks of one build")
         made_model = got["model"]
-        made += [(b, v, g, f, h, vec) for (b, v, g, f, h, _), vec in zip(group, got["vectors"])]
+        made += [(b, v, g, f, h, vec) for (b, v, g, f, h, _), vec in zip(chunk, got["vectors"])]
     rows += made
     rows.sort(key=lambda r: (r[0], r[1], r[3]))
     model = made_model or (old_model if rows else None) or entry["model"]
     meta = {"format": str(FORMAT), "model": model, "configured": entry["model"], "dimension": str(entry["dimension"]),
             "document_prefix_sha256": prefix_hash(entry), "built": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-    with catalog.lock(index_root):
+    with write_lock(index_root, lock_wait):
         in_place = False
         folder = None
         try:
@@ -309,6 +404,8 @@ def build(store, cfg, again=False, launcher=None, root=None):
             in_place = True
         except sqlite3.Error as e:
             raise KbError(f"the file of vectors could not be written ({e})") from None
+        except OSError as e:   # a full disk or a refused permission is a refusal of the engine, as for the theme vectors, and not a traceback in an unattended run
+            raise KbError(f"the file of vectors could not be written ({e.strerror or 'error'})") from None
         finally:
             if folder is not None:  # whatever went wrong, the old file is as it was and no folder of the build is left
                 shutil.rmtree(folder, ignore_errors=True)

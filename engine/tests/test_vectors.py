@@ -1,4 +1,6 @@
 import copy
+import errno
+import fcntl
 import hashlib
 import json
 import math
@@ -9,6 +11,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import closing
 from unittest import mock
@@ -18,7 +21,7 @@ from engine.tests.test_card import MODEL, RECORD, SENTENCE_MODEL, grounding, sen
 from engine.tests.test_catalog import CatalogCase
 from engine.tests.test_models import FAKE_EMBED, config, embedding, fake_vector
 
-from kb import KbError, card, catalog, models, read, search, vectors
+from kb import KbError, card, catalog, models, read, search, themeextract, vectors
 
 SEARCHED = ("neutral_problem", "neutral_approach", "neutral_provides")
 
@@ -1399,6 +1402,185 @@ class CommandTest(VectorCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("tasks.card-embed", r.stderr)
         self.assertEqual(self.sent(), [])
+
+
+class BoundedBuildTest(VectorCase):
+    """`waiting_texts` and the three arguments that bound a build, for a caller with a time to keep (plan `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`,
+    Increment A). With none of them the build is as it was (the tests above)."""
+
+    def waiting(self):
+        return vectors.waiting_texts(self.store, self.mcfg)
+
+    def three(self):
+        return [self.carded(title=t, model=self.model_with(t.lower())) for t in ("One", "Two", "Three")]
+
+    def call_sizes(self):
+        path = os.path.join(self.base, "calls.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [len(json.loads(json.loads(line)["stdin"])["texts"]) for line in f]
+
+    def hold_the_lock(self):
+        fd = os.open(os.path.join(self.store.cfg["index_root"], catalog.LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, fd)
+
+    def test_the_waiting_texts_are_the_texts_a_build_would_send_and_nothing_is_written_or_sent(self):
+        (one, one_v), (two, two_v) = self.two()
+        self.assertEqual(self.waiting(), 6)                       # no file yet
+        before = os.listdir(self.store.cfg["index_root"])
+        with mock.patch.object(catalog, "lock", side_effect=AssertionError("the count takes no lock")):
+            self.waiting()
+        self.assertEqual((self.calls(), os.listdir(self.store.cfg["index_root"])), (0, before))
+        self.build()
+        self.assertEqual(self.waiting(), 0)                       # a current file
+        self.carded(title="Three", model=self.model_with("three"))
+        self.assertEqual(self.waiting(), 3)                       # a new card
+        self.build()
+        card.file(self.store, card.make(self.store, one, one_v, model=self.model_with("one", neutral_approach="a changed approach"), records=[]))
+        self.assertEqual(self.waiting(), 1)                       # a changed text, the same book
+        self.build()
+        self.store.set_state(two, "weeded")
+        self.assertEqual(self.waiting(), 0)                       # a book that is not active is not waiting
+
+    def test_the_count_after_a_build_is_the_texts_that_build_would_send(self):
+        self.three()
+        waiting = self.waiting()
+        counts = self.build()
+        self.assertEqual((waiting, counts["texts_sent"]), (9, 9))
+        self.assertEqual((self.waiting(), self.build()["texts_sent"]), (0, 0))
+
+    def test_a_bounded_build_sends_whole_cards_that_fit_and_keeps_every_vector_it_already_had(self):
+        self.three()
+        first = self.build(max_texts=4)                           # one card of three texts fits; the second would make six
+        self.assertEqual((first["texts_sent"], first["vectors"], first["made"], first["kept"]), (3, 3, 3, 0))
+        self.assertEqual((self.waiting(), len(self.stored())), (6, 3))
+        second = self.build(max_texts=4)
+        self.assertEqual((second["texts_sent"], second["vectors"], second["made"], second["kept"]), (3, 6, 3, 3))
+        third = self.build(max_texts=4)
+        self.assertEqual((third["texts_sent"], third["vectors"], third["made"], third["kept"]), (3, 9, 3, 6))
+        self.assertEqual((self.waiting(), len(self.stored())), (0, 9))
+        whole = self.build()
+        self.assertEqual((whole["kept"], whole["made"], whole["texts_sent"]), (9, 0, 0))
+        self.assertEqual(len({r[0] for r in self.stored()}), 3)
+
+    def test_a_card_that_needs_more_than_the_batch_is_left_out_whole_and_the_next_that_fits_goes_on(self):
+        (one, one_v), _two, _three = self.three()
+        self.build()
+        card.file(self.store, card.make(self.store, one, one_v, model=self.model_with("one", neutral_problem="p1 changed", neutral_approach="p2 changed"), records=[]))
+        self.carded(title="Four", model=self.model_with("four"))
+        self.assertEqual(self.waiting(), 5)                       # two texts of the first card, three of the new card
+        counts = self.build(max_texts=3)                          # the first card needs two and fits; the new card needs three and does not fit what is left
+        self.assertEqual((counts["texts_sent"], counts["made"]), (2, 2))
+        self.assertEqual(self.waiting(), 3)
+
+    def test_a_card_not_taken_keeps_the_vectors_of_its_fields_that_did_not_change(self):
+        (one, one_v), _two, _three = self.three()
+        self.build()
+        card.file(self.store, card.make(self.store, one, one_v, model=self.model_with("one", neutral_approach="a changed approach"), records=[]))
+        counts = self.build(max_texts=0)                          # nothing may be sent
+        self.assertEqual((counts["texts_sent"], counts["kept"], counts["made"], counts["vectors"]), (0, 8, 0, 8))
+        self.assertEqual({r[3] for r in self.stored() if r[0] == one}, {"neutral_problem", "neutral_provides"})   # the changed field has no vector until it is embedded
+        self.assertEqual(self.waiting(), 1)
+
+    def test_a_stop_that_is_true_sends_nothing_writes_nothing_and_leaves_no_folder(self):
+        self.two()
+        self.build()
+        self.three()
+        before, mtime = self.stored(), os.stat(self.path()).st_mtime_ns
+        calls = self.calls()
+        with self.assertRaises(themeextract.Cut):
+            self.build(stop=lambda: True)
+        self.assertEqual((self.calls(), self.stored(), os.stat(self.path()).st_mtime_ns), (calls, before, mtime))
+        self.assertEqual([n for n in os.listdir(self.store.cfg["index_root"]) if n.startswith(vectors.BUILD_PREFIX)], [])
+
+    def test_a_stop_that_becomes_true_after_a_call_ends_the_build_and_the_old_file_stands(self):
+        self.three()
+        said = []
+
+        def stop():
+            said.append(self.calls())
+            return len(said) > 1                                   # looked at before each call: false before the first, true before the second
+        with self.assertRaises(themeextract.Cut):
+            self.build(stop=stop, group=3)
+        self.assertEqual((said, self.calls()), ([0, 1], 1))
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_a_group_bounds_the_texts_of_a_call(self):
+        self.two()
+        self.build(group=2)
+        self.assertEqual(self.call_sizes(), [2, 2, 2])
+        self.assertEqual(len(self.stored()), 6)
+
+    def test_a_lock_that_is_held_refuses_after_the_wait_given_and_writes_nothing(self):
+        self.two()
+        self.hold_the_lock()
+        began = time.monotonic()
+        with self.assertRaises(vectors.Busy):
+            self.build(lock_wait=0.2)
+        self.assertLess(time.monotonic() - began, 10)
+        self.assertFalse(os.path.exists(self.path()))
+        self.assertTrue(issubclass(vectors.Busy, KbError))
+
+    def test_a_lock_wait_of_zero_does_not_wait_and_a_free_lock_is_taken(self):
+        self.two()
+        self.build(lock_wait=0)
+        self.assertEqual(len(self.stored()), 6)
+
+    def test_the_arguments_are_checked_and_again_cannot_be_bounded(self):
+        self.two()
+        for kw in ({"max_texts": -1}, {"max_texts": "3"}, {"max_texts": True}, {"group": 0}, {"group": "2"}, {"lock_wait": -1}, {"lock_wait": 3600},
+                   {"lock_wait": "1"}, {"stop": "yes"}, {"again": True, "max_texts": 3}):
+            with self.subTest(kw=kw), self.assertRaises(KbError):
+                self.build(**kw)
+        self.assertEqual(self.calls(), 0)
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_with_none_of_the_new_arguments_the_build_is_the_old_one(self):
+        self.three()
+        plain = self.build()
+        stored = self.stored()
+        explicit = self.build(stop=None, max_texts=None, group=None, lock_wait=None)
+        self.assertEqual((plain["made"], explicit["made"], explicit["kept"]), (9, 0, 9))
+        self.assertEqual(self.stored(), stored)
+
+    def test_a_disk_error_at_the_write_is_a_refusal_of_the_engine_and_the_old_file_stands(self):
+        """From the security review of plan `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`: an `OSError` must not leave the build as a traceback."""
+        self.two()
+        self.build()
+        before = open(self.path(), "rb").read()
+        self.carded(title="Three", model=self.model_with("three"))
+        for target, error in (("mkdtemp", OSError(errno.ENOSPC, "No space left on device")), ("replace", PermissionError(errno.EACCES, "Permission denied"))):
+            with self.subTest(target=target):
+                with mock.patch.object(vectors.tempfile if target == "mkdtemp" else vectors.os, target, side_effect=error):
+                    with self.assertRaisesRegex(KbError, "could not be written"):
+                        self.build()
+                self.assertEqual(open(self.path(), "rb").read(), before)
+                self.assertEqual([n for n in os.listdir(self.store.cfg["index_root"]) if n.startswith(vectors.BUILD_PREFIX)], [])
+
+    def test_a_reply_with_fewer_vectors_than_texts_is_refused_and_writes_nothing(self):
+        """From the security review: `zip` would have dropped the texts that got no vector and the counts would still have said they were sent."""
+        self.two()
+        short = {"model": "bge-m3:latest", "dimension": 4, "vectors": [fake_vector("x")]}
+        with mock.patch.object(models, "embed", return_value=short):
+            with self.assertRaisesRegex(KbError, "vectors for"):
+                self.build()
+        self.assertFalse(os.path.exists(self.path()))
+
+    def test_the_lock_helper_refuses_a_wait_that_is_not_a_number_of_seconds_from_zero_to_under_an_hour(self):
+        """From the security review: a NaN wait never reaches its deadline, so the helper itself checks what it is given, as `build` does."""
+        root = self.store.cfg["index_root"]
+        for wait in (float("nan"), float("inf"), -1, -0.5, 3600, 1e9, "5", object(), True, [1]):
+            with self.subTest(wait=wait), self.assertRaises(KbError):
+                with vectors.write_lock(root, wait):
+                    pass
+        with vectors.write_lock(root, 0):
+            pass
+        with vectors.write_lock(root, 0.5):
+            pass
+        with vectors.write_lock(root, None):
+            pass
 
 
 if __name__ == "__main__":
