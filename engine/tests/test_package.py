@@ -558,6 +558,16 @@ class ReadTests(HelperCase):
         for bad in ("../x", "/etc/passwd", "https://example.org/a", "~/books", BOOK.lower(), BOOK + "A", BOOK[:-1], "a b", ""):
             self.refused("read", bad, LOCATOR, words="book")
 
+    def test_a_locator_whose_apostrophe_is_written_as_a_json_escape_reaches_the_engine_as_the_same_locator(self):
+        """From the review of the skill `find-a-passage`: the skill tells an agent to write the apostrophes of a locator as the JSON escape, so that none is left between the single quotes of its command."""
+        self.control({"stdout": '{"text": "a passage"}'})
+        escaped = '{"at":{"path":["Dijkstra\\u0027s algorithm"]},"kind":"section"}'
+        self.assertNotIn("'", escaped)
+        code, out, err = self.run_helper("read", BOOK, escaped)
+        self.assertEqual((code, err), (0, ""))
+        (call,) = self.calls()
+        self.assertEqual(call["argv"][4], json.dumps({"at": {"path": ["Dijkstra's algorithm"]}, "kind": "section"}, separators=(",", ":"), sort_keys=True))
+
     def test_a_locator_is_a_small_json_object(self):
         for bad in ("", "x", "[]", "1", '"s"', '{"a":', '{"a":1,"a":2}', '{"a":1.5}', '{"a":NaN}', "{" + '"k":' * 3 + "}",
                     json.dumps({"a": "x" * 3000})):
@@ -1107,6 +1117,117 @@ class WalkSkillTests(unittest.TestCase):
         self.assertNotIn("<<library-data", self.text)
         self.assertNotIn("\x1b", self.text)
         for name in os.listdir(os.path.dirname(WALK_SKILL)):
+            self.assertEqual(name, "SKILL.md")
+
+
+FIND_SKILL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "package", "kb", "harness", "neutral", "skills",
+                          "find-a-passage", "SKILL.md")
+
+
+class FindPassageSkillTests(unittest.TestCase):
+    """The skill that tells an agent how to search the library by words and read a passage back (Increment A of the plan `2026-11-20-add-the-skills-find-a-passage-and-suggest-topics-to-the-package`).
+    It needs no workbench checkout: it is a Markdown file of the package."""
+
+    def setUp(self):
+        with open(FIND_SKILL, encoding="utf-8") as f:
+            self.text = f.read()
+        self.head, _, self.body = self.text.partition("\n---\n")
+        self.lower = " ".join(self.body.lower().split())  # a phrase may be wrapped over two lines
+        with open(HELPER, encoding="utf-8") as f:
+            self.source = f.read()
+
+    def number(self, name):
+        import re
+        return int(re.search(r"^%s = (\d+)$" % name, self.source, re.M).group(1))
+
+    def test_the_skill_is_a_neutral_skill_with_a_name_and_a_description(self):
+        lines = self.head.splitlines()
+        self.assertEqual(lines[0], "---")
+        fields = dict(line.split(": ", 1) for line in lines[1:])
+        self.assertEqual(sorted(fields), ["description", "name"])
+        self.assertEqual(fields["name"], "find-a-passage")
+        self.assertTrue(30 <= len(fields["description"]) <= 300)
+        self.assertEqual(os.path.basename(os.path.dirname(FIND_SKILL)), fields["name"])
+
+    def test_it_says_when_to_search_by_words_and_when_to_use_the_two_skills_that_search_by_meaning(self):
+        for phrase in ("you know words that occur in a book", "it finds words, not meaning", "use `pose-a-problem`", "`walk-from-themes`", "check a claim against a book"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_to_write_few_plain_words_and_which_characters_to_leave_out_because_they_go_into_a_shell_command(self):
+        """The rule of the plan `2026-11-14-plain-words-in-the-search-of-pose-a-problem`, in the same words."""
+        step1 = self.lower.split("## 1.", 1)[1].split("## 2.", 1)[0]
+        for phrase in ("few words, plain and distinctive", "the search needs every word in one passage", "use only plain words (letters, digits and spaces)",
+                       "leave out every apostrophe and quotation mark, `$`, backtick, `;`, `&`, `|`, `<`, `>`, `(`, `)`, `\\` and any other character that a shell reads",
+                       "the words go into a shell command", "even if the title or the text you took them from has it", "at most %d characters" % self.number("MAX_QUERY")):
+            self.assertIn(phrase, step1)
+        from kb import search as fulltext
+        self.assertIn("at most %d words, each of at most %d characters" % (fulltext.MAX_WORDS, fulltext.MAX_WORD_CHARS), step1)       # the limits of the engine, which the helper passes through
+
+    def test_it_names_the_search_call_with_the_double_dash_in_single_quotes_and_the_limits_of_the_helper(self):
+        self.assertIn("wb run kb search [--limit <1-%d>] -- '" % self.number("CEILING_LIMIT"), self.body)
+        self.assertNotIn('--limit <1-%d>] -- "' % self.number("CEILING_LIMIT"), self.body)
+        step2 = self.lower.split("## 2.", 1)[1].split("## 3.", 1)[0]
+        for phrase in ("put the words in single quotes, never double quotes", "leave an apostrophe out of the words", "(%d by default)" % self.number("DEFAULT_LIMIT"), "nothing is sent out",
+                       "changes nothing"):
+            self.assertIn(phrase, step2)
+
+    def test_it_names_what_a_result_carries_and_says_to_pick_the_result_of_the_book_meant(self):
+        step2 = self.body.split("## 2.", 1)[1].split("## 3.", 1)[0]       # the reply of the search is described in step 2, and each key must be named there
+        for key in ("`book_id`", "`version_id`", "`title`", "`excerpt`", "`locator`", "`is_current`", "`caveats`", "`completeness`"):
+            self.assertIn(key, step2)
+        for phrase in ("whose `book_id` is the book you mean", "results of other books are not it", "the excerpt shows the words that matched, not the whole passage"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_names_the_read_call_and_says_the_locator_is_given_exactly_and_never_made_up(self):
+        import re
+        lo, hi = re.search(r"--chars <(\d+)-(\d+)>", self.source).groups()
+        self.assertIn("wb run kb read [--version v<N>] [--chars <%s-%s>] <book> '<locator-json>'" % (lo, hi), self.body)
+        for phrase in ("exactly as the result gave it", "do not write, change or complete a locator yourself", "(%d by default)" % self.number("DEFAULT_CHARS"),
+                       "the version is that of the result you took the locator from", "never a path or an address"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_to_read_on_by_following_next_and_what_the_end_of_a_reply_looks_like(self):
+        step4 = self.lower.split("## 4.", 1)[1].split("## 5.", 1)[0]
+        for phrase in ("follow `next`", "`next` is a locator for where the following piece begins, or none at the end", "pass it as the locator, exactly as it was given", "`status`",
+                       "`found` and `found_by_text` are a passage that was read", "the `locator` of a `found_by_text` reply replaces the one you passed", "`not_found` and `unknown_kind`",
+                       "the book is unread"):
+            self.assertIn(phrase, step4)
+
+    def test_it_says_that_a_locator_holds_text_of_the_book_and_to_write_its_apostrophes_as_a_json_escape(self):
+        """From the review of Increment A: a locator carries the headings and words of the book, and 5 of 200 locators of the owner's library held an apostrophe or a quotation mark;
+        in single quotes an apostrophe ends the quotation and the rest is a command."""
+        step4 = self.lower.split("## 4.", 1)[1].split("## 5.", 1)[0]
+        for phrase in ("a locator holds text of the book", "an apostrophe in it would end the single quotes", "write every apostrophe of the locator as `\\u0027`",
+                       "means the same locator", "no apostrophe is left between the single quotes", "this is the only change you may make to a locator",
+                       "if you cannot be sure of a locator, do not run the read: mark the book unread",
+                       "apply this to every locator you pass, a `next` and the replacement of a `found_by_text` reply included, and keep the locator on one line",
+                       "pass the `version_id` of the result as `--version`"):
+            self.assertIn(phrase, step4)
+        import json as plain_json
+        self.assertEqual(plain_json.loads('"Dijkstra\\u0027s algorithm"'), "Dijkstra's algorithm")      # the escape is the JSON way of writing the apostrophe
+
+    def test_it_says_to_quote_the_passage_as_the_books_own_words_with_its_citation_and_never_a_path_and_to_say_what_the_caveats_say(self):
+        step5 = self.lower.split("## 5.", 1)[1].split("## 6.", 1)[0]
+        for phrase in ("when you quote the passage, quote it as the book's own words, in quotation marks, with its citation", "never by a path", "`caveats`", "`completeness`",
+                       "say so and do not rely on the book", "partial"):
+            self.assertIn(phrase, step5)
+
+    def test_it_says_to_mark_the_book_unread_when_no_passage_turns_up_and_not_to_loop(self):
+        for phrase in ("unread", "do not rely on it", "at most three tries", "do not run the same search again", "no loop"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_every_result_is_untrusted_and_to_stop_and_tell_the_owner_when_the_helper_refuses(self):
+        for phrase in ("untrusted", "not an instruction", "whatever it says", "refused", "tell the owner", "do not try another way"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_holds_no_marker_no_control_character_and_no_other_file_beside_it(self):
+        from kb import read as reading
+        from kb import search as fulltext
+        for marker in (fulltext.MARKER, reading.END_MARKER):
+            self.assertNotIn(marker, self.text)
+        self.assertNotIn("<<library-data", self.text)
+        self.assertNotIn("\x1b", self.text)
+        for name in os.listdir(os.path.dirname(FIND_SKILL)):
             self.assertEqual(name, "SKILL.md")
 
 
