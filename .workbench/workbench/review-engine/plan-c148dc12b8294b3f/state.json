@@ -1,0 +1,76 @@
+{
+  "closed": null,
+  "decisions": [
+    {
+      "at": "2026-11-20T12:30:43Z",
+      "choice": "applied",
+      "earlier": [],
+      "finding": "R1-F1",
+      "reason": "Both tests are now named in the steps of A and B: a terminal in and no terminal out refuses and writes nothing."
+    }
+  ],
+  "format": 1,
+  "generation": 4,
+  "kind": "plan",
+  "path": "docs/plans/2026-11-20-accept-the-models-picks-for-all-proposed-books-in-one-step.md",
+  "rounds": [
+    {
+      "at": "2026-11-20T12:30:37Z",
+      "bridge": "ask-codex",
+      "document_sha256": "6ca490dd6cc7ca449704a71bcba7c485d6f03dada7de8349fe6387760a7d81ba",
+      "file": "round-1.json",
+      "findings": [
+        {
+          "id": "R1-F1",
+          "severity": "major"
+        }
+      ],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 1,
+      "profile": "standard",
+      "reading": "changes_needed",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "aeacb0f56fbff70738a8f1527079b26f06c4db06d1d802927d362cc4c82e987c",
+      "usage": {
+        "input_tokens": 317618,
+        "output_tokens": 3113,
+        "total_tokens": null
+      },
+      "verdict": "changes_needed"
+    },
+    {
+      "at": "2026-11-20T12:31:44Z",
+      "bridge": "ask-codex",
+      "document_sha256": "0892b4aa31897c7a0d90ce415e1c6b0d22c8a78585c17dc65907dcbdd013bfe8",
+      "file": "round-2.json",
+      "findings": [],
+      "mismatch": false,
+      "model": "gpt-5.6-terra",
+      "n": 2,
+      "profile": "standard",
+      "reading": "no_meaningful_changes",
+      "requested": {
+        "effort": "medium",
+        "model": "gpt-5.6-terra",
+        "options": {}
+      },
+      "sha256": "4d5ffba5bcb5cb0214c4575351a90a86f6743ba6000958c50d9069dd17c813f0",
+      "usage": {
+        "input_tokens": 329121,
+        "output_tokens": 2060,
+        "total_tokens": null
+      },
+      "verdict": "no_meaningful_changes"
+    }
+  ],
+  "seal": "b107a6564454b835b53b522359424c4d6cc6ab4a7f13048c8bb9b8f89e5d3198",
+  "window": {
+    "bound": 3,
+    "first": 1
+  }
+}
