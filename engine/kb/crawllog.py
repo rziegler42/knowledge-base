@@ -23,7 +23,7 @@ import stat
 
 from . import KbError, textutil
 
-STEPS = ("run_start", "refuse", "list_update", "discover", "enqueue", "block", "fetch", "capture", "scan", "hold", "convert", "index", "judge", "reject", "card", "propose", "move", "idle", "themes", "theme_vectors", "weave", "fail",
+STEPS = ("run_start", "refuse", "list_update", "discover", "enqueue", "block", "fetch", "capture", "scan", "hold", "convert", "index", "judge", "reject", "card", "propose", "move", "idle", "themes", "card_vectors", "theme_vectors", "weave", "fail",
          "breaker", "stop", "run_end", "report")
 OUTCOMES = ("ok", "skipped", "rejected", "failed", "blocked", "held", "refused", "tripped")
 FIELDS = ("ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds")

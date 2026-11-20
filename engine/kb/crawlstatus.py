@@ -44,7 +44,7 @@ PARAM_WITHHELD = "[withheld]"
 
 # The steps and outcomes of the spec's log, in its order (a test reads the spec's own text and compares).
 STEPS = ("run_start", "refuse", "list_update", "discover", "enqueue", "block", "fetch", "capture", "scan", "hold", "convert", "index", "judge",
-         "reject", "card", "propose", "move", "idle", "themes", "theme_vectors", "weave", "fail", "breaker", "stop", "run_end", "report")
+         "reject", "card", "propose", "move", "idle", "themes", "card_vectors", "theme_vectors", "weave", "fail", "breaker", "stop", "run_end", "report")
 OUTCOMES = ("ok", "skipped", "rejected", "failed", "blocked", "held", "refused", "tripped")
 FIELDS = ("ts", "run", "step", "outcome", "candidate", "book", "host", "reason", "n", "seconds")
 BREAKER_KINDS = ("consecutive_failures", "failure_share", "model_down", "stage_bound")  # the runner plan's contract for `crawl/breaker.json`
@@ -793,13 +793,13 @@ def _number(value):
 
 def idle_counts(index_root, day, zone):
     """The idle windows of a day of `zone`: what each did, from the `idle` lines (one for each window, with its seconds, the books made and why it ended), and what their parts
-    did, from the `themes`, `theme_vectors` and `weave` lines. `last` is the newest window (the later line if two are equal)."""
+    did, from the `themes`, `card_vectors`, `theme_vectors` and `weave` lines. `last` is the newest window (the later line if two are equal)."""
     return count_idle(lines_of_day(index_root, day, zone))
 
 
 def count_idle(found):
     """`idle_counts` over the answer of `lines_of_day` that the caller already has (so that a report that needs the day's lines for other things does not read the files twice)."""
-    windows = seconds = books = themes_failed = vector_texts = vectors_failed = weave_repairs = weave_added = weave_failed = 0
+    windows = seconds = books = themes_failed = vector_texts = vectors_failed = weave_repairs = weave_added = weave_failed = card_texts = cards_failed = 0
     reasons, last = {}, None
     for record in found["lines"]:
         step, outcome = record["step"], record["outcome"]
@@ -814,6 +814,11 @@ def count_idle(found):
                         "books_made": _number(record["n"]), "seconds": _number(record["seconds"])}
         elif step == "themes" and outcome == "failed":
             themes_failed += 1
+        elif step == "card_vectors":
+            if outcome == "ok":
+                card_texts += _number(record["n"])
+            elif outcome == "failed":
+                cards_failed += 1
         elif step == "theme_vectors":
             if outcome == "ok":
                 vector_texts += _number(record["n"])
@@ -826,8 +831,8 @@ def count_idle(found):
             elif outcome == "failed":
                 weave_failed += 1
     return {"day": found["day"], "windows": windows, "seconds": int(seconds), "books_made": int(books), "by_reason": dict(sorted(reasons.items(), key=lambda item: (-item[1], item[0]))),
-            "last": last, "themes_failed": themes_failed, "vector_texts": int(vector_texts), "vectors_failed": vectors_failed, "weave_repairs": weave_repairs,
-            "weave_themes_added": int(weave_added), "weave_failed": weave_failed, "bad": found["bad"], "cut": found["cut"], "unreadable": found["unreadable"], "problem": found["problem"]}
+            "last": last, "themes_failed": themes_failed, "vector_texts": int(vector_texts), "vectors_failed": vectors_failed, "card_vector_texts": int(card_texts), "card_vectors_failed": cards_failed,
+            "weave_repairs": weave_repairs, "weave_themes_added": int(weave_added), "weave_failed": weave_failed, "bad": found["bad"], "cut": found["cut"], "unreadable": found["unreadable"], "problem": found["problem"]}
 
 
 # --- the queue, the counters, the books --------------------------------------------------------------------------------------------------------

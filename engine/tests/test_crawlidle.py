@@ -4,7 +4,9 @@ After the fetch, a run may spend `themes_window_s` seconds making themes for the
 library and index root, the real card lock and the real log, with a fake model whose every call moves a fake clock on; no test makes a request or calls a real model, reads the owner's config,
 plan or key, or touches the owner's library.
 Run them with `python3 -W error::ResourceWarning -m unittest engine.tests.test_crawlidle`."""
+import contextlib
 import datetime
+import fcntl
 import json
 import os
 import sqlite3
@@ -18,7 +20,7 @@ from engine.tests.test_themecheck import config
 from engine.tests.test_themeextract import JournalFake, row, values
 from engine.tests.test_themerun import GOOD, REFUSED, SAYS, RunCase, scripted
 
-from kb import KbError, cardstate, catalog, crawlguard, crawlidle, crawllog, crawlplan, crawlqueue, crawlrun, crawlstate, models, theme, themerun, themevectors
+from kb import KbError, cardstate, catalog, crawlguard, crawlidle, crawllog, crawlplan, crawlqueue, crawlrun, crawlstate, models, theme, themerun, themevectors, vectors
 
 NOW = datetime.datetime(2026, 11, 18, 12, 0, 0, tzinfo=datetime.timezone.utc)
 HOUR = datetime.timedelta(hours=1)
@@ -112,14 +114,20 @@ class IdleCase(RunCase):
             raise KbError("there is no weave")
         return types.SimpleNamespace(_np=lambda: None, status=status, repair=lambda *a, **k: self.fail("no repair was to be made"))
 
-    def idle(self, script=(), per_call=30, ctx=None, on_call=None, embed_per_call=5, embed_on_call=None, embed_fail=False, **kw):
+    def idle(self, script=(), per_call=30, ctx=None, on_call=None, embed_per_call=5, embed_on_call=None, embed_fail=False, cards=False, **kw):
+        """Run the step. The part for the vectors of the cards is left out unless `cards` is true, so that the tests of the other parts count only what they made (plan
+        `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`, Increment B: the tests of that part are `CardVectorsTest`)."""
         kw.setdefault("statvfs", roomy)
         kw.setdefault("probe", self.probe)
         kw.setdefault("weave", self.no_weave())
         ctx = ctx or self.ctx()
         fake = self.clocked(script, per_call, on_call)
         self.fake = fake
-        with mock.patch.object(models, "run_job", fake), mock.patch.object(models, "embed", self.embedding_fake(embed_per_call, embed_on_call, embed_fail)):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(models, "run_job", fake))
+            stack.enter_context(mock.patch.object(models, "embed", self.embedding_fake(embed_per_call, embed_on_call, embed_fail)))
+            if not cards:
+                stack.enter_context(mock.patch.object(crawlidle, "_card_vectors", lambda *a, **k: None))
             crawlidle.make_step(**kw)(ctx)
         return ctx
 
@@ -798,6 +806,185 @@ class LogTest(IdleCase):
         self.idle(GOOD + [ValueError("secret-xyz")] * 3)
         text = json.dumps(self.lines("idle", "themes"))
         for word in ("annealing", "secret-xyz", "cools a system", "A paper"):
+            self.assertNotIn(word, text)
+
+
+class CardVectorsTest(IdleCase):
+    """After the themes and before the vectors of the themes, the vectors of the cards that have none, in a batch that fits the time left (plan `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`,
+    Increment B). A book of the fixture has a card of three embedded fields, so three texts."""
+
+    FIT = dict(SECONDS_A_TEXT=10.0, SECONDS_A_CALL=0.0, BUILD_OVERHEAD_S=0.0, MARGIN=1.0, MIN_BATCH=1, WEAVE_RESERVE_S=0.0)
+
+    def card_lines(self):
+        return [(x["outcome"], x["reason"], x["n"]) for x in self.lines("card_vectors")]
+
+    def waiting(self):
+        return vectors.waiting_texts(self.store, self.crawl_cfg())
+
+    def no_themes(self):
+        """The themes of the books are not this part's business: nothing is eligible for them."""
+        return mock.patch.object(crawlidle, "_eligible", return_value=[])
+
+    def next_window(self):
+        self.log = crawllog.Log(self.index_root(), "run-2", clock=lambda: self.now)
+        self.now += HOUR
+
+    def test_the_vectors_of_the_cards_are_built_after_the_themes_and_before_the_vectors_of_the_themes(self):
+        self.books(2)
+        self.idle(self.distinct(2), cards=True)
+        self.assertEqual(self.card_lines(), [("ok", None, 6)])            # two cards of three texts
+        self.assertEqual(self.embedded, [6, 12])                          # the cards, then the six texts of each of the two themes
+        self.assertEqual([x["step"] for x in self.lines("themes", "card_vectors", "theme_vectors")], ["themes", "themes", "card_vectors", "theme_vectors"])
+        self.assertEqual((self.waiting(), themevectors.waiting_texts(self.store, self.crawl_cfg())), (0, 0))
+        self.assertTrue(os.path.exists(vectors.path_of(self.index_root())))
+        self.assertEqual(self.ended()["reason"], "nothing to do")
+
+    def test_a_library_whose_card_vectors_are_current_costs_a_count_and_no_model_call(self):
+        self.books(1)
+        self.idle(GOOD, cards=True)
+        self.next_window()
+        self.idle([], cards=True)
+        self.assertEqual(self.card_lines()[-1], ("skipped", "nothing waits", None))
+        self.assertEqual(self.embedded, [])                               # the second window sent nothing (the fake notes only the calls of its own window)
+
+    def test_a_batch_that_the_time_limits_takes_whole_cards_and_the_next_window_goes_on(self):
+        self.books(3)
+        self.crawl_plan["themes_window_s"] = 100
+        with mock.patch.multiple(crawlidle, **self.FIT), self.no_themes():
+            self.idle([], cards=True)                                     # 100 seconds, half of them for the cards: 5 texts fit, one card of three
+            self.assertEqual(self.card_lines(), [("ok", None, 3)])
+            self.assertEqual(self.ended()["reason"], "deadline")          # a batch that the time held back says so: the window ran out of time, not of work
+            self.assertEqual(self.waiting(), 6)
+            self.next_window()
+            self.idle([], cards=True)
+            self.next_window()
+            self.idle([], cards=True)
+        self.assertEqual(self.card_lines(), [("ok", None, 3)] * 3)
+        self.assertEqual(self.waiting(), 0)
+
+    def test_the_cards_take_no_more_than_half_of_what_is_left_so_that_the_vectors_of_the_themes_have_the_rest(self):
+        self.assertEqual(crawlidle.CARD_VECTORS_SHARE, 0.5)
+        self.books(3)
+        self.crawl_plan["themes_window_s"] = 100
+        with mock.patch.multiple(crawlidle, **self.FIT), self.no_themes():
+            self.idle([], cards=True)
+        self.assertEqual(self.embedded, [3])                              # a share of 1.0 would have fitted nine texts, three cards
+
+    def test_a_batch_that_the_time_limits_to_fewer_than_the_least_while_more_wait_is_not_begun(self):
+        self.books(3)
+        self.crawl_plan["themes_window_s"] = 100
+        with mock.patch.multiple(crawlidle, **{**self.FIT, "MIN_BATCH": 20}), self.no_themes():
+            self.idle([], cards=True)
+        self.assertEqual(self.card_lines(), [("skipped", "waits for a longer window", None)])
+        self.assertEqual((self.embedded, self.waiting()), ([], 9))
+        self.assertEqual(self.ended()["reason"], "deadline")              # the window says that time limited it
+
+    def test_a_final_backlog_of_fewer_than_the_least_is_embedded_whole(self):
+        self.books(1)
+        self.crawl_plan["themes_window_s"] = 100
+        with mock.patch.multiple(crawlidle, **{**self.FIT, "MIN_BATCH": 20, "SECONDS_A_TEXT": 4.0}), self.no_themes():
+            self.idle([], cards=True)                                     # 50 seconds for the cards at 4 a text: 12 texts, and 3 wait
+        self.assertEqual(self.embedded, [3])
+        self.assertEqual(self.waiting(), 0)
+
+    def test_a_stop_file_made_between_two_calls_ends_the_build_before_the_next_and_writes_no_file(self):
+        self.books(3)
+        with mock.patch.object(crawlidle, "EMBED_GROUP", 3), self.no_themes():
+            self.idle([], cards=True, embed_on_call=lambda n: self.stop_file() if n == 1 else None)
+        self.assertEqual(self.embedded, [3])
+        self.assertFalse(os.path.exists(vectors.path_of(self.index_root())))
+        self.assertEqual(self.card_lines(), [("skipped", "stopped", None)])
+        self.assertEqual(self.ended()["reason"], "stopped")
+
+    def test_a_build_that_fails_is_a_failed_step_and_the_embedding_entry_is_asked_once(self):
+        self.books(1)
+        with self.no_themes():
+            self.idle([], cards=True, embed_fail=True)
+        self.assertEqual(self.card_lines(), [("failed", "the vectors could not be made", None)])
+        self.assertEqual(self.probes, ["card-embed"])
+        self.assertEqual(self.ended()["reason"], "nothing to do")         # the failure is the part's own: the window goes on to the parts after it
+
+    def test_a_catalog_lock_that_cannot_be_opened_is_a_failed_step_and_the_window_goes_on(self):
+        self.books(1)
+        with mock.patch.object(vectors, "write_lock", side_effect=KbError("the catalog lock cannot be opened (Permission denied)")), self.no_themes():
+            self.idle([], cards=True)
+        self.assertEqual(self.card_lines(), [("failed", "the lock of the catalog could not be opened", None)])
+        self.assertEqual((self.embedded, self.ended()["reason"]), ([], "nothing to do"))
+
+    def test_a_disk_or_file_error_in_the_count_or_the_build_is_a_failed_step_too_and_the_window_goes_on(self):
+        """From the security review: an `OSError` (a full disk, a permission) must not end the run with a traceback and skip the parts after this one."""
+        self.books(1)
+        for target in ("waiting_texts", "build"):
+            with self.subTest(target=target), mock.patch.object(vectors, target, side_effect=OSError(28, "No space left on device")), self.no_themes():
+                self.log = crawllog.Log(self.index_root(), "run-" + target, clock=lambda: self.now)
+                before = len(self.card_lines())
+                self.idle([], cards=True)
+                self.assertEqual(len(self.card_lines()), before + 1)
+                self.assertEqual(self.card_lines()[-1][0], "failed")
+
+    def test_a_failure_of_the_cards_does_not_stop_the_vectors_of_the_themes_or_the_weave(self):
+        self.books(1)
+        with mock.patch.object(vectors, "build", side_effect=KbError("the model is not the one that made the vectors that are kept")):
+            self.idle(GOOD, cards=True)
+        self.assertEqual(self.card_lines(), [("failed", "the vectors could not be made", None)])
+        self.assertEqual([(x["outcome"], x["n"]) for x in self.lines("theme_vectors")], [("ok", 6)])      # the themes of the book made in this window are embedded all the same
+        self.assertEqual(self.embedded, [6])
+        self.assertEqual(self.ended()["reason"], "nothing to do")
+        self.assertEqual(self.probes, ["card-embed"])
+
+    def test_a_catalog_lock_that_another_writer_holds_is_a_skipped_step_with_no_embedding_and_no_probe(self):
+        self.books(1)
+        fd = os.open(os.path.join(self.index_root(), catalog.LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        self.addCleanup(os.close, fd)
+        with self.no_themes():
+            self.idle([], cards=True)
+        self.assertEqual(self.embedded, [])                               # the lock is looked at before the work, so that the work is not lost
+        self.assertEqual(self.card_lines(), [("skipped", "locked", None)])
+        self.assertEqual(self.probes, [])
+        self.assertEqual(self.waiting(), 3)
+
+    def test_the_step_looks_at_the_lock_without_waiting_and_lets_the_write_wait_a_few_seconds_at_most(self):
+        self.books(1)
+        with mock.patch.object(vectors, "write_lock", wraps=vectors.write_lock) as locked, self.no_themes():
+            self.idle([], cards=True)
+        self.assertEqual([c.args[1] for c in locked.call_args_list], [crawlidle.LOCK_LOOK_S, crawlidle.LOCK_WRITE_S])
+
+    def test_a_lock_that_is_taken_between_the_look_and_the_write_is_a_skipped_step_too_and_not_a_failed_one(self):
+        self.books(1)
+        with mock.patch.object(vectors, "build", side_effect=vectors.Busy("another writer")), self.no_themes():
+            self.idle([], cards=True)
+        self.assertEqual(self.card_lines(), [("skipped", "locked", None)])
+        self.assertEqual(self.probes, [])
+
+    def test_with_no_embedding_entry_set_the_step_is_skipped_for_want_of_settings_and_the_themes_are_made_all_the_same(self):
+        self.books(1)
+        self.idle(GOOD, ctx=self.ctx(cfg=self.crawl_cfg(embedding_entry=False)), cards=True)
+        self.assertEqual(len(self.lines("themes")), 1)
+        self.assertEqual(self.card_lines(), [("skipped", "settings", None)])
+        self.assertEqual(self.embedded, [])
+
+    def test_a_card_count_that_cannot_be_made_is_a_failed_step_and_the_window_goes_on(self):
+        self.books(1)
+        with mock.patch.object(vectors, "waiting_texts", side_effect=KbError("cannot read")), self.no_themes():
+            self.idle([], cards=True)
+        self.assertEqual(self.card_lines(), [("failed", "the texts that wait could not be counted", None)])
+        self.assertEqual(self.ended()["reason"], "nothing to do")
+
+    def test_a_deadline_that_has_come_before_the_part_begins_ends_the_window_without_a_line_for_it(self):
+        self.books(1)
+        self.crawl_plan["themes_window_s"] = 60
+        with self.no_themes():
+            self.idle([], cards=True, ctx=self.ctx(deadline=self.now))    # the run's own time is spent
+        self.assertEqual(self.lines("card_vectors"), [])
+        self.assertEqual(self.embedded, [])
+
+    def test_every_line_holds_a_fixed_sentence_or_a_number(self):
+        self.books(1)
+        with self.no_themes():
+            self.idle([], cards=True)
+        text = json.dumps(self.lines("card_vectors"))
+        for word in ("annealing", "cools a system", "A paper", "stopping"):
             self.assertNotIn(word, text)
 
 

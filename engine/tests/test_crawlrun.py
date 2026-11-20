@@ -238,6 +238,7 @@ class Bytecode(Case):
 
     def test_a_dry_run_says_the_two_lengths_of_the_idle_window(self):
         text = self.dry_text(PLAN_TEXT)
+        self.assertIn("to make themes, the vectors of the cards, the vectors of the themes and a repair of the weave; ", text)
         self.assertIn("use up to 600 seconds of an idle window (up to 3600 seconds once the day's fetches are used up, never past the end of the day) to make themes", text)
         text = self.dry_text(PLAN_TEXT + "[idle]\nthemes_window_s = 90\nthemes_window_full_s = 1500\n")
         self.assertIn("use up to 90 seconds of an idle window (up to 1500 seconds once the day's fetches are used up", text)

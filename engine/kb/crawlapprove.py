@@ -241,7 +241,7 @@ def render_summary(plan, topics, allow_hosts, fingerprint_hex, date):
         ("PDF files: none are taken (pdf_max_mb is 0)." if plan["pdf_max_mb"] == 0 else
          f"PDF files: taken up to {plan['pdf_max_mb']} MB each, scanned before any conversion (a file with a finding in the hold list above is held), and converted in a tool that is killed above {plan['tool_rss_mb']} MB of memory."),
         ("Idle window: none (themes_window_s is 0): no themes are made between runs." if plan["themes_window_s"] == 0 else
-         f"Idle window: after each run's fetch, up to {plan['themes_window_s']} seconds (never longer than the run's own time budget) make themes for books that have none, the vectors of the themes, and a repair of the weave when it is due; the stop file ends it"
+         f"Idle window: after each run's fetch, up to {plan['themes_window_s']} seconds (never longer than the run's own time budget) make themes for books that have none, the vectors of the cards that have none, the vectors of the themes, and a repair of the weave when it is due; the stop file ends it"
          + (f"; once the day's fetches are used up the window is up to {plan['themes_window_full_s']} seconds (never past the end of the day, never longer than the run's own time budget)." if plan["themes_window_full_s"]
             else "; once the day's fetches are used up the window is the same length.")),
         f"  allow file: {len(allow_hosts)} host{'' if len(allow_hosts) == 1 else 's'}"

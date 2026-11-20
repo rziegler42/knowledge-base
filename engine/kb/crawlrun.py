@@ -437,7 +437,7 @@ def _dry_run(cfg, now, say, kb_root, statvfs, prefix):
             f"refill the queue; fetch up to {plan['batch']} new candidates and take each new book through the same steps; "
             + (f"then use up to {plan['themes_window_s']} seconds of an idle window "
                + (f"(up to {plan['themes_window_full_s']} seconds once the day's fetches are used up, never past the end of the day) " if plan["themes_window_full_s"] else "(the same length once the day's fetches are used up) ")
-               + "to make themes, the vectors of the themes and a repair of the weave; " if plan["themes_window_s"]
+               + "to make themes, the vectors of the cards, the vectors of the themes and a repair of the weave; " if plan["themes_window_s"]
                else "then no idle window (themes_window_s is 0); ")
             + "at each point looking at the stop file and at the time budget")
     code, reason = outcome if outcome is not None else (EXIT_DONE, "")

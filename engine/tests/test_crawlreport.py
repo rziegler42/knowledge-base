@@ -92,7 +92,7 @@ class BuildTest(ReportBase):
         self.assertEqual(got["counts"], {"fetched": 3, "fetch_failed": 2, "kept": 1, "rejected": 1, "standing": 2, "failed": 2, "fail_lines": 4})
         self.assertEqual((got["day"], got["zone"], got["generated"]), ("2026-11-18", "UTC", "2026-11-18T12:00:00Z"))
         self.assertEqual({k: got["log"][k] for k in ("lines", "first", "last", "bad", "cut", "problem")},
-                         {"lines": 42, "first": "2026-11-18T05:00:00Z", "last": "2026-11-18T09:00:00Z", "bad": {}, "cut": False, "problem": None})
+                         {"lines": 43, "first": "2026-11-18T05:00:00Z", "last": "2026-11-18T09:00:00Z", "bad": {}, "cut": False, "problem": None})
 
     def test_the_idle_windows_of_the_day_are_counted_from_the_log(self):
         self.full_day()
@@ -174,7 +174,7 @@ class BuildTest(ReportBase):
         with open(self.tmp / "crawl" / "log" / "crawl-2026-11-18.jsonl", "ab") as f:
             f.write(b"junk\n[1]\n")
         got = self.build()["log"]
-        self.assertEqual((got["bad"], got["lines"]), ({"not_json": 1, "not_object": 1}, 42))
+        self.assertEqual((got["bad"], got["lines"]), ({"not_json": 1, "not_object": 1}, 43))
 
     def test_the_books_filed_by_address_and_host_each_once_in_time_order(self):
         self.full_day()

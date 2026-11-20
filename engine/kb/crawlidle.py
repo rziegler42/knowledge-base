@@ -33,7 +33,7 @@ import datetime
 import os
 import sqlite3
 
-from . import KbError, crawlguard, crawlplan, crawlrun, crawlstate, theme, themeextract, themerun, themevectors
+from . import KbError, crawlguard, crawlplan, crawlrun, crawlstate, theme, themeextract, themerun, themevectors, vectors
 from . import store as library_store
 from . import weave as library_weave
 
@@ -41,6 +41,7 @@ BATCH = 20                                    # books in one plan
 TASKS = ("theme", "theme-check")              # the tasks whose entries the themes call, in the order they are asked
 EMBED_TASKS = ("card-embed",)                 # the task whose entry the vectors call
 THEMES_SHARE = 0.6                            # the part of the window that the themes may use while more books wait for them; the rest is for the vectors and the weave
+CARD_VECTORS_SHARE = 0.5                      # the part of what is left, after the themes, that the vectors of the cards may use; the vectors of the themes and the weave have the rest
 EMBED_GROUP = 40                              # texts in one call to the embedding entry: about 19 seconds, so that a stop is looked at about that often (a call may hold 3,906)
 SECONDS_A_TEXT, SECONDS_A_CALL, BUILD_OVERHEAD_S = 0.35, 5.0, 5.0   # measured on 2026-11-18: an embedding call of 5, 30 and 110 texts took 6.8, 20.9 and 44.4 seconds; the build reads and writes for about 5
 MARGIN = 0.75                                 # the part of the time left that an estimate may use
@@ -240,7 +241,18 @@ def make_step(open_store=None, statvfs=None, probe=None, launcher=None, root=Non
                 reason = why[0]
                 return
 
-            # ---- 2. the vectors of the themes, in a batch that fits the time left
+            # ---- 2. the vectors of the cards that have none, in a batch that fits half of the time left
+            outcome = _card_vectors(ctx, library, stop, why, end, say, probe, launcher, root)
+            if outcome == "limited":
+                ran_out = True
+            elif outcome is not None:
+                reason = outcome
+                return
+            if stop():
+                reason = why[0]
+                return
+
+            # ---- 3. the vectors of the themes, in a batch that fits the time left
             outcome = _vectors(ctx, library, stop, why, end, say, probe, launcher, root)
             if outcome == "limited":
                 ran_out = True
@@ -251,7 +263,7 @@ def make_step(open_store=None, statvfs=None, probe=None, launcher=None, root=Non
                 reason = why[0]
                 return
 
-            # ---- 3. the weave, when a repair is due
+            # ---- 4. the weave, when a repair is due
             if _weave(ctx, library, end, say, weaving) == "limited":
                 ran_out = True
             reason = DEADLINE if ran_out else NOTHING
@@ -264,6 +276,55 @@ def make_step(open_store=None, statvfs=None, probe=None, launcher=None, root=Non
             ctx.log.write("idle", outcome, reason=reason, n=made, seconds=used, now=ctx.clock())
 
     return step
+
+
+def _card_vectors(ctx, library, stop, why, end, say, probe, launcher, root):
+    """The `card_vectors` part of the window (plan `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`): the vectors of the card texts that have none, which the search by
+    meaning (`pose-a-problem`) reads, in a batch of whole cards that fits `CARD_VECTORS_SHARE` of the time left less the reserve of the weave, so that the vectors of the themes and the weave have the rest. Returns None when it went well
+    or had nothing to do **or failed** (a failure is logged and counted, and a failure that repeats, such as a model that is not the one that made the vectors kept, must not starve the vectors of the themes and
+    the weave, which come after it), `"limited"` when the time left held back a batch, or the reason that ends the window (`STOPPED`, `DISK` or `DEADLINE` from the stop). A build that is cut writes nothing."""
+    since = ctx.clock()
+    try:
+        crawlguard.entry_of(ctx.cfg, "card-embed")
+    except KbError:
+        say("card_vectors", "skipped", SETTINGS)
+        return None
+    try:
+        waiting = vectors.waiting_texts(library, ctx.cfg)
+    except (KbError, OSError):                                         # a failure of this part is its own: it is logged, and the vectors of the themes and the weave still have their turn
+        say("card_vectors", "failed", "the texts that wait could not be counted", since=since)
+        return None
+    if waiting == 0:
+        say("card_vectors", "skipped", "nothing waits", since=since)
+        return None
+    fit = _fit(((end - ctx.clock()).total_seconds() - WEAVE_RESERVE_S) * CARD_VECTORS_SHARE)
+    batch = min(waiting, fit)
+    if batch < min(MIN_BATCH, waiting):                                # the time limits the batch below the least, and more are waiting: a longer window will do it
+        say("card_vectors", "skipped", "waits for a longer window", since=since)
+        return "limited"
+    try:
+        with vectors.write_lock(ctx.index_root, LOCK_LOOK_S):          # looked at before the work, which a lock refused at the write would lose
+            pass
+    except vectors.Busy:
+        say("card_vectors", "skipped", LOCKED, since=since)
+        return None
+    except KbError:
+        say("card_vectors", "failed", "the lock of the catalog could not be opened", since=since)
+        return None
+    try:
+        built = vectors.build(library, ctx.cfg, launcher=launcher, root=root, stop=stop, max_texts=(batch if batch < waiting else None), group=EMBED_GROUP, lock_wait=LOCK_WRITE_S)
+    except themeextract.Cut:
+        say("card_vectors", "skipped", why[0] if why else STOPPED, since=since)
+        return why[0] if why else STOPPED
+    except vectors.Busy:                                               # taken between the look and the write: the work is lost, and no model is to blame
+        say("card_vectors", "skipped", LOCKED, since=since)
+        return None
+    except (KbError, OSError):
+        say("card_vectors", "failed", "the vectors could not be made", since=since)
+        _answers(ctx, probe, set(), tasks=EMBED_TASKS)                 # a model that does not answer is counted; a trip ends the run
+        return None
+    say("card_vectors", "ok", n=built["texts_sent"], since=since)
+    return "limited" if batch < waiting else None
 
 
 def _vectors(ctx, library, stop, why, end, say, probe, launcher, root):

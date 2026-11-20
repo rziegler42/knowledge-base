@@ -983,6 +983,7 @@ class Hardening(Case):
         line = next(x for x in text.splitlines() if x.startswith("Idle window:"))
         self.assertIn("600 seconds", line)
         self.assertIn("themes", line)
+        self.assertIn("make themes for books that have none, the vectors of the cards that have none, the vectors of the themes, and a repair of the weave", line)
         self.assertIn("never longer than the run's own time", line)
         self.set_plan(PLAN_TEXT + "[idle]\nthemes_window_s = 90\n")
         text, _ = self.approve()

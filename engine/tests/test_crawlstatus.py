@@ -1405,6 +1405,21 @@ class IdleWindowTest(StateBase):
         got = cs.idle_counts(self.tmp, self.DAY, "UTC")
         self.assertEqual((got["vectors_failed"], got["vector_texts"], got["weave_failed"], got["weave_repairs"]), (1, 0, 1, 0))
 
+    def test_the_texts_embedded_for_cards_and_the_failed_steps_of_the_cards_are_counted_apart_from_those_of_the_themes(self):
+        self.put_log("2026-11-16", dict(ts="2026-11-16T05:05:00Z", run="r1", step="card_vectors", outcome="ok", n=30, seconds=12),
+                     dict(ts="2026-11-16T05:06:00Z", run="r1", step="theme_vectors", outcome="ok", n=7, seconds=3),
+                     dict(ts="2026-11-16T06:05:00Z", run="r2", step="card_vectors", outcome="ok", n=9, seconds=4),
+                     dict(ts="2026-11-16T06:06:00Z", run="r2", step="card_vectors", outcome="skipped", reason="nothing waits"),
+                     dict(ts="2026-11-16T07:05:00Z", run="r3", step="card_vectors", outcome="failed", reason="the vectors could not be made"))
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual((got["card_vector_texts"], got["card_vectors_failed"]), (39, 1))
+        self.assertEqual((got["vector_texts"], got["vectors_failed"]), (7, 0))      # the themes' own counts are as they were
+
+    def test_a_day_with_no_card_vector_line_counts_none(self):
+        self.put_log("2026-11-16", *self.window_lines())
+        got = cs.idle_counts(self.tmp, self.DAY, "UTC")
+        self.assertEqual((got["card_vector_texts"], got["card_vectors_failed"]), (0, 0))
+
     def test_a_reason_is_cleaned_and_a_window_with_no_reason_is_named(self):
         self.put_log("2026-11-16", dict(ts="2026-11-16T05:05:00Z", run="r1", step="idle", outcome="ok", reason="dead" + ZWSP + "line", n=1, seconds=1),
                      dict(ts="2026-11-16T06:05:00Z", run="r2", step="idle", outcome="ok", n=1, seconds=1))

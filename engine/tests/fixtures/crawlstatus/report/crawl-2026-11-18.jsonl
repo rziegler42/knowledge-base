@@ -34,6 +34,7 @@
 {"ts":"2026-11-18T07:00:21Z","run":"r2","step":"stop","outcome":"ok","candidate":null,"book":null,"host":null,"reason":"the breaker tripped","n":null,"seconds":null}
 {"ts":"2026-11-18T07:00:30Z","run":"r2","step":"run_end","outcome":"tripped","candidate":null,"book":null,"host":null,"reason":"the breaker tripped","n":0,"seconds":30}
 {"ts":"2026-11-18T07:00:22Z","run":"r2","step":"themes","outcome":"ok","candidate":null,"book":"b-theme","host":null,"reason":null,"n":12,"seconds":34}
+{"ts":"2026-11-18T07:00:23Z","run":"r2","step":"card_vectors","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":9,"seconds":3}
 {"ts":"2026-11-18T07:00:24Z","run":"r2","step":"theme_vectors","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":20,"seconds":6}
 {"ts":"2026-11-18T07:00:26Z","run":"r2","step":"weave","outcome":"ok","candidate":null,"book":null,"host":null,"reason":null,"n":14,"seconds":9}
 {"ts":"2026-11-18T07:00:28Z","run":"r2","step":"idle","outcome":"ok","candidate":null,"book":null,"host":null,"reason":"deadline","n":1,"seconds":600}

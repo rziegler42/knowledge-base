@@ -70,7 +70,10 @@ cover the themes inside a book, the threads between themes, shelf rules, or conv
   alone, can be thrown away and rebuilt, keeps a vector while its text, model and document prefix are unchanged, and is never reused
   for another model, dimension or document prefix. Built in the engine as
   `card-vectors`; the search that uses it is Increment D of the plan
-  `2026-11-09-search-the-neutral-descriptions-by-meaning`.
+  `2026-11-09-search-the-neutral-descriptions-by-meaning`. **The idle window of the crawl keeps it current** (plan
+  `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`, `docs/specs/population.md`, "The idle window"): it embeds the
+  texts that have no vector or whose text changed, in batches of whole cards that fit the time left, and keeps every other vector; a card not yet embedded is counted by the search
+  as `without_vector`. `card-vectors --again` stays the owner's, for a change of model or document prefix.
 
 ### What a card holds
 

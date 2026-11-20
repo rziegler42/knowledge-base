@@ -826,7 +826,10 @@ python3 -m kb card-search 'a few sentences about a problem' --meaning [--limit N
   five neutral fields of the newest card of each version of each active book (problem, approach and provides; **not needs or
   limits**, most of whose sentences a sample found were not in the book), with the embedding model that your config sets for
   `card-embed` (see [Calling a model](#calling-a-model)), and writes them to `vectors.sqlite` in the index root. **The text of those
-  fields goes to that model**, over the link the registry names, when you run it. The file is built in a folder of its own inside the
+  fields goes to that model**, over the link the registry names, when you run it. **The idle window of the unattended crawl runs the same build too** (`kb/crawlidle.py`, the part `card_vectors`,
+  after the themes and before the vectors of the themes): it embeds only the texts that have no vector or whose text changed, in a batch of whole cards that fits half of the time left, with a stop looked at before each call
+  (`vectors.build` takes `stop`, `max_texts`, `group` and `lock_wait` for that, and `vectors.waiting_texts` counts what waits without a lock or a call); a window with nothing waiting costs a count, and a lock held by another writer
+  skips the part. `--again` stays yours. The file is built in a folder of its own inside the
   index folder (mode 0700, a random name beginning `.vectors-build-`) and renamed into place under the catalog's lock, so no file
   at a name that could be guessed is opened or made private; a build that was killed leaves such a folder, and the next build
   removes it. **It removes every folder, file or link in the index folder whose name begins `.vectors-build-`** (a link as a link,
