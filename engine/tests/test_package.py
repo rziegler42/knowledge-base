@@ -1231,5 +1231,114 @@ class FindPassageSkillTests(unittest.TestCase):
             self.assertEqual(name, "SKILL.md")
 
 
+TOPICS_SKILL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "package", "kb", "harness", "neutral", "skills",
+                            "suggest-topics", "SKILL.md")
+
+
+class SuggestTopicsSkillTests(unittest.TestCase):
+    """The skill that tells an agent how to propose topics for the owner's crawl after it found a gap (Increment B of the plan `2026-11-20-add-the-skills-find-a-passage-and-suggest-topics-to-the-package`).
+    It needs no workbench checkout: it is a Markdown file of the package, and its example is read by the crawl's own reader of the file of topics."""
+
+    def setUp(self):
+        with open(TOPICS_SKILL, encoding="utf-8") as f:
+            self.text = f.read()
+        self.head, _, self.body = self.text.partition("\n---\n")
+        self.lower = " ".join(self.body.lower().split())  # a phrase may be wrapped over two lines
+
+    def example(self):
+        """The text of the one fenced block of the skill that opens a section of the file of topics."""
+        import re
+        blocks = [b for b in re.findall(r"```\n(.*?)```", self.body, re.S) if b.lstrip().startswith("[")]
+        self.assertEqual(len(blocks), 1)
+        return blocks[0]
+
+    def test_the_skill_is_a_neutral_skill_with_a_name_and_a_description(self):
+        lines = self.head.splitlines()
+        self.assertEqual(lines[0], "---")
+        fields = dict(line.split(": ", 1) for line in lines[1:])
+        self.assertEqual(sorted(fields), ["description", "name"])
+        self.assertEqual(fields["name"], "suggest-topics")
+        self.assertTrue(30 <= len(fields["description"]) <= 300)
+        self.assertEqual(os.path.basename(os.path.dirname(TOPICS_SKILL)), fields["name"])
+
+    def test_it_says_to_use_it_only_for_a_gap_found_by_searching_and_to_write_nothing(self):
+        for phrase in ("only when you have found a gap in the library by searching in this conversation", "a search that covered little of the library (the coverage numbers of `pose-a-problem`)", "a search where nothing fit", "only encyclopedia or reference pages",
+                       "you write nothing", "the file of topics is the owner's", "you cannot see it",
+                       "a search that covered little is a gap only when the words search of step 1 confirms it"):
+            self.assertIn(phrase, self.lower)
+
+    def test_it_says_to_check_the_gap_with_a_search_by_words_in_plain_words_and_to_propose_nothing_when_the_library_holds_plenty(self):
+        step1 = self.lower.split("## 1.", 1)[1].split("## 2.", 1)[0]
+        for phrase in ("wb run kb search [--limit <1-20>] -- '", "use only plain words (letters, digits and spaces)",
+                       "leave out every apostrophe and quotation mark, `$`, backtick, `;`, `&`, `|`, `<`, `>`, `(`, `)`, `\\` and any other character that a shell reads",
+                       "at most three searches", "changes nothing", "nothing is sent out", "if the library holds plenty, there is no gap: say so and propose nothing",
+                       "put the words in single quotes, never double quotes", "at most 1000 characters, of at most 20 words, each of at most 100 characters",
+                       "stop and tell the owner what it said; do not try another way"):
+            self.assertIn(phrase, step1)
+        self.assertNotIn('--limit <1-20>] -- "', self.body)
+
+    def test_it_says_that_the_crawl_sends_every_topic_to_outside_services_and_what_a_topic_may_not_hold(self):
+        step2 = self.lower.split("## 2.", 1)[1].split("## 3.", 1)[0]
+        for phrase in ("the crawl turns every topic into search queries and sends them to outside search services", "openalex, arxiv, wikipedia and a web search", "no secret, no credential, no private text from the project",
+                       "no name of a project, product, company or person", "if you cannot put the subject in general words, do not propose it",
+                       "the comments of evidence hold no private text either: they land in the owner's file and in what the owner approves"):
+            self.assertIn(phrase, step2)
+
+    def test_it_says_how_to_write_the_proposal_in_the_form_of_the_file_and_never_a_weight_or_a_section_of_its_own(self):
+        from kb import crawltopics
+        step3 = self.lower.split("## 3.", 1)[1].split("## 4.", 1)[0]
+        for phrase in ("at most five topics", "one idea to a line", "at most %d characters" % crawltopics.MAX_TOPIC, "`[core weight=10]`", "`[exploratory weight=5]`", "`[low weight=1]`",
+                       "never write a weight of your own and never a section of your own", "a `#` starts a comment", "evidence goes in a comment line above its topic",
+                       "never as a plain line", "the crawl would read it as one more topic, and queries made from it would be sent out",
+                       "keep each comment to one line, and start every line of a comment with `#`", "a topic never starts with `[` or `#`"):
+            self.assertIn(phrase, step3)
+
+    def test_it_says_the_owner_compares_for_repeats_and_that_a_change_of_the_file_needs_the_crawl_to_be_approved_again_and_what_could_not_be_told(self):
+        step4 = self.lower.split("## 4.", 1)[1]
+        for phrase in ("you cannot see the owner's file, so you cannot tell a repeat", "ask the owner to compare", "approves the crawl again after any change to the file",
+                       "say what you could not tell (for example how much of the library your searches covered)"):
+            self.assertIn(phrase, step4)
+
+    def test_the_example_is_read_by_the_real_reader_of_the_file_and_yields_exactly_its_topics_and_no_evidence_line(self):
+        from kb import crawltopics
+        block = self.example()
+        topics = crawltopics.parse_topics(block)
+        plain_lines = [l.strip() for l in block.splitlines() if l.strip() and not l.strip().startswith("#") and not l.strip().startswith("[")]
+        self.assertEqual([t for t, _, _ in topics], plain_lines)             # every plain line is a topic and no evidence is among them
+        self.assertTrue(1 <= len(topics) <= 5)
+        self.assertTrue(all(len(t) <= crawltopics.MAX_TOPIC for t, _, _ in topics))
+        lines = [l.strip() for l in block.splitlines() if l.strip()]
+        for number, line in enumerate(lines):
+            if not line.startswith("#") and not line.startswith("["):
+                self.assertTrue(lines[number - 1].startswith("#"), line)       # the evidence of each topic is a comment line directly above it, never a plain line
+        self.assertEqual(sum(1 for l in lines if l.startswith("#")), len(topics))     # one comment of evidence for each topic
+        sections = {(s, w) for _, w, s in topics}
+        self.assertTrue(sections <= {("core", 10), ("exploratory", 5), ("low", 1)})   # only the owner's three sections, with their weights
+
+    def test_an_evidence_line_written_as_a_plain_line_inside_the_block_would_be_one_more_topic_which_is_why_the_skill_forbids_it(self):
+        from kb import crawltopics
+        block = self.example()
+        before = len(crawltopics.parse_topics(block))
+        lines = block.rstrip("\n").split("\n")
+        plain_evidence = "\n".join(lines[:2] + ["a search found two encyclopedia pages and no paper"] + lines[2:]) + "\n"
+        self.assertEqual(len(crawltopics.parse_topics(plain_evidence)), before + 1)
+
+    def test_the_three_section_lines_the_skill_gives_are_those_the_reader_takes(self):
+        from kb import crawltopics
+        for line, name, weight in (("[core weight=10]", "core", 10), ("[exploratory weight=5]", "exploratory", 5), ("[low weight=1]", "low", 1)):
+            self.assertIn("`%s`" % line, self.body)
+            self.assertEqual(crawltopics.parse_topics(line + "\na topic\n"), [("a topic", weight, name)])
+
+    def test_it_holds_no_marker_no_control_character_and_no_other_file_beside_it(self):
+        from kb import read as reading
+        from kb import search as fulltext
+        for marker in (fulltext.MARKER, reading.END_MARKER):
+            self.assertNotIn(marker, self.text)
+        self.assertNotIn("<<library-data", self.text)
+        self.assertNotIn("\x1b", self.text)
+        for name in os.listdir(os.path.dirname(TOPICS_SKILL)):
+            self.assertEqual(name, "SKILL.md")
+
+
 if __name__ == "__main__":
     unittest.main()
