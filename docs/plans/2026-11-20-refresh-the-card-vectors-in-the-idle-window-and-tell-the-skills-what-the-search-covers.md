@@ -107,6 +107,12 @@ Increment A's tests stand unless B changes `vectors.py`, which it does not. Afte
 
 Plan review through the review engine (`gpt-5.6-terra`), 1 round of a bound of 3, converged on 2026-11-20: no meaningful findings; the reviewer found the plan consistent with its named specs, with scoped increments and adequate verification. Applied: none. Rejected: none. Before the review I corrected one figure of the plan myself, after reading the code: the cost constants of the window are 0.35 seconds a text and 5 seconds a call. Left for the owner: the approval, and whether to run a security review (asked once, in the owner's hands).
 
+Increment C, independent review by the `reviewer` agent (read only, 1 exchange of a cap of 6): no blocking findings. It checked the wording against `problem.py`, `vectors.py`, `walk.py`, `weave.py` and `crawlidle.py`, and found the unchanged rules (plain words, untrusted data, single quotes, no loops) intact.
+
+- Applied: the definitions of `stale` (vectors made from an older text of their card, not cards) and of `without_vector` (cards with no usable vector, a card whose only vectors are stale among them) now say exactly that; the walk's skill now says that the command the warning names is for the owner and is not to be run.
+- Not applied, with a reason: the plan's criterion 7 says the books without a vector are "more than a fifth of the books searched", and the skill says "more than a fifth of `cards_searched` and `without_vector` together", that is `without_vector / (searched + without_vector) > 0.2`. The skill's form is the one that reads as a share of the library, and on the measurement of 2026-11-20 (749 of 923) both trigger; it is recorded here as a departure from the plan's words.
+- Could not be checked by the reviewer: how an agent behaves with the wording; the 77 tests of the file that need a workbench checkout (skipped before and after the change).
+
 ## Deferred work
 
 - The weave's repair rule and the wording and the command of the walk's warning: the weave is repaired only when due, so the warning is on almost every call while the crawl makes themes. A change is the walk's own plan.
@@ -115,4 +121,10 @@ Plan review through the review engine (`gpt-5.6-terra`), 1 round of a bound of 3
 
 ## Result
 
-Empty until work starts.
+**Increment C** (built in `main` directly, since it changes no code of `engine/kb` and so does not void the crawl's approval; done before A and B because it depends on neither).
+
+- Done: a paragraph in step 4 of `pose-a-problem` ("Say how much of the library the search covered": the definitions of `cards_searched`, `stale` and `without_vector`; when `without_vector` is more than a fifth of the two together, say so with both numbers, tell the owner to run `card-vectors`, and note that a search that covered little cannot show that nothing fits) and a closing paragraph of step 7 (if the search covered little, do not say that nothing from another field fit); one sentence group in step 3 of `walk-from-themes` (say the warning once at the start and go on, it is not a failure of the call, the leads of the newest themes may be missing, the command it names is for the owner and is not to be run, the lanes, thresholds and numbers are as they are); two new tests in `engine/tests/test_package.py`.
+- Tests were written first and seen failing (2 failures: the words were not in the skills).
+- Verification: `python3 -B -m unittest engine.tests.test_package`, 107 tests, OK, 77 skipped (they need a workbench checkout, and were skipped before the change too), Python 3.15.0; `wb run code-work check`, 75 plans, no problems; `git diff --check`, clean.
+- Breaks (11 single changes to the two skill files, each caught by the matching new test, the files restored byte for byte): the fifth changed to a half; the word to the owner removed; the two numbers dropped; the sentence that a search that covered little cannot show that nothing fits inverted; the closing rule of step 7 removed; `once` removed; `not a failure` inverted; the newest-themes sentence removed; the do-not-run clause removed; the definition of the stale card removed; the numbers-as-they-are sentence removed. Two breaks were first not caught or not applied (a definition that no test held; a sentence whose lines I had moved), and the test and the break script were corrected.
+- Departures from the plan: the threshold is said as a share of the two counts together (see the review record). Nothing else.

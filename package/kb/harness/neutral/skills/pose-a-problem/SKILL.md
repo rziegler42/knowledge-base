@@ -47,8 +47,14 @@ with `found_by`: which sub-problems returned it and at what rank). Each book has
 and `score` (a closeness, larger is closer, and not a measure
 of whether the book is right), `matched` (which description matched: `n_problem`, `n_approach` or `n_provides`), `excerpt` (the matched
 text, behind the untrusted-text marker), `citation` (it starts with the book's title) and `grounding` (how many items of its card are
-marked `stated`, found in the book, and how many `inferred`, the model's own inference). `cards_searched`, `stale` and `without_vector` say how much of the library the search covered. A book that two
+marked `stated`, found in the book, and how many `inferred`, the model's own inference). A book that two
 sub-problems found is more interesting than one that a single sub-problem found at a low rank.
+
+**Say how much of the library the search covered.** `cards_searched` is the number of cards that have a usable vector and so were searched, `stale`
+the number of vectors that were made from an older text of their card and are not used, and `without_vector` the number of cards that were
+not searched because they have no usable vector yet (a card whose only vectors are stale is among them). When `without_vector` is more than a fifth of `cards_searched` and `without_vector` together, the search covered little of the
+library: say so in your answer, with both numbers, and tell the owner to run `card-vectors`, which makes the vectors of the cards that have
+none. A search that covered little cannot show that nothing fits.
 
 ## 5. Set aside the problem's own field
 
@@ -80,3 +86,6 @@ a book by its citation, never by a path. If the passage does not support the car
 If nothing from another field fits after step 5, say so plainly: nothing from another field fit, and what was searched (the
 sub-problems you used). Do not stretch a weak match to have something to report, and do not search again with the same idea in other
 words to find a fit.
+
+If the search covered little (step 4), do not say that nothing from another field fit: say that the search covered little, with the
+numbers, and what it found.

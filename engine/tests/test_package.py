@@ -925,6 +925,18 @@ class SkillTests(unittest.TestCase):
         for phrase in ("refused", "tell the owner", "do not try another way"):
             self.assertIn(phrase, self.lower)
 
+    def test_it_says_what_to_do_when_the_search_covered_little_of_the_library(self):
+        """Plan `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`, Increment C: the search sees only the cards that have a vector."""
+        step4 = self.lower.split("## 4.", 1)[1].split("## 5.", 1)[0]
+        for phrase in ("`cards_searched`", "`without_vector`", "more than a fifth", "covered little", "both numbers", "tell the owner to run `card-vectors`",
+                       "cannot show that nothing fits", "a card whose only vectors are stale is among them"):
+            self.assertIn(phrase, step4)
+        step7 = self.lower.split("## 7.", 1)[1]
+        for phrase in ("covered little", "do not say that nothing from another field fit", "what it found"):
+            self.assertIn(phrase, step7)
+        self.assertIn("single sub-problem", self.lower)       # the earlier sentences of step 4 and step 7 stand as they were
+        self.assertIn("do not stretch a weak match", step7)
+
 
 WALK_SKILL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "package", "kb", "harness", "neutral", "skills",
                           "walk-from-themes", "SKILL.md")
@@ -1011,6 +1023,15 @@ class WalkSkillTests(unittest.TestCase):
         for phrase in ("read the `warning` first", "when it is not null (the weave is out of date", "tell the owner what it says", "first step of a route has no closeness", "rounded to two decimals", "the theme before it on the route",
                        "`held_back`", "`unknown_refs`", "`widen`", "`notes`"):
             self.assertIn(phrase, self.lower)
+
+    def test_it_says_how_to_read_a_warning_that_the_weave_is_out_of_date(self):
+        """Plan `2026-11-20-refresh-the-card-vectors-in-the-idle-window-and-tell-the-skills-what-the-search-covers`, Increment C: the crawl makes themes all day and the weave is
+        repaired only when due, so the warning is on almost every call."""
+        step3 = self.lower.split("## 3.", 1)[1].split("## 4.", 1)[0]
+        for phrase in ("read the `warning` first", "tell the owner what it says", "once, at the start of your answer", "go on",
+                       "not a failure of the call", "the leads of the newest themes may be missing", "it is for the owner, so do not run it",
+                       "the lanes, the thresholds and the numbers below are as they are"):
+            self.assertIn(phrase, step3)
 
     def test_it_says_to_pass_the_themes_of_a_lead_route_in_seen(self):
         for phrase in ("the themes of their routes", "the `ref` of each step of its `route`", "a lead may also be given in `--seen`", "refused if you ask for more"):
